@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { parseMetricPoints, validateScientificEnvelope } from './scientificAnalytics';
+import type { ScientificPoint, ScientificCohort } from './scientificAnalytics';
+type ScientificPointFields = Partial<Omit<ScientificPoint, 'id' | 'name' | 'metrics' | 'contract_revision'>> & { contract_revision?: 1 | null };
 import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
 import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
@@ -26,7 +29,24 @@ api.interceptors.request.use((config) => {
 });
 
 // Types
+export interface CandidateResultSummary {
+    stage_id: string | null;
+    state: string;
+    partial: boolean;
+    requested_count: number | null;
+    generated_count: number | null;
+    rejected_count: number | null;
+    failed_count: number | null;
+    unevaluable_count: number | null;
+    expected_publication_count: number | null;
+    persisted_count: number | null;
+    dispositions?: Array<{ candidate_id: string; disposition: 'selected' | 'rejected' | 'failed' | 'unevaluable'; criterion: string | null; reason_code: string | null }> | null;
+    reason: { code: string; message: string } | null;
+}
+
 export interface Job {
+    result_summary?: CandidateResultSummary;
+    fampnn_analysis_overrides?: import('../components/FampnnAnalysisControls').FampnnAnalysisOverrides;
     id: string;
     name: string;
     status: 'queued' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled';
@@ -1700,6 +1720,8 @@ export interface DesignFrustraMPNNProjection {
 }
 
 export interface Design {
+    core_protein_scientific_contract?: 1 | null;
+    scientific_structure_document?: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef | null;
     id: string;
     job_id: string;
     name: string;
@@ -2138,7 +2160,7 @@ export interface FampnnPsceProfile {
 
 // Fetch per-chain metrics for a design
 export const fetchChainMetrics = (designId: string) =>
-    api.get<Record<string, ChainMetric>>(`/api/designs/${designId}/chain-metrics`);
+    api.get<unknown>(`/api/designs/${designId}/chain-metrics`);
 
 // Power control (eco mode + manual)
 export const fetchPowerProfile = () =>
@@ -2190,6 +2212,7 @@ export interface MetricDistribution {
 }
 
 export interface JobAnalytics {
+    scientific_cohorts?: ScientificCohort[];
     job_id: string;
     design_count: number;
     metrics: Record<string, MetricDistribution | null>;
@@ -2197,26 +2220,27 @@ export interface JobAnalytics {
     pipeline_summary: Record<string, UntypedApiValue>;
 }
 
-export interface DesignMetricPoint {
+export interface DesignMetricPoint extends ScientificPointFields {
     id: string;
     name: string;
     metrics: Record<string, number>;
 }
 
 export interface BatchAnalytics {
+    scientific_cohorts?: ScientificCohort[];
     job_ids: string[];
     metrics_summary: Record<string, Record<string, number>>; // metric -> {job_id -> avg}
     common_metrics: string[];
 }
 
 export const fetchJobAnalytics = (jobId: string) =>
-    api.get<JobAnalytics>(`/api/analytics/job/${jobId}`);
+    api.get<JobAnalytics>(`/api/analytics/job/${jobId}`).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 export const fetchJobDesignMetrics = (jobId: string) =>
-    api.get<DesignMetricPoint[]>(`/api/analytics/job/${jobId}/designs`);
+    api.get<unknown>(`/api/analytics/job/${jobId}/designs`).then(response => ({...response, data: parseMetricPoints(response.data)}));
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
-    api.post<BatchAnalytics>('/api/analytics/batch', { job_ids: jobIds });
+    api.post<BatchAnalytics>('/api/analytics/batch', { job_ids: jobIds }).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 // Structure Analysis (Biotite-powered)
 export interface StructureAnalysis {
@@ -3537,7 +3561,7 @@ export interface ChainPairIptmData {
     size: number;
 }
 
-export interface PlotlyMetricPoint {
+export interface PlotlyMetricPoint extends ScientificPointFields {
     id: string;
     name: string;
     metrics: Record<string, number>;
@@ -3565,6 +3589,7 @@ export interface PlotlyChartSuggestion {
 }
 
 export interface PlotlyMetricsResponse {
+    scientific_cohorts?: ScientificCohort[];
     job_id: string;
     metric_keys: string[];
     points: PlotlyMetricPoint[];
@@ -3583,7 +3608,7 @@ export const fetchDesignPlotlyMetrics = (
     jobId: string,
     params?: { include_children?: boolean; limit?: number; offset?: number; design_ids?: string[] }
 ) =>
-    params?.design_ids?.length
+    (params?.design_ids?.length
         ? api.post<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, {
             include_children: params.include_children ?? true,
             limit: params.limit,
@@ -3596,7 +3621,7 @@ export const fetchDesignPlotlyMetrics = (
                 limit: params?.limit,
                 offset: params?.offset,
             },
-        });
+        })).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 // PAE (Predicted Aligned Error) data
 export interface PAEData {
@@ -3609,7 +3634,7 @@ export interface PAEData {
 }
 
 export const fetchPAEData = (designId: string) =>
-    api.get<PAEData>(`/api/designs/${designId}/pae`);
+    api.get<unknown>(`/api/designs/${designId}/pae`);
 
 // ============================================================
 // DEBUG ORCHESTRATOR OVERRIDES

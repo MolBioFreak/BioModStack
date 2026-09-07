@@ -7,6 +7,7 @@ import groovy.json.JsonSlurper
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
 include { ESMFold2Predict } from './esmfold2_experimental.nf'
+include { ESMFold2MSAPredict; esmfold2ContractInputs } from './esmfold2_experimental.nf'
 
 def resolveBooleanParam(value, defaultValue) {
     if (value == null) {
@@ -191,6 +192,155 @@ def normalizeSequenceProducerInputs(inputChannel) {
         if (artifactIds.toSet().size() != artifactIds.size() || artifactKeys.toSet().size() != artifactKeys.size()) {
             throw new IllegalArgumentException('sequence producer identities must be unique within one input set')
         }
+        normalized
+    }
+}
+
+def boltzRosterCanonical(value) {
+    if (value instanceof Map) {
+        def sorted = new TreeMap()
+        value.each { key, item -> sorted[key.toString()] = boltzRosterCanonical(item) }
+        return sorted
+    }
+    if (value instanceof Collection) return value.collect { boltzRosterCanonical(it) }
+    return value
+}
+
+def boltzInputDigest(byte[] bytes) {
+    java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
+}
+
+def readBoltzLaunchAuthority() {
+    if (!params.boltz_launch_authority_path || !params.boltz_launch_authority_sha256) {
+        throw new IllegalArgumentException('Boltz task inventory missing launch authority')
+    }
+    def source = file(params.boltz_launch_authority_path.toString()).toAbsolutePath().normalize()
+    def expected = file("${params.out_dir}/.boltz-launch-authority.json").toAbsolutePath().normalize()
+    if (source != expected || java.nio.file.Files.isSymbolicLink(source) ||
+        java.nio.file.Files.size(source) > 2 * 1024 * 1024) {
+        throw new IllegalArgumentException('Boltz task inventory foreign or oversized launch authority path')
+    }
+    byte[] bytes
+    java.nio.file.Files.newInputStream(source, java.nio.file.LinkOption.NOFOLLOW_LINKS).withCloseable { stream ->
+        bytes = stream.readNBytes(2 * 1024 * 1024 + 1)
+    }
+    if (bytes.length > 2 * 1024 * 1024 || boltzInputDigest(bytes) != params.boltz_launch_authority_sha256) {
+        throw new IllegalArgumentException('Boltz task inventory launch hash mismatch')
+    }
+    // Parsing consumes the exact captured bytes whose digest was checked.
+    return new JsonSlurper().parse(bytes, 'UTF-8')
+}
+
+def boltzTaskBindingBase64(namespace, owner) {
+    if (params.protein_science_contract_revision != 1) return ''
+    def authority = readBoltzLaunchAuthority()
+    def expected = authority.tasks.findAll { it.namespace == namespace.toString() && it.owner == owner }
+    if (expected.size() != 1) throw new IllegalArgumentException('Boltz task binding identity missing')
+    def binding = [schema_name: 'boltz_task_binding', schema_version: 1,
+        job_id: authority.job_id, attempt: authority.attempt, result_root: authority.result_root,
+        launch_sha256: params.boltz_launch_authority_sha256.toString(), task: expected[0]]
+    JsonOutput.toJson(boltzRosterCanonical(binding)).getBytes('UTF-8').encodeBase64().toString()
+}
+
+def checkedBoltzInputs(inputChannel, owner) {
+    if (params.protein_science_contract_revision != 1) return inputChannel
+    // Collect the complete EXISTING input-owner channel, never successful outputs.
+    return inputChannel.collect(flat: false).flatMap { records ->
+        def authority = readBoltzLaunchAuthority()
+        if ((authority.keySet() as Set) != (['schema_name', 'schema_version', 'job_id', 'attempt',
+                'result_root', 'request_sha256', 'tasks', 'input_files', 'model_id', 'mode'] as Set) ||
+            authority.schema_name != 'boltz_launch_authority' || authority.schema_version != 1 ||
+            !(authority.attempt instanceof Integer) || authority.attempt < 0 ||
+            authority.job_id != params.job_id?.toString() || authority.result_root != params.out_dir?.toString()) {
+            throw new IllegalArgumentException('Boltz task inventory launch binding invalid')
+        }
+        def captured = [:]
+        authority.input_files.each { path, descriptor ->
+            byte[] expected = descriptor.content_base64.toString().decodeBase64()
+            byte[] actual = file(path).bytes
+            if (boltzInputDigest(expected) != descriptor.sha256 || !Arrays.equals(expected, actual)) {
+                throw new IllegalArgumentException('Boltz task inventory input snapshot changed')
+            }
+            captured[file(path).toString()] = actual
+        }
+        def normalized = records ?: []
+        def tasks = normalized.collect { record ->
+            if (owner == 'BoltzFromComplex') {
+                def name = record[0].toString()
+                if (!(name ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
+                    throw new IllegalArgumentException('Boltz task inventory unsafe complex name')
+                }
+                byte[] inputBytes = captured[record[1].toString()]
+                if (inputBytes == null) throw new IllegalArgumentException('Boltz task inventory foreign complex source')
+                def parsed = new JsonSlurper().parse(inputBytes, 'UTF-8')
+                if (!(parsed instanceof Map) || !(parsed.components instanceof Collection) || parsed.components.isEmpty()) {
+                    throw new IllegalArgumentException('Boltz task inventory invalid complex input')
+                }
+                return [namespace: name, owner: owner, metadata: null, input_sha256: boltzInputDigest(inputBytes)]
+            }
+            def meta = validateSequenceProducerMetadata(record[0], record[1], record[2])
+            return [namespace: meta.producer_artifact_id, owner: owner, metadata: meta,
+                input_sha256: boltzInputDigest(meta.producer_sequence.toString().getBytes('UTF-8'))]
+        }.sort { it.namespace }
+        if (!tasks || tasks.size() > 10000 || tasks.collect { it.namespace }.toSet().size() != tasks.size() ||
+            JsonOutput.toJson(boltzRosterCanonical(tasks)) != JsonOutput.toJson(boltzRosterCanonical(authority.tasks))) {
+            throw new IllegalArgumentException('Boltz task inventory differs from launch authority')
+        }
+        // Dispatch captured bytes, not mutable source symlinks. Preserve suffixes
+        // needed by the existing preparation/MSA owners.
+        def frozen = [:]
+        captured.each { path, content ->
+            def suffix = path.toString().tokenize('.').last()
+            if (!(suffix ==~ /[A-Za-z0-9]+/)) suffix = 'input'
+            def target = file("${params.out_dir}/.boltz-inputs/${boltzInputDigest(content)}.${suffix}")
+            java.nio.file.Files.createDirectories(target.parent)
+            def temporaryInput = java.nio.file.Files.createTempFile(target.parent, '.snapshot-', '.tmp')
+            java.nio.file.Files.write(temporaryInput, content)
+            java.nio.file.Files.move(temporaryInput, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            frozen[path] = target
+        }
+        if (owner == 'BoltzFromComplex') {
+            normalized.each { record ->
+                def originalPath = record[1].toString()
+                def definition = new JsonSlurper().parse(captured[originalPath], 'UTF-8')
+                def changed = false
+                definition.components.each { component ->
+                    if (component.msa_path) {
+                        def selector = file(component.msa_path.toString()).toString()
+                        if (!frozen.containsKey(selector)) throw new IllegalArgumentException('Boltz task inventory missing component MSA snapshot')
+                        component.msa_path = frozen[selector].toString()
+                        changed = true
+                    }
+                }
+                if (changed) {
+                    byte[] resolvedBytes = JsonOutput.toJson(definition).getBytes('UTF-8')
+                    def target = file("${params.out_dir}/.boltz-inputs/${boltzInputDigest(resolvedBytes)}.json")
+                    def temporaryInput = java.nio.file.Files.createTempFile(target.parent, '.resolved-', '.tmp')
+                    java.nio.file.Files.write(temporaryInput, resolvedBytes)
+                    java.nio.file.Files.move(temporaryInput, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                    frozen[originalPath] = target
+                }
+            }
+        }
+        normalized = normalized.collect { record ->
+            def values = new ArrayList(record as List)
+            def indices = owner == 'BoltzFromComplex' ? [1, 2] : (values.size() == 4 ? [3] : [])
+            indices.each { index ->
+                if (frozen.containsKey(values[index].toString())) values[index] = frozen[values[index].toString()]
+            }
+            tuple(*values)
+        }
+        def inventory = [schema_name: 'boltz_workflow_inventory', schema_version: 1,
+            job_id: authority.job_id, attempt: authority.attempt, result_root: authority.result_root,
+            launch_sha256: params.boltz_launch_authority_sha256.toString(), tasks: tasks]
+        def destination = file("${params.out_dir}/scientific/boltz_workflow_inventory.json")
+        java.nio.file.Files.createDirectories(destination.parent)
+        def temporary = java.nio.file.Files.createTempFile(destination.parent, '.boltz-inventory-', '.json')
+        java.nio.file.Files.write(temporary, JsonOutput.toJson(boltzRosterCanonical(inventory)).getBytes('UTF-8'))
+        java.nio.file.Files.move(temporary, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE)
         normalized
     }
 }
@@ -426,19 +576,26 @@ process BatchMSAGeneration {
 
 process BoltzFromSequenceTask {
     label 'Boltz'
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: 'boltz_task_binding.json', enabled: params.protein_science_contract_revision == 1
     label 'gpu'
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
+    // Marked evidence stays task-scoped; legacy flattened publication is unchanged.
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
     tuple val(producer_meta), val(sequence), val(sequence_name)
 
     output:
+    path 'boltz_task_binding.json'
     tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures
     path "predictions/*.json", emit: jsons, optional: true
+    path "predictions/*.npz", emit: native_identity_artifacts, optional: true
     path "msa/*.a3m", emit: msa, optional: true
     path "*.log"
 
@@ -453,6 +610,7 @@ process BoltzFromSequenceTask {
     def useMsa = params.boltz_use_msa == null || params.boltz_use_msa.toString() == 'true'
     def msaForceRefresh = params.msa_force_refresh ? "true" : "false"
     """
+    printf '%s' '${boltzTaskBindingBase64(producer_meta.producer_artifact_id, "BoltzFromSequenceTask")}' | base64 --decode > boltz_task_binding.json
     set -o pipefail  # Propagate exit codes through pipes
     
     # Setup temp directories for containerized execution
@@ -551,6 +709,7 @@ PYEOF
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
+        ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
@@ -587,6 +746,7 @@ PYEOF
         --metadata-base64 '${producerMetadataBase64}' \
         --predictions-dir predictions \
         --producer-method boltz \
+        ${params.protein_science_contract_revision == 1 ? '--protein-science-contract-revision 1 --boltz-native-root boltz_results_yamls' : ''} \
         --output producer_candidates.json
     """
 }
@@ -596,7 +756,7 @@ workflow BoltzFromSequence {
     input_ch
 
     main:
-    normalized_inputs = normalizeSequenceProducerInputs(input_ch)
+    normalized_inputs = checkedBoltzInputs(normalizeSequenceProducerInputs(input_ch), 'BoltzFromSequenceTask')
     BoltzFromSequenceTask(normalized_inputs)
     canonical_structures = sequenceCanonicalProducerOutputs(BoltzFromSequenceTask.out.canonical_structures, 'boltz')
     canonical_pdbs = canonical_structures.filter { producer_meta, predicted ->
@@ -635,18 +795,25 @@ workflow BoltzFromSequence {
 // Boltz with pre-computed MSA (no rate limiting!)
 process BoltzFromSequenceWithMSATask {
     label 'Boltz'
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: 'boltz_task_binding.json', enabled: params.protein_science_contract_revision == 1
     label 'gpu'
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
+    // Marked evidence stays task-scoped; legacy flattened publication is unchanged.
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)
 
     output:
+    path 'boltz_task_binding.json'
     tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures
     path "predictions/*.json", emit: jsons, optional: true
+    path "predictions/*.npz", emit: native_identity_artifacts, optional: true
     path "*.log"
 
     script:
@@ -655,6 +822,7 @@ process BoltzFromSequenceWithMSATask {
     def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
     def producerMetadataBase64 = JsonOutput.toJson(producer_meta).bytes.encodeBase64().toString()
     """
+    printf '%s' '${boltzTaskBindingBase64(producer_meta.producer_artifact_id, "BoltzFromSequenceWithMSATask")}' | base64 --decode > boltz_task_binding.json
     set -o pipefail  # Propagate exit codes through pipes
     
     # Setup temp directories for containerized execution
@@ -731,6 +899,7 @@ PYEOF
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
+        ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
@@ -765,6 +934,7 @@ PYEOF
         --metadata-base64 '${producerMetadataBase64}' \
         --predictions-dir predictions \
         --producer-method boltz \
+        ${params.protein_science_contract_revision == 1 ? '--protein-science-contract-revision 1 --boltz-native-root boltz_results_yamls' : ''} \
         --output producer_candidates.json
     """
 }
@@ -777,7 +947,7 @@ workflow BoltzFromSequenceWithMSA {
     typed_inputs = input_ch.map { producer_meta, sequence, sequence_name, msa_file ->
         tuple(validateSequenceProducerMetadata(producer_meta, sequence, sequence_name), sequence, sequence_name, msa_file)
     }
-    BoltzFromSequenceWithMSATask(typed_inputs)
+    BoltzFromSequenceWithMSATask(checkedBoltzInputs(typed_inputs, 'BoltzFromSequenceWithMSATask'))
     canonical_structures = sequenceCanonicalProducerOutputs(BoltzFromSequenceWithMSATask.out.canonical_structures, 'boltz')
     pdbs = BoltzFromSequenceWithMSATask.out.canonical_structures
         .map { producer_meta, producer_manifest, produced ->
@@ -1303,7 +1473,10 @@ PYEOF
 // Boltz folding stage: consumes prepared YAML + precomputed MSAs.
 process BoltzFromComplex {
     label 'Boltz'
+    publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: 'boltz_task_binding.json', enabled: params.protein_science_contract_revision == 1
     label 'gpu'
+    publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
+    publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
@@ -1314,6 +1487,7 @@ process BoltzFromComplex {
     tuple val(complex_name), path(complex_yaml), path(msa_dir)
 
     output:
+    path 'boltz_task_binding.json'
     tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true
     path "predictions/*.cif", emit: cifs, optional: true
     path "predictions/*.json", emit: jsons, optional: true
@@ -1327,6 +1501,7 @@ process BoltzFromComplex {
     def geometryMode = params.boltz_target_geometry_mode ?: (params.boltz_anchor_target ? 'conditioned' : 'flexible')
     def producerSampleBase64 = complex_name.toString().getBytes('UTF-8').encodeBase64().toString()
     """
+    printf '%s' '${boltzTaskBindingBase64(complex_name, "BoltzFromComplex")}' | base64 --decode > boltz_task_binding.json
     set -o pipefail
 
     mkdir -p tmp yamls predictions msa
@@ -1343,6 +1518,7 @@ process BoltzFromComplex {
     boltz predict \\
         ./yamls/ \\
         --output_format pdb \\
+        ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
@@ -1387,6 +1563,7 @@ process BoltzFromComplex {
     python3 '${params.code_root}/scripts/write_structure_producer_manifest.py' \
       --predictions-root predictions \
       --producer-method boltz \
+      ${params.protein_science_contract_revision == 1 ? '--protein-science-contract-revision 1 --boltz-native-root boltz_results_yamls' : ''} \
       --producer-sample-base64 '${producerSampleBase64}' \
       --format pdb \
       --output producer_candidates.json
@@ -1403,6 +1580,10 @@ workflow structure_prediction_wf {
     def boltz_use_msa = resolveBooleanParam(params.boltz_use_msa, false)
     def protenix_use_msa = resolveBooleanParam(params.protenix_use_msa, true)
     typed_inputs = normalizeSequenceProducerInputs(input_ch)
+    if (pred_method in ['boltz', 'boltz_protenix']) {
+        typed_inputs = checkedBoltzInputs(typed_inputs,
+            boltz_use_msa ? 'BoltzFromSequenceWithMSATask' : 'BoltzFromSequenceTask')
+    }
 
     structures = channel.empty()
     canonical_structures = channel.empty()
@@ -1492,9 +1673,16 @@ workflow structure_prediction_wf {
         }
 
         if (pred_method == 'esmfold2') {
-            ESMFold2Predict(typed_inputs)
+            def esmfold2_outputs
+            if (params.containsKey('core_protein_scientific_contract')) {
+                ESMFold2MSAPredict(esmfold2ContractInputs(typed_inputs, params))
+                esmfold2_outputs = ESMFold2MSAPredict.out.typed_cifs
+            } else {
+                ESMFold2Predict(typed_inputs)
+                esmfold2_outputs = ESMFold2Predict.out.typed_cifs
+            }
             esmfold2_canonical_outputs = canonicalProducerOutputs(
-                ESMFold2Predict.out.typed_cifs, 'esmfold2'
+                esmfold2_outputs, 'esmfold2'
             )
             structures = structures.mix(
                 esmfold2_canonical_outputs.map { producer_meta, predicted -> predicted }
@@ -1530,6 +1718,7 @@ workflow complex_prediction_wf {
 
     main:
     def pred_method = params.pred_method ?: 'boltz'
+    boltz_inputs = pred_method != 'protenix' ? checkedBoltzInputs(input_ch, 'BoltzFromComplex') : input_ch
 
     structures = channel.empty()
     canonical_candidates = channel.empty()
@@ -1545,7 +1734,7 @@ workflow complex_prediction_wf {
     }
     else if (pred_method == 'boltz_protenix') {
         // Run both Boltz + Protenix in parallel without collapsing producer identity.
-        PrepareComplexWithMSA(input_ch)
+        PrepareComplexWithMSA(boltz_inputs)
         BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
 
         PrepProtenixComplex(input_ch)
@@ -1562,7 +1751,7 @@ workflow complex_prediction_wf {
     }
     else {
         // Default: Boltz-2 complex prediction.
-        PrepareComplexWithMSA(input_ch)
+        PrepareComplexWithMSA(boltz_inputs)
         BoltzFromComplex(PrepareComplexWithMSA.out.prepared)
         canonical_candidates = complexCanonicalProducerOutputs(
             BoltzFromComplex.out.canonical_pdbs

@@ -1,6 +1,7 @@
 
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
@@ -755,6 +756,11 @@ export function JobSubmission() {
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
+    // Keep user scopes in the canonical cloned/saved request state.
+    const fampnnOverrides = params.fampnn_analysis_overrides;
+    const setFampnnOverrides = (value: unknown) => setParams(previous => ({ ...previous, fampnn_analysis_overrides: value }));
+    let fampnnError = '';
+    try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
@@ -878,6 +884,7 @@ export function JobSubmission() {
         if (stored) {
             try {
                 const data = JSON.parse(stored);
+                data.params = fampnnUserParams(data.params || {});
                 console.log('Loading cloned job data:', data);
 
                 // Set common fields
@@ -1185,8 +1192,8 @@ export function JobSubmission() {
 
         setWizardMode('manual');
         setSelectedTemplateId(null);
-        setClonedValues(undefined);
-        setParams(template.params || {});
+        setClonedValues(fampnnUserParams(template.params || {}));
+        setParams(fampnnUserParams(template.params || {}));
         if (template.model_id) setSelectedModelId(template.model_id);
         if (template.mode) setSelectedModeId(template.mode);
         setJobName(template.params?.job_name || template.name || '');
@@ -1507,8 +1514,8 @@ export function JobSubmission() {
             }
             : params;
         return configuredFrustrampnnWorkflow
-            ? mergeFrustraMpnnLaunchParams(baseParams, runFrustrampnn, frustrampnnSettings)
-            : baseParams;
+            ? mergeFrustraMpnnLaunchParams(fampnnUserParams(baseParams), runFrustrampnn, frustrampnnSettings)
+            : fampnnUserParams(baseParams);
     }, [
         isTemplateMode,
         params,
@@ -1528,8 +1535,22 @@ export function JobSubmission() {
             })
             .map((param: UntypedApiValue) => param.label || param.name)
         : [];
+    const fampnnLaunchParams = isTemplateMode ? { ...templateDetail?.preset_params, ...params } : params;
+    const usesFampnn = wizardMode === 'manual' && selectedModelId === 'fampnn';
+    // General RFD3 is backbone-only, BoltzGen skips sequence design, and the
+    // legacy RFdiffusion FA-MPNN parent is not in the admitted caller inventory.
+    const unsupportedFampnnParent = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
+        && (fampnnLaunchParams.seq_method === 'fampnn' || fampnnLaunchParams.seq_design_fampnn === true);
+    const activeFampnnOverrides = fampnnLaunchParams.fampnn_analysis_overrides;
+    if (usesFampnn) {
+        try { hydrateFampnnOverrides(activeFampnnOverrides); } catch (error) { fampnnError = String(error); }
+    } else { fampnnError = ''; }
+    if (unsupportedFampnnParent) fampnnError = 'This general/binder template is not an admitted FA-MPNN caller. Launch remains disabled; use the standalone or local-redesign launcher.';
+    const genericFampnnControl = usesFampnn ? <FampnnAnalysisControls value={activeFampnnOverrides} onChange={setFampnnOverrides}
+        summaryDefault="Declared input protein residues"
+        mutationDefault="Declared input protein residues" /> : null;
     const allMissingRequiredTemplateParams = missingRequiredTemplateParams;
-    const isReady = frustrampnnConfigurationReady && Boolean(
+    const isReady = !fampnnError && frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
         (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
@@ -1549,7 +1570,8 @@ export function JobSubmission() {
 
         if (isTemplateMode && templateData) {
             // Template mode: merge preset params with user params
-            const mergedParams = { ...templateData.preset_params, ...params };
+            const mergedParams = fampnnUserParams({ ...templateData.preset_params, ...params });
+            delete mergedParams.fampnn_analysis_overrides;
             const templateModelIdOverride = mergedParams.template_model_id;
             const templateModeIdOverride = mergedParams.template_mode_id;
             delete mergedParams.template_model_id;
@@ -1659,6 +1681,10 @@ export function JobSubmission() {
                 Object.assign(filteredParams, params);
             }
 
+            for (const key of Object.keys(filteredParams)) {
+                if (!(key in fampnnUserParams(filteredParams)) || key === 'fampnn_analysis_overrides') delete filteredParams[key];
+            }
+
             // specific check for ntp_type to ensure it's not sent if empty even if in params list
             if (filteredParams['ntp_type'] === '') {
                 delete filteredParams['ntp_type'];
@@ -1684,6 +1710,7 @@ export function JobSubmission() {
                 model_id: selectedModelId,
                 mode: selectedModeId,
                 params: finalParams,
+                ...(selectedModelId === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
             });
         } else {
             console.error('Submit failed: Template data not loaded or invalid mode', { wizardMode, templateData, selectedTemplateData });
@@ -2202,6 +2229,7 @@ export function JobSubmission() {
                                 ))}
                             </div>
 
+                            {unsupportedFampnnParent && <p role="alert">{fampnnError}</p>}
                             {genericFrustrampnnControl}
 
                             {(templateDetail?.preset_params?.pred_method ||
@@ -2305,6 +2333,7 @@ export function JobSubmission() {
                                 )
                                 }
 
+                                {genericFampnnControl}
                                 {genericFrustrampnnControl}
 
                                 {/* Ligand Selector for Complex Prediction mode in manual/advanced mode */}

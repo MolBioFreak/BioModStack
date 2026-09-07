@@ -9,6 +9,7 @@ import copy
 from pathlib import Path
 import argparse
 from multiprocessing import Pool
+from scientific_alignment_identity import validate_scientific_revision, validate_scientific_roles
 from Bio.PDB import PDBParser, PDBIO, Superimposer
 
 def setup_logging():
@@ -113,20 +114,31 @@ def align_structures(args):
     """Align Boltz structure to Design template with chain-specific handling"""
     (design_path, boltz_path, out_pdb, src_json, dst_json, src_pae, dst_pae,
      fold_id, seq_id, design_type, binder_chains_arg, target_chains_arg,
-     geometry_mode, strict_target_rmsd) = args
+     geometry_mode, strict_target_rmsd) = args[:14]
+    revision, chain_map = args[14:] if len(args) > 14 else (None, None)
     
     try:
+        validate_scientific_revision(revision)
         parser = PDBParser(QUIET=True)
         ref_structure = parser.get_structure("design", design_path)
         boltz_structure = parser.get_structure("boltz", boltz_path)
-
         if design_type == 'binder':
-            binder_chains = [c.strip() for c in binder_chains_arg.split(',')] if binder_chains_arg else ['A']
-            target_chains = [c.strip() for c in target_chains_arg.split(',')] if target_chains_arg else ['B']
+            if revision == 1:
+                binder_chains = [c.strip() for c in (binder_chains_arg or '').split(',') if c.strip()]
+                target_chains = [c.strip() for c in (target_chains_arg or '').split(',') if c.strip()]
+                validate_scientific_roles(
+                    [c.id for c in ref_structure.get_chains()], boltz_structure,
+                    binder_chains, target_chains, chain_map=chain_map,
+                )
+            else:
+                binder_chains = [c.strip() for c in binder_chains_arg.split(',')] if binder_chains_arg else ['A']
+                target_chains = [c.strip() for c in target_chains_arg.split(',')] if target_chains_arg else ['B']
 
             ref_chain_ids = set(get_chain_ids(ref_structure))
             boltz_chain_ids = set(get_chain_ids(boltz_structure))
             if not (set(binder_chains + target_chains) <= ref_chain_ids and set(binder_chains + target_chains) <= boltz_chain_ids):
+                if revision == 1:
+                    raise ValueError("Explicit scientific roles unavailable; strict alignment prohibits fallback")
                 shared = sorted(ref_chain_ids & boltz_chain_ids)
                 if len(shared) >= 2:
                     binder_chains, target_chains = [shared[0]], [shared[1]]
@@ -277,7 +289,11 @@ def main():
                       help="Fail anchored outputs whose target RMSD exceeds this threshold")
     parser.add_argument("--ncpus", type=int, default=1,
                       help="Number of CPUs for parallel processing")
+    parser.add_argument("--core_protein_scientific_contract", type=int, default=None, help="Trusted admitted-job revision; never inferred from results")
+    parser.add_argument("--chain_map_json", type=Path, default=None, help="Explicit complete source-to-output chain map")
     args = parser.parse_args()
+    validate_scientific_revision(args.core_protein_scientific_contract)
+    chain_map = json.loads(args.chain_map_json.read_text()) if args.chain_map_json else None
     
     # Validate input directories
     if not args.design_dir.exists():
@@ -347,6 +363,8 @@ def main():
             args.target_chains,
             args.geometry_mode,
             args.strict_target_rmsd,
+            args.core_protein_scientific_contract,
+            chain_map,
         ))
 
     if not tasks:

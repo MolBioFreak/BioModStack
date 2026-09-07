@@ -17,6 +17,7 @@ process PrepFAMPNN {
 
     output:
     path ("fampnn_input/*.pdb"), emit: pdbs
+    path ("fampnn_input/*.fampnn_prep.json"), emit: provenance, optional: true
     path ("*.csv"), emit: csv
 
     script:
@@ -37,10 +38,11 @@ process PrepFAMPNN {
     def customCdrFlag = customCdrPositions ? "--cdr_positions \"${customCdrPositions}\"" : ""
     def extraFixedJson = params.manual_mutation_fixed_positions_json ? " \\\\\n        --extra_fixed_positions_json \\\"${params.manual_mutation_fixed_positions_json}\\\"" : ""
 
+    def roleProofFlag = useAntibodyConstraints && params.get('core_protein_scientific_contract') != null ? '--require_role_provenance --prepared_dir fampnn_input' : ''
     def constraintCmd = useAntibodyConstraints
         ? """
     # Generate CDR-aware constraints based on design mode
-    python /scripts/prep_antibody_constraints.py \\
+    python /scripts/prep_antibody_constraints.py ${roleProofFlag} \\
         --input_dir "./" \\
         --out_fampnn "fampnn.csv" \\
         --out_mpnn "mpnn_fixed_chains.json" \\
@@ -66,9 +68,18 @@ process PrepFAMPNN {
     # Restore missing side-chains required by FAMPNN    
     python /scripts/prep_fampnn_designs.py \\
         --input_dir "./" \\
-        --out_dir "fampnn_input"
+        --out_dir "fampnn_input" ${params.get('core_protein_scientific_contract') != null ? '--publish_identity' : ''}
     
     ${constraintCmd}
+
+    ${roleProofFlag ? """
+    # Publish this task's actual input/output chain before child admission.
+    mkdir -p "${params.out_dir}/prep/fampnn/native"
+    for native in ${pdb_files}; do
+        cp "\$native" "${params.out_dir}/prep/fampnn/native/"
+    done
+    cp fampnn_input/*.pdb fampnn_input/*.fampnn_prep.json "${params.out_dir}/prep/fampnn/"
+    """ : ''}
     """
 }
 
@@ -89,6 +100,7 @@ process RunFAMPNN {
     input:
     tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)
     val analysis_chain_id
+    val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.
 
     output:
     tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons
@@ -108,8 +120,22 @@ process RunFAMPNN {
     if (!checkpointPath) {
         throw new IllegalArgumentException("FAMPNN checkpoint not configured. Set params.fampnn_checkpoint or params.fampnn_checkpoint_path.")
     }
+    def strictAnalysis = params.get('core_protein_scientific_contract') != null
+    def deferredAnalysis = strictAnalysis && analysis_contract.declaration instanceof Map
+    if (strictAnalysis && (analysis_contract.core_protein_scientific_contract != 1 || (!(analysis_contract.policy instanceof Map) && !deferredAnalysis))) {
+        throw new IllegalArgumentException('Marked FA-MPNN attempt requires workflow-owned analysis policy')
+    }
+    def policyBase64 = strictAnalysis ? groovy.json.JsonOutput.toJson(deferredAnalysis ? analysis_contract.declaration : analysis_contract.policy).getBytes('UTF-8').encodeBase64().toString() : ''
+    def policySetup = deferredAnalysis ? """
+    printf '%s' '${policyBase64}' | base64 --decode > fampnn_analysis_declaration.json
+    python /scripts/fampnn_policy_resolution.py --declaration fampnn_analysis_declaration.json --prepared-dir . --output fampnn_resolved_scopes.json
+    """ : (strictAnalysis ? "printf '%s' '${policyBase64}' | base64 --decode > fampnn_analysis_policy.json" : '')
+    def bindNativePolicy = deferredAnalysis ? 'python /scripts/fampnn_policy_resolution.py --scopes fampnn_resolved_scopes.json --native-dir fampnn_output/samples --output fampnn_analysis_policy.json' : ''
+    def analysisFlags = strictAnalysis ? '--core-protein-scientific-contract 1 --analysis-policy fampnn_analysis_policy.json --source-pdb-dir . --candidate-pdb-dir fampnn_output/samples' : ''
+    def requireAnalysis = strictAnalysis && (deferredAnalysis ? analysis_contract.declaration : analysis_contract.policy).require_full_coverage == true
     """
     mkdir -p results
+    ${policySetup}
 
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with defaultdict metadata.
@@ -129,6 +155,8 @@ process RunFAMPNN {
         out_dir="fampnn_output" \\
         ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \\
         2>&1 | tee fampnn_${task.index}.log
+
+    ${bindNativePolicy}
 
     # Rename output files from fold_X_sampleY.pdb to fold_X_seq_Y.pdb
     for file in fampnn_output/samples/*_sample*.pdb; do
@@ -153,9 +181,10 @@ process RunFAMPNN {
             --sample-pkl-dir "fampnn_output/sample_pkls" \\
             --out-jsonl "fampnn_seq_prob_metrics_${batch_id}.jsonl" \\
             --out-csv "fampnn_seq_prob_metrics_${batch_id}.csv" \\
-            --mutation-top-n ${params.fampnn_mutation_top_n ?: 25} \\
-            --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta ?: 0.0}
+            --mutation-top-n ${strictAnalysis && params.fampnn_mutation_top_n != null ? params.fampnn_mutation_top_n : (params.fampnn_mutation_top_n ?: 25)} \\
+            --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta ?: 0.0} ${analysisFlags}
     else
+        ${requireAnalysis ? 'exit 1 # Required sequence-probability analysis missing' : ':'}
         printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
     fi
     

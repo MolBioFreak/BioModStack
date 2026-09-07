@@ -78,13 +78,17 @@ process FilterRF3 {
     label 'Foundry'
     publishDir "${params.out_dir}/run/filter_rf3", mode: 'copy', pattern: '*.log'
 
+    publishDir "${params.out_dir}/run/filter_rf3", mode: 'copy', pattern: "rf3_data_*.jsonl", enabled: params.get('core_protein_scientific_contract') == 1
+    publishDir "${params.out_dir}/run/filter_rf3", mode: 'copy', pattern: "rf3_filter_*", enabled: params.get('core_protein_scientific_contract') == 1
+
     input:
     tuple path(cif_files), path(json_files)
 
     output:
     path ("output/*.pdb"), emit: structures, optional: true
+    path "rf3_filter_*", emit: stage_receipt, optional: true
     path "filter_rf3_${task.index}.log"
-    path ("output/filtered.jsonl"), emit: jsonl, optional: true
+    path (params.get('core_protein_scientific_contract') == 1 ? "rf3_data_*.jsonl" : "output/filtered.jsonl"), emit: jsonl, optional: true
 
     script:
     // Filter parameters similar to AF2/Boltz
@@ -102,6 +106,7 @@ process FilterRF3 {
 
     """    
     python3 /scripts/filter_structures.py prediction \\
+        ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1 --stage-receipt-dir rf3_filter_${task.index} --stage-id rf3_prediction_filter --job-id '${params.job_id}' --task-id ${task.index}" : ''} \\
         --input-dir ./ \\
         --output-dir output \\
         --convert-to-pdb \\

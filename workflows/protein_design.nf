@@ -553,7 +553,15 @@ process BuildGeneralRFD3ResultManifest {
     """
 }
 
+include { PublishRFFilterStage as PublishProteinDesignRF3Stage; PublishRFFilterStage as PublishProteinDesignRFD3Stage } from '../modules/rf_filter_stage'
+
 workflow PROTEIN_DESIGN {
+    def rf3StageTasks = Channel.empty()
+    def rf3StageExpected = Channel.value(0)
+    def rf3StageRole = 'skipped'
+    def rfd3StageTasks = Channel.empty()
+    def rfd3StageExpected = Channel.value(0)
+    def rfd3StageRole = 'skipped'
     try {
         nextflow.preview.topic = true
     }
@@ -740,6 +748,9 @@ workflow PROTEIN_DESIGN {
                 .set { rfd_tuples }
 
             FilterRFD3(rfd_tuples)
+            rfd3StageTasks = FilterRFD3.out.stage_receipt
+            rfd3StageExpected = rfd_tuples.count()
+            rfd3StageRole = params.run_rfd_only && !generalRfd3Generation ? 'selected_publication' : 'upstream'
 
             if (params.run_rfd_only) {
                 terminal_designs = FilterRFD3.out.structures_metadata
@@ -749,7 +760,7 @@ workflow PROTEIN_DESIGN {
                             proteinDesignTerminalCandidate(pdb, 'rfd3_only', 'rfd3')
                         }
                     }
-                    .ifEmpty { error('protein_design:no_candidates') }
+                    .ifEmpty { if (params.get('core_protein_scientific_contract') != 1) error('protein_design:no_candidates') }
                 final_pdbs = terminal_designs.map { candidate_meta, structure -> structure }.collect()
             }
             else {
@@ -938,14 +949,14 @@ workflow PROTEIN_DESIGN {
             def default_gpu = params.pinned_gpus ? params.pinned_gpus.toString().split(',')[0].trim().toInteger() : (params.gpu_id ?: 0)
             fampnn_pdbs
                 .combine(mega_csv)
-                .map { batch_id, pdbs, csv -> [batch_id, pdbs, csv, default_gpu] }
+                .map { batch_id, pdbs, csv -> [batch_id, FampnnAnalysisPolicy.stagePrepared(params, pdbs), csv, default_gpu] }
                 .set { fampnn_input }
 
             if (params.rfd_mode in ['binder_denovo', 'binder_foldconditioning', 'binder_motifscaffolding', 'binder_partialdiffusion']) {
-                RunFAMPNN(fampnn_input, 'A')
+                RunFAMPNN(fampnn_input, 'A', FampnnAnalysisPolicy.forWorkflow(params, 'protein_design', 'binder_role_residues'))
             }
             else {
-                RunFAMPNN(fampnn_input, 'all_chains')
+                RunFAMPNN(fampnn_input, 'all_chains', FampnnAnalysisPolicy.forWorkflow(params, 'protein_design', 'declared_protein_inputs'))
             }
 
             CompressFAMPNN("fampnn", RunFAMPNN.out.pdbs_jsons.flatten().collect())
@@ -1098,6 +1109,9 @@ workflow PROTEIN_DESIGN {
                 .set { rf3_tuple }
 
             FilterRF3(rf3_tuple)
+            rf3StageTasks = FilterRF3.out.stage_receipt
+            rf3StageExpected = rf3_tuple.count()
+            rf3StageRole = 'selected_publication'
             FilterRF3.out.structures
                 .flatten()
                 .collect()
@@ -1178,7 +1192,7 @@ workflow PROTEIN_DESIGN {
         terminal_designs = analysis_input_pdbs
             .flatten()
             .map { pdb -> proteinDesignTerminalCandidate(pdb, terminalBranch, terminalMethod) }
-            .ifEmpty { error('protein_design:no_candidates') }
+            .ifEmpty { if (params.get('core_protein_scientific_contract') != 1) error('protein_design:no_candidates') }
         def projected_terminal_pdbs = terminal_designs.map { candidate_meta, structure -> structure }
         final_pdbs = projected_terminal_pdbs.collect()
     }
@@ -1207,7 +1221,11 @@ workflow PROTEIN_DESIGN {
         .set { metadata_fold_seq }
 
     CombineMetadata(metadata_fold, metadata_fold_seq).csv.set { all_designs_metadata }
-    BindProteinDesignTerminalMetadata.out.manifest.collect().set { terminal_candidate_manifests }
+    BindProteinDesignTerminalMetadata.out.manifest.toList().set { terminal_candidate_manifests }
+    if (params.get('core_protein_scientific_contract') == 1) {
+        PublishProteinDesignRF3Stage('protein_design', 'rf3_prediction_filter', rf3StageRole, rf3StageExpected, rf3StageTasks.toList(), rf3StageRole == 'selected_publication' ? terminal_candidate_manifests : Channel.value([]))
+        PublishProteinDesignRFD3Stage('protein_design', 'rfd3_backbone_filter', rfd3StageRole, rfd3StageExpected, rfd3StageTasks.toList(), rfd3StageRole == 'selected_publication' ? terminal_candidate_manifests : Channel.value([]))
+    }
     ProjectProteinDesignMetadata(all_designs_metadata, terminal_candidate_manifests)
     projected_design_metadata = ProjectProteinDesignMetadata.out.csv
 

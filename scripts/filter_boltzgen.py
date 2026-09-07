@@ -124,6 +124,12 @@ def parse_size_buckets(value: str | None) -> list[dict[str, int]]:
 
 def get_metric_value(metrics: Dict, design: Dict, key: str):
     key = METRIC_ALIASES.get(key, key)
+    if metrics.get("core_protein_scientific_contract") == 1 and not key.endswith("_fraction"):
+        from lib.filtering.evidence import metric_evidence
+        item = metrics.get("metric_evidence", {}).get(key)
+        if item is not None:
+            return item["value"] if item["state"] == "ok" else None
+        return metric_evidence(key, metrics.get(key), metrics.get("plddt_units"))["value"]
     if key.endswith("_fraction"):
         residue_code = key[:-9].upper()
         sequence = (design.get("sequence", "") or metrics.get("designed_sequence", "") or "").upper()
@@ -172,12 +178,15 @@ def metric_is_higher_better(metric_name: str) -> bool:
     return not any(token in lowered for token in lower_is_better_tokens)
 
 
-def resolve_metric_specs(overrides: dict[str, float | None]) -> list[dict[str, object]]:
+def resolve_metric_specs(overrides: dict[str, float | None], core_protein_scientific_contract=None) -> list[dict[str, object]]:
     metric_specs: dict[str, dict[str, object]] = {
         "plddt": {"name": "plddt", "higher_is_better": True, "weight": 1.0},
         "affinity_probability": {"name": "affinity_probability", "higher_is_better": True, "weight": 1.0},
         "filter_rmsd": {"name": "filter_rmsd", "higher_is_better": False, "weight": 1.0},
     }
+
+    if core_protein_scientific_contract == 1:
+        metric_specs = {("design_ptm" if k == "plddt" else k): {**v, "name": "design_ptm" if k == "plddt" else k} for k, v in metric_specs.items()}
 
     for metric_name, weight in overrides.items():
         metric_name = METRIC_ALIASES.get(metric_name, metric_name)
@@ -195,7 +204,7 @@ def resolve_metric_specs(overrides: dict[str, float | None]) -> list[dict[str, o
     return list(metric_specs.values())
 
 
-def apply_metric_ranking(designs: list[dict], metric_specs: list[dict[str, object]]) -> None:
+def apply_metric_ranking(designs: list[dict], metric_specs: list[dict[str, object]], core_protein_scientific_contract=None) -> None:
     if not designs:
         return
     if not metric_specs:
@@ -203,6 +212,18 @@ def apply_metric_ranking(designs: list[dict], metric_specs: list[dict[str, objec
             design["quality_rank_key"] = 0.0
             design["quality_score"] = 1.0
         return
+
+    if core_protein_scientific_contract == 1:
+        from lib.filtering.evidence import metric_evidence
+        complete = []
+        for design in designs:
+            valid = all(metric_evidence(str(s["name"]), get_metric_value(design["metrics"], design, str(s["name"])), "percent")["state"] == "ok" for s in metric_specs)
+            if valid:
+                complete.append(design)
+            else:
+                design["quality_rank_key"] = None
+                design["quality_score"] = None
+        designs = complete
 
     rank_maps: list[dict[str, object]] = []
     for spec in metric_specs:
@@ -246,6 +267,7 @@ def select_diverse_subset(
     budget: int,
     alpha: float = 0.01,
     size_buckets: list[dict[str, int]] | None = None,
+    core_protein_scientific_contract=None,
 ) -> List[Dict]:
     """
     Select diverse subset using greedy max-min diversity with quality weight.
@@ -263,6 +285,12 @@ def select_diverse_subset(
     Returns:
         Selected subset of designs
     """
+    # Strict ranking marks incomplete candidates with unavailable aggregates.
+    # Gate before either the budget shortcut or sorting/arithmetic.
+    designs = [d for d in designs if all(
+        isinstance(d.get(key), (int, float)) and not isinstance(d.get(key), bool)
+        and np.isfinite(d[key]) for key in ('quality_score', 'quality_rank_key')
+    )] if core_protein_scientific_contract == 1 else designs
     size_buckets = size_buckets or []
 
     if len(designs) <= budget and not size_buckets:
@@ -337,8 +365,122 @@ def select_diverse_subset(
     return selected
 
 
+def run_strict_filter(args):
+    """Future-only path: all inputs retained in the disposition artifact."""
+    import hashlib
+    import math
+    from lib.filtering.evidence import evaluate
+
+    overrides = parse_metrics_override(args.metrics_override)
+    if args.metrics_override:
+        tokens = [t for t in re.split(r"[\s,]+", args.metrics_override.strip()) if t]
+        if len(tokens) != len(overrides) or any(v is not None and (not math.isfinite(v) or v <= 0) for v in overrides.values()):
+            raise ValueError("Unsupported metric override; use metric=positive_weight or metric=none")
+    extras = parse_additional_filters(args.additional_filters)
+    if args.additional_filters and len(extras) != len([t for t in re.split(r"[\s,]+", args.additional_filters.strip()) if t]):
+        raise ValueError("Unsupported additional filter")
+    if str(args.filter_biased).lower() == 'true':
+        extras = [{"feature": f"{aa}_fraction", "operator": '<', "threshold": .3} for aa in ('ALA','GLY','GLU','LEU','VAL')] + extras
+    specs = resolve_metric_specs(overrides, core_protein_scientific_contract=1)
+    criteria = [('plddt', args.boltzgen_min_plddt, None), ('affinity_probability', args.boltzgen_min_conf_score, None), ('filter_rmsd', None, args.boltzgen_max_rmsd)]
+    criteria += [(METRIC_ALIASES.get(str(e['feature']), str(e['feature'])), e['threshold'] if e['operator'] == '>' else None, e['threshold'] if e['operator'] == '<' else None) for e in extras]
+    required = [str(s['name']) for s in specs]
+    criteria += [(name, None, None) for name in required if name not in {c[0] for c in criteria if c[1] is not None or c[2] is not None}]
+    # Validate configuration even with no inputs.
+    evaluate(criteria, {}, '', required=required)
+    buckets = parse_size_buckets(args.size_buckets)
+    if args.size_buckets and len(buckets) != len([t for t in re.split(r"[\s,]+", args.size_buckets.strip()) if t]):
+        raise ValueError('Unsupported size buckets')
+    pdbs = args.pdbs or []
+    jsons = args.jsons or []
+    if len(pdbs) == 1:
+        pdbs = pdbs[0].split()
+    if len(jsons) == 1:
+        jsons = jsons[0].split()
+    dispositions, passing = [], []
+    for pdb in pdbs:
+        path = Path(pdb)
+        identity = path.stem
+        record = None
+        try:
+            matches = [Path(p) for p in jsons if Path(p).name in (f'confidence_{identity}.json', f'{identity}.json')]
+            if len(matches) > 1:
+                raise ValueError('ambiguous_metadata_identity')
+            raw = matches[0].read_bytes() if matches else None
+            metrics = json.loads(raw) if raw is not None else {}
+            if not isinstance(metrics, dict) or (metrics.get('design_id') is not None and metrics['design_id'] != identity):
+                raise ValueError('foreign_metadata_identity')
+            metrics['core_protein_scientific_contract'] = 1
+            sequence = metrics.get('designed_sequence') or ''
+            for name, _, _ in criteria:
+                if name.endswith('_fraction'):
+                    metrics[name] = get_metric_value(metrics, {'sequence': sequence}, name)
+            record = evaluate(criteria, metrics, identity, metrics.get('metric_evidence'), metrics.get('plddt_units'), required=required)
+            record['source_sha256'] = hashlib.sha256(raw).hexdigest() if raw is not None else None
+            record['structure_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+            if record['disposition'] == 'passed':
+                passing.append({'design_id': identity, 'path': path, 'json_path': matches[0] if matches else None, 'sequence': sequence, 'metrics': metrics})
+        except Exception as exc:
+            record = evaluate(criteria, {}, identity, required=required)
+            record.update(disposition='invalid_evidence', reason_code=str(exc))
+            for criterion in record['criteria']:
+                criterion['disposition'] = 'invalid_evidence'
+                criterion['evidence'].update(state='invalid', value=None, reason_code='candidate_evidence_failure')
+        dispositions.append(record)
+    apply_metric_ranking(passing, specs, core_protein_scientific_contract=1)
+    selected = select_diverse_subset(passing, args.budget if args.budget is not None else len(passing), args.alpha, buckets, core_protein_scientific_contract=1)
+    selected_ids = {d['design_id'] for d in selected}
+    for record in dispositions:
+        record['selected'] = record['candidate_id'] in selected_ids
+        if record['disposition'] == 'passed' and not record['selected']:
+            record['selection_rejection'] = {
+                'criterion': 'diversity_budget_selection',
+                'reason_code': 'not_selected_by_diversity_budget',
+            }
+    # Publish all dispositions before output copying can fail.
+    summary = {'core_protein_scientific_contract': 1, 'input_count': len(pdbs), 'passed_thresholds': len(passing), 'final_count': len(selected), 'effective_metrics': specs, 'dispositions': dispositions}
+    (Path(args.out_dir) / 'filter_summary.json').write_text(json.dumps(summary, allow_nan=False, indent=2))
+    for design in selected:
+        shutil.copy2(design['path'], Path(args.out_dir) / design['path'].name)
+        if design['json_path']:
+            # Write a new versioned artifact; never mutate the input sidecar.
+            raw = next(r for r in dispositions if r['candidate_id'] == design['design_id'])
+            from lib.filtering.evidence import metric_evidence
+            payload = {k: v for k, v in design['metrics'].items() if isinstance(v, str) or v is None}
+            payload.update({k: metric_evidence(k, v, design['metrics'].get('plddt_units'))['value'] for k, v in design['metrics'].items() if isinstance(v, (int, float))})
+            payload.update(core_protein_scientific_contract=1, source_sha256=raw['source_sha256'], metric_evidence={c['criterion']: c['evidence'] for c in raw['criteria']})
+            native = design['metrics'].get('native_scalar_source')
+            if native is not None:
+                if native['candidate_id'] != design['design_id']:
+                    raise ValueError('foreign_native_candidate')
+                declared = native['artifact']
+                native_path = design['json_path'].parent / declared['path']
+                if Path(declared['path']).name != declared['path'] or native_path.is_symlink():
+                    raise ValueError('foreign_native_source')
+                if hashlib.sha256(native_path.read_bytes()).hexdigest() != declared['sha256']:
+                    raise ValueError('native_source_bytes_changed')
+                shutil.copy2(native_path, Path(args.out_dir) / native_path.name)
+                payload['native_scalar_source'] = native
+            (Path(args.out_dir) / design['json_path'].name).write_text(json.dumps(payload, allow_nan=False, indent=2))
+    # Only a fully copied set receives publication authority. The earlier report
+    # remains useful failure evidence if copying stops, but cannot credit rows.
+    summary['publication'] = {}
+    for design in selected:
+        artifacts = {}
+        for role, source in [('structure', design['path']), ('metrics', design['json_path'])]:
+            if source is None:
+                raise ValueError('selected_candidate_metadata_missing')
+            path = Path(args.out_dir) / source.name
+            artifacts[role] = {'path': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        summary['publication'][design['design_id']] = artifacts
+        if design['metrics'].get('native_scalar_source') is not None:
+            artifacts['native'] = design['metrics']['native_scalar_source']['artifact']
+    (Path(args.out_dir) / 'filter_summary.json').write_text(json.dumps(summary, allow_nan=False, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Filter BoltzGen results with diversity selection")
+    parser.add_argument("--core-protein-scientific-contract", type=int, choices=[1], default=None)
     parser.add_argument("--pdbs", nargs="+", help="Input PDB files")
     parser.add_argument("--jsons", nargs="+", help="Input JSON metadata files")
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
@@ -370,6 +512,8 @@ def main():
     
     args = parser.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
+    if args.core_protein_scientific_contract == 1:
+        return run_strict_filter(args)
     
     if not args.pdbs:
         print("No PDBs to filter")

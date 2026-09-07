@@ -19,7 +19,10 @@ from types import SimpleNamespace
 import math
 import re
 
+from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
 from database import get_session, Design, Job
+from services.analysis_registry import scientific_contract_revision, unavailable_scientific_identity
+from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificChainMetric, ViewerDocument
 from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.cdr_annotator import extract_sequence_from_pdb
@@ -179,6 +182,8 @@ class DesignFrustraMPNNProjection(BaseModel):
 
 
 class DesignResponse(BaseModel):
+    core_protein_scientific_contract: Optional[int] = None
+    scientific_structure_document: Optional[ViewerDocument] = None
     id: str
     job_id: str
     name: str
@@ -473,6 +478,13 @@ class NotesUpdate(BaseModel):
 
 
 class PlotlyMetricPoint(BaseModel):
+    model_config = {"extra": "forbid"}
+    contract_revision: int | None = None
+    source_job_id: str | None = None
+    cohort_key: str | None = None
+    metric_states: Dict[str, MetricState] | None = None
+    metric_descriptors: Dict[str, MetricDescriptor] | None = None
+    metric_sources: Dict[str, MetricSource | None] | None = None
     id: str
     name: str
     metrics: Dict[str, float]
@@ -500,6 +512,7 @@ class PlotlyChartSuggestion(BaseModel):
 
 
 class PlotlyMetricsResponse(BaseModel):
+    scientific_cohorts: List[ScientificCohort] = []
     job_id: str
     metric_keys: List[str]
     points: List[PlotlyMetricPoint]
@@ -892,8 +905,10 @@ def _review_metric_allowed(design: Design, key: str) -> bool:
     return True
 
 
-def _build_plotly_metrics(design: Design) -> Dict[str, float]:
-    """Build a dense, plot-ready numeric metric map for a design."""
+def _build_plotly_metrics(design: Design, *, job: Job | None = None) -> Dict[str, float]:
+    """Keep legacy flattening isolated from the trusted revision-one projection."""
+    if revision_for_job(job) == 1:
+        return projection(design)["metrics"]
     metrics: Dict[str, float] = {}
 
     base_metrics = {
@@ -1847,11 +1862,15 @@ def _design_to_response(
     design: Design,
     *,
     include_fampnn_structure_fallback: bool = False,
+    job: Optional[Job] = None,
 ) -> DesignResponse:
     state = sa_inspect(design)
     unloaded = set(state.unloaded)
     data: Dict[str, Any] = {}
     for field_name in DesignResponse.model_fields.keys():
+        if field_name in {"core_protein_scientific_contract", "scientific_structure_document"}:
+            data[field_name] = None  # Only the Job/registered-producer adapter may publish authority.
+            continue
         if field_name in {"frustration_csv_relpath", "frustrampnn"}:
             continue
         if field_name in unloaded:
@@ -2072,10 +2091,16 @@ def _design_to_response(
     if "sequence_design_metrics" not in capabilities:
         clear_review_fields(prefixes=("fampnn_",), names=("mpnn_score",))
 
-    if not isinstance(data.get("metric_provenance"), dict):
-        data["metric_provenance"] = build_design_metric_provenance({**data, "pdb_path": data.get("pdb_path")})
-    if not isinstance(data.get("metric_completeness"), dict):
-        data["metric_completeness"] = build_design_metric_completeness(data)
+    # Marked projections are rebuilt from persisted inputs under the owning Job;
+    # cached display dictionaries (including historical optimistic availability)
+    # are not scientific authority. Never lazy-load Job from this sync function.
+    strict_rank = revision_for_job(job) == 1
+    if job is not None and job.id != data.get("job_id"):
+        raise ValueError("rank projection requires the design's owning Job")
+    if strict_rank or not isinstance(data.get("metric_provenance"), dict):
+        data["metric_provenance"] = build_design_metric_provenance(data, job=job)
+    if strict_rank or not isinstance(data.get("metric_completeness"), dict):
+        data["metric_completeness"] = build_design_metric_completeness(data, job=job)
     data.update(_compute_import_metadata(design))
     return DesignResponse.model_validate(data)
 
@@ -2214,7 +2239,7 @@ async def _collect_plotly_metrics(
 
     query = (
         select(Design)
-        .options(load_only(*ANALYTICS_LOAD_ONLY_COLUMNS))
+        .options(load_only(Design.job_id, *ANALYTICS_LOAD_ONLY_COLUMNS))
         .where(Design.job_id.in_(job_ids))
         .order_by(Design.created_at.desc())
         .limit(limit)
@@ -2229,16 +2254,18 @@ async def _collect_plotly_metrics(
     designs = result.scalars().all()
     total = (await session.execute(count_query)).scalar() or 0
 
+    owners = await owning_jobs(session, designs)
     points: List[PlotlyMetricPoint] = []
     metric_keys: set[str] = set()
     for design in designs:
-        metrics = _build_plotly_metrics(design)
+        scientific = await persisted_projection(design, session) if revision_for_job(owners.get(design.job_id)) == 1 else None
+        metrics = scientific["metrics"] if scientific else _build_plotly_metrics(design)
         metric_keys.update(metrics.keys())
         points.append(
             PlotlyMetricPoint(
                 id=design.id,
                 name=design.name,
-                metrics=metrics,
+                **(scientific or {"metrics": metrics}),
             )
         )
 
@@ -2247,6 +2274,7 @@ async def _collect_plotly_metrics(
         job_id=job_id,
         metric_keys=sorted_metric_keys,
         points=points,
+        scientific_cohorts=(await partition(designs, owners, session))[1],
         total=int(total),
         metric_metadata=_build_plotly_metric_metadata(sorted_metric_keys),
         chart_suggestions=_build_plotly_chart_suggestions(sorted_metric_keys),
@@ -2611,7 +2639,13 @@ async def list_designs(
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     designs = result.scalars().all()
-    responses = [_design_to_response(d) for d in designs]
+    owners = await owning_jobs(session, designs)
+    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    for design, response in zip(designs, responses):
+        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
+        if response.core_protein_scientific_contract == 1:
+            from services.boltz_scientific_consumer import scientific_document
+            response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(
@@ -2827,7 +2861,14 @@ async def get_design(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
-    return _design_to_response(design, include_fampnn_structure_fallback=True)
+    owners = await owning_jobs(session, [design])
+    response = _design_to_response(design, include_fampnn_structure_fallback=True,
+                                   job=owners.get(design.job_id))
+    response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
+    if response.core_protein_scientific_contract == 1:
+        from services.boltz_scientific_consumer import scientific_document
+        response.scientific_structure_document = await scientific_document(design, session)
+    return response
 
 
 @router.get("/{design_id}/pdb")
@@ -2887,7 +2928,7 @@ class ResidueMetrics(BaseModel):
     length: int
 
 
-@router.get("/{design_id}/residue-metrics", response_model=ResidueMetrics)
+@router.get("/{design_id}/residue-metrics", response_model=Union[ResidueMetrics, ScientificViewerMetric, ScientificResidueMetric])
 async def get_residue_metrics(
     design_id: str,
     session: AsyncSession = Depends(get_session)
@@ -2899,6 +2940,10 @@ async def get_residue_metrics(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
+    if await scientific_contract_revision(design, session) == 1:
+        from services.boltz_scientific_consumer import compute_persisted_native_metric
+        return await compute_persisted_native_metric(design, "residue_plddt", session)
+
     if not design.residue_plddt:
         raise HTTPException(status_code=404, detail="No per-residue data available for this design")
     
@@ -2914,7 +2959,7 @@ async def get_residue_metrics(
     )
 
 
-@router.get("/{design_id}/chain-metrics")
+@router.get("/{design_id}/chain-metrics", response_model=Union[ScientificViewerMetric, ScientificChainMetric, Dict[str, Any]])
 async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_session)):
     """Return per-chain pLDDT and type information."""
     result = await session.execute(select(Design).where(Design.id == design_id))
@@ -2922,6 +2967,10 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
+
+    if await scientific_contract_revision(design, session) == 1:
+        from services.boltz_scientific_consumer import compute_persisted_native_metric
+        return await compute_persisted_native_metric(design, "chain_metrics", session)
 
     payload = await _get_cached_design_analysis_payload(
         session,
@@ -3018,7 +3067,13 @@ async def get_designs_for_job(
     
     # Count total
     total = (await session.execute(count_query)).scalar()
-    responses = [_design_to_response(d) for d in designs]
+    owners = await owning_jobs(session, designs)
+    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    for design, response in zip(designs, responses):
+        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
+        if response.core_protein_scientific_contract == 1:
+            from services.boltz_scientific_consumer import scientific_document
+            response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(
@@ -3173,7 +3228,7 @@ class PAEData(BaseModel):
     size: int  # Matrix dimension
 
 
-@router.get("/{design_id}/pae", response_model=PAEData)
+@router.get("/{design_id}/pae", response_model=Union[PAEData, ScientificViewerMetric])
 async def get_pae_data(
     design_id: str,
     max_size: int = Query(200, description="Maximum matrix dimension"),
@@ -3191,6 +3246,12 @@ async def get_pae_data(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
+    if await scientific_contract_revision(design, session) == 1:
+        from services.boltz_scientific_consumer import compute_persisted_pae
+        from services.analysis_registry import normalize_pae_matrix_params
+        payload, _, _ = await compute_persisted_pae(design, normalize_pae_matrix_params({'max_size':max_size}), session)
+        return ScientificViewerMetric.model_validate(payload)
+
     payload = await _get_cached_design_analysis_payload(
         session,
         design,

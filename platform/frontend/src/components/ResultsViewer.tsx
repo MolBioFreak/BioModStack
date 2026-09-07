@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { MaturationEvidence } from './MaturationEvidence';
+import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
@@ -16,7 +18,6 @@ import type {
     DesignFilters,
     DesignSortField,
     Job,
-    PAEData,
     PersistedAnalysisRun,
     ManualMutagenesisConfig,
     RfLoopMetric,
@@ -2945,25 +2946,35 @@ export function ResultsViewer() {
         queryKey: ['design-analysis', 'pae_matrix', selectedDesignId],
         queryFn: () => (
             selectedDesignId
-                ? fetchDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
+                ? fetchDesignAnalysis<unknown>(selectedDesignId, 'pae_matrix', { max_size: 200 }).then((response) => response.data)
                 : null
         ),
         enabled: structureViewerAnalysisEnabled && selectedDesignCanRunPaeMatrix,
         staleTime: 60000,
         refetchInterval: (query) => {
-            const status = (query.state.data as PersistedAnalysisRun<PAEData> | null | undefined)?.status;
+            const status = (query.state.data as PersistedAnalysisRun<unknown> | null | undefined)?.status;
             return status === 'queued' || status === 'running' ? jobPollingInterval(1500, query) : false;
         },
     });
+    const paeMatrixSummary = useMemo(() => {
+        const raw = paeMatrixAnalysisRun?.status === 'completed' ? paeMatrixAnalysisRun.result : null;
+        if (!raw) return null;
+        if (selectedDesign?.core_protein_scientific_contract != null) {
+            const parsed = parseScientificPae(raw, selectedDesign.scientific_structure_document);
+            return parsed.status === 'ok' ? `${parsed.rows.length} × ${parsed.columns.length} matrix` : parsed.reason;
+        }
+        return typeof raw === 'object' && 'size' in raw && typeof raw.size === 'number' && Number.isSafeInteger(raw.size)
+            ? `${raw.size} × ${raw.size} matrix` : null;
+    }, [paeMatrixAnalysisRun, selectedDesign?.core_protein_scientific_contract, selectedDesign?.scientific_structure_document]);
     const paeMatrixAnalysis = paeMatrixAnalysisRun?.status === 'completed'
-        ? (paeMatrixAnalysisRun.result as PAEData | null)
+        ? (paeMatrixAnalysisRun.result ?? null)
         : null;
     const runPaeMatrixAnalysis = useMutation({
         mutationFn: async () => {
             if (!selectedDesignId) {
                 throw new Error('No design selected');
             }
-            const response = await triggerDesignAnalysis<PAEData>(selectedDesignId, 'pae_matrix', { max_size: 200 });
+            const response = await triggerDesignAnalysis<unknown>(selectedDesignId, 'pae_matrix', { max_size: 200 });
             return response.data;
         },
         onSuccess: () => {
@@ -4083,9 +4094,7 @@ export function ResultsViewer() {
             unavailableReason: !selectedDesignCanRunPaeMatrix
                 ? 'Required aligned-error artifact is unavailable.'
                 : formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
-            summary: paeMatrixAnalysis
-                ? `${paeMatrixAnalysis.size} × ${paeMatrixAnalysis.size} matrix`
-                : null,
+            summary: paeMatrixSummary,
             run: () => runPaeMatrixAnalysis.mutateAsync(),
         },
         {
@@ -4104,7 +4113,7 @@ export function ResultsViewer() {
                 : null,
             run: () => runContactMapAnalysis.mutateAsync(),
         },
-    ].filter((item) => item.supported)), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, selectedDesignCanRunAntibodyAnalysis, selectedDesignCanRunChainMetrics, selectedDesignCanRunContactMap, selectedDesignCanRunIpsae, selectedDesignCanRunPaeMatrix, selectedDesignCanRunStructureSummary, selectedDesignSupportsAntibodyAnalyzer, selectedDesignSupportsChainMetrics, selectedDesignSupportsContactMap, selectedDesignSupportsIpsae, selectedDesignSupportsPaeMatrix, selectedDesignSupportsStructureSummary, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
+    ].filter((item) => item.supported)), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, paeMatrixSummary, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, selectedDesignCanRunAntibodyAnalysis, selectedDesignCanRunChainMetrics, selectedDesignCanRunContactMap, selectedDesignCanRunIpsae, selectedDesignCanRunPaeMatrix, selectedDesignCanRunStructureSummary, selectedDesignSupportsAntibodyAnalyzer, selectedDesignSupportsChainMetrics, selectedDesignSupportsContactMap, selectedDesignSupportsIpsae, selectedDesignSupportsPaeMatrix, selectedDesignSupportsStructureSummary, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
     const overviewAnalysisCounts = useMemo(() => {
         if (!selectedDesignId) {
             return { cached: 0, running: 0, missing: 0, attention: 0 };
@@ -7477,6 +7486,10 @@ export function ResultsViewer() {
                                                             {selectedDesignPpiflowSummaryRows.length > 0 && (
                                                                 <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                                                                     <div className="text-[11px] uppercase tracking-wider text-slate-500">PPIFlow Refinement Record</div>
+                                                                    <MaturationEvidence
+                                                                        comparisons={selectedDesign.confidence_metrics?.maturation_comparisons}
+                                                                        completeness={selectedDesign.metric_completeness?.ppiflow}
+                                                                    />
                                                                     <div className="mt-3 space-y-2 text-xs">
                                                                         {selectedDesignPpiflowSummaryRows.map(([label, value]) => (
                                                                             <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">

@@ -847,7 +847,13 @@ process SpawnFAMPNNJobs {
     path "spawn_fampnn_result.json", emit: result
     
     script:
-    def params_json = groovy.json.JsonOutput.toJson([
+    def analysisContract = FampnnAnalysisPolicy.forWorkflow(params, 'antibody_denovo', 'authorized_sequence_design_region')
+    def admittedPdbDir = analysisContract ? params.out_dir + '/prep/fampnn' : pdb_dir
+    def analysisParams = analysisContract ? [
+        core_protein_scientific_contract: analysisContract.core_protein_scientific_contract,
+        fampnn_analysis_declaration: analysisContract.declaration
+    ] : [:]
+    def params_json = groovy.json.JsonOutput.toJson(analysisParams + [
         fampnn_checkpoint: params.fampnn_checkpoint,
         fampnn_checkpoint_path: params.fampnn_checkpoint_path,
         fampnn_temperature: params.fampnn_temperature ?: 0.0001,
@@ -860,15 +866,16 @@ process SpawnFAMPNNJobs {
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
         pinned_gpus: params.pinned_gpus
     ])
+    def params_json_base64 = params_json.getBytes('UTF-8').encodeBase64().toString()
     """
     python3 ${params.code_root}/scripts/spawn_fampnn_children.py \\
         --parent_job_id "${parent_job_id}" \\
-        --pdb_dir "${pdb_dir}" \\
+        --pdb_dir "${admittedPdbDir}" \\
         --pdbs_per_job ${pdbs_per_job} \\
         --seqs_per_design ${seqs_per_design} \\
         --batch_name "${batch_name}" \\
         --display_prefix "${params.job_name ?: 'Antibody'}" \\
-        --params_json '${params_json}' \\
+        --params_json "\$(printf '%s' '${params_json_base64}' | base64 --decode)" \\
         --api_url "${params.api_url}" \\
         --output spawn_fampnn_result.json \\
         2>&1 | tee spawn_fampnn.log

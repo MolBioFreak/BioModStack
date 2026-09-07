@@ -45,10 +45,10 @@ workflow FAMPNN_CHILD {
         .collect()
         .combine(PrepFAMPNN.out.csv)
         .map { payload ->
-            tuple(0, payload[0..-2], payload[-1], gpu_id_val)
+            tuple(0, FampnnAnalysisPolicy.stagePrepared(params, payload[0..-2]), payload[-1], gpu_id_val)
         }
 
-    RunFAMPNN(fampnn_run_input, chain_id)
+    RunFAMPNN(fampnn_run_input, chain_id, FampnnAnalysisPolicy.forChild(params))
 
     // Optional filtering based on pSCE thresholds
     def filterEnabled = params.enable_fampnn_filter != false && (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)

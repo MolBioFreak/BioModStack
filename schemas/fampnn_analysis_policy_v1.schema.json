@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms:fampnn-analysis-policy:v1",
+  "title": "Workflow-owned resolved FA-MPNN analysis policy",
+  "description": "Server-owned resolved transport, not an operator raw-JSON setting. Identity strings are source PDB chain:author_number:insertion_code; an empty insertion code retains the trailing colon. Inputs are exact staged producer input stems. Admission must resolve declarations and overrides against authoritative workflow identities before transport. The analyzer independently checks membership against the pinned producer parser's source-PDB identity mapping. This artifact never changes generation authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "owner", "version", "declaration", "dialect", "require_full_coverage", "allow_summary_override", "inputs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"const": 1},
+    "owner": {"enum": ["protein_design", "antibody_denovo", "protein_local_redesign"]},
+    "declaration": {"enum": ["binder_role_residues", "declared_protein_inputs", "authorized_sequence_design_region", "sequence_redesign_positions_spec"]},
+    "dialect": {"const": "fampnn-18363df253dbeb7b2cb963daf7a732fbaa25157d"},
+    "require_full_coverage": {"type": "boolean", "description": "Explicit workflow requirement; do not implicitly turn optional analysis into required analysis."},
+    "allow_summary_override": {"type": "boolean"},
+    "inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+      "additionalProperties": {"$ref": "#/$defs/input"}
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"owner": {"const": "protein_design"}}}, "then": {"properties": {"declaration": {"enum": ["binder_role_residues", "declared_protein_inputs"]}}}},
+    {"if": {"properties": {"owner": {"const": "antibody_denovo"}}}, "then": {"properties": {"declaration": {"const": "authorized_sequence_design_region"}}}},
+    {"if": {"properties": {"owner": {"const": "protein_local_redesign"}}}, "then": {"properties": {"declaration": {"const": "sequence_redesign_positions_spec"}}}}
+  ],
+  "$defs": {
+    "membership": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "override": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/membership"}]},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_domain", "sequence_design", "summary", "summary_override", "mutation_override", "artifact_binding"],
+      "properties": {
+        "artifact_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["producer_input_id", "source_pdb_sha256", "producer_candidate_ids"],
+          "description": "Workflow-owned expected input bytes and authorized native producer identities, not database design IDs. Resolver must snapshot and bind the generation input before producer execution. Input ID must equal this input key; candidate IDs must use that exact input ID plus native _sampleN. Analyzer also enforces these cross-field relations. Output bytes are observed evidence, never substituted for expected input authority.",
+          "properties": {
+            "producer_input_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+            "source_pdb_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "producer_candidate_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*_sample(0|[1-9][0-9]*)$"}}
+          }
+        },
+        "input_domain": {"$ref": "#/$defs/membership", "description": "Workflow-declared input protein domain, not inferred from model output."},
+        "sequence_design": {"$ref": "#/$defs/membership", "description": "Authorized sequence-design set before fixed-mask exclusion."},
+        "summary": {"$ref": "#/$defs/membership", "description": "Workflow declaration's explicit summary membership, independent of mutation scope."},
+        "summary_override": {"$ref": "#/$defs/override", "description": "Null inherits workflow summary; [] explicitly selects no residues. Must stay inside input_domain and be allowed by workflow."},
+        "mutation_override": {"$ref": "#/$defs/override", "description": "Null inherits sequence_design; [] explicitly selects no mutations. Narrowing only, followed by exclusion of fixed residues."}
+      }
+    }
+  }
+}

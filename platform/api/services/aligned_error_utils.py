@@ -9,6 +9,17 @@ import numpy as np
 
 from paths import resolve_runtime_data_path
 
+# Model tasks mount scripts without the API tree. Keep one pure identity owner
+# and preserve these public/private aliases for existing numerical consumers.
+import sys
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.structure_identity import (
+    ResidueRecord, NUCLEIC_RESIDUES, _IDENTITY_FIELDS, _parse_pdb_atom_line,
+    _strict_structure_records, residue_identity_axis,
+)
+
 
 STANDARD_RESIDUES = {
     "ALA", "ARG", "ASN", "ASP", "CYS",
@@ -17,22 +28,12 @@ STANDARD_RESIDUES = {
     "SER", "THR", "TRP", "TYR", "VAL",
     "DA", "DC", "DT", "DG", "A", "C", "U", "G",
 }
-NUCLEIC_RESIDUES = {"DA", "DC", "DT", "DG", "A", "C", "U", "G"}
 
 BOLTZ_PAE_NPZ_FORMAT = "boltz_pae_npz"
 PROTENIX_FULL_JSON_FORMAT = "protenix_full_json"
 CONFIDENCE_JSON_FORMAT = "confidence_json"
 
 
-@dataclass(frozen=True)
-class ResidueRecord:
-    index: int
-    chain_id: str
-    residue_name: str
-    residue_number: int
-    ca_coord: np.ndarray
-    cb_coord: np.ndarray
-    chain_type: str
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,10 @@ class AlignedErrorArtifact:
     matrix_key: str
     matrix: np.ndarray
     residues: list[ResidueRecord]
+    row_positions: tuple[int, ...] | None = None
+    column_positions: tuple[int, ...] | None = None
+    identity_evidence: dict[str, Any] | None = None
+    contract_revision: int | None = None
 
 
 def _normalize_path(path_value: str | Path | None) -> Path | None:
@@ -53,26 +58,6 @@ def _normalize_path(path_value: str | Path | None) -> Path | None:
     return candidate.resolve()
 
 
-def _parse_pdb_atom_line(line: str) -> dict[str, Any] | None:
-    atom_num = int(line[6:11].strip())
-    atom_name = line[12:16].strip()
-    residue_name = line[17:20].strip()
-    chain_id = line[21].strip()
-    residue_seq_num = line[22:26].strip()
-    if not residue_seq_num:
-        return None
-    if residue_name == "LIG":
-        return None
-    return {
-        "atom_num": atom_num,
-        "atom_name": atom_name,
-        "residue_name": residue_name,
-        "chain_id": chain_id,
-        "residue_seq_num": int(residue_seq_num),
-        "x": float(line[30:38].strip()),
-        "y": float(line[38:46].strip()),
-        "z": float(line[46:54].strip()),
-    }
 
 
 def _parse_cif_atom_line(line: str, field_map: dict[str, int]) -> dict[str, Any] | None:
@@ -99,8 +84,21 @@ def _parse_cif_atom_line(line: str, field_map: dict[str, int]) -> dict[str, Any]
     }
 
 
-def load_structure_residue_records(structure_path: str | Path) -> tuple[list[ResidueRecord], np.ndarray]:
+def validate_contract_revision(revision: int | None) -> None:
+    if revision is not None and (type(revision) is not int or revision != 1):
+        raise ValueError("Unsupported core protein scientific contract revision")
+
+
+
+
+def load_structure_residue_records(
+    structure_path: str | Path, *, contract_revision: int | None = None,
+    selected_model: int = 1, selected_altloc: str = "",
+) -> tuple[list[ResidueRecord], np.ndarray]:
+    validate_contract_revision(contract_revision)
     resolved = _normalize_path(structure_path)
+    if contract_revision == 1 and resolved is not None:
+        return _strict_structure_records(resolved.read_bytes(), resolved.suffix.lower() in (".cif", ".mmcif"), selected_model, selected_altloc)
     if resolved is None or not resolved.exists():
         raise FileNotFoundError(f"Structure file not found: {structure_path}")
 
@@ -130,6 +128,7 @@ def load_structure_residue_records(structure_path: str | Path) -> tuple[list[Res
             chain_id = str(atom["chain_id"]).strip()
             residue_number = int(atom["residue_seq_num"])
             coord = np.array([float(atom["x"]), float(atom["y"]), float(atom["z"])], dtype=float)
+            # Unmarked results retain the historical insertion-collapsing lookup.
             residue_key = (chain_id, residue_number, residue_name)
 
             if atom_name in {"CA", "C1'", "C1"}:
@@ -141,6 +140,7 @@ def load_structure_residue_records(structure_path: str | Path) -> tuple[list[Res
                         "residue_number": residue_number,
                         "ca_coord": coord,
                         "key": residue_key,
+                        "insertion_code": atom.get("insertion_code", ""),
                     }
                 )
             elif residue_name not in STANDARD_RESIDUES:
@@ -227,16 +227,118 @@ def _reduce_protenix_matrix(
     return _reduce_atom_token_matrix(matrix, token_mask, residue_count, path)
 
 
+
+
+
+
+def _validate_residue_axis(axis, residues, candidate_id, document_id, size):
+    expected = residue_identity_axis(residues, candidate_id=candidate_id, document_id=document_id)
+    if not isinstance(axis, dict) or any(axis.get(k) != expected[k] for k in ("candidate_id", "document_id", "source_sha256")):
+        raise ValueError("Foreign or missing axis identity binding")
+    rows = axis.get("residues")
+    if not isinstance(rows, list) or len(rows) != size or size != len(residues):
+        raise ValueError("Unavailable axis: dimensions/downsample require complete native identity")
+    positions = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Malformed axis identity")
+        position = row.get("index")
+        if type(position) is not int or not 0 <= position < len(residues) or row != expected["residues"][position]:
+            raise ValueError("Foreign residue axis identity")
+        positions.append(position)
+    if len(set(positions)) != size:
+        raise ValueError("Duplicate residue axis identity")
+    return tuple(positions)
+
+
+def validate_numeric_chain_projection(residues: list[ResidueRecord]) -> None:
+    """Reject loss of canonical instances through the auth-chain metric API.
+
+    This is a numerical boundary only: parsing and identity axes retain every
+    valid instance, including mmCIF label chains sharing an author chain.
+    """
+    instances: dict[str, tuple] = {}
+    for residue in residues:
+        identity = (residue.selected_model, residue.label_asym_id,
+                    residue.source_entity_id, residue.entity_instance_id)
+        if residue.chain_id in instances and instances[residue.chain_id] != identity:
+            raise ValueError(f"Ambiguous auth-chain projection: {residue.chain_id}")
+        instances[residue.chain_id] = identity
+
+
+def _load_strict_aligned_error(
+    artifact_path, aligned_error_format, structure_path, matrix_key,
+    candidate_id, document_id, identity_evidence, selected_model, selected_altloc,
+):
+    import hashlib
+    from io import BytesIO
+
+    if not isinstance(identity_evidence, dict) or set(identity_evidence) != {
+        "artifact_sha256", "matrix_key", "row_axis", "column_axis",
+    }:
+        raise ValueError("Invalid producer identity evidence keys")
+    key = matrix_key if matrix_key is not None else (
+        "token_pair_pae" if aligned_error_format == PROTENIX_FULL_JSON_FORMAT else "pae"
+    )
+    if not isinstance(key, str) or not key or identity_evidence["matrix_key"] != key:
+        raise ValueError("Foreign aligned-error matrix_key identity")
+    source = artifact_path.read_bytes()
+    if identity_evidence.get("artifact_sha256") != hashlib.sha256(source).hexdigest():
+        raise ValueError("Foreign aligned-error artifact identity")
+    residues, _ = load_structure_residue_records(
+        structure_path, contract_revision=1, selected_model=selected_model, selected_altloc=selected_altloc,
+    )
+    if aligned_error_format == BOLTZ_PAE_NPZ_FORMAT:
+        with np.load(BytesIO(source), allow_pickle=False) as payload:
+            if key not in payload:
+                raise ValueError(f"Aligned-error artifact is missing matrix_key {key}")
+            matrix = np.asarray(payload[key])
+    elif aligned_error_format in (CONFIDENCE_JSON_FORMAT, PROTENIX_FULL_JSON_FORMAT):
+        payload = json.loads(source)
+        if key not in payload:
+            raise ValueError(f"Aligned-error artifact is missing matrix_key {key}")
+        raw = payload[key]
+        # JSON booleans can disappear in a mixed float array. Validate leaf types
+        # before NumPy's common-dtype promotion, not after conversion to float.
+        if (not isinstance(raw, list) or any(not isinstance(row, list) for row in raw)
+                or any(type(value) not in (int, float) for row in raw for value in row)):
+            raise ValueError("Aligned-error matrix requires native numeric measurements")
+        matrix = np.asarray(raw)
+    else:
+        raise ValueError("Unsupported aligned-error artifact format")
+    if matrix.dtype.kind not in "iuf":
+        raise ValueError("Aligned-error matrix requires native numeric measurements")
+    matrix = _validate_square_matrix(matrix, artifact_path)
+    row_positions = _validate_residue_axis(identity_evidence.get("row_axis"), residues, candidate_id, document_id, matrix.shape[0])
+    column_positions = _validate_residue_axis(identity_evidence.get("column_axis"), residues, candidate_id, document_id, matrix.shape[1])
+    validate_numeric_chain_projection(residues)
+    return AlignedErrorArtifact(artifact_path, aligned_error_format, key, matrix, residues,
+                                row_positions, column_positions, identity_evidence, contract_revision=1)
+
+
 def load_aligned_error_artifact(
     *,
     aligned_error_path: str | Path,
     aligned_error_format: str,
     structure_path: str | Path,
     matrix_key: str | None = None,
+    contract_revision: int | None = None,
+    candidate_id: str | None = None,
+    document_id: str | None = None,
+    identity_evidence: dict[str, Any] | None = None,
+    selected_model: int = 1,
+    selected_altloc: str = "",
 ) -> AlignedErrorArtifact:
+    validate_contract_revision(contract_revision)
     artifact_path = _normalize_path(aligned_error_path)
     if artifact_path is None or not artifact_path.exists():
         raise FileNotFoundError(f"Aligned-error artifact not found: {aligned_error_path}")
+
+    if contract_revision == 1:
+        return _load_strict_aligned_error(
+            artifact_path, aligned_error_format, structure_path, matrix_key,
+            candidate_id, document_id, identity_evidence, selected_model, selected_altloc,
+        )
 
     residues, token_mask = load_structure_residue_records(structure_path)
     if not residues:

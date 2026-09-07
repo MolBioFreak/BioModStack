@@ -187,8 +187,12 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 
 def build_manifest(
-    *, metadata: dict[str, Any], predictions_dir: Path, producer_method: str
+    *, metadata: dict[str, Any], predictions_dir: Path, producer_method: str,
+    protein_science_contract_revision: int | None = None, boltz_native_root: Path | None = None,
 ) -> dict[str, Any]:
+    if protein_science_contract_revision is not None or boltz_native_root is not None:
+        from write_structure_producer_manifest import validate_native_options
+        validate_native_options(protein_science_contract_revision, producer_method, boltz_native_root)
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", producer_method):
         raise ValueError("producer_method is invalid")
     if not predictions_dir.is_dir() or predictions_dir.is_symlink():
@@ -222,6 +226,12 @@ def build_manifest(
                 "source_format": source_format,
             }
         )
+        if protein_science_contract_revision == 1:
+            from write_structure_producer_manifest import boltz_native_identity
+            candidates[-1]["protein_science_contract_revision"] = 1
+            candidates[-1]["boltz_native_identity"] = boltz_native_identity(
+                native_root=boltz_native_root, predictions_root=predictions_dir, structure=structure,
+                source=physical_bytes, candidate_id=metadata["producer_artifact_id"], document_id=output_key)
     return {
         "schema_name": "sequence_structure_producer_candidates",
         "schema_version": 1,
@@ -234,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metadata-base64", required=True)
     parser.add_argument("--predictions-dir", required=True, type=Path)
     parser.add_argument("--producer-method", required=True)
+    parser.add_argument("--protein-science-contract-revision", type=int, choices=[1])
+    parser.add_argument("--boltz-native-root", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -242,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
             metadata=metadata,
             predictions_dir=args.predictions_dir,
             producer_method=args.producer_method,
+            protein_science_contract_revision=args.protein_science_contract_revision,
+            boltz_native_root=args.boltz_native_root,
         )
         _atomic_json_write(args.output, manifest)
     except (OSError, ValueError) as exc:

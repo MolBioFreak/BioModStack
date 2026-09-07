@@ -104,15 +104,62 @@ def _normalize_design_id_list(value: Any) -> list[str]:
     return cleaned
 
 
+async def scientific_contract_revision(design: Design, session: AsyncSession) -> int | None:
+    """Read launch authority, never a Design/user-supplied provenance claim."""
+    from services.core_protein_scientific_contract import revision_for_job
+    job = await session.scalar(
+        select(Job).options(load_only(Job.id, Job.provenance)).where(Job.id == design.job_id)
+    )
+    return revision_for_job(job)
+
+
+def unavailable_scientific_identity(design: Design, metric: str, reason: str) -> dict[str, Any]:
+    return {
+        "schema_name": "core_protein_viewer_metric", "schema_version": 1,
+        "contract_revision": 1, "design_id": design.id, "design_name": design.name,
+        "metric": metric, "status": "unavailable", "reason": reason,
+        "document": None, "artifact_sha256": None, "producer_binding": None,
+        "row_axis": None, "column_axis": None,
+        "sampled_row_indices": None, "sampled_column_indices": None,
+        "native_shape": None, "native_row_positions": None, "native_column_positions": None, "pae_matrix": None, "size": None,
+    }
+
+
 async def build_analysis_input_signature(
     definition: AnalysisDefinition,
     subject: Any,
     params: dict[str, Any],
     session: AsyncSession,
 ) -> str:
+    if (definition.subject_kind == "design" and definition.analysis_type in {PAE_MATRIX_ANALYSIS, CHAIN_METRICS_ANALYSIS, IPSAE_INTERFACE_ANALYSIS}
+            and await scientific_contract_revision(subject, session) == 1):
+        from services.boltz_scientific_consumer import verified_boltz_design
+        identity = {"core_protein_scientific_contract":1, "viewer_identity_adapter":2,
+            "design_id":subject.id, "analysis_type":definition.analysis_type, "params":params}
+        if definition.analysis_type == IPSAE_INTERFACE_ANALYSIS:
+            identity.update(review_profile_id=subject.review_profile_id,
+                review_role_map=subject.review_role_map,
+                detected_antibody_chains=subject.detected_antibody_chains,
+                detected_target_chain=subject.detected_target_chain,
+                producer_record=subject.confidence_metrics)
+        try:
+            if not isinstance(getattr(subject, 'confidence_metrics', None), dict) or not subject.confidence_metrics.get('core_protein_scientific'):
+                raise ValueError('missing_producer_native_axis_ledger')
+            selected = await verified_boltz_design(subject, session)
+        except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+            # This distinct namespace can only cache unavailable results. It
+            # never falls back to legacy paths or reuses a prior healthy run.
+            return _json_hash({**identity, "status":"unavailable"})
+        return _json_hash({**identity, "status":"ok", "native":selected['native'],
+            "artifacts":selected['artifacts'], "block":selected['block']})
     value = definition.build_input_signature(subject, params, session)
     if inspect.isawaitable(value):
         value = await value
+    if definition.subject_kind == "design" and definition.analysis_type in {
+        PAE_MATRIX_ANALYSIS, CHAIN_METRICS_ANALYSIS, CONTACT_MAP_ANALYSIS,
+    } and await scientific_contract_revision(subject, session) == 1:
+        return _json_hash({"legacy_signature": str(value), "core_protein_scientific_contract": 1,
+                           "viewer_identity_adapter": 1, "candidate_id": subject.id})
     return str(value)
 
 
@@ -278,30 +325,38 @@ async def _job_design_scope_rows(
     return list(result.scalars().all())
 
 
+async def correlation_scientific_scope(designs, session):
+    """One canonical read path for cached computation and source-bound keys."""
+    from services.scientific_analytics import owning_jobs, partition, persisted_projection
+    from services.core_protein_scientific_contract import revision_for_job
+    owners = await owning_jobs(session, designs)
+    projections, sources = {}, []
+    for design in designs:
+        owner = owners.get(design.job_id)
+        if owner is None or revision_for_job(owner) != 1:
+            continue
+        value = await persisted_projection(design, session)
+        projections[design.id] = value
+        sources.append({"id": design.id, "job_id": design.job_id, "revision": 1,
+            "owner_model": owner.model_id, "owner_provenance": owner.provenance,
+            "producer_record": design.confidence_metrics,
+            "projection": {key: ({k: v.model_dump(mode="json") if hasattr(v, "model_dump") else v
+                for k, v in item.items()} if isinstance(item, dict) else item)
+                for key, item in value.items()}})
+    legacy, cohorts = await partition(designs, owners, session, projections=projections)
+    return legacy, [cohort.model_dump(mode="json") for cohort in cohorts], sources
+
+
 async def build_job_correlation_signature(job: Job, params: dict[str, Any], session: AsyncSession) -> str:
     designs = await _job_design_scope_rows(
         session,
         job,
         include_children=bool(params.get("include_children", True)),
         design_ids=params.get("design_ids") or [],
-        columns=(
-            Design.id,
-            Design.plddt_overall,
-            Design.plddt_binder,
-            Design.pae_overall,
-            Design.pae_interaction,
-            Design.rmsd_binder,
-            Design.rmsd_overall,
-            Design.mpnn_score,
-            Design.conf_score,
-            Design.ptm,
-            Design.rog,
-            Design.ligand_iptm,
-            Design.affinity_score,
-            Design.binder_probability,
-        ),
+        columns=tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
+    designs, cohorts, sources = await correlation_scientific_scope(designs, session)
     payload = {
         "analysis_type": JOB_CORRELATION_MATRIX_ANALYSIS,
         "job_id": str(job.id),
@@ -326,6 +381,8 @@ async def build_job_correlation_signature(job: Job, params: dict[str, Any], sess
             for design in designs
         ],
     }
+    if sources:
+        payload.update(scientific_contract_revision=1, scientific_sources=sources, scientific_cohorts=cohorts)
     return _json_hash(payload)
 
 

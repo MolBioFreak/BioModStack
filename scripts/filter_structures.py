@@ -52,13 +52,38 @@ class BackboneFilter(StructureFilter):
     
     def extract_metrics(self, structure_path: Path, metadata: dict) -> Dict[str, Any]:
         """Extract SS and RoG metrics from backbone structure."""
-        structure = load_structure(structure_path)
-        if structure is None:
-            return {}
-        
-        metrics = calculate_backbone_metrics(structure)
+        if self.core_protein_scientific_contract == 1:
+            import hashlib
+            import tempfile
+            import biotite
+            from lib.filtering.evidence import metric_evidence
+            # Hash exactly the immutable bytes given to the existing parser,
+            # including compression for .cif.gz; never reopen the source to hash.
+            raw = structure_path.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()
+            with tempfile.TemporaryDirectory(prefix='backbone-snapshot-') as owned:
+                snapshot = Path(owned) / structure_path.name
+                snapshot.write_bytes(raw)
+                structure = load_structure(snapshot)
+            metrics: Dict[str, Any] = dict(calculate_backbone_metrics(structure, 1))
+            provenance = {}
+            for name in ('rog', 'helices', 'strands', 'total_ss'):
+                provenance[name] = {
+                    'source': str(structure_path), 'source_sha256': digest,
+                    'calculation': ('peptide_backbone_coordinate_radius_of_gyration'
+                                    if name == 'rog' else 'biotite.annotate_sse_contiguous_element_count'),
+                    'calculation_version': 1, 'biotite_version': biotite.__version__,
+                    'model': 1, 'evidence': metric_evidence(name, metrics.get(name)),
+                }
+            metrics['_descriptor_provenance'] = provenance
+        else:
+            structure = load_structure(structure_path)
+            if structure is None:
+                return {}
+            metrics = calculate_backbone_metrics(structure, self.core_protein_scientific_contract)
         # Add any metrics from JSON metadata
-        metrics.update(metadata)
+        if self.core_protein_scientific_contract != 1:
+            metrics.update(metadata)
         return metrics
 
 
@@ -89,7 +114,7 @@ class PredictionFilter(StructureFilter):
     
     def extract_metrics(self, structure_path: Path, metadata: dict) -> Dict[str, Any]:
         """Extract confidence and RMSD metrics from predictions."""
-        return extract_confidence_metrics(metadata)
+        return extract_confidence_metrics(metadata, self.core_protein_scientific_contract)
 
 
 def parse_thresholds(args, stage: str) -> Dict[str, tuple]:
@@ -186,6 +211,7 @@ def main():
     
     # Common arguments
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--core-protein-scientific-contract', type=int, choices=[1], default=None)
     common.add_argument('--input-dir', required=True, help='Input directory')
     common.add_argument('--output-dir', required=True, help='Output directory')
     common.add_argument('--convert-to-pdb', action='store_true',
@@ -237,7 +263,18 @@ def main():
     prediction.add_argument('--rf3-max-rmsd-overall', type=float, dest='max_rmsd')
     prediction.add_argument('--rf3-max-rmsd-binder', type=float, dest='max_rmsd_binder')
     
+    # Stage receipts belong only to the existing RF3/RFD3 workflow filters.
+    for stage_parser in (backbone, prediction):
+        stage_parser.add_argument('--stage-receipt-dir')
+        stage_parser.add_argument('--stage-id')
+        stage_parser.add_argument('--job-id')
+        stage_parser.add_argument('--task-id')
     args = parser.parse_args()
+    receipt_dir = getattr(args, 'stage_receipt_dir', None)
+    if receipt_dir and (args.core_protein_scientific_contract != 1 or not all(
+        getattr(args, key, None) for key in ('stage_id', 'job_id', 'task_id')
+    )):
+        parser.error('Stage receipt requires revision 1 and explicit stage/job/task identity')
     
     # Parse thresholds
     thresholds = parse_thresholds(args, args.stage)
@@ -262,8 +299,12 @@ def main():
         output_dir=Path(args.output_dir),
         thresholds=thresholds,
         convert_to_pdb=args.convert_to_pdb,
+        core_protein_scientific_contract=args.core_protein_scientific_contract,
     )
     
+    if receipt_dir:
+        from lib.filtering.stage_receipt import snapshot_inputs
+        snapshot_inputs(filter_instance, Path(receipt_dir))
     results = filter_instance.run()
     
     # Write results JSONL to working directory (not output_dir) for Nextflow
@@ -272,7 +313,7 @@ def main():
         for r in results:
             structure_path = Path(r.get('file', ''))
             metadata_path = filter_instance.find_metadata_file(structure_path) if structure_path else None
-            metadata = filter_instance.load_metadata(metadata_path) if metadata_path else {}
+            metadata = {} if args.core_protein_scientific_contract == 1 else (filter_instance.load_metadata(metadata_path) if metadata_path else {})
             ids = derive_ids(structure_path, metadata)
 
             if ids["fold_id"] is None:
@@ -309,7 +350,17 @@ def main():
                     "rmsd_binder": metrics.get("rmsd_binder"),
                 })
 
-            f.write(json.dumps(record) + '\n')
+            if args.core_protein_scientific_contract == 1:
+                record.update({k: r.get(k) for k in ('core_protein_scientific_contract', 'candidate_id', 'disposition', 'criteria', 'source_sha256')})
+                if 'descriptor_provenance' in r:
+                    record['descriptor_provenance'] = r['descriptor_provenance']
+                if 'candidate_failure' in r:
+                    record['candidate_failure'] = r['candidate_failure']
+            f.write(json.dumps(record, allow_nan=args.core_protein_scientific_contract != 1) + '\n')
+    if receipt_dir:
+        from lib.filtering.stage_receipt import publish_invocation
+        publish_invocation(filter_instance, results, jsonl_path, Path(receipt_dir),
+                           args.stage_id, args.job_id, args.task_id)
     logger.info(f"Results written to {jsonl_path}")
     
     # Exit with error if nothing passed

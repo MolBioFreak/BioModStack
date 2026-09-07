@@ -88,7 +88,7 @@ process RunBoltzGen {
 
     output:
     path "output/designs/*.pdb", emit: pdbs, optional: true
-    path "output/designs/*.json", emit: jsons, optional: true
+    path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true
     path "*.log"
 
     script:
@@ -108,6 +108,7 @@ process RunBoltzGen {
     # Run BoltzGen with wrapper that handles CIF->PDB conversion and batch processing
     
     python3 /scripts/run_boltzgen_wrapper.py \\
+        ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1" : ''} \\
         ${configArg} \\
         --out_dir output \\
         --num_designs ${numDesigns} \\
@@ -126,29 +127,33 @@ process RunBoltzGen {
 }
 
 process FilterBoltzGen {
+    // Native byte evidence must be regular task-local snapshots, not symlinks.
+    stageInMode { params.get('core_protein_scientific_contract') == 1 ? 'copy' : 'symlink' }
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "filtered/*.json"
     publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     path pdbs
     path jsons
 
     output:
-    path "filtered/*.pdb", emit: pdbs
+    path "filtered/*.pdb", emit: pdbs, optional: params.get('core_protein_scientific_contract') == 1
     path "filtered/*.json", emit: jsons, optional: true
     path "filtered/filter_summary.json", emit: summary, optional: true
+    path "filtered/*.{npz,csv}", emit: native_artifacts, optional: true
     path "*.log"
 
     script:
-    // Build filter parameters
-    def minPlddt = params.get('boltzgen_min_plddt') ?: ''
-    def minConfScore = params.get('boltzgen_min_conf_score') ?: ''
-    def maxRmsd = params.get('boltzgen_refolding_rmsd_threshold') ?: params.get('boltzgen_max_rmsd') ?: ''
-    def budget = params.get('boltzgen_budget') ?: ''
-    def alpha = params.get('boltzgen_alpha') ?: '0.01'
+    // Only marked future attempts use strict zero-preserving transport.
+    def strictEvidence = params.get('core_protein_scientific_contract') == 1
+    def minPlddt = strictEvidence ? params.get('boltzgen_min_plddt') : (params.get('boltzgen_min_plddt') ?: null)
+    def minConfScore = strictEvidence ? params.get('boltzgen_min_conf_score') : (params.get('boltzgen_min_conf_score') ?: null)
+    def maxRmsd = strictEvidence ? (params.get('boltzgen_refolding_rmsd_threshold') != null ? params.get('boltzgen_refolding_rmsd_threshold') : params.get('boltzgen_max_rmsd')) : (params.get('boltzgen_refolding_rmsd_threshold') ?: params.get('boltzgen_max_rmsd') ?: null)
+    def budget = strictEvidence ? params.get('boltzgen_budget') : (params.get('boltzgen_budget') ?: null)
+    def alpha = strictEvidence && params.get('boltzgen_alpha') != null ? params.get('boltzgen_alpha') : (params.get('boltzgen_alpha') ?: '0.01')
     def filterBiased = params.containsKey('boltzgen_filter_biased') ? (params.get('boltzgen_filter_biased') != false) : true
     def metricsOverride = params.get('boltzgen_metrics_override') ?: ''
     def additionalFilters = params.get('boltzgen_additional_filters') ?: ''
@@ -166,12 +171,13 @@ process FilterBoltzGen {
     fi
 
     python3 ${params.code_root}/scripts/filter_boltzgen.py \\
+        ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1" : ''} \\
         --pdbs ${pdbs} \\
         --jsons ${jsons} \\
-        ${minPlddt ? "--boltzgen-min-plddt ${minPlddt}" : ''} \\
-        ${minConfScore ? "--boltzgen-min-conf-score ${minConfScore}" : ''} \\
-        ${maxRmsd ? "--boltzgen-max-rmsd ${maxRmsd}" : ''} \\
-        ${budget ? "--budget ${budget}" : ''} \\
+        ${minPlddt != null ? "--boltzgen-min-plddt ${minPlddt}" : ''} \\
+        ${minConfScore != null ? "--boltzgen-min-conf-score ${minConfScore}" : ''} \\
+        ${maxRmsd != null ? "--boltzgen-max-rmsd ${maxRmsd}" : ''} \\
+        ${budget != null ? "--budget ${budget}" : ''} \\
         --alpha ${alpha} \\
         --filter-biased ${filterBiased} \\
         ${metricsOverride ? "--metrics-override '${metricsOverride}'" : ''} \\

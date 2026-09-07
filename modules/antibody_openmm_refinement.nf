@@ -12,15 +12,31 @@ def antibodyOpenMMStableProducerKey(rawValue, String field) {
     return value
 }
 
+def antibodyOpenMMSetting(settings, String key, fallback) {
+    if (!settings.containsKey('core_protein_scientific_contract')) return settings.get(key) ?: fallback
+    // Marked inputs default only on absence/null, never Groovy truthiness.
+    def value = settings.get(key)
+    return value == null ? fallback : value
+}
+
+def antibodyOpenMMCdrOnly(settings) {
+    if (!settings.containsKey('core_protein_scientific_contract')) return settings.get('openmm_cdr_only') ?: true
+    def marker = settings.get('core_protein_scientific_contract')
+    if (!(marker instanceof Integer) || marker != 1) throw new IllegalArgumentException('invalid core_protein_scientific_contract')
+    def value = antibodyOpenMMSetting(settings, 'openmm_cdr_only', true)
+    if (!(value instanceof Boolean)) throw new IllegalArgumentException('openmm_cdr_only must be boolean')
+    return value
+}
+
 workflow AntibodyOpenMMRefinement {
     take:
     validated_structures
 
     main:
     log.info("Step 3.5: Running OpenMM physics refinement...")
-    log.info("  Compute tier: ${params.openmm_compute_tier ?: 'fast'}")
-    log.info("  CDR-only mode: ${params.openmm_cdr_only ?: true}")
-    log.info("  Restraint mode: ${params.openmm_restraint_mode ?: 'framework'}")
+    log.info("  Compute tier: ${antibodyOpenMMSetting(params, 'openmm_compute_tier', 'fast')}")
+    log.info("  CDR-only mode: ${antibodyOpenMMCdrOnly(params)}")
+    log.info("  Restraint mode: ${antibodyOpenMMSetting(params, 'openmm_restraint_mode', 'framework')}")
 
     openmm_records = validated_structures.map { meta, pdb_or_pdbs ->
         def pdbs = pdb_or_pdbs instanceof Collection ? new ArrayList(pdb_or_pdbs as Collection) : [pdb_or_pdbs]
@@ -37,11 +53,11 @@ workflow AntibodyOpenMMRefinement {
 
     OpenMMRelaxation(
         openmm_batched,
-        params.openmm_compute_tier ?: 'fast',
-        params.openmm_cdr_only ?: true,
-        params.openmm_restraint_mode ?: 'framework',
-        params.openmm_antibody_chain ?: 'H',
-        params.openmm_force_field ?: 'amber14sb'
+        antibodyOpenMMSetting(params, 'openmm_compute_tier', 'fast'),
+        antibodyOpenMMCdrOnly(params),
+        antibodyOpenMMSetting(params, 'openmm_restraint_mode', 'framework'),
+        antibodyOpenMMSetting(params, 'openmm_antibody_chain', 'H'),
+        antibodyOpenMMSetting(params, 'openmm_force_field', 'amber14sb')
     )
 
     OpenMMRelaxation.out.relaxed_pdbs.subscribe { pdbs ->
@@ -70,7 +86,7 @@ workflow AntibodyOpenMMRefinement {
             params.openmm_mmgbsa_mode ?: 'interface',
             params.openmm_binder_chains ?: 'H',
             params.openmm_target_chains ?: 'A',
-            params.openmm_force_field ?: 'amber14sb'
+            antibodyOpenMMSetting(params, 'openmm_force_field', 'amber14sb')
         )
 
         OpenMMScore.out.scores_json.subscribe { jsons ->

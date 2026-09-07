@@ -405,6 +405,7 @@ process PrepProteinLocalFAMPNN {
 
     output:
     path('fampnn_input/*.pdb'), emit: pdbs
+    path('fampnn_input/*.fampnn_prep.json'), emit: provenance, optional: true
     path('fampnn.csv'), emit: csv
 
     script:
@@ -415,7 +416,7 @@ process PrepProteinLocalFAMPNN {
 
     python3 ${params.code_root}/scripts/prep_fampnn_designs.py \
         --input_dir ./ \
-        --out_dir fampnn_input
+        --out_dir fampnn_input ${params.get('core_protein_scientific_contract') != null ? '--publish_identity' : ''}
 
     python3 ${params.code_root}/scripts/prep_fampnn_constraints_from_spec.py \
         --input_dir fampnn_input \
@@ -496,6 +497,8 @@ process ExportProteinLocalBoltzPredictions {
     """
 }
 
+include { PublishRFFilterStage as PublishProteinLocalRFD3Stage } from '../modules/rf_filter_stage'
+
 workflow PROTEIN_LOCAL_REDESIGN {
     main:
     if (!params.containsKey('interactive_gating')) params.interactive_gating = false
@@ -532,6 +535,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def inputPdbForMerge = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
     def inputPdbForNative = params.plr_input_pdb ? Channel.of(file(params.plr_input_pdb)) : Channel.empty()
 
+    def rfd3StageTasks = Channel.empty()
+    def rfd3StageExpected = Channel.value(0)
+    def rfd3StageRole = 'skipped'
     def mergedBackboneArtifacts
     def manifestChannel
 
@@ -562,6 +568,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
         )
         if (nativeSequenceMethod != 'skip') {
             FilterRFD3(RunRFD3.out.structures_metadata)
+            rfd3StageTasks = FilterRFD3.out.stage_receipt
+            rfd3StageExpected = RunRFD3.out.structures_metadata.count()
+            rfd3StageRole = 'upstream'
             mergedBackboneArtifacts = FilterRFD3.out.structures_metadata
         } else {
             mergedBackboneArtifacts = RunRFD3.out.structures_metadata
@@ -576,8 +585,15 @@ workflow PROTEIN_LOCAL_REDESIGN {
         PrepProteinLocalRFD3Input(ResolveProteinLocalRegion.out.seed_pdb, manifestChannel)
         RunRFD3(PrepProteinLocalRFD3Input.out.input_json)
         FilterRFD3(RunRFD3.out.structures_metadata)
+        rfd3StageTasks = FilterRFD3.out.stage_receipt
+        rfd3StageExpected = RunRFD3.out.structures_metadata.count()
+        rfd3StageRole = 'upstream'
         MergeProteinLocalComplexes(FilterRFD3.out.structures_metadata, inputPdbForMerge, manifestChannel)
         mergedBackboneArtifacts = MergeProteinLocalComplexes.out.structures_metadata
+    }
+
+    if (params.get('core_protein_scientific_contract') == 1) {
+        PublishProteinLocalRFD3Stage('protein_local_redesign', 'rfd3_backbone_filter', rfd3StageRole, rfd3StageExpected, rfd3StageTasks.toList(), Channel.value([]))
     }
 
     if (resumeFromBackbones) {
@@ -663,10 +679,10 @@ workflow PROTEIN_LOCAL_REDESIGN {
         def defaultGpu = params.pinned_gpus ? params.pinned_gpus.toString().split(',')[0].trim().toInteger() : (params.gpu_id ?: 0)
         fampnnPdbs
             .combine(megaCsv)
-            .map { batch_id, pdbs, csv -> [batch_id, pdbs, csv, defaultGpu] }
+            .map { batch_id, pdbs, csv -> [batch_id, FampnnAnalysisPolicy.stagePrepared(params, pdbs), csv, defaultGpu] }
             .set { fampnnInput }
 
-        RunFAMPNN(fampnnInput, params.plr_design_chains)
+        RunFAMPNN(fampnnInput, params.plr_design_chains, FampnnAnalysisPolicy.forWorkflow(params, 'protein_local_redesign', 'sequence_redesign_positions_spec'))
         FilterFAMPNN(RunFAMPNN.out.pdbs_jsons)
 
         finalDesignPdbs = FilterFAMPNN.out.pdbs

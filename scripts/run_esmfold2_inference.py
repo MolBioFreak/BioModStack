@@ -342,6 +342,42 @@ def parse_pdb_polymer_components(
     return components
 
 
+def native_scalar_metrics(sample: Any) -> dict:
+    """Native token-mean fractions, with invalid distinct from absent/null.
+
+    Version identity follows the two immutable provider pins in esmfold2.def.
+    This declaration is source semantics, not deployed-image attestation.
+    """
+    import math
+    import numpy as np
+    result = {'scalar_dialect': {
+        'name': 'biohub_esmfold2_token_scalar_v1',
+        'esm_commit': 'c94ed8d763bbd7088b296949e5b401e8ea12073a',
+        'transformers_commit': '3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf'}, 'scalar_states': {}}
+    for key, attr in (('plddt_mean', 'plddt'), ('ptm', 'ptm'), ('iptm', 'iptm')):
+        native = getattr(sample, attr, None)
+        value, state = None, 'unavailable'
+        if native is not None:
+            state = 'invalid'
+            try:
+                if hasattr(native, 'detach'):
+                    native = native.detach().float().cpu().numpy() if str(native.dtype) != 'torch.bool' else True
+                array = np.asarray(native)
+                if array.dtype.kind not in 'fiu' or array.size == 0 or (key != 'plddt_mean' and array.size != 1):
+                    raise ValueError('invalid native scalar type or shape')
+                if not np.all(np.isfinite(array)) or not np.all((array >= 0) & (array <= 1)):
+                    raise ValueError('invalid native scalar domain')
+                value = float(array.mean()) if key == 'plddt_mean' else float(array.item())
+                if not math.isfinite(value):
+                    raise ValueError('invalid native reduction')
+                state = 'ok'
+            except (ValueError, TypeError, AttributeError, OverflowError):
+                value = None
+        result[key] = value
+        result['scalar_states'][key] = state
+    return result
+
+
 def tensor_mean(value: Any) -> float | None:
     if value is None:
         return None
@@ -413,6 +449,8 @@ def load_msa_for_sequence(
     remove_insertions: bool = True,
     max_sequences: int | None = None,
     expected_sequence: str,
+    expected_sha256: str | None = None,
+    snapshot_dir: Path | None = None,
 ) -> tuple[Any | None, dict[str, Any] | None]:
     if not path or not str(path).strip():
         return None, None
@@ -422,6 +460,21 @@ def load_msa_for_sequence(
     resolved_fmt = (fmt or "auto").strip().lower()
     if resolved_fmt == "auto":
         resolved_fmt = "stockholm" if msa_path.suffix.lower() in {".sto", ".stockholm"} else "a3m"
+    if expected_sha256 is not None:
+        # Hash and parse the same read, not a mutable pathname reopened later.
+        import hashlib
+        import tempfile
+        data = msa_path.read_bytes()
+        actual_hash = hashlib.sha256(data).hexdigest()
+        if actual_hash != expected_sha256:
+            raise ESMFold2InputError('MSA artifact hash disagrees with effective settings')
+        with tempfile.TemporaryDirectory(prefix='msa-snapshot-', dir=snapshot_dir) as directory:
+            snapshot = Path(directory) / ('input.' + resolved_fmt)
+            snapshot.write_bytes(data)
+            parsed, metadata = load_msa_for_sequence(msa_cls, path=str(snapshot), fmt=resolved_fmt,
+                remove_insertions=remove_insertions, max_sequences=max_sequences, expected_sequence=expected_sequence)
+        metadata.update(path=str(msa_path), sha256=actual_hash)
+        return parsed, metadata
     if resolved_fmt == "stockholm":
         msa = msa_cls.from_stockholm(msa_path, remove_insertions=remove_insertions, max_sequences=max_sequences)
     elif resolved_fmt == "a3m":
@@ -498,6 +551,8 @@ def build_structure_prediction_input(
             remove_insertions=msa_remove_insertions,
             max_sequences=msa_max_sequences,
             expected_sequence=normalized_sequence,
+            expected_sha256=getattr(args, '_msa_expected_hashes', {}).get(str(msa_path)),
+            snapshot_dir=Path(args.output_dir) if getattr(args, '_msa_expected_hashes', None) else None,
         )
         inputs.append(ProteinInput(id=component_id, sequence=normalized_sequence, msa=msa))
         protein_count += 1
@@ -648,8 +703,117 @@ def build_structure_prediction_input(
     return StructurePredictionInput(sequences=inputs), manifest_components
 
 
+def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[str], dict]:
+    """Compile the marked workflow into the actual runner argv, without model imports.
+
+    File mappings are supplied only by Nextflow path inputs. Top-level MSA belongs
+    to the primary sequence; it is never implicitly assigned to a component.
+    """
+    import hashlib
+    marker = request.get('core_protein_scientific_contract')
+    if type(marker) is not int or marker != 1:
+        raise ValueError('core_protein_scientific_contract must be integer 1')
+    json.dumps(request, allow_nan=False)
+    parser = build_parser()
+    defaults = vars(parser.parse_args(['--output-dir', 'esmfold2_results']))
+    defaults.update(num_loops=1, num_sampling_steps=5, num_diffusion_samples=1,
+                    device='cuda', local_files_only=True)
+    normalized = dict(request)
+    for key in defaults:
+        alias = 'esmf_' + key
+        if alias in normalized:
+            if key in normalized and (type(normalized[key]) is not type(normalized[alias]) or normalized[key] != normalized[alias]):
+                raise ValueError(f'conflicting aliases: {key}/{alias}')
+            normalized[key] = normalized[alias]
+    original = normalized
+    if request.get('esmf_requested_settings_json'):
+        original = json.loads(request['esmf_requested_settings_json'])
+        if not isinstance(original, dict):
+            raise ValueError('invalid requested settings transport')
+        original = {key.removeprefix('esmf_'): value for key, value in original.items()}
+    settings, sources, argv = {}, [], []
+    integer_bounds = {'seed': (0, 2147483647), 'msa_max_sequences': (1, 10000),
+                      'num_loops': (1, 12), 'num_sampling_steps': (1, 1000),
+                      'num_diffusion_samples': (1, 8)}
+
+    def checked(key, value):
+        if key in integer_bounds and value is not None:
+            low, high = integer_bounds[key]
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f'{key} must be an integer in [{low}, {high}]')
+        if key in ('msa_remove_insertions', 'local_files_only', 'pdb_include_dna_rna') and type(value) is not bool:
+            raise ValueError(f'{key} must be boolean')
+        if key == 'msa_format' and value not in ('auto', 'a3m', 'stockholm'):
+            raise ValueError('invalid msa_format')
+        return value
+
+    def stage(value, scope):
+        if not isinstance(value, str) or value not in staged_paths:
+            raise ValueError(f'missing staged file: {value}')
+        path = Path(staged_paths[value])
+        if not path.is_file():
+            raise ValueError(f'missing staged file: {value}')
+        data = path.read_bytes()
+        sources.append({'scope': scope, 'requested_path': value, 'used_path': str(path),
+                        'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data)})
+        return str(path)
+
+    components = normalized.get('esmf_complex_components', normalized.get('complex_components'))
+    if components is None:
+        raw = normalized.get('complex_components_json')
+        components = json.loads(raw) if raw else []
+    if not isinstance(components, list):
+        raise ValueError('complex_components must be a list')
+    components = json.loads(json.dumps(components, allow_nan=False))
+    if normalized.get('msa_path') and not normalized.get('sequence'):
+        raise ValueError('top-level MSA requires a primary sequence; component MSA must be scoped explicitly')
+    for component in components:
+        if not isinstance(component, dict):
+            raise ValueError('component must be an object')
+        scope = 'component:' + str(component.get('id', ''))
+        for key in ('msa_format', 'msa_max_sequences', 'msa_remove_insertions'):
+            value = checked(key, component.get(key, defaults[key]))
+            settings[scope + '.' + key] = {'requested': component.get(key), 'effective': value,
+                'origin': 'request' if key in component else 'runner_default', 'scope': scope}
+            component[key] = value
+        if component.get('msa_path'):
+            component['msa_path'] = stage(component['msa_path'], scope)
+    for key, default in defaults.items():
+        if key == 'complex_components_json':
+            value = json.dumps(components, allow_nan=False) if components else ''
+        else:
+            value = checked(key, normalized.get(key, default))
+        scope = 'primary' if key.startswith('msa_') else 'model'
+        requested = original.get(key)
+        if key in ('msa_path', 'pdb_sequence_path') and value:
+            value = stage(value, scope)
+        settings[key] = {'requested': requested, 'effective': value,
+            'origin': 'request' if key in original else 'workflow_default', 'scope': scope}
+        if value is not None:
+            if type(value) not in (str, bool, int, float):
+                raise ValueError(f'invalid scalar type: {key}')
+            argv.extend(['--' + key.replace('_', '-'), str(value).lower() if type(value) is bool else str(value)])
+    # Verify exactly the command we will run, not an independent copy of the request.
+    effective = vars(parser.parse_args(argv))
+    for key in defaults:
+        settings[key]['effective'] = effective[key]
+    receipt = {'schema_version': 1, 'core_protein_scientific_contract': 1,
+               'model': 'esmfold2', 'settings': settings, 'sources': sources, 'argv': argv}
+    json.dumps(receipt, allow_nan=False)
+    return argv, receipt
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    receipt_path = os.environ.get('BMS_ESMFOLD2_EFFECTIVE_SETTINGS')
+    if receipt_path:
+        receipt_bytes = Path(receipt_path).read_bytes()
+        receipt = json.loads(receipt_bytes)
+        if type(receipt.get('core_protein_scientific_contract')) is not int or receipt['core_protein_scientific_contract'] != 1:
+            raise ESMFold2InputError('invalid effective settings contract')
+        if receipt.get('argv') != list(sys.argv[1:] if argv is None else argv):
+            raise ESMFold2InputError('effective settings argv mismatch')
+        args._msa_expected_hashes = {source['used_path']: source['sha256'] for source in receipt['sources']}
     model_id_or_path = args.model_id_or_path or default_model_for_variant(args.model_variant)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -774,8 +938,10 @@ def main(argv: list[str] | None = None) -> int:
             "iptm": scalar(getattr(sample, "iptm", None)),
             "cif": cif_name,
         }
+        if receipt_path:
+            metrics.update(native_scalar_metrics(sample))
         metrics_name = f"{sample_id}.metrics.json"
-        (output_dir / metrics_name).write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+        (output_dir / metrics_name).write_text(json.dumps(metrics, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
         samples.append({"sample_id": sample_id, "cif": cif_name, "metrics": metrics_name, **metrics})
 
     summary_columns = [
@@ -812,7 +978,7 @@ def main(argv: list[str] | None = None) -> int:
         "local_files_only": args.local_files_only,
         "samples": samples,
     }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
     print(
         json.dumps(
             {

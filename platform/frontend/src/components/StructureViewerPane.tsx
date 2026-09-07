@@ -4,6 +4,7 @@ import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import ChainDetailsPanel from './ChainDetailsPanel';
+import { parseScientificPae, parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
 import {
@@ -73,8 +74,8 @@ interface ViewerAnalysisBundle {
     fampnnPsceProfile?: FampnnPsceProfile | null;
     onRunFampnnPsceProfile?: () => void;
     fampnnPsceBusy?: boolean;
-    paeMatrixRun?: PersistedAnalysisRun<PAEData> | null;
-    paeMatrixData?: PAEData | null;
+    paeMatrixRun?: PersistedAnalysisRun<unknown> | null;
+    paeMatrixData?: unknown;
     onRunPaeMatrix?: () => void;
     paeMatrixBusy?: boolean;
     ipsaeInterfaceRun?: PersistedAnalysisRun<IpsaeInterfaceAnalysis> | null;
@@ -333,8 +334,11 @@ export default function StructureViewerPane({
         height: 320,
     });
 
-    const [plddtProfile, setPlddtProfile] = useState<number[]>([]);
-    const [residueMetricNumbers, setResidueMetricNumbers] = useState<number[]>([]);
+    const [rawPlddtProfile, setPlddtProfile] = useState<number[]>([]);
+    const [rawResidueMetricNumbers, setResidueMetricNumbers] = useState<number[]>([]);
+    const [residueMetricsCandidateId, setResidueMetricsCandidateId] = useState<string | null>(null);
+    const plddtProfile = residueMetricsCandidateId === selectedDesignId ? rawPlddtProfile : [];
+    const residueMetricNumbers = residueMetricsCandidateId === selectedDesignId ? rawResidueMetricNumbers : [];
     const [selectedChain, setSelectedChain] = useState<string | null>(null);  // null = all chains
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerAreaRef = useRef<HTMLDivElement>(null);
@@ -526,7 +530,30 @@ export default function StructureViewerPane({
     const structureAnalysisStatusCopy = formatAnalysisStatus(structureAnalysisStatus);
 
     const chainMetricsRun = viewerAnalyses?.chainMetricsRun ?? null;
-    const chainMetrics = useMemo(() => viewerAnalyses?.chainMetrics ?? {}, [viewerAnalyses?.chainMetrics]);
+    const scientificRevision = selectedDesign?.core_protein_scientific_contract != null;
+    const [nativePayloads, setNativePayloads] = useState<{residue: unknown; chains: unknown}>({residue:null,chains:null});
+    const [nativeSelection, setNativeSelection] = useState<{document: unknown; index: number} | null>(null);
+    const nativeDocument = selectedDesign?.core_protein_scientific_contract === 1
+        && selectedDesign.id === selectedDesignId && selectedDesign.scientific_structure_document?.candidateId === selectedDesignId
+        && !(colorMode === 'cdr' && antibodyStructureUrl) ? selectedDesign.scientific_structure_document : null;
+    const nativeResidue = useMemo(()=>parseScientificNativeMetric(nativePayloads.residue,nativeDocument,'residue_plddt'),[nativePayloads.residue,nativeDocument]);
+    const nativeChains = useMemo(()=>parseScientificNativeMetric(nativePayloads.chains,nativeDocument,'chain_metrics'),[nativePayloads.chains,nativeDocument]);
+    const nativeResidueSelections = nativeResidue.status === 'ok' && nativeSelection?.document === nativeDocument
+        && nativeResidue.residues[nativeSelection.index] ? [nativeResidue.residues[nativeSelection.index]] : [];
+    useEffect(()=>{
+        let current=true;
+        setNativePayloads({residue:null,chains:null});setNativeSelection(null);
+        if(!scientificRevision || !selectedDesignId) return;
+        const load=async(endpoint:string)=>{try{const response=await fetch(`/api/designs/${selectedDesignId}/${endpoint}`);return response.ok?await response.json():null;}catch{return null;}};
+        void Promise.all([load('residue-metrics'),load('chain-metrics')]).then(([residue,chains])=>{if(current)setNativePayloads({residue,chains});});
+        return ()=>{current=false;};
+    },[scientificRevision,selectedDesignId,nativeDocument]);
+    const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
+        descriptor:{id:'native-plddt',label:'Native pLDDT',dimension:'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
+            provenance:{source:'Boltz verified native vector',artifactSha256:nativeResidue.artifactSha256}},
+        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index]})),
+    }),[nativeResidue]);
+    const chainMetrics = useMemo(() => scientificRevision ? {} : viewerAnalyses?.chainMetrics ?? {}, [scientificRevision, viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
     const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;
     const chainMetricsStatus = chainMetricsRun?.status ?? 'missing';
@@ -541,8 +568,17 @@ export default function StructureViewerPane({
     const fampnnPsceStatusCopy = formatAnalysisStatus(fampnnPsceStatus);
 
     const paeRun = viewerAnalyses?.paeMatrixRun ?? null;
-    const paeData = viewerAnalyses?.paeMatrixData ?? null;
-    const paeMatrix = paeData?.pae_matrix ?? null;
+    const paeRaw = viewerAnalyses?.paeMatrixData ?? null;
+    const paeData = scientificRevision ? null : paeRaw as PAEData | null;
+    const scientificPae = useMemo(() => scientificRevision
+        ? selectedDesign?.core_protein_scientific_contract !== 1 || selectedDesign?.id !== selectedDesignId
+            || (selectedDesign?.scientific_structure_document && selectedDesign.scientific_structure_document.candidateId !== selectedDesignId)
+            || (colorMode === 'cdr' && Boolean(antibodyStructureUrl))
+            ? {status: 'unavailable' as const, reason: 'PAE identity unavailable: missing selected candidate/source binding'}
+            : parseScientificPae(paeRaw, selectedDesign?.scientific_structure_document)
+        : null,
+    [paeRaw, scientificRevision, selectedDesign?.core_protein_scientific_contract, selectedDesign?.id, selectedDesignId, selectedDesign?.scientific_structure_document, colorMode, antibodyStructureUrl]);
+    const paeMatrix = scientificRevision ? (scientificPae?.status === 'ok' ? scientificPae.matrix : null) : paeData?.pae_matrix ?? null;
     const paeBusy = viewerAnalyses?.paeMatrixBusy ?? false;
     const onRunPaeMatrix = viewerAnalyses?.onRunPaeMatrix;
     const paeStatus = paeRun?.status ?? 'missing';
@@ -556,7 +592,7 @@ export default function StructureViewerPane({
     const ipsaeInterfaceStatusCopy = formatAnalysisStatus(ipsaeInterfaceStatus);
 
     const contactMapRun = viewerAnalyses?.contactMapRun ?? null;
-    const contactMap = viewerAnalyses?.contactMap ?? null;
+    const contactMap = scientificRevision ? null : viewerAnalyses?.contactMap ?? null;
     const contactMapBusy = viewerAnalyses?.contactMapBusy ?? false;
     const onRunContactMap = viewerAnalyses?.onRunContactMap;
     const contactMapStatus = contactMapRun?.status ?? 'missing';
@@ -599,7 +635,10 @@ export default function StructureViewerPane({
     // Per-residue confidence is already persisted on the design row, so fetching it
     // is cheap and does not kick off new analysis work.
     useEffect(() => {
-        if (!selectedDesignId || selectedDesign?.review_profile_id === 'shape_blueprint') {
+        let current = true;
+        setPlddtProfile([]);
+        setResidueMetricNumbers([]);
+        if (scientificRevision || !selectedDesignId || selectedDesign?.review_profile_id === 'shape_blueprint') {
             setPlddtProfile([]);
             setResidueMetricNumbers([]);
             return;
@@ -611,20 +650,25 @@ export default function StructureViewerPane({
 
                 if (residueRes?.ok) {
                     const data = await residueRes.json();
+                    if (!current) return;
+                    setResidueMetricsCandidateId(selectedDesignId);
                     setPlddtProfile(Array.isArray(data.plddt) ? data.plddt : []);
                     setResidueMetricNumbers(Array.isArray(data.residue_numbers) ? data.residue_numbers : []);
                 } else {
+                    if (!current) return;
                     setPlddtProfile([]);
                     setResidueMetricNumbers([]);
                 }
             } catch {
+                if (!current) return;
                 setPlddtProfile([]);
                 setResidueMetricNumbers([]);
             }
         };
 
         fetchResidueMetrics();
-    }, [selectedDesign?.review_profile_id, selectedDesignId]);
+        return () => { current = false; };
+    }, [scientificRevision, selectedDesign?.review_profile_id, selectedDesignId]);
 
     const chainBoundaries = useMemo(() => {
         const chainIds = Object.keys(chainMetrics).sort();
@@ -1129,13 +1173,19 @@ export default function StructureViewerPane({
                 labelSeqId: residueNumber,
             })) ?? []
         ));
-        if (paeData && paeMatrix && indexedResidues.length === paeData.size && paeMatrix.length === paeData.size) {
+        const rowResidues = scientificPae?.status === 'ok' ? scientificPae.rows : indexedResidues;
+        const columnResidues = scientificPae?.status === 'ok' ? scientificPae.columns : indexedResidues;
+        if (paeMatrix && rowResidues.length === paeMatrix.length && (scientificRevision ? scientificPae?.status === 'ok' : paeData?.size === paeMatrix.length)) {
             const values = [];
-            for (let row = 0; row < paeData.size && values.length < maxPairs; row += 1) {
-                for (let column = 0; column < paeData.size && values.length < maxPairs; column += 1) {
+            // Strict matrices are complete or visibly unavailable, never partial projections.
+            // Oversized declared axes are passed through with no cells for renderer rejection.
+            const strictPae = scientificPae?.status === 'ok';
+            const pairLimit = strictPae ? (rowResidues.length <= 512 && columnResidues.length <= 512 ? Infinity : 0) : maxPairs;
+            for (let row = 0; row < paeMatrix.length && values.length < pairLimit; row += 1) {
+                for (let column = 0; column < columnResidues.length && values.length < pairLimit; column += 1) {
                     const value = paeMatrix[row]?.[column];
                     values.push({
-                        identity: { first: indexedResidues[row]!, second: indexedResidues[column]! },
+                        identity: { first: rowResidues[row]!, second: columnResidues[column]! },
                         value: typeof value === 'number' && Number.isFinite(value) ? value : null,
                         ...(typeof value === 'number' && Number.isFinite(value) ? {} : { missingness: 'unavailable' as const }),
                     });
@@ -1148,12 +1198,18 @@ export default function StructureViewerPane({
                     projectionPolicy: 'none', normalization: 'none',
                     palette: { colors: ['#2563eb', '#f8fafc', '#dc2626'], domain: [0, 32], missingColor: '#475569' },
                     provenance: {
-                        source: paeData.source_mode ?? 'persisted PAE artifact',
-                        artifactId: paeData.confidence_file ?? undefined,
-                        parameters: { admitted_pairs: values.length, total_pairs: paeData.size * paeData.size, bounded: values.length < paeData.size * paeData.size },
+                        source: paeData?.source_mode ?? 'persisted PAE artifact',
+                        artifactId: scientificPae?.status === 'ok' ? scientificPae.artifactSha256 : paeData?.confidence_file ?? undefined,
+                        parameters: { admitted_pairs: values.length, total_pairs: paeMatrix.length * columnResidues.length, bounded: values.length < paeMatrix.length * columnResidues.length },
                     },
                 },
                 values,
+                ...(scientificPae?.status === 'ok' ? { dataset: {
+                    datasetId: scientificPae.artifactSha256, descriptorId: 'pae',
+                    documentIds: [scientificPae.document.documentId],
+                    shape: [rowResidues.length, columnResidues.length] as const,
+                    rowAxis: rowResidues, columnAxis: columnResidues, matrixDirection: 'directed' as const,
+                } } : {}),
             });
         }
         if (contactMap && contactMap.chain_ids.length === contactMap.size && contactMap.residue_numbers.length === contactMap.size) {
@@ -1226,7 +1282,7 @@ export default function StructureViewerPane({
             }
         }
         return layers;
-    }, [chainMetrics, contactMap, paeData, paeMatrix]);
+    }, [chainMetrics, contactMap, paeData, paeMatrix, scientificPae, scientificRevision]);
 
     const derivedComponents = useMemo<readonly DerivedStructureComponent[]>(() => (
         Object.entries(chainMetrics ?? {}).map(([chainId, metric]) => ({
@@ -1382,12 +1438,13 @@ export default function StructureViewerPane({
     }, [activeJob?.id, chainMetrics, selectedDesign?.id]);
     const allMetricLayers = useMemo<readonly MetricLayer[]>(
         () => [
+            ...(nativeResidueLayer ? [nativeResidueLayer] : []),
             ...structureScalarMetricLayers,
             ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
             ...pairMetricLayers,
             ...interfaceMetricLayers,
         ],
-        [interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+        [nativeResidueLayer, interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
 
@@ -2553,10 +2610,11 @@ export default function StructureViewerPane({
             </div>
 
             {/* Chain Details Panel (for multi-chain complexes) */}
-            {selectedDesign && Object.keys(chainMetrics).length > 0 && (
+            {selectedDesign && (scientificRevision || Object.keys(chainMetrics).length > 0) && (
                 <ChainDetailsPanel
                     design={selectedDesign}
                     chainMetrics={chainMetrics as Record<string, ChainMetric> | null}
+                    nativeMetric={scientificRevision ? nativeChains : undefined}
                 />
             )}
 
@@ -2937,11 +2995,13 @@ export default function StructureViewerPane({
                         ) : (
                             <StructureWorkbench
                                 mode="standard"
+                                key={scientificRevision ? `${selectedDesignId}:${viewerStructureUrl}` : undefined}
                                 structureUrl={viewerStructureUrl}
                                 format={viewerStructureFormat}
                                 alphafoldView={effectiveColorMode === 'plddt' && !plddtResidueColors}
                                 selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                                 overlayStructures={viewerOverlayStructures}
+                                residueSelections={scientificRevision ? nativeResidueSelections : undefined}
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
                                 showComplexWorkbench={false}
@@ -2949,7 +3009,7 @@ export default function StructureViewerPane({
                                 showMeasurements={!shapeMetrics && metricWorkbenchOpen}
                                 jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
                                 artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
-                                structureDocumentId={governedWorkbenchContext?.structureDocumentId}
+                                structureDocumentId={scientificRevision ? selectedDesign?.scientific_structure_document?.documentId : governedWorkbenchContext?.structureDocumentId}
                                 derivedComponents={derivedComponents}
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}
@@ -2960,6 +3020,34 @@ export default function StructureViewerPane({
                             />
                         )}
 
+                        {scientificRevision && (
+                            <div role="status" className="absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200">
+                                {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
+                                {nativeResidue.status === 'unavailable' ? ` Residue metrics unavailable: ${nativeResidue.reason}` : ''}
+                                {nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
+                            </div>
+                        )}
+                        {scientificRevision && (
+                            <section aria-label="Native residue confidence" className="absolute top-12 left-2 right-2 max-h-56 overflow-auto bg-slate-950/90 p-2 text-xs">
+                                {nativeResidue.status === 'ok' && <>
+                                <div>Native pLDDT — percent display (native fraction × 100)</div>
+                                <svg viewBox={`0 0 ${nativeResidue.values.length} 100`} className="w-full h-24" preserveAspectRatio="none" aria-label="Native pLDDT percent chart">
+                                    <polyline points={nativeResidue.values.map((v,i)=>`${i},${100-v*100}`).join(' ')} fill="none" stroke="#38bdf8" strokeWidth="0.5"/>
+                                    {nativeResidue.values.map((v,index)=><circle key={index} data-native-chart-index={index}
+                                        cx={index} cy={100-v*100} r="0.5" fill="#38bdf8" role="button" tabIndex={0}
+                                        aria-label={`Select native residue ${index + 1}`}
+                                        onClick={()=>setNativeSelection({document:nativeDocument,index})}
+                                        onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setNativeSelection({document:nativeDocument,index});}}}/>)}
+                                </svg>
+                                <div className="flex flex-wrap gap-1">{nativeResidue.residues.map((residue,index)=><button key={index}
+                                    data-native-residue-index={index} data-display-percent={nativeResidue.values[index]*100}
+                                    onClick={()=>setNativeSelection({document:nativeDocument,index})}>
+                                    {residue.authAsymId??residue.labelAsymId}:{residue.authSeqId??residue.labelSeqId}{residue.insertionCode} {(nativeResidue.values[index]*100).toFixed(1)}%
+                                </button>)}</div>
+                                </>}
+                                {selectedDesign && <ChainDetailsPanel design={selectedDesign} chainMetrics={null} nativeMetric={nativeChains}/>}
+                            </section>
+                        )}
                         {showReferenceDock && (
                             <div
                                 className="absolute z-30 rounded-xl border border-slate-700/70 bg-slate-950/92 shadow-2xl backdrop-blur-sm overflow-hidden"

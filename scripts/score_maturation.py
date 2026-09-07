@@ -6,9 +6,14 @@ import argparse
 import json
 import math
 import re
+import hashlib
+import tempfile
 from pathlib import Path
 
-import pyrosetta
+from maturation_correspondence import compare_declared_domain, finite_number, canonical_payload, validate_comparison_request, compare_request_domains, residue_identity
+
+# Pure comparison/objective helpers are importable without a scientific runtime.
+pyrosetta = None
 
 
 def parse_chain_list(value):
@@ -53,6 +58,44 @@ def get_pdb_key(pose, resi):
         pdb_info.number(resi),
         pdb_info.icode(resi).strip(),
     )
+
+
+def parse_exact_position_spec(value):
+    """Strict source selection preserves insertion codes; no numeric-prefix match."""
+    positions = set()
+    for token in (value or '').split(','):
+        token = token.strip()
+        if not token:
+            continue
+        match = re.fullmatch(r'([^\d\s])(-?\d+)([A-Za-z]?)(?:-(-?\d+))?', token)
+        if not match:
+            raise ValueError('invalid exact position: ' + token)
+        chain, number, insertion, end = match.groups()
+        if end is not None:
+            if insertion:
+                raise ValueError('insertion-coded ranges require explicit identities')
+            positions.update((chain, n, '') for n in range(min(int(number), int(end)), max(int(number), int(end)) + 1))
+        else:
+            positions.add((chain, int(number), insertion))
+    return positions
+
+
+def position_labels(positions):
+    return sorted(f'{key[0]}{key[1]}' + (key[2] if len(key) == 3 else '') for key in (positions or []))
+
+
+def declared_scope(request, name, side, observed):
+    """Side-specific scope authority is independent of RMSD availability."""
+    spec = (request or {}).get('domains', {}).get(name)
+    if not isinstance(spec, dict) or side not in spec:
+        return None
+    try:
+        keys = [residue_identity(key) for key in spec[side]]
+    except (ValueError, TypeError):
+        return None
+    if len(set(keys)) != len(keys) or not set(keys).issubset(observed):
+        return None
+    return set(keys)
 
 
 def ordered_pose_chains(pose):
@@ -275,6 +318,7 @@ def interface_score(
     selected_positions=None,
     position_groups=None,
     binder_chain_remap=None,
+    strict=False,
 ):
     scorefxn = pyrosetta.get_fa_scorefxn()
     scorefxn(pose)
@@ -286,7 +330,7 @@ def interface_score(
     selected_interface_residues = set()
     group_scores = {
         group_name: {
-            "score": 0.0,
+            "score": float('nan') if strict and position_groups[group_name] is None else 0.0,
             "negative_pair_count": 0,
             "interface_residues": set(),
         }
@@ -299,6 +343,18 @@ def interface_score(
             binder_chain_remap.get(binder_key[0], binder_key[0]) if binder_chain_remap else binder_key[0],
             binder_key[1],
         )
+        if strict:
+            binder_position = binder_key
+        if strict and not finite_number(pair_score):
+            # Validate observations BEFORE the negative-energy predicate. NaN,
+            # +Inf and bool must not disappear into a plausible zero sum.
+            total = float('nan')
+            if selected_positions and binder_position in selected_positions:
+                selected_total = float('nan')
+            for group_name, position_set in (position_groups or {}).items():
+                if position_set and binder_position in position_set:
+                    group_scores[group_name]['score'] = float('nan')
+            continue
         if pair_score < 0:
             total += pair_score
             negative_pair_count += 1
@@ -308,13 +364,13 @@ def interface_score(
                 selected_interface_residues.add(resi_a)
                 selected_interface_residues.add(resi_b)
             for group_name, position_set in (position_groups or {}).items():
-                if binder_position not in position_set:
+                if not position_set or binder_position not in position_set:
                     continue
                 group_scores[group_name]["score"] += pair_score
                 group_scores[group_name]["negative_pair_count"] += 1
                 group_scores[group_name]["interface_residues"].add(resi_a)
                 group_scores[group_name]["interface_residues"].add(resi_b)
-    return {
+    result = {
         "global_score": total,
         "global_interface_residues": interface_residues,
         "global_negative_pair_count": negative_pair_count,
@@ -330,6 +386,13 @@ def interface_score(
             for group_name, group_data in group_scores.items()
         },
     }
+    if strict:
+        result['global_unavailable_reason'] = 'invalid_pair_energy' if not finite_number(total) else None
+        result['selected_unavailable_reason'] = 'invalid_pair_energy' if not finite_number(selected_total) else None
+        for name, group in result['position_groups'].items():
+            group['unavailable_reason'] = ('missing_domain_authority' if position_groups[name] is None else
+                                           'invalid_pair_energy' if not finite_number(group['score']) else None)
+    return result
 
 
 def extract_chain_coords(pose, chain_ids, chain_remap=None):
@@ -348,12 +411,12 @@ def extract_chain_coords(pose, chain_ids, chain_remap=None):
     return coords
 
 
-def filter_coords_by_position_set(coords, position_set, invert=False):
+def filter_coords_by_position_set(coords, position_set, invert=False, strict=False):
     if not position_set:
         return dict(coords) if invert else {}
     filtered = {}
     for key, value in coords.items():
-        membership = (key[0], key[1]) in position_set
+        membership = (key if strict else (key[0], key[1])) in position_set
         if invert:
             membership = not membership
         if membership:
@@ -577,8 +640,14 @@ def _loop_signal(metric, prefix):
     return any(metric.get(f"{prefix}_{suffix}") is not None for suffix in ("contact_delta", "distance_delta", "centroid_distance_delta"))
 
 
-def compute_loop_objective_score(metric, objective_mode):
+def compute_loop_objective_score(metric, objective_mode, strict=False):
     mode = (objective_mode or "selected_interface").strip().lower()
+    if strict and not finite_number(metric.get("delta_interface_score")):
+        return None
+    if strict and mode != "selected_interface" and not finite_number(metric.get("rmsd_backbone")):
+        return None
+    if strict and mode in {"loop_epitope", "balanced"} and not _loop_signal(metric, "epitope"):
+        return None
     if mode == "loop_epitope" and not _loop_signal(metric, "epitope"):
         mode = "loop_target"
     if mode == "balanced" and not _loop_signal(metric, "epitope"):
@@ -626,10 +695,16 @@ def compute_loop_objective_score(metric, objective_mode):
     return float(interface_term)
 
 
-def compute_overall_objective_score(loop_metrics, objective_mode, selected_delta_interface, global_delta_interface, nonselected_rmsd, clash_count):
+def compute_overall_objective_score(loop_metrics, objective_mode, selected_delta_interface, global_delta_interface, nonselected_rmsd, clash_count, strict=False):
     mode = (objective_mode or "selected_interface").strip().lower()
+    if strict and mode != "selected_interface":
+        selected = [m for m in loop_metrics.values() if m.get("selected")]
+        if not selected or not finite_number(nonselected_rmsd) or any(not finite_number(m.get("objective_score")) for m in selected):
+            return None
     if mode == "selected_interface" or not loop_metrics:
         base_score = selected_delta_interface if selected_delta_interface is not None else global_delta_interface
+        if strict and not finite_number(base_score):
+            return None
         return None if base_score is None else float(base_score)
 
     preferred_scores = [
@@ -657,9 +732,11 @@ def compute_overall_objective_score(loop_metrics, objective_mode, selected_delta
 
 def main():
     parser = argparse.ArgumentParser(description="Score PPIFlow maturation improvements")
+    parser.add_argument("--core-protein-scientific-contract", choices=["1"], default=None)
+    parser.add_argument("--comparison-request", help="Trusted request/preparation projection with explicit domains, residue pairs, roles and exact source/candidate SHA256; never a candidate self-claimed manifest")
     parser.add_argument("--original_pdb", required=True, help="Original complex PDB")
     parser.add_argument("--matured_pdb", required=True, help="Matured complex PDB")
-    parser.add_argument("--antibody_chains", default="H,L",
+    parser.add_argument("--antibody_chains", default=None,
                         help="Comma-separated antibody chain IDs")
     parser.add_argument("--antigen_chains", default="",
                         help="Comma-separated antigen chain IDs")
@@ -676,6 +753,32 @@ def main():
                         help="Ranking objective for partial-flow outputs")
     parser.add_argument("--output", required=True, help="Output JSON file")
     args = parser.parse_args()
+    strict = args.core_protein_scientific_contract == "1"
+    if not strict and args.antibody_chains is None:
+        args.antibody_chains = "H,L"
+    comparison_request = None
+    provenance = {}
+    if strict:
+        reference_bytes = Path(args.original_pdb).read_bytes()
+        candidate_bytes = Path(args.matured_pdb).read_bytes()
+        provenance = dict(core_protein_scientific_contract=1,
+                          reference_sha256=hashlib.sha256(reference_bytes).hexdigest(),
+                          candidate_sha256=hashlib.sha256(candidate_bytes).hexdigest())
+        reason = None
+        if args.comparison_request:
+            request_bytes = Path(args.comparison_request).read_bytes()
+            comparison_request = json.loads(request_bytes)
+            provenance['comparison_request_sha256'] = hashlib.sha256(request_bytes).hexdigest()
+            reason = validate_comparison_request(comparison_request, reference_bytes, candidate_bytes)
+        elif not args.antigen_chains or not args.antibody_chains:
+            reason = 'missing_role_authority'
+        if reason:
+            provenance.update(objective_mode=args.objective_mode, objective_score=None,
+                              rmsd_backbone=None, selected_rmsd_backbone=None,
+                              nonselected_rmsd_backbone=None, sequence_identity=None,
+                              unavailable_reason=reason)
+            Path(args.output).write_text(json.dumps(provenance, sort_keys=True, allow_nan=False))
+            return
 
     antibody_chains = parse_chain_list(args.antibody_chains)
     antigen_chains = parse_chain_list(args.antigen_chains)
@@ -683,47 +786,84 @@ def main():
     epitope_positions = parse_position_spec(args.epitope_residues)
     loop_residue_map = load_loop_residue_map(args.cdr_positions_by_loop_json)
 
+    global pyrosetta
+    import pyrosetta
     pyrosetta.init("-out:levels all:error -ignore_unrecognized_res 1")
-    pose_original = pyrosetta.pose_from_pdb(args.original_pdb)
-    pose_matured = pyrosetta.pose_from_pdb(args.matured_pdb)
+    if strict:
+        # The parser reads only process-owned snapshots of the bytes we hashed.
+        # Keep both alive until parsing finishes; never reopen the mutable inputs.
+        with tempfile.TemporaryDirectory(prefix="maturation-snapshot-") as snapshot_dir:
+            reference_snapshot = Path(snapshot_dir) / "reference.pdb"
+            candidate_snapshot = Path(snapshot_dir) / "candidate.pdb"
+            reference_snapshot.write_bytes(reference_bytes)
+            candidate_snapshot.write_bytes(candidate_bytes)
+            reference_snapshot.chmod(0o400)
+            candidate_snapshot.chmod(0o400)
+            pose_original = pyrosetta.pose_from_pdb(str(reference_snapshot))
+            pose_matured = pyrosetta.pose_from_pdb(str(candidate_snapshot))
+    else:
+        pose_original = pyrosetta.pose_from_pdb(args.original_pdb)
+        pose_matured = pyrosetta.pose_from_pdb(args.matured_pdb)
     scorefxn = pyrosetta.get_fa_scorefxn()
     scorefxn(pose_original)
     scorefxn(pose_matured)
 
-    antibody_chains_original, antigen_chains_original, original_detected_chains = resolve_chain_groups(
-        pose_original,
-        antibody_chains,
-        antigen_chains,
-    )
-    antibody_chains_original, antigen_chains_original = reconcile_chain_groups_with_selected_positions(
-        original_detected_chains,
-        antibody_chains_original,
-        antigen_chains_original,
-        selected_positions,
-        fallback_ab_count=len(antibody_chains_original),
-    )
-    antibody_chains_matured, antigen_chains_matured, matured_detected_chains = resolve_chain_groups(
-        pose_matured,
-        antibody_chains,
-        antigen_chains,
-        fallback_ab_count=len(antibody_chains_original),
-        fallback_ag_count=len(antigen_chains_original),
-    )
-    antibody_chains_matured, antigen_chains_matured = reconcile_chain_groups_with_selected_positions(
-        matured_detected_chains,
-        antibody_chains_matured,
-        antigen_chains_matured,
-        selected_positions,
-        fallback_ab_count=len(antibody_chains_original),
-    )
-    matured_to_original_chain_map = {
-        matured_chain: original_chain
-        for original_chain, matured_chain in zip(antibody_chains_original, antibody_chains_matured)
-    }
-    matured_target_to_original_chain_map = {
-        matured_chain: original_chain
-        for original_chain, matured_chain in zip(antigen_chains_original, antigen_chains_matured)
-    }
+    if strict:
+        roles = comparison_request['roles'] if comparison_request else {
+            'reference': {'binder': antibody_chains, 'target': antigen_chains},
+            'candidate': {'binder': antibody_chains, 'target': antigen_chains},
+        }
+        antibody_chains_original, antigen_chains_original = roles['reference']['binder'], roles['reference']['target']
+        antibody_chains_matured, antigen_chains_matured = roles['candidate']['binder'], roles['candidate']['target']
+        original_detected_chains = ordered_pose_chains(pose_original)
+        matured_detected_chains = ordered_pose_chains(pose_matured)
+        if (not set(antibody_chains_original + antigen_chains_original).issubset(original_detected_chains)
+                or not set(antibody_chains_matured + antigen_chains_matured).issubset(matured_detected_chains)
+                or set(antibody_chains_original) & set(antigen_chains_original)
+                or set(antibody_chains_matured) & set(antigen_chains_matured)):
+            provenance.update(objective_mode=args.objective_mode, objective_score=None,
+                              rmsd_backbone=None, sequence_identity=None, unavailable_reason='invalid_role_authority')
+            Path(args.output).write_text(json.dumps(provenance, sort_keys=True, allow_nan=False))
+            return
+        provenance['roles'] = roles
+        # Chain order is never residue correspondence in the strict contract.
+        matured_to_original_chain_map = {}
+        matured_target_to_original_chain_map = {}
+    else:
+        antibody_chains_original, antigen_chains_original, original_detected_chains = resolve_chain_groups(
+            pose_original,
+            antibody_chains,
+            antigen_chains,
+        )
+        antibody_chains_original, antigen_chains_original = reconcile_chain_groups_with_selected_positions(
+            original_detected_chains,
+            antibody_chains_original,
+            antigen_chains_original,
+            selected_positions,
+            fallback_ab_count=len(antibody_chains_original),
+        )
+        antibody_chains_matured, antigen_chains_matured, matured_detected_chains = resolve_chain_groups(
+            pose_matured,
+            antibody_chains,
+            antigen_chains,
+            fallback_ab_count=len(antibody_chains_original),
+            fallback_ag_count=len(antigen_chains_original),
+        )
+        antibody_chains_matured, antigen_chains_matured = reconcile_chain_groups_with_selected_positions(
+            matured_detected_chains,
+            antibody_chains_matured,
+            antigen_chains_matured,
+            selected_positions,
+            fallback_ab_count=len(antibody_chains_original),
+        )
+        matured_to_original_chain_map = {
+            matured_chain: original_chain
+            for original_chain, matured_chain in zip(antibody_chains_original, antibody_chains_matured)
+        }
+        matured_target_to_original_chain_map = {
+            matured_chain: original_chain
+            for original_chain, matured_chain in zip(antigen_chains_original, antigen_chains_matured)
+        }
     loop_position_specs = build_loop_position_sets(loop_residue_map, antibody_chains_original, selected_positions)
     loop_position_groups = {
         loop_id: loop_info["positions"]
@@ -734,6 +874,49 @@ def main():
         for loop_id, loop_info in loop_position_specs.items()
     }
 
+    selected_positions_matured = selected_positions
+    loop_position_groups_matured = loop_position_groups
+    epitope_positions_matured = epitope_positions
+    selection_required = bool(selected_positions)
+    if strict:
+        source_keys = {get_pdb_key(pose_original, i) for i in range(1, pose_original.total_residue() + 1)}
+        candidate_keys = {get_pdb_key(pose_matured, i) for i in range(1, pose_matured.total_residue() + 1)}
+        source_binder = {key for key in source_keys if key[0] in antibody_chains_original}
+        candidate_binder = {key for key in candidate_keys if key[0] in antibody_chains_matured}
+        source_selected = parse_exact_position_spec(args.selected_positions)
+        domains = (comparison_request or {}).get('domains', {})
+        selected_positions = declared_scope(comparison_request, 'selected', 'reference', source_binder)
+        if 'selected' not in domains:
+            selected_positions = source_selected if source_selected.issubset(source_binder) else None
+        selected_positions_matured = declared_scope(comparison_request, 'selected', 'candidate', candidate_binder)
+        selection_required = bool(source_selected) or 'selected' in domains
+        if selection_required and (not selected_positions or not selected_positions_matured):
+            provenance['selection_scope_reason'] = ('missing_candidate_domain_authority' if 'selected' not in domains
+                                                     else 'invalid_or_empty_selected_domain')
+        # Request names are stable output labels. No candidate map is invented.
+        loop_names = [name for name in domains if name not in {'whole_binder', 'selected', 'nonselected', 'epitope'}]
+        if not loop_names:
+            loop_names = list(loop_position_groups) or (['SELECTED'] if selection_required else [])
+        legacy_groups = loop_position_groups
+        loop_position_groups, loop_position_groups_matured, loop_selection_map = {}, {}, {}
+        for name in loop_names:
+            domain_name = 'selected' if name == 'SELECTED' and name not in domains else name
+            reference_scope = declared_scope(comparison_request, domain_name, 'reference', source_binder)
+            candidate_scope = declared_scope(comparison_request, domain_name, 'candidate', candidate_binder)
+            if domain_name not in domains:
+                # Source-only preparation positions have no candidate authority.
+                reference_scope = (selected_positions if name == 'SELECTED' else
+                                   {(chain, number, '') for chain, number in legacy_groups.get(name, set())})
+                if reference_scope is not None and not reference_scope.issubset(source_binder):
+                    reference_scope = None
+            loop_position_groups[name] = reference_scope
+            loop_position_groups_matured[name] = candidate_scope
+            loop_selection_map[name] = bool((reference_scope or set()) & (selected_positions or set()))
+        epitope_positions = declared_scope(comparison_request, 'epitope', 'reference', source_keys - source_binder)
+        if 'epitope' not in domains:
+            epitope_positions = parse_exact_position_spec(args.epitope_residues)
+        epitope_positions_matured = declared_scope(comparison_request, 'epitope', 'candidate', candidate_keys - candidate_binder)
+
     interface_score_orig = interface_score(
         pose_original,
         antibody_chains_original,
@@ -741,20 +924,24 @@ def main():
         args.distance_cutoff,
         selected_positions=selected_positions,
         position_groups=loop_position_groups,
+        strict=strict,
     )
     interface_score_matured = interface_score(
         pose_matured,
         antibody_chains_matured,
         antigen_chains_matured,
         args.distance_cutoff,
-        selected_positions=selected_positions,
-        position_groups=loop_position_groups,
+        selected_positions=selected_positions_matured,
+        position_groups=loop_position_groups_matured,
         binder_chain_remap=matured_to_original_chain_map,
+        strict=strict,
     )
     delta_interface = interface_score_matured["global_score"] - interface_score_orig["global_score"]
     selected_delta_interface = None
     if interface_score_orig["selected_score"] is not None and interface_score_matured["selected_score"] is not None:
         selected_delta_interface = interface_score_matured["selected_score"] - interface_score_orig["selected_score"]
+    elif strict and selection_required:
+        selected_delta_interface = float('nan')  # unavailable, not a global fallback
 
     coords_orig = extract_chain_coords(pose_original, antibody_chains_original)
     coords_orig_ordered = extract_chain_coords_by_order(pose_original, antibody_chains_original)
@@ -774,36 +961,55 @@ def main():
         antigen_chains_matured,
         chain_remap=matured_target_to_original_chain_map,
     )
-    epitope_coords_orig = filter_coords_by_position_set(target_coords_orig, epitope_positions)
-    epitope_coords_matured = filter_coords_by_position_set(target_coords_matured, epitope_positions)
-    rmsd_val = rmsd(
-        coords_orig,
-        coords_matured,
-        ordered_a=coords_orig_ordered,
-        ordered_b=coords_matured_ordered,
-    )
-    selected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions)
-    selected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions)
-    selected_rmsd_val = rmsd(selected_coords_orig, selected_coords_matured)
-    nonselected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions, invert=True)
-    nonselected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions, invert=True)
-    nonselected_rmsd_val = rmsd(nonselected_coords_orig, nonselected_coords_matured)
-    seq_id = sequence_identity(
-        pose_original,
-        pose_matured,
-        antibody_chains_original,
-        antibody_chains_matured,
-        chain_remap_b=matured_to_original_chain_map,
-    )
+    epitope_coords_orig = filter_coords_by_position_set(target_coords_orig, epitope_positions, strict=strict)
+    epitope_coords_matured = filter_coords_by_position_set(target_coords_matured, epitope_positions_matured, strict=strict)
+    comparisons = {}
+    if strict:
+        original_map = pose_residue_map(pose_original)
+        candidate_map = pose_residue_map(pose_matured)
+        comparisons = compare_request_domains(
+            comparison_request, {**coords_orig, **target_coords_orig}, {**coords_matured, **target_coords_matured},
+            [key for key in original_map if key[0] in antibody_chains_original],
+            [key for key in candidate_map if key[0] in antibody_chains_matured],
+        )
+        rmsd_val = comparisons['whole_binder']['value']
+        selected_rmsd_val = comparisons['selected']['value']
+        nonselected_rmsd_val = comparisons['nonselected']['value']
+        seq_id = None
+        if rmsd_val is not None:
+            pairs = comparison_request['domains']['whole_binder']['pairs']
+            seq_id = sum(pose_original.residue(original_map[tuple(a)]).name1() ==
+                         pose_matured.residue(candidate_map[tuple(b)]).name1() for a, b in pairs) / len(pairs)
+    else:
+        rmsd_val = rmsd(
+            coords_orig,
+            coords_matured,
+            ordered_a=coords_orig_ordered,
+            ordered_b=coords_matured_ordered,
+        )
+        selected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions)
+        selected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions)
+        selected_rmsd_val = rmsd(selected_coords_orig, selected_coords_matured)
+        nonselected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions, invert=True)
+        nonselected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions, invert=True)
+        nonselected_rmsd_val = rmsd(nonselected_coords_orig, nonselected_coords_matured)
+        seq_id = sequence_identity(
+            pose_original,
+            pose_matured,
+            antibody_chains_original,
+            antibody_chains_matured,
+            chain_remap_b=matured_to_original_chain_map,
+        )
     clash_count = count_ca_clashes(pose_matured, cutoff=2.0)
 
     loop_metrics = {}
     for loop_id, position_set in loop_position_groups.items():
         group_orig = interface_score_orig["position_groups"].get(loop_id, {})
         group_matured = interface_score_matured["position_groups"].get(loop_id, {})
-        loop_coords_orig = filter_coords_by_position_set(coords_orig, position_set)
-        loop_coords_matured = filter_coords_by_position_set(coords_matured, position_set)
-        loop_rmsd = rmsd(loop_coords_orig, loop_coords_matured)
+        loop_coords_orig = filter_coords_by_position_set(coords_orig, position_set, strict=strict)
+        loop_coords_matured = filter_coords_by_position_set(coords_matured, loop_position_groups_matured[loop_id], strict=strict)
+        comparison_name = 'selected' if loop_id == 'SELECTED' and loop_id not in (comparison_request or {}).get('domains', {}) else loop_id
+        loop_rmsd = comparisons.get(comparison_name, {}).get("value") if strict else rmsd(loop_coords_orig, loop_coords_matured)
         target_loop_orig = contact_metrics(loop_coords_orig, target_coords_orig, args.distance_cutoff)
         target_loop_matured = contact_metrics(loop_coords_matured, target_coords_matured, args.distance_cutoff)
         epitope_loop_orig = contact_metrics(loop_coords_orig, epitope_coords_orig, 8.0)
@@ -812,8 +1018,8 @@ def main():
         loop_metric = {
             "loop_id": loop_id,
             "selected": bool(loop_selection_map.get(loop_id, False)),
-            "position_count": len(position_set),
-            "positions": sorted(f"{chain}{resnum}" for chain, resnum in position_set),
+            "position_count": len(position_set or []),
+            "positions": position_labels(position_set),
             "interface_score_original": float(group_orig.get("score", 0.0)),
             "interface_score_matured": float(group_matured.get("score", 0.0)),
             "delta_interface_score": float(group_matured.get("score", 0.0) - group_orig.get("score", 0.0)),
@@ -841,7 +1047,10 @@ def main():
             "epitope_centroid_distance_matured": epitope_loop_matured["centroid_distance"],
             "epitope_centroid_distance_delta": distance_improvement(epitope_loop_orig["centroid_distance"], epitope_loop_matured["centroid_distance"]),
         }
-        loop_metric["objective_score"] = compute_loop_objective_score(loop_metric, args.objective_mode)
+        loop_metric["objective_score"] = compute_loop_objective_score(loop_metric, args.objective_mode, strict=strict)
+        if strict:
+            loop_metric['positions_matured'] = position_labels(loop_position_groups_matured[loop_id])
+            loop_metric['interface_unavailable_reason'] = group_orig.get('unavailable_reason') or group_matured.get('unavailable_reason')
         loop_metrics[loop_id] = loop_metric
 
     primary_loop = None
@@ -863,6 +1072,7 @@ def main():
         delta_interface,
         nonselected_rmsd_val,
         clash_count,
+        strict=strict,
     )
     rosetta_interface_metrics = calculate_rosetta_interface_analyzer_metrics(
         pose_matured,
@@ -904,7 +1114,7 @@ def main():
         "selected_negative_pair_count_original": interface_score_orig["selected_negative_pair_count"],
         "selected_negative_pair_count_matured": interface_score_matured["selected_negative_pair_count"],
         "selected_position_count": len(selected_positions) if selected_positions else 0,
-        "selected_positions": sorted(f"{chain}{resnum}" for chain, resnum in selected_positions) if selected_positions else [],
+        "selected_positions": position_labels(selected_positions),
         "loop_metrics": loop_metrics,
         "loop_ids": sorted(loop_metrics.keys()),
         "selected_loop_ids": sorted(loop_id for loop_id, selected in loop_selection_map.items() if selected),
@@ -923,13 +1133,22 @@ def main():
         "upstream_ppiflow_rank_score_used": False,
         "target_contact_distance_cutoff": float(args.distance_cutoff),
         "epitope_contact_distance_cutoff": 8.0,
-        "epitope_residues": sorted(f"{chain}{resnum}" for chain, resnum in epitope_positions) if epitope_positions else [],
+        "epitope_residues": position_labels(epitope_positions),
         "interface_energy_method": "negative_interchain_pair_energy_sum",
         "distance_cutoff": float(args.distance_cutoff),
     }
     payload.update(rosetta_interface_metrics)
 
-    Path(args.output).write_text(json.dumps(payload, indent=2))
+    if strict:
+        payload.update(provenance)
+        payload['interface_unavailable_reason'] = interface_score_orig.get('global_unavailable_reason') or interface_score_matured.get('global_unavailable_reason')
+        payload['selected_interface_unavailable_reason'] = interface_score_orig.get('selected_unavailable_reason') or interface_score_matured.get('selected_unavailable_reason')
+        payload['selected_positions_matured'] = position_labels(selected_positions_matured)
+        payload['epitope_residues_matured'] = position_labels(epitope_positions_matured)
+        payload['comparisons'] = comparisons
+        payload['sequence_identity_unavailable_reason'] = comparisons['whole_binder']['reason'] if seq_id is None else None
+        payload['objective_unavailable_reason'] = 'required_objective_evidence_unavailable' if objective_score is None else None
+    Path(args.output).write_text(json.dumps(canonical_payload(payload) if strict else payload, indent=2, sort_keys=strict, allow_nan=not strict))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,12 @@ import pytest_socket
 from pytest_socket import SocketBlockedError
 
 
+@pytest.fixture(autouse=True)
+def isolated_scientific_artifact_root(tmp_path, monkeypatch):
+    """ORM flush hooks and inherited subprocesses must never write live artifacts."""
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(tmp_path / "scientific_artifacts"))
+
+
 API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))

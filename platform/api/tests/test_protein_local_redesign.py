@@ -187,16 +187,42 @@ def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path
 
 def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    expected = '''is_protein_local_redesign = (
-            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
-        ) or (
-            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
-        )
-        if not is_protein_local_redesign:
-            job_data.params = _normalize_antibody_job_params(job_data.params)
+    import ast
+    from types import SimpleNamespace
+    from routers.jobs import _should_normalize_antibody_job_params
 
-        if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":'''
-    assert expected in jobs_source
+    # Execute the actual ingress guard with its real policy, rather than demand
+    # the old inline spelling. Keep ordering and call-site coverage explicit.
+    tree = ast.parse(jobs_source)
+    guards = [node for node in ast.walk(tree) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Call) and isinstance(node.test.func, ast.Name)
+        and node.test.func.id == '_should_normalize_antibody_job_params']
+    assert len(guards) == 1
+    guard = guards[0]
+    calls = [node for node in ast.walk(guard) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == '_normalize_antibody_job_params']
+    assert len(calls) == 1
+    validations = [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == 'prepare_local_redesign_scheduler_params'
+        and node.lineno > guard.lineno]
+    assert validations and guard.end_lineno < min(validations)
+    code = compile(ast.Module(body=[guard], type_ignores=[]), '<actual ingress guard>', 'exec')
+    for model, mode, params, expected in [
+        ('protein_local_redesign', 'local_redesign', {}, False),
+        ('protein_modification_experimental', 'region_redesign', {}, False),
+        ('protein_modification_experimental', 'de_novo_design', {'generator': 'rfd3'}, False),
+        ('rfantibody', 'antibody_denovo', {}, True),
+    ]:
+        observed = []
+        data = SimpleNamespace(params=params.copy())
+        def normalize(value):
+            observed.append(value.copy())
+            return {**value, 'antibody_default_applied': True}
+        exec(code, {'normalized_model_id': model, 'normalized_mode': mode, 'job_data': data,
+            '_should_normalize_antibody_job_params': _should_normalize_antibody_job_params,
+            '_normalize_antibody_job_params': normalize})
+        assert bool(observed) is expected
+        assert ('antibody_default_applied' in data.params) is expected
 
 
 def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> None:

@@ -315,7 +315,7 @@ PY
     export TORCH_NUM_THREADS=${task.cpus}
     echo "CPU thread budget: ${task.cpus}" | tee -a "\${LOG_FILE}"
 
-    python3 scripts/rfdiffusion_inference.py \\
+    python3 ${params.code_root}/scripts/rfantibody_inference_wrapper.py --bms-role-export \\
         --config-path \$RFA_CONFIG_PATH \\
         --config-name antibody \\
         antibody.target_pdb=\${WORK_DIR}/${target_pdb} \\

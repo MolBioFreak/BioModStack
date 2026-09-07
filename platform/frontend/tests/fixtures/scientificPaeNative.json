@@ -1,0 +1,245 @@
+{
+  "schema_name": "core_protein_viewer_metric",
+  "schema_version": 1,
+  "contract_revision": 1,
+  "design_id": "candidate",
+  "design_name": "Candidate",
+  "metric": "pae",
+  "status": "ok",
+  "reason": null,
+  "document": {
+    "documentId": "primary",
+    "candidateId": "candidate",
+    "contentSha256": "d2e91e69c68e72828fa035e5c180e901c742f5cbf3c8ed4033d38fd96430d399",
+    "sourceKind": "pdb"
+  },
+  "producer_binding": {
+    "candidate_id": "native-sample-7",
+    "document_id": "native/sample-7.cif"
+  },
+  "artifact_sha256": "7420d543c0079a0a69735d0fc3c5afe2d334ce20d1a73e4256562c227cdaa5de",
+  "row_axis": {
+    "candidate_id": "native-sample-7",
+    "document_id": "native/sample-7.cif",
+    "source_sha256": "d2e91e69c68e72828fa035e5c180e901c742f5cbf3c8ed4033d38fd96430d399",
+    "residues": [
+      {
+        "index": 4,
+        "chain_id": "T",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "T",
+        "auth_seq_id": 1,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"T\"]"
+      },
+      {
+        "index": 0,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      },
+      {
+        "index": 1,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "A",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      },
+      {
+        "index": 2,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "B",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      },
+      {
+        "index": 3,
+        "chain_id": "L",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "L",
+        "auth_seq_id": 10,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"L\"]"
+      }
+    ]
+  },
+  "column_axis": {
+    "candidate_id": "native-sample-7",
+    "document_id": "native/sample-7.cif",
+    "source_sha256": "d2e91e69c68e72828fa035e5c180e901c742f5cbf3c8ed4033d38fd96430d399",
+    "residues": [
+      {
+        "index": 3,
+        "chain_id": "L",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "L",
+        "auth_seq_id": 10,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"L\"]"
+      },
+      {
+        "index": 4,
+        "chain_id": "T",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "T",
+        "auth_seq_id": 1,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"T\"]"
+      },
+      {
+        "index": 0,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      },
+      {
+        "index": 1,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "A",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      },
+      {
+        "index": 2,
+        "chain_id": "H",
+        "residue_name": "ALA",
+        "insertion_code": "B",
+        "selected_model": 1,
+        "selected_altloc": "",
+        "auth_asym_id": "H",
+        "auth_seq_id": 100,
+        "label_asym_id": null,
+        "label_seq_id": null,
+        "source_entity_id": null,
+        "entity_instance_id": "[1,\"auth\",\"H\"]"
+      }
+    ]
+  },
+  "native_row_positions": [
+    4,
+    0,
+    1,
+    2,
+    3
+  ],
+  "native_column_positions": [
+    3,
+    4,
+    0,
+    1,
+    2
+  ],
+  "native_shape": [
+    5,
+    5
+  ],
+  "sampled_row_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "sampled_column_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "pae_matrix": [
+    [
+      0.0,
+      1.0,
+      2.0,
+      3.0,
+      4.0
+    ],
+    [
+      5.0,
+      6.0,
+      7.0,
+      8.0,
+      9.0
+    ],
+    [
+      10.0,
+      11.0,
+      12.0,
+      13.0,
+      14.0
+    ],
+    [
+      15.0,
+      16.0,
+      17.0,
+      18.0,
+      19.0
+    ],
+    [
+      20.0,
+      21.0,
+      22.0,
+      23.0,
+      24.0
+    ]
+  ],
+  "size": 5
+}

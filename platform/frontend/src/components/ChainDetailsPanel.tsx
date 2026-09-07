@@ -11,7 +11,10 @@ import type { ChainMetric, Design } from '../lib/api';
 interface ChainDetailsPanelProps {
     design: Design;
     chainMetrics: Record<string, ChainMetric> | null | undefined;
+    nativeMetric?: import('../lib/scientificViewerIdentity').ScientificNativeMetric;
     isLoading?: boolean;
+    /** Validated API producer ledger; never derive indexes from sorted chains. */
+    chainIdentity?: { document: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef; provider_chains: Record<string, import('../structureViewer/contracts/structureIdentity').EntityInstanceRef> };
 }
 
 // Map chain index (0,1,2) to chain letter (A,B,C)
@@ -87,10 +90,44 @@ const normalizePairChainsIptm = (raw: Design['pair_chains_iptm']): Record<string
     return normalized;
 };
 
-export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDetailsPanelProps) {
+export function ChainDetailsPanel(props: ChainDetailsPanelProps) {
+    const metric=props.nativeMetric, doc=props.design.scientific_structure_document;
+    if (metric) {
+        if(metric.status !== 'ok' || metric.metric !== 'chain_metrics' || props.design.id !== doc?.candidateId
+            || metric.document.candidateId !== doc?.candidateId || metric.document.contentSha256 !== doc?.contentSha256
+            || metric.document.documentId !== doc?.documentId || metric.document.sourceKind !== doc?.sourceKind) {
+            return <div role="status">Chain metrics unavailable: {metric.status==='unavailable'?metric.reason:'selected structure mismatch'}</div>;
+        }
+        return <section aria-label="Native chain metrics" className="text-xs p-2">
+            <h4>Chain Details ({metric.chains.length} chains)</h4>
+            <div>Roles unavailable: missing_role_assignment</div>
+            {metric.chains.map(chain=><div key={chain.providerIndex} data-native-chain={chain.chainId}>
+                Chain {chain.chainId} · pTM {chain.ptm.toFixed(3)} · {chain.residues.length} residues
+            </div>)}
+            <table aria-label="Directed native chain iPTM"><thead><tr><th>From / to</th>{metric.chains.map(c=><th key={c.providerIndex}>{c.chainId}</th>)}</tr></thead>
+                <tbody>{metric.chains.map(row=><tr key={row.providerIndex}><th>{row.chainId}</th>{metric.chains.map(col=><td key={col.providerIndex}>{metric.pairChainsIptm[row.providerIndex][col.providerIndex].toFixed(3)}</td>)}</tr>)}</tbody>
+            </table>
+        </section>;
+    }
+    return <LegacyChainDetailsPanel {...props}/>;
+}
+
+function LegacyChainDetailsPanel({ design, chainMetrics, isLoading, chainIdentity }: ChainDetailsPanelProps) {
+    const strict = design.core_protein_scientific_contract === 1;
+    const doc = design.scientific_structure_document;
+    const validLedger = Boolean(chainIdentity && doc?.contentSha256 && doc.candidateId === design.id
+        && chainIdentity.document.candidateId === doc.candidateId
+        && chainIdentity.document.documentId === doc.documentId
+        && chainIdentity.document.contentSha256 === doc.contentSha256);
+    const chainName = (key: string): string | null => {
+        if (!strict) return indexToLetter(key);
+        if (!validLedger) return null;
+        const ref = chainIdentity?.provider_chains[key];
+        return ref && ref.documentId === doc?.documentId ? ref.authAsymId ?? ref.labelAsymId ?? null : null;
+    };
     const [expanded, setExpanded] = useState(true);
-    const chainsPtm = useMemo(() => normalizeChainsPtm(design.chains_ptm), [design.chains_ptm]);
-    const pairChainsIptm = useMemo(() => normalizePairChainsIptm(design.pair_chains_iptm), [design.pair_chains_iptm]);
+    const chainsPtm = useMemo(() => normalizeChainsPtm(strict ? Object.fromEntries(Object.entries(design.chains_ptm ?? {}).filter(([,v]) => typeof v === 'number' && Number.isFinite(v))) : design.chains_ptm), [design.chains_ptm, strict]);
+    const pairChainsIptm = useMemo(() => normalizePairChainsIptm(strict ? null : design.pair_chains_iptm), [design.pair_chains_iptm, strict]);
 
     // Hide non-polymer ion/ligand chains from the summary view. They are useful in the
     // structure itself, but their per-chain confidence blocks and iPTM rows are mostly noise.
@@ -105,9 +142,11 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
         }> = [];
 
         // Use chains_ptm as primary source (from Boltz confidence JSON)
-        if (Object.keys(chainsPtm).length > 0) {
-            Object.entries(chainsPtm).forEach(([idx, ptm]) => {
-                const letter = indexToLetter(idx);
+        const ptmEntries = strict ? Object.fromEntries(Object.keys(design.chains_ptm ?? {}).map(key => [key, chainsPtm[key] ?? null])) : chainsPtm;
+        if (Object.keys(ptmEntries).length > 0) {
+            Object.entries(ptmEntries).forEach(([idx, ptm]) => {
+                const letter = chainName(idx);
+                if (letter === null) return;
                 const metric = chainMetrics?.[letter];
                 result.push({
                     id: idx,
@@ -133,7 +172,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
         }
 
         return result.filter((chain) => chain.type !== 'ligand');
-    }, [chainsPtm, chainMetrics]);
+    }, [chainsPtm, chainMetrics, chainIdentity, strict, validLedger, doc, design.chains_ptm]);
 
     const visibleChainIds = useMemo(() => new Set(chains.map((chain) => chain.id)), [chains]);
 
@@ -150,6 +189,10 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
         }
         return normalized;
     }, [pairChainsIptm, visibleChainIds]);
+
+    if (strict && (!validLedger || Object.keys(design.chains_ptm ?? {}).some(key => chainName(key) === null))) {
+        return <div role="status" className="text-xs text-amber-200 p-2">Chain metrics unavailable: missing_producer_chain_identity_ledger</div>;
+    }
 
     // Only show for multi-chain complexes
     if (chains.length <= 1) return null;
@@ -202,6 +245,7 @@ export function ChainDetailsPanel({ design, chainMetrics, isLoading }: ChainDeta
                                             <span>{chain.length} {chain.type === 'protein' ? 'aa' : 'bp'}</span>
                                         </div>
                                     )}
+                                    {strict && chain.ptm == null && <div>pTM unavailable: missing_native_value</div>}
                                     {chain.ptm != null && (
                                         <div className="flex justify-between">
                                             <span>pTM:</span>

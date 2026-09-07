@@ -379,7 +379,12 @@ async def finalize_successful_job(
         return FinalizationResult(False, await _authoritative_result_count(session, job), state)
     await session.refresh(job)
 
+    from services.core_protein_scientific_contract import revision_for_job
+
+    strict_revision = None
     try:
+        strict_revision = revision_for_job(job)
+        session.info.setdefault("core_protein_native_prevalidated", set()).discard(job_id)
         ingested_count = await ingest_fn(
             job_id,
             output_dir,
@@ -387,6 +392,8 @@ async def finalize_successful_job(
             epitope_residues=epitope_residues,
             commit=False,
         )
+        from services.core_protein_execution_settings import persist_openmm_receipts
+        await persist_openmm_receipts(job, output_dir, session)
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"
@@ -398,6 +405,28 @@ async def finalize_successful_job(
                 raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
             idempotent_prior_results = int(ingested_count or 0) <= 0
         elif job_expects_design_results(job):
+            from services.core_protein_result_contract import validate_persisted_publication
+
+            # Native/canonical owners prevalidate their own stronger contracts.
+            native_owner = False
+            if strict_revision == 1:
+                from services.result_ingester import _parse_job_params
+
+                native_owner = str(job.model_id or "").strip().lower() in {
+                    "protein_local_redesign", "conformational_mapping",
+                } or (
+                    str(job.model_id or "").strip().lower() == "protein_modification_experimental"
+                    and (str(job.mode or "").strip().lower() == "shape_blueprint" or (
+                        str(job.mode or "").strip().lower() == "de_novo_design"
+                        and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
+                    ))
+                )
+            canonical_prevalidated = job_id in session.info.get("core_protein_native_prevalidated", set())
+            if strict_revision == 1 and not native_owner and not canonical_prevalidated:
+                rows = list((await session.execute(select(Design).where(
+                    Design.job_id == job_id, Design.source_stage.is_(None),
+                ))).scalars())
+                validate_persisted_publication(job, rows, output_dir)
             if count == 0:
                 raise RuntimeError("workflow completed but result ingestion produced no designs")
             usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
@@ -419,6 +448,13 @@ async def finalize_successful_job(
             return FinalizationResult(False, await _authoritative_result_count(session, job), "cancelled")
         count = await _authoritative_result_count(session, job)
         partial = count > 0
+        from services.core_protein_result_contract import retained_usable_candidate_count
+
+        if strict_revision == 1 and job_expects_design_results(job):
+            retained_rows = list((await session.execute(select(Design).where(
+                Design.job_id == job_id, Design.source_stage.is_(None),
+            ))).scalars())
+            partial = retained_usable_candidate_count(retained_rows, output_dir) > 0
         message = str(exc) or exc.__class__.__name__
         integrity_state = str(getattr(exc, "integrity_state", "ingestion_failed"))
         no_candidates = integrity_state == "no_candidates" and count == 0
@@ -434,8 +470,20 @@ async def finalize_successful_job(
             ),
             "error": message,
         }
+        if getattr(exc, "reason", None) is not None:
+            details["reason"] = getattr(exc, "reason")
         if no_candidates:
             details["reason"] = getattr(exc, "reason", {"code": "no_candidates", "message": message})
+        # A terminal result failure must not erase separately verified upstream
+        # filter dispositions. Re-read after rollback; never retain failed reads.
+        from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
+        try:
+            from paths import get_data_root, resolve_runtime_data_path
+            filter_root = Path(output_dir)
+            filter_root = resolve_runtime_data_path(filter_root) if filter_root.is_absolute() else get_data_root() / filter_root
+            retain_filter_stages(job, prepare_filter_stages(job, filter_root))
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError):
+            pass
         failure_provenance = _integrity_provenance(
             job,
             details,

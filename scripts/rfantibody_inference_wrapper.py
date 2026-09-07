@@ -14,6 +14,19 @@ from certain target proteins crash scipy.Rotation.from_matrix.
 import os
 import sys
 
+# Role-only export leaves all inference/rotation behavior exactly as the native
+# entrypoint. Unverified debug overlays run without inventing biological roles.
+if '--bms-role-export' in sys.argv:
+    import runpy
+    from antibody_fampnn_provenance import install_native_export
+    sys.argv.remove('--bms-role-export')
+    try:
+        install_native_export()
+    except ValueError as exc:
+        print(f'[RFA-WRAPPER] Role provenance unavailable: {exc}', file=sys.stderr)
+    runpy.run_path('/opt/RFantibody/scripts/rfdiffusion_inference.py', run_name='__main__')
+    sys.exit(0)
+
 # Step 1: Ensure this script's directory is on the path for the patch module
 scripts_dir = os.path.dirname(os.path.abspath(__file__))
 if scripts_dir not in sys.path:

@@ -24,7 +24,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -731,6 +731,13 @@ class ResumeJobRequest(BaseModel):
     from_stage: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     name_suffix: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_scientific_revision_input(cls, data: Any) -> Any:
+        from services.core_protein_scientific_contract import reject_reserved_marker
+        reject_reserved_marker(data)
+        return data
 
 
 class ContinueProteinLocalReviewRequest(BaseModel):
@@ -5464,6 +5471,67 @@ def _resolve_job_sequence_length(
     return 300
 
 
+def _mutagenesis_variant_job_params(params: Dict[str, Any], variant: Dict[str, Any], i: int) -> Dict[str, Any]:
+    """Build the same generated settings for prevalidation and persistence."""
+    # Override sequence with variant-specific sequence
+    job_params = dict(params)
+    job_params['sequence'] = variant.get('sequence')
+    job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
+    job_params['mutation_variant'] = {
+        'name': variant.get('name'),
+        'source_design_id': variant.get('source_design_id'),
+        'source_design_name': variant.get('source_design_name'),
+        'binder_chain_id': variant.get('binder_chain_id'),
+        'mutation': variant.get('mutation'),
+        'loop_ids': variant.get('loop_ids'),
+        'locked_positions_spec': variant.get('locked_positions_spec'),
+    }
+
+    # BATCH-STAGE-GATE: Remove per-variant FrustraMPNN
+    # FrustraMPNN runs as a post-batch phase after ALL variants complete
+    # This prevents GPU contention and enables single-model-load optimization
+    job_params.pop('run_frustrampnn', None)
+
+    variant_complex_components = variant.get('complex_components')
+    # Construct complex_components for BoltzFromComplex if any non-protein components present
+    # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
+    ligand_components = job_params.pop('ligands', [])
+
+    if variant_complex_components:
+        job_params['complex_components'] = variant_complex_components
+        logger.info(
+            f"[MUTAGENESIS] Using variant-specific complex_components with "
+            f"{len(variant_complex_components)} entries for variant {variant.get('name')}"
+        )
+    # Check if any components need the complex workflow (DNA, RNA, ligands, ions, peptides)
+    elif ligand_components:
+        # Build complex_components array: protein + all other components
+        complex_comps = [
+            {'type': 'protein', 'id': 'A', 'sequence': variant.get('sequence')}
+        ]
+        # Add all components from ligands array (DNA, RNA, ligands, ions, peptides)
+        for comp in ligand_components:
+            comp_type = comp.get('type', 'ligand')
+            comp_entry = {
+                'type': comp_type,
+                'id': comp.get('id', 'X'),
+            }
+            # Add sequence for nucleic acids and peptides
+            if comp_type in ('dna', 'rna', 'peptide', 'protein') and comp.get('sequence'):
+                comp_entry['sequence'] = comp.get('sequence')
+            # Add CCD for standard ligands/ions
+            if comp.get('ccd'):
+                comp_entry['ccd'] = comp.get('ccd')
+            # Add SMILES for custom ligands
+            if comp.get('smiles'):
+                comp_entry['smiles'] = comp.get('smiles')
+            complex_comps.append(comp_entry)
+
+        job_params['complex_components'] = complex_comps
+        logger.info(f"[MUTAGENESIS] Built complex_components with {len(complex_comps)} entries for variant {variant.get('name')}")
+    return job_params
+
+
 async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
@@ -5475,6 +5543,15 @@ async def _create_job(
     _trusted_workflow_adapter: Any = Depends(lambda: False),
 ):
     """Create and queue a new pipeline job."""
+    from services import core_protein_scientific_contract as scientific_contract
+    try:
+        # Also covers internal callers that mutate/model_construct JobCreate,
+        # including template and mutagenesis registry-validation bypasses.
+        scientific_contract.reject_reserved_marker(job_data.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from copy import deepcopy
+    original_requested_params = deepcopy(job_data.params)
     require_molecular_dynamics_feature(job_data.model_id)
     _raise_if_workflow_launches_disabled("create new workflow jobs")
     md_input_resolver: Callable[[str], str] = (
@@ -5766,6 +5843,16 @@ async def _create_job(
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
         await _validate_md_analysis_child(job_data, session)
 
+    try:
+        scientific_revision = scientific_contract.admission_revision(
+            normalized_model_id, normalized_mode,
+        )
+        if scientific_revision == 1 and normalized_model_id in {'boltzgen', 'boltzgen_child'}:
+            from services.boltzgen_request_compatibility import compile_boltzgen_settings
+            job_data.params = compile_boltzgen_settings(job_data.params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     if job_data.parent_job_id and job_data.child_stage and job_data.name:
         existing_child_result = await session.execute(
             select(Job)
@@ -5855,6 +5942,30 @@ async def _create_job(
                 decision_history=existing_child.decision_history,
             )
     
+    # New declarations are compiled only after historical-child reuse has
+    # returned, but before any new job/output directory can be written.
+    try:
+        from services.fampnn_policy_admission import compile_declaration
+        fampnn_declaration = None
+        if scientific_revision is None and job_data.fampnn_analysis_overrides is not None:
+            raise ValueError('FA-MPNN analysis overrides require an activated caller')
+        if scientific_revision is not None:
+            scientific_parent = await session.get(Job, job_data.parent_job_id) if job_data.parent_job_id else None
+            fampnn_declaration = compile_declaration(
+                normalized_model_id, normalized_mode, job_data.params,
+                job_data.fampnn_analysis_overrides.model_dump() if job_data.fampnn_analysis_overrides is not None else None,
+                parent=scientific_parent,
+            )
+            if normalized_model_id == 'fampnn_child' and fampnn_declaration and 'materialization' in fampnn_declaration:
+                settings = fampnn_declaration['materialization']['settings']
+                for key, value in settings.items():
+                    if key in job_data.params and job_data.params[key] != value:
+                        raise ValueError(f'child {key} conflicts with parent declaration')
+                job_data.params.update(settings)
+                job_data.params['fampnn_constraint_mode'] = 'antibody'
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Detect complex components for logging (info level)
     if 'complex_components' in job_data.params:
         logger.info(f"Job contains {len(job_data.params['complex_components'])} complex components")
@@ -5926,6 +6037,31 @@ async def _create_job(
                 detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
             )
     
+    validated_variant_params = None
+    if is_mutagenesis and scientific_revision is not None:
+        # Validate the complete expansion before even the MSA dependency row is
+        # added. Keep legacy/out-of-scope batch admission behavior unchanged.
+        if mutagenesis_variants:
+            if not isinstance(mutagenesis_variants, list) or any(
+                not isinstance(variant, dict) for variant in mutagenesis_variants
+            ):
+                raise HTTPException(status_code=422, detail="mutagenesis_variants must contain parameter objects")
+            validated_variant_params = [
+                _mutagenesis_variant_job_params(job_data.params, variant, i)
+                for i, variant in enumerate(mutagenesis_variants)
+            ]
+        for generated_params in validated_variant_params or [job_data.params]:
+            errors = registry.validate_job_params(
+                job_data.model_id, job_data.mode,
+                _normalize_boltz_cp_params_for_validation(job_data.model_id, generated_params),
+            )
+            if errors:
+                raise HTTPException(status_code=422, detail={"validation_errors": errors})
+            _validate_protenix_template_requirements(job_data.model_id, generated_params)
+            _validate_protenix_checkpoint_requirements(job_data.model_id, generated_params)
+            _validate_fampnn_checkpoint_requirements(job_data.model_id, generated_params)
+            _validate_antibody_runtime_paths(job_data.model_id, generated_params)
+
     preallocated_job_id = _preallocated_job_id if isinstance(_preallocated_job_id, str) else None
     if preallocated_job_id is not None:
         if num_jobs != 1 or not re.fullmatch(
@@ -6088,62 +6224,8 @@ async def _create_job(
             variant = mutagenesis_variants[i]
             job_name = f"{job_data.name}_{variant.get('name', f'var_{i+1}')}"
             output_dir = str(Path(base_output_dir) / variant.get('name', f'var_{i+1}'))
-            # Override sequence with variant-specific sequence
-            job_params = {**job_data.params}
-            job_params['sequence'] = variant.get('sequence')
-            job_params['sequence_name'] = variant.get('name', f'var_{i+1}')
-            job_params['mutation_variant'] = {
-                'name': variant.get('name'),
-                'source_design_id': variant.get('source_design_id'),
-                'source_design_name': variant.get('source_design_name'),
-                'binder_chain_id': variant.get('binder_chain_id'),
-                'mutation': variant.get('mutation'),
-                'loop_ids': variant.get('loop_ids'),
-                'locked_positions_spec': variant.get('locked_positions_spec'),
-            }
-            
-            # BATCH-STAGE-GATE: Remove per-variant FrustraMPNN
-            # FrustraMPNN runs as a post-batch phase after ALL variants complete
-            # This prevents GPU contention and enables single-model-load optimization
-            job_params.pop('run_frustrampnn', None)
-            
-            variant_complex_components = variant.get('complex_components')
-            # Construct complex_components for BoltzFromComplex if any non-protein components present
-            # The ligands array contains ALL complex components: ligands, ions, DNA, RNA, peptides
-            ligand_components = job_params.pop('ligands', [])
-            
-            if variant_complex_components:
-                job_params['complex_components'] = variant_complex_components
-                logger.info(
-                    f"[MUTAGENESIS] Using variant-specific complex_components with "
-                    f"{len(variant_complex_components)} entries for variant {variant.get('name')}"
-                )
-            # Check if any components need the complex workflow (DNA, RNA, ligands, ions, peptides)
-            elif ligand_components:
-                # Build complex_components array: protein + all other components
-                complex_comps = [
-                    {'type': 'protein', 'id': 'A', 'sequence': variant.get('sequence')}
-                ]
-                # Add all components from ligands array (DNA, RNA, ligands, ions, peptides)
-                for comp in ligand_components:
-                    comp_type = comp.get('type', 'ligand')
-                    comp_entry = {
-                        'type': comp_type,
-                        'id': comp.get('id', 'X'),
-                    }
-                    # Add sequence for nucleic acids and peptides
-                    if comp_type in ('dna', 'rna', 'peptide', 'protein') and comp.get('sequence'):
-                        comp_entry['sequence'] = comp.get('sequence')
-                    # Add CCD for standard ligands/ions
-                    if comp.get('ccd'):
-                        comp_entry['ccd'] = comp.get('ccd')
-                    # Add SMILES for custom ligands
-                    if comp.get('smiles'):
-                        comp_entry['smiles'] = comp.get('smiles')
-                    complex_comps.append(comp_entry)
-                
-                job_params['complex_components'] = complex_comps
-                logger.info(f"[MUTAGENESIS] Built complex_components with {len(complex_comps)} entries for variant {variant.get('name')}")
+            job_params = (dict(validated_variant_params[i]) if validated_variant_params is not None
+                          else _mutagenesis_variant_job_params(job_data.params, variant, i))
         elif num_jobs > 1:
             job_name = f"{job_data.name}_sim{i+1}"
             output_dir = str(Path(base_output_dir) / f"sim_{i+1}")
@@ -6333,6 +6415,17 @@ async def _create_job(
         # Use sequence_length from request if provided (child jobs)
         effective_seq_length = job_data.sequence_length or sequence_length
         
+        job_params, provenance_payload = scientific_contract.admitted_payload(
+            job_params, provenance_payload, scientific_revision,
+        )
+        if fampnn_declaration is not None:
+            from copy import deepcopy
+            job_params['fampnn_analysis_declaration'] = deepcopy(fampnn_declaration)
+            provenance_payload['fampnn_analysis_declaration'] = deepcopy(fampnn_declaration)
+
+        if scientific_revision is not None:
+            provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
+
         # Create job record with queue fields
         job = Job(
             id=job_id,
@@ -7846,6 +7939,18 @@ async def delete_job_permanently(
     }
 
 
+from services.core_protein_execution_settings import ExecutionSettings
+
+
+@router.get("/{job_id}/execution-settings", response_model=ExecutionSettings)
+async def job_execution_settings(job_id: str, session: AsyncSession = Depends(get_session)):
+    from services.core_protein_execution_settings import verify_receipts
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return verify_receipts(job)
+
+
 @router.post("/{job_id}/resubmit")
 async def resubmit_job(
     job_id: str,
@@ -7907,8 +8012,7 @@ async def resubmit_job(
     # Create new output directory for resubmitted job
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
-    os.makedirs(output_dir, exist_ok=True)
-    
+
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
@@ -7966,12 +8070,53 @@ async def resubmit_job(
         resubmit_params.get("selected_input_schema_version")
     )
 
+    from services import core_protein_scientific_contract as scientific_contract
+    try:
+        source_revision = scientific_contract.revision_for_job(original_job)
+        # Every fresh attempt uses current admission, including former children.
+        # A marked source may not silently downgrade through an inactive caller.
+        resubmit_params.pop(scientific_contract.REVISION_KEY, None)
+        resubmit_params.pop('fampnn_analysis_declaration', None)
+        resubmit_params.pop('fampnn_analysis_policy', None)
+        scientific_contract.reject_reserved_marker(resubmit_params)
+        resubmit_revision = scientific_contract.admission_revision(
+            original_job.model_id, original_job.mode,
+        )
+        if (source_revision is not None and resubmit_revision is None
+                and (original_job.model_id, original_job.mode) in scientific_contract.SUPPORTED_CALLERS):
+            raise ValueError("marked source requires an active scientific caller for fresh resubmission")
+        if resubmit_revision is not None:
+            errors = get_registry().validate_job_params(
+                original_job.model_id, original_job.mode,
+                _normalize_boltz_cp_params_for_validation(original_job.model_id, resubmit_params),
+            )
+            if errors:
+                raise HTTPException(status_code=422, detail={"validation_errors": errors})
+        resubmit_params, resubmit_provenance = scientific_contract.admitted_payload(
+            resubmit_params, {}, resubmit_revision,
+        )
+        original_request = (original_job.provenance or {}).get('core_protein_requested_params')
+        if resubmit_revision is not None and original_request is not None:
+            resubmit_provenance['core_protein_requested_params'] = deepcopy(original_request)
+        if resubmit_revision is not None:
+            from services.fampnn_policy_admission import compile_declaration, overrides_from_declaration
+            trusted_declaration = (original_job.provenance or {}).get('fampnn_analysis_declaration')
+            declaration = compile_declaration(original_job.model_id, original_job.mode, resubmit_params,
+                overrides_from_declaration(trusted_declaration),
+                parent=await session.get(Job, original_job.parent_job_id) if original_job.parent_job_id else None)
+            if declaration is not None:
+                resubmit_params['fampnn_analysis_declaration'] = declaration
+                resubmit_provenance['fampnn_analysis_declaration'] = declaration
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
         model_id=original_job.model_id,
         mode=original_job.mode,
         params=resubmit_params,
+        provenance=resubmit_provenance,
         status=JobStatus.QUEUED.value,
         created_at=datetime.utcnow(),
         output_dir=output_dir,
@@ -8001,6 +8146,7 @@ async def resubmit_job(
             response,
             request,
         )
+    os.makedirs(output_dir, exist_ok=True)
     session.add(new_job)
     await session.commit()
     await session.refresh(new_job)
@@ -9112,6 +9258,12 @@ async def resume_job(
     If from_stage is specified, it is recorded as a stage hint for cache-based
     resume behavior. The underlying Nextflow resume remains cache-driven.
     """
+    from services import core_protein_scientific_contract as scientific_contract
+    try:
+        if request is not None:
+            scientific_contract.reject_reserved_marker(request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     _raise_if_workflow_launches_disabled("resume workflow jobs")
     await reject_generic_md_lifecycle_control(job_id, session)
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -9287,6 +9439,16 @@ async def resume_job(
             "applied_overrides": sorted(param_overrides.keys()),
         }
 
+    # Guard the original declaration before directories, normalization, or rows
+    # can be changed. Fresh-submission/review iteration branches above re-admit.
+    trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
+    if trusted_declaration is not None:
+        from services.fampnn_policy_admission import guard_cached_declaration
+        try:
+            guard_cached_declaration(trusted_declaration, job.params or {}, param_overrides)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
     # This allows Nextflow to find cached tasks from the previous run
@@ -9336,12 +9498,36 @@ async def resume_job(
         merged_params.get("selected_input_schema_version")
     )
 
+    try:
+        # True cached resume stays in its original cohort, even after activation.
+        # Overrides may not supply authority (including review-payload defaults).
+        scientific_contract.reject_reserved_marker(param_overrides)
+        resume_revision = scientific_contract.revision_for_job(job)
+        merged_params.pop(scientific_contract.REVISION_KEY, None)
+        merged_params.pop('fampnn_analysis_declaration', None)
+        merged_params.pop('fampnn_analysis_policy', None)
+        trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
+        merged_params, resume_provenance = scientific_contract.admitted_payload(
+            merged_params, {}, resume_revision,
+        )
+        original_request = (job.provenance or {}).get('core_protein_requested_params')
+        if resume_revision is not None and original_request is not None:
+            resume_provenance['core_protein_requested_params'] = {
+                **deepcopy(original_request), **deepcopy(param_overrides),
+            }
+        if trusted_declaration is not None:
+            merged_params['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
+            resume_provenance['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     new_job = Job(
         id=new_job_id,
         name=new_name,
         status="queued",
         model_id=job.model_id,
         mode=job.mode,
+        provenance=resume_provenance,
         params={
             **merged_params,
             "resume_job_id": job_id,

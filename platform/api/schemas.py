@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
+from services.fampnn_policy_admission import FampnnAnalysisOverrides
 
 
 def serialize_datetime(dt: datetime) -> str:
@@ -31,6 +32,7 @@ class JobStatus(str, Enum):
 
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
+    fampnn_analysis_overrides: FampnnAnalysisOverrides | None = None
     name: str = Field(..., min_length=1, max_length=255)
     model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
     mode: str = Field(..., description="Mode ID for the selected model")
@@ -54,6 +56,13 @@ class JobCreate(BaseModel):
         max_length=128,
         description="Opaque server-owned Project launch context; hierarchy identity is never accepted here",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_scientific_revision_input(cls, data: Any) -> Any:
+        from services.core_protein_scientific_contract import reject_reserved_marker
+        reject_reserved_marker(data)
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -84,6 +93,34 @@ class JobCreate(BaseModel):
             }
         }
     )
+
+
+class CandidateResultReason(BaseModel):
+    code: str
+    message: str
+
+
+class CandidateDisposition(BaseModel):
+    candidate_id: str
+    disposition: Literal['selected', 'rejected', 'failed', 'unevaluable']
+    criterion: Optional[str] = None
+    reason_code: Optional[str] = None
+
+
+class CandidateResultSummary(BaseModel):
+    """Observed producer accounting; unknown counts stay null, never row-inferred."""
+    stage_id: Optional[str] = None
+    state: str = 'unavailable'
+    partial: bool = False
+    requested_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    generated_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    rejected_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    failed_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    unevaluable_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    expected_publication_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    persisted_count: Optional[int] = Field(default=None, ge=0, strict=True)
+    reason: Optional[CandidateResultReason] = None
+    dispositions: Optional[List[CandidateDisposition]] = None
 
 
 class JobResponse(BaseModel):
@@ -150,7 +187,31 @@ class JobResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
     
-    from pydantic import field_serializer
+    from pydantic import field_serializer, computed_field
+
+    @computed_field
+    @property
+    def result_summary(self) -> CandidateResultSummary:
+        provenance = self.provenance or {}
+        # Legacy metadata and DB row counts are not producer inventory authority.
+        if type(provenance.get('core_protein_scientific_contract')) is not int or provenance.get('core_protein_scientific_contract') != 1:
+            return CandidateResultSummary()
+        receipt = provenance.get('core_protein_candidate_publication') or {}
+        counts = receipt.get('summary') or {}
+        integrity = provenance.get('result_integrity') or {}
+        values = {key: counts.get(key) for key in (
+            'stage_id', 'requested_count', 'generated_count', 'rejected_count',
+            'failed_count', 'unevaluable_count', 'expected_publication_count')}
+        values['persisted_count'] = integrity.get('result_count') if integrity else counts.get('published_count')
+        values['state'] = integrity.get('state', 'pending_validation' if receipt else 'unavailable')
+        values['partial'] = integrity.get('partial') is True
+        reason = integrity.get('reason')
+        if isinstance(reason, dict) and isinstance(reason.get('code'), str):
+            values['reason'] = {'code': reason['code'], 'message': str(reason.get('message') or integrity.get('error') or reason['code'])}
+        elif integrity.get('error'):
+            values['reason'] = {'code': 'result_integrity_failure', 'message': str(integrity['error'])}
+        values['dispositions'] = receipt.get('dispositions')
+        return CandidateResultSummary.model_validate(values)
     
     @field_serializer('created_at', 'started_at', 'completed_at')
     @classmethod

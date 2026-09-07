@@ -27,6 +27,7 @@ class StructureFilter(ABC):
         output_dir: Path,
         thresholds: Dict[str, Tuple[Optional[float], Optional[float]]] = None,
         convert_to_pdb: bool = False,
+        core_protein_scientific_contract=None,
     ):
         """
         Initialize filter.
@@ -37,6 +38,7 @@ class StructureFilter(ABC):
             thresholds: Dict of metric_name -> (min_val, max_val)
             convert_to_pdb: If True, convert CIF outputs to PDB
         """
+        self.core_protein_scientific_contract = core_protein_scientific_contract
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.thresholds = thresholds or {}
@@ -59,6 +61,10 @@ class StructureFilter(ABC):
         if stem.endswith('.cif'):
             stem = stem[:-4]
         
+        if self.core_protein_scientific_contract == 1:
+            candidates = [structure_path.parent / f"{stem}_summary_confidences.json", structure_path.parent / f"{stem}.json"]
+            return next((p for p in candidates if p.exists()), None)
+
         # Try various patterns
         candidates = [
             structure_path.with_suffix('.json'),
@@ -74,12 +80,26 @@ class StructureFilter(ABC):
     def load_metadata(self, json_path: Path) -> dict:
         """Load metadata from JSON file."""
         try:
+            if self.core_protein_scientific_contract == 1:
+                import hashlib
+                raw = json_path.read_bytes()
+                self.source_sha256 = hashlib.sha256(raw).hexdigest()
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError("Metadata must be an object")
+                return data
             with open(json_path) as f:
                 return json.load(f)
         except Exception as e:
+            if self.core_protein_scientific_contract == 1:
+                raise
             logger.warning(f"Could not load metadata {json_path}: {e}")
             return {}
     
+    def evaluate_thresholds(self, metrics, candidate_id):
+        from .evidence import evaluate
+        return evaluate([(name, *bounds) for name, bounds in self.thresholds.items()], metrics, candidate_id, plddt_units=metrics.get("plddt_units"))
+
     def check_thresholds(self, metrics: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """
         Check if metrics pass all thresholds.
@@ -90,6 +110,10 @@ class StructureFilter(ABC):
         Returns:
             Tuple of (passed, failure_reason)
         """
+        if self.core_protein_scientific_contract == 1:
+            result = self.evaluate_thresholds(metrics, "")
+            passed = result["disposition"] == "passed"
+            return passed, None if passed else result["disposition"]
         for metric_name, (min_val, max_val) in self.thresholds.items():
             value = metrics.get(metric_name)
             
@@ -176,10 +200,21 @@ class StructureFilter(ABC):
                 # Load metadata
                 metadata_path = self.find_metadata_file(structure_path)
                 metadata = self.load_metadata(metadata_path) if metadata_path else {}
+                if self.core_protein_scientific_contract == 1:
+                    identity = structure_path.name.removesuffix('.gz').removesuffix('.cif').removesuffix('.pdb')
+                    if metadata.get('design_id') is not None and metadata['design_id'] != identity:
+                        raise ValueError('foreign_metadata_identity')
+                    result['source_sha256'] = self.source_sha256 if metadata_path else None
                 
                 # Extract metrics
                 metrics = self.extract_metrics(structure_path, metadata)
+                if self.core_protein_scientific_contract == 1:
+                    provenance = metrics.pop('_descriptor_provenance', None)
+                    if provenance is not None:
+                        result['descriptor_provenance'] = provenance
                 result['metrics'] = metrics
+                if self.core_protein_scientific_contract == 1:
+                    result.update(self.evaluate_thresholds(metrics, structure_path.name))
                 
                 # Check thresholds
                 passed, reason = self.check_thresholds(metrics)
@@ -187,7 +222,9 @@ class StructureFilter(ABC):
                 result['reason'] = reason
                 
                 if passed:
-                    self.copy_passing_files(structure_path, metadata_path)
+                    published_path = self.copy_passing_files(structure_path, metadata_path)
+                    if self.core_protein_scientific_contract == 1:
+                        result['published_file'] = str(published_path)
                     logger.info(f"PASS: {structure_path.name}")
                 else:
                     logger.info(f"FAIL: {structure_path.name} - {reason}")
@@ -195,8 +232,19 @@ class StructureFilter(ABC):
             except Exception as e:
                 result['passed'] = False
                 result['reason'] = str(e)
+                if self.core_protein_scientific_contract == 1:
+                    result.update(core_protein_scientific_contract=1, candidate_id=structure_path.name, disposition='invalid_evidence')
+                    result['candidate_failure'] = {'code': 'candidate_evidence_failure', 'detail': str(e) or type(e).__name__}
+                    failure = self.evaluate_thresholds({}, structure_path.name)
+                    for criterion in failure['criteria']:
+                        criterion['disposition'] = 'invalid_evidence'
+                        criterion['evidence'].update(state='invalid', value=None, reason_code='candidate_evidence_failure')
+                    result['criteria'] = failure['criteria']
                 logger.error(f"ERROR: {structure_path.name} - {e}")
             
+            if self.core_protein_scientific_contract == 1:
+                from .evidence import metric_evidence
+                result['metrics'] = {k: metric_evidence(k, v, result['metrics'].get('plddt_units'))['value'] for k, v in result['metrics'].items()}
             results.append(result)
         
         # Summary
@@ -210,4 +258,4 @@ class StructureFilter(ABC):
         output_path = self.output_dir / output_file
         with open(output_path, 'w') as f:
             for r in results:
-                f.write(json.dumps(r) + '\n')
+                f.write(json.dumps(r, allow_nan=self.core_protein_scientific_contract != 1) + '\n')

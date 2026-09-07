@@ -35,7 +35,7 @@ def calculate_radius_of_gyration(coords: np.ndarray) -> float:
     return float(np.sqrt(np.mean(distances_sq)))
 
 
-def calculate_secondary_structure(structure: 'struc.AtomArray') -> Dict[str, int]:
+def calculate_secondary_structure(structure: 'struc.AtomArray', core_protein_scientific_contract=None) -> Dict[str, Optional[int]]:
     """
     Calculate secondary structure content using DSSP-like algorithm.
     
@@ -48,11 +48,12 @@ def calculate_secondary_structure(structure: 'struc.AtomArray') -> Dict[str, int
     Returns:
         Dict with 'helices', 'strands', 'total_ss' counts
     """
+    unavailable: Dict[str, Optional[int]] = dict.fromkeys(('helices', 'strands', 'total_ss'), None if core_protein_scientific_contract == 1 else 0)
     if not HAS_BIOTITE:
-        return {'helices': 0, 'strands': 0, 'total_ss': 0}
+        return unavailable
     
     if structure is None:
-        return {'helices': 0, 'strands': 0, 'total_ss': 0}
+        return unavailable
     
     try:
         # Get SSE (Secondary Structure Elements) annotation
@@ -87,10 +88,10 @@ def calculate_secondary_structure(structure: 'struc.AtomArray') -> Dict[str, int
         }
     except Exception as e:
         print(f"Warning: SS calculation failed: {e}")
-        return {'helices': 0, 'strands': 0, 'total_ss': 0}
+        return unavailable
 
 
-def calculate_backbone_metrics(structure: 'struc.AtomArray') -> Dict[str, float]:
+def calculate_backbone_metrics(structure: 'struc.AtomArray', core_protein_scientific_contract=None) -> Dict[str, float]:
     """
     Calculate backbone-related metrics for a structure.
     
@@ -120,13 +121,13 @@ def calculate_backbone_metrics(structure: 'struc.AtomArray') -> Dict[str, float]
         metrics['rog'] = calculate_radius_of_gyration(backbone.coord)
     
     # Calculate SS
-    ss_metrics = calculate_secondary_structure(structure)
+    ss_metrics = calculate_secondary_structure(structure, core_protein_scientific_contract)
     metrics.update(ss_metrics)
     
     return metrics
 
 
-def extract_confidence_metrics(metadata: dict) -> Dict[str, Optional[float]]:
+def extract_confidence_metrics(metadata: dict, core_protein_scientific_contract=None) -> Dict[str, Optional[float]]:
     """
     Extract confidence metrics from prediction metadata.
     
@@ -138,6 +139,11 @@ def extract_confidence_metrics(metadata: dict) -> Dict[str, Optional[float]]:
     Returns:
         Normalized dict with 'plddt', 'ptm', 'pae' keys
     """
+    if core_protein_scientific_contract == 1:
+        aliases = {'plddt': ('plddt', 'mean_plddt', 'pLDDT'), 'ptm': ('ptm', 'pTM'), 'pae': ('pae', 'mean_pae', 'PAE'), 'rmsd': ('rmsd', 'rmsd_overall'), 'rmsd_binder': ('rmsd_binder', 'binder_rmsd')}
+        result = {key: next((metadata[k] for k in names if k in metadata), None) for key, names in aliases.items()}
+        result['plddt_units'] = metadata.get('plddt_units')
+        return result
     return {
         'plddt': metadata.get('plddt') or metadata.get('mean_plddt') or metadata.get('pLDDT'),
         'ptm': metadata.get('ptm') or metadata.get('pTM'),

@@ -190,6 +190,12 @@ process AlignBoltzValidation {
     path "alignment_batch.log"
 
     script:
+    def revision = params.get('core_protein_scientific_contract')
+    if (revision != null && (revision instanceof Boolean || revision.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def scientificArgs = revision == null ? '' : '--core_protein_scientific_contract 1'
+    def quoteRole = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def resolvedBinderChains = params.antibody_chains ?: params.binder_chains ?: 'H,L'
     def resolvedTargetChains = params.antigen_chains ?: params.target_chains ?: 'T'
     def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
@@ -208,8 +214,8 @@ process AlignBoltzValidation {
         --boltz_dir ./ \\
         --output_dir predictions \\
         --design_type binder \\
-        --binder_chains "${resolvedBinderChains}" \\
-        --target_chains "${resolvedTargetChains}" \\
+        --binder_chains ${quoteRole(revision == null ? resolvedBinderChains : (params.antibody_chains ?: params.binder_chains ?: ''))} \\
+        --target_chains ${quoteRole(revision == null ? resolvedTargetChains : (params.antigen_chains ?: params.target_chains ?: ''))} ${scientificArgs} \\
         --geometry_mode "${geometryMode}" ${boltzStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
@@ -248,6 +254,11 @@ process BatchProtenixValidation {
     path "protenix_batch.log"
 
     script:
+    def revision = params.get('core_protein_scientific_contract')
+    if (revision != null && (revision instanceof Boolean || revision.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def scientificArgs = revision == null ? '' : '--core_protein_scientific_contract 1'
     def model_name = params.protenix_model_weights ?: 'protenix-v2'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
@@ -350,10 +361,10 @@ payload = json.loads(Path('chain_roles.json').read_text())
 print(",".join(payload.get('all_target_chain_ids') or []))
 PY
 )"
-    if [ -z "\$PROTENIX_BINDER_CHAINS" ]; then
+    if [ "${revision == null}" = "true" ] && [ -z "\$PROTENIX_BINDER_CHAINS" ]; then
         PROTENIX_BINDER_CHAINS="${fallbackAlignmentBinderChains}"
     fi
-    if [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
+    if [ "${revision == null}" = "true" ] && [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
         PROTENIX_TARGET_CHAINS="${fallbackAlignmentTargetChains}"
     fi
 
@@ -446,7 +457,7 @@ PY
         --design_type binder \\
         --binder_chains "\$PROTENIX_BINDER_CHAINS" \\
         --target_chains "\$PROTENIX_TARGET_CHAINS" \\
-        --chain_roles_json chain_roles.json \\
+        --chain_roles_json chain_roles.json ${scientificArgs} \\
         --geometry_mode "${geometryMode}" ${protenixStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_protenix.log

@@ -347,7 +347,14 @@ PY
         lightChainArg="--light_chain \${lightChain}"
     fi
 
-    "\${PYTHON_BIN}" "\${ppiflow_script}" \\
+    nativeCommand=("\${PYTHON_BIN}" "\${ppiflow_script}")
+    if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
+        nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
+            --producer ppiflow --root /app/ppiflow --reference "${original_complex_pdb}"
+            --binder "\${heavyChain},\${lightChain}" --target "${params.antigen_chains ?: antigenChain}"
+            --selected "${ppiflow_positions}" --loops "${cdr_positions_by_loop_json}" -- "\${ppiflow_script}")
+    fi
+    "\${nativeCommand[@]}" \\
         --complex_pdb "${complex_pdb}" \\
         --fixed_positions "\${fixedPositionsSpec}" \\
         --cdr_position "\${cdrPositionsSpec}" \\
@@ -380,7 +387,15 @@ manifest = []
 for i, pdb in enumerate(pdbs):
     out_name = f"${meta.id}_ppiflow_sample{i}.pdb"
     shutil.copy2(pdb, out_dir / out_name)
+    comparison_path = None
+    if "${params.get('core_protein_scientific_contract') ?: ''}" == "1":
+        comparison = Path(str(pdb) + '.comparison.json')
+        if not comparison.is_file():
+            raise ValueError('native comparison publication missing')
+        comparison_path = str((out_dir / (out_name + '.comparison.json')).resolve())
+        shutil.copy2(comparison, comparison_path)
     manifest.append({
+        "comparison_path": comparison_path,
         "sample_index": i,
         "name": out_name,
         "path": str((out_dir / out_name).resolve()),
@@ -397,10 +412,10 @@ process PrepMaturationRedesign {
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fampnn.csv"
 
     input:
-    tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop)
+    tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop), path(comparison_requests)
 
     output:
-    tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), emit: prep
+    tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep
 
     script:
     def frameworkType = params.get('framework_type')
@@ -421,6 +436,12 @@ process PrepMaturationRedesign {
 
     mkdir -p input_pdbs
     cp ${backbone_pdbs} ./input_pdbs/
+    mkdir -p fampnn_transport
+    prepTransport=()
+    if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
+        cp ${comparison_requests} ./input_pdbs/
+        prepTransport=(--maturation_transport)
+    fi
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/anchors_to_ppiflow_positions.py" \\
         --anchors_json "${anchors_json}" \\
@@ -430,7 +451,8 @@ process PrepMaturationRedesign {
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/prep_fampnn_designs.py" \\
         --input_dir "./input_pdbs" \\
-        --out_dir "fampnn_input"
+        --out_dir "fampnn_input" "\${prepTransport[@]}"
+    if [ "\${#prepTransport[@]}" -gt 0 ]; then cp fampnn_input/*.comparison.json fampnn_transport/; fi
 
     cdr_positions=\$(cat "${cdr_positions}" | tr -d '\\n')
 
@@ -460,7 +482,7 @@ process RunMaturationFAMPNN {
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
-    tuple val(meta), path(pdbs), path(csv)
+    tuple val(meta), path(pdbs), path(csv), path(transport_dir)
 
     output:
     tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned
@@ -487,7 +509,13 @@ process RunMaturationFAMPNN {
     mkdir -p results
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with OmegaConf/defaultdict metadata.
-    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py \\
+    nativeCommand=("\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py)
+    if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
+        cp ${transport_dir}/*.comparison.json ./
+        nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
+            --producer fampnn --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py)
+    fi
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "\${nativeCommand[@]}" \\
         batch_size=1 \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
@@ -508,6 +536,9 @@ process RunMaturationFAMPNN {
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp "\$file" "results/\$new_name"
+        if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
+            cp "\$file.comparison.json" "results/\$new_name.comparison.json"
+        fi
     done
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/analyse_fampnn.py" \\
@@ -528,6 +559,15 @@ process RunMaturationFAMPNN {
     """
 }
 
+def maturationScientificContractArg(params) {
+    def value = params.get('core_protein_scientific_contract')
+    if (value == null) return ''
+    if (value instanceof Boolean || value.toString() != '1') {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    return '--core-protein-scientific-contract 1'
+}
+
 process ScoreMaturationImprovement {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "scores/*_maturation_score.json", saveAs: { fn -> fn.replace('scores/', '') }
@@ -539,9 +579,10 @@ process ScoreMaturationImprovement {
     tuple val(meta), path("scores/*_maturation_score.json"), emit: scores
 
     script:
+    def scientificContractArg = maturationScientificContractArg(params)
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.antibody_chains ?: (scientificContractArg ? '' : defaultAntibodyChains)
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
     def objectiveMode = paramValueOrDefault(params, 'ppiflow_objective_mode', 'selected_interface')
@@ -552,7 +593,13 @@ process ScoreMaturationImprovement {
     mkdir -p scores
     for matured_pdb in ${matured_pdbs}; do
         base_name=\$(basename "\$matured_pdb" .pdb)
+        case "\$matured_pdb" in *.pdb) ;; *) continue ;; esac
+        comparisonArg=()
+        if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ] && [ -f "\$matured_pdb.comparison.json" ]; then
+            comparisonArg=(--comparison-request "\$matured_pdb.comparison.json")
+        fi
         "\${PYTHON_BIN}" "${params.code_root}/scripts/score_maturation.py" \\
+            ${scientificContractArg} "\${comparisonArg[@]}" \\
             --original_pdb "${original_pdb}" \\
             --matured_pdb "\$matured_pdb" \\
             --antibody_chains "${antibodyChains}" \\
@@ -578,9 +625,10 @@ process ScorePartialFlowImprovement {
     tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores
 
     script:
+    def scientificContractArg = maturationScientificContractArg(params)
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.antibody_chains ?: (scientificContractArg ? '' : defaultAntibodyChains)
     def antigenChains = params.antigen_chains ?: ''
     def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
     def objectiveMode = paramValueOrDefault(params, 'ppiflow_objective_mode', 'selected_interface')
@@ -591,7 +639,13 @@ process ScorePartialFlowImprovement {
     mkdir -p scores
     for matured_pdb in ${matured_pdbs}; do
         base_name=\$(basename "\$matured_pdb" .pdb)
+        case "\$matured_pdb" in *.pdb) ;; *) continue ;; esac
+        comparisonArg=()
+        if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ] && [ -f "\$matured_pdb.comparison.json" ]; then
+            comparisonArg=(--comparison-request "\$matured_pdb.comparison.json")
+        fi
         "\${PYTHON_BIN}" "${params.code_root}/scripts/score_maturation.py" \\
+            ${scientificContractArg} "\${comparisonArg[@]}" \\
             --original_pdb "${original_pdb}" \\
             --matured_pdb "\$matured_pdb" \\
             --antibody_chains "${antibodyChains}" \\
@@ -619,6 +673,7 @@ process FilterByMaturation {
     path ("filter_reports/*_maturation_filter.json"), emit: filter_reports
 
     script:
+    def scientificContractArg = maturationScientificContractArg(params)
     def rawMinImprovement = paramValueOrDefault(params, 'maturation_min_improvement', null)
     def minImprovement = rawMinImprovement != null ? rawMinImprovement as Double : null
     def percentile = paramValueOrDefault(params, 'maturation_filter_percentile', null)
@@ -671,6 +726,7 @@ with open("scores_manifest.json", "w") as f:
         fi
 
         "\${PYTHON_BIN}" "${params.code_root}/scripts/filter_maturation.py" \\
+            ${scientificContractArg} \\
             --score_json "\${score_json}" \\
             --pdb_path "\$matured_pdb" \\
             --output_dir "filtered_output" \\

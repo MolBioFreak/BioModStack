@@ -1990,6 +1990,34 @@ async def _validate_ont_fastq_qc_terminal_completion(
     )
 
 
+async def _persist_boltz_launch_authority(session, job, command):
+    """Commit trusted inputs before any remote handoff or scientific spawn."""
+    from services.boltz_launch_authority import KEY, build_authority, transport, validate_launch_settings, command_params
+    from services.frustrampnn.contracts import canonical_json_bytes
+    authority = build_authority(job, command)
+    if authority is None:
+        return list(command)
+    validate_launch_settings(job)
+    persisted_command = build_job_nextflow_command(job, job.params, job.output_dir)
+    persisted_authority = build_authority(job, persisted_command)
+    compiled_settings = [{key:value for key,value in command_params(cmd).items()
+        if key.startswith('boltz_') or key in ('pred_method', 'num_parallel_jobs')}
+        for cmd in (command, persisted_command)]
+    if compiled_settings[0] != compiled_settings[1]:
+        raise ValueError('Boltz compiled settings differ from persisted request')
+    if canonical_json_bytes(authority) != canonical_json_bytes(persisted_authority):
+        raise ValueError('Boltz launch input differs from persisted request')
+    previous = (job.provenance or {}).get(KEY)
+    if previous is not None and previous.get('job_id') == authority['job_id'] and previous.get('attempt') == authority['attempt']:
+        if canonical_json_bytes(previous) != canonical_json_bytes(authority):
+            raise ValueError('Boltz same-attempt input authority changed')
+        authority = previous
+    else:
+        job.provenance = {**(job.provenance or {}), KEY: authority}
+    await session.commit()
+    return list(command) + ['--protein_science_contract_revision', '1'] + transport(authority)
+
+
 async def launch_nextflow_job(
     job_id: str,
     model_id: str,
@@ -2130,6 +2158,10 @@ async def launch_nextflow_job(
             logger.error(f"Job {job_id} not found in database")
             return
 
+        # Persisted provenance, never a parameter/file self-marker, owns revision.
+        from services.core_protein_scientific_contract import workflow_params
+        launch_params = workflow_params(job, launch_params)
+
         if job.status == JobStatus.RUNNING.value and job.started_at is not None and not allow_running_job:
             logger.warning(f"Job {job_id} is already marked running; skipping duplicate launcher entry")
             return
@@ -2193,6 +2225,12 @@ async def launch_nextflow_job(
             )
 
         try:
+            # Resolve the same command/input owner used at execution, then seal
+            # its input roster before even a workflow-adapter handoff.
+            if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
+                from services.core_protein_scientific_contract import revision_for_job
+                if revision_for_job(job) is not None:
+                    await _persist_boltz_launch_authority(session, job, build_job_nextflow_command(job, launch_params, output_dir))
             if job.execution_target_id:
                 if transient_runner:
                     raise ExecutionOwnershipError(
@@ -2205,14 +2243,9 @@ async def launch_nextflow_job(
                 remote_command = (
                     _build_msa_batch_command(launch_params, output_dir)
                     if model_id == "msa_batch"
-                    else build_nextflow_command(
-                        model_id,
-                        mode,
-                        launch_params,
-                        output_dir,
-                        job_id=job_id,
-                    )
+                    else build_job_nextflow_command(job, launch_params, output_dir)
                 )
+                remote_command = await _persist_boltz_launch_authority(session, job, remote_command)
                 remote_environment = {"NXF_ANSI_LOG": "false"}
                 if is_protenix:
                     remote_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -2442,7 +2475,10 @@ async def launch_nextflow_job(
             attempt = 1
 
             while True:
-                cmd = build_nextflow_command(model_id, mode, launch_params, output_dir, job_id=job_id)
+                cmd = build_job_nextflow_command(job, launch_params, output_dir)
+                cmd = await _persist_boltz_launch_authority(session, job, cmd)
+                from services import rf_filter_task_roster
+                await rf_filter_task_roster.begin_command(session, job, cmd)
                 logger.info(
                     f"[JOB {job_id}] Launch attempt {attempt} "
                     f"(resume_retries={resume_lock_retries_used}/{max_resume_lock_retries}, "
@@ -2469,6 +2505,10 @@ async def launch_nextflow_job(
                     nonlocal last_oom_line, last_resume_lock_line, last_stage
                     attempt_log.append(line_str)
                     full_log.append(line_str)
+                    if ('Submitted process >' in line_str or 'Cached process >' in line_str):
+                        await session.refresh(job)
+                        if rf_filter_task_roster.observe(job, line_str):
+                            await session.commit()
                     if resume_lock_pattern in line_str:
                         attempt_resume_lock_seen = True
                         last_resume_lock_line = line_str.strip()
@@ -2723,6 +2763,11 @@ async def launch_nextflow_job(
                     finally:
                         _running_units.pop(job_id, None)
 
+                # EOF was drained above; only the existing runtime owner may
+                # seal a complete roster. Failed/lost attempts remain open.
+                await session.refresh(job)
+                if rf_filter_task_roster.finish(job, exit_code):
+                    await session.commit()
                 lock_failed = exit_code != 0 and attempt_resume_lock_seen
                 if lock_failed and resume_lock_retries_used < max_resume_lock_retries:
                     resume_lock_retries_used += 1
@@ -3201,12 +3246,22 @@ def normalize_plr_input_pdb_path(
     return normalized
 
 
+def build_job_nextflow_command(job, params, output_dir):
+    """All launch/rebuild paths join request origin from their owning persisted Job."""
+    from services.core_protein_scientific_contract import workflow_params
+    requested = (job.provenance or {}).get('core_protein_requested_params')
+    return build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
+        output_dir, job_id=job.id, requested_params=requested)
+
+
 def build_nextflow_command(
     model_id: str,
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
-    job_id: str = None
+    job_id: str = None,
+    *,
+    requested_params: Optional[Dict[str, Any]] = None,
 ) -> list:
     """
     Build the Nextflow command line dynamically.
@@ -3215,6 +3270,28 @@ def build_nextflow_command(
     """
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
+    # Only the persisted launch owner may add this transport after compilation.
+    params.pop('boltz_launch_authority_base64', None)
+    params.pop('boltz_launch_authority_path', None)
+    params.pop('boltz_launch_authority_sha256', None)
+    if model_id == 'boltz2':
+        params.pop('protein_science_contract_revision', None)
+    # Internal transport, never an operator parameter. The pending trusted Job
+    # provenance join must supply the original pre-registry request separately;
+    # normalized launch params cannot establish which values were requested.
+    params.pop('openmm_requested_settings_json', None)
+    params.pop('esmf_requested_settings_json', None)
+    if 'core_protein_scientific_contract' in params and requested_params is not None:
+        if not isinstance(requested_params, dict):
+            raise ValueError('OpenMM request provenance must be an object')
+        params['esmf_requested_settings_json'] = json.dumps(requested_params, allow_nan=False, sort_keys=True)
+        openmm_keys = ('cdr_only', 'compute_tier', 'restraint_mode', 'antibody_chain',
+                       'force_field', 'max_iterations', 'energy_tolerance', 'fix_structure')
+        params['openmm_requested_settings_json'] = json.dumps(
+            {'openmm_' + key: requested_params['openmm_' + key]
+             for key in openmm_keys if 'openmm_' + key in requested_params},
+            allow_nan=False, sort_keys=True)
+
     if (
         str(model_id or "").strip().lower() == "protein_modification_experimental"
         and str(mode or "").strip().lower() == "region_redesign"
@@ -4333,6 +4410,33 @@ def build_nextflow_command(
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'
     elif model_id in {'esmfold2', 'esmfold2_experimental'}:
+        if 'core_protein_scientific_contract' in params:
+            # Validate typed values before stringifying them into Nextflow flags.
+            # This import is route-free and never imports the scientific runtime.
+            import importlib.util
+            runner_path = Path(__file__).resolve().parents[3] / 'scripts' / 'run_esmfold2_inference.py'
+            runner_spec = importlib.util.spec_from_file_location('bms_esmfold2_parameter_compiler', runner_path)
+            runner_module = importlib.util.module_from_spec(runner_spec)
+            runner_spec.loader.exec_module(runner_module)
+            requested = dict(params)
+            requested.pop('esmf_requested_settings_json', None)
+            if complex_components:
+                if requested.get('msa_path') or requested.get('esmf_msa_path'):
+                    raise ValueError('conflicting primary MSA and component-owned launch; specify each component MSA explicitly')
+                requested['complex_components'] = complex_components
+            paths = {}
+            for key in ('msa_path', 'esmf_msa_path', 'pdb_sequence_path', 'esmf_pdb_sequence_path'):
+                if requested.get(key):
+                    paths[requested[key]] = requested[key]
+            components_for_validation = requested.get('complex_components', [])
+            raw_components = requested.get('complex_components_json') or requested.get('esmf_complex_components_json')
+            if raw_components:
+                components_for_validation = json.loads(raw_components)
+            for component in components_for_validation:
+                if isinstance(component, dict) and component.get('msa_path'):
+                    paths[component['msa_path']] = component['msa_path']
+            runner_module.compile_workflow_request(requested, paths)
+            # Request origin is installed only from the separately supplied Job provenance.
         esmfold2_quality_presets = {
             'smoke': {'num_loops': 1, 'num_sampling_steps': 25, 'num_diffusion_samples': 1},
             'standard': {'num_loops': 3, 'num_sampling_steps': 50, 'num_diffusion_samples': 1},
@@ -4380,6 +4484,9 @@ def build_nextflow_command(
         ui_model_path_present = 'model_id_or_path' in params
         for src_key, dest_key in esmfold2_mappings.items():
             if src_key in params:
+                if params.get('core_protein_scientific_contract') is not None and dest_key in params:
+                    if type(params[src_key]) is not type(params[dest_key]) or params[src_key] != params[dest_key]:
+                        raise ValueError(f'conflicting ESMFold2 aliases: {src_key}/{dest_key}')
                 # Visible UI keys must win over stale prefixed defaults that may still
                 # exist on old templates or cloned launch payloads.
                 params[dest_key] = params[src_key]
@@ -4481,7 +4588,14 @@ def build_nextflow_command(
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
             elif isinstance(value, dict):
-                if key == "frustrampnn_settings":
+                if key == 'fampnn_analysis_declaration':
+                    declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
+                    declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
+                    declaration_path.parent.mkdir(parents=True, exist_ok=True)
+                    declaration_path.write_bytes(declaration_bytes)
+                    cmd.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
+                                '--fampnn_analysis_declaration_sha256', hashlib.sha256(declaration_bytes).hexdigest()])
+                elif key == "frustrampnn_settings":
                     transport_value = dict(value)
                     protein_selection = transport_value.get("protein_selection")
                     if (

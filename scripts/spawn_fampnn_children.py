@@ -121,6 +121,12 @@ def spawn_fampnn_jobs(
         except json.JSONDecodeError:
             print(f"[SPAWN-FAMPNN] Warning: Failed to parse params_json", file=sys.stderr)
 
+    # These are workflow transport, not public request authority. Admission must
+    # reload the initial declaration from the persisted parent Job itself.
+    for reserved in ('core_protein_scientific_contract', 'fampnn_analysis_policy',
+                     'fampnn_analysis_declaration'):
+        extra_params.pop(reserved, None)
+
     pinned_gpus = _normalize_pinned_gpus(extra_params.get("pinned_gpus"))
     if pinned_gpus is not None:
         extra_params["pinned_gpus"] = pinned_gpus

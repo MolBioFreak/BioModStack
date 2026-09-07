@@ -16,6 +16,7 @@ import math
 import shutil
 import sys
 from multiprocessing import Pool
+from scientific_alignment_identity import validate_scientific_revision, validate_scientific_roles
 from pathlib import Path
 from typing import Iterable
 
@@ -43,11 +44,30 @@ def copy_optional_file(src: Path, dst: Path) -> bool:
     return True
 
 
-def load_chain_roles(path: Path | None) -> dict[str, dict[str, list[str]]]:
+def load_chain_roles(path: Path | None, *, strict: bool = False) -> dict[str, dict[str, list[str]]]:
     if path is None:
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
     entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    if strict:
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("Missing producer chain role entries")
+        validated = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid producer chain role entry")
+            name = entry.get("name")
+            binder = entry.get("binder_chain_ids")
+            target = entry.get("target_chain_ids")
+            if not isinstance(name, str) or not name or name in validated:
+                raise ValueError("Missing or duplicate producer chain role identity")
+            if not isinstance(binder, list) or not isinstance(target, list) or not binder or not target:
+                raise ValueError(f"Missing producer binder/target roles for {name}")
+            roles = binder + target
+            if any(not isinstance(c, str) or not c or c != c.strip() or ',' in c for c in roles) or len(set(roles)) != len(roles):
+                raise ValueError(f"Ambiguous or overlapping producer roles for {name}")
+            validated[name] = {"binder_chain_ids": binder, "target_chain_ids": target}
+        return validated
     chain_roles: dict[str, dict[str, list[str]]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
@@ -166,10 +186,14 @@ def renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains: I
     return changed
 
 
-def get_matched_ca_atoms(ref_structure, mobile_structure, chains: list[str] | None = None):
+def get_matched_ca_atoms(ref_structure, mobile_structure, chains: list[str] | None = None, *, contract_revision=None):
+    validate_scientific_revision(contract_revision)
     ref_map = get_ca_atoms_by_key(ref_structure, chains=chains)
     mobile_map = get_ca_atoms_by_key(mobile_structure, chains=chains)
     common_keys = sorted(set(ref_map.keys()) & set(mobile_map.keys()), key=lambda k: (k[0], k[1], k[2]))
+
+    if len(common_keys) < 3 and contract_revision == 1:
+        raise ValueError("Insufficient exact residue identities; sequential fallback prohibited")
 
     if len(common_keys) < 3:
         ref_ordered = get_ca_atoms_by_chain_order(ref_structure, chains=chains)
@@ -264,9 +288,11 @@ def find_full_data_sidecar(summary_json: Path) -> Path | None:
 
 
 def align_structure(args):
-    design_path, json_path, output_dir, design_type, binder_chains_arg, target_chains_arg, geometry_mode, strict_target_rmsd = args
+    design_path, json_path, output_dir, design_type, binder_chains_arg, target_chains_arg, geometry_mode, strict_target_rmsd = args[:8]
+    revision, chain_map = args[8:] if len(args) > 8 else (None, None)
 
     try:
+        validate_scientific_revision(revision)
         design_name, cif_path = parse_design_name(json_path)
         if not design_path.exists():
             raise FileNotFoundError(f"Design PDB not found for {design_name}: {design_path}")
@@ -279,6 +305,13 @@ def align_structure(args):
         mobile_chain_ids = set(get_chain_ids(mobile_structure))
 
         if design_type == "binder":
+            if revision == 1:
+                validate_scientific_roles(
+                    [c.id for c in ref_structure.get_chains()], mobile_structure,
+                    [c.strip() for c in binder_chains_arg.split(",") if c.strip()],
+                    [c.strip() for c in target_chains_arg.split(",") if c.strip()], chain_map=chain_map,
+                )
+                mobile_chain_ids = set(get_chain_ids(mobile_structure))
             binder_chains = [c.strip() for c in binder_chains_arg.split(",") if c.strip()] or ["H", "L"]
             target_chains = [c.strip() for c in target_chains_arg.split(",") if c.strip()] or ["T"]
             expected = set(binder_chains + target_chains)
@@ -296,7 +329,7 @@ def align_structure(args):
                         target_chains,
                     )
                 elif len(shared) == 1:
-                    ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None)
+                    ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None, **({"contract_revision": revision} if revision is not None else {}))
                     superimposer = Superimposer()
                     superimposer.set_atoms(ref_atoms, mobile_atoms)
                     superimposer.apply(mobile_structure.get_atoms())
@@ -334,22 +367,23 @@ def align_structure(args):
                         f"design_chains={sorted(ref_chain_ids)} protenix_chains={sorted(mobile_chain_ids)}"
                     )
 
-            renumber_mobile_residues_by_order(
-                ref_structure,
-                mobile_structure,
-                chains=sorted(set(binder_chains + target_chains)),
-            )
+            if revision is None:
+                renumber_mobile_residues_by_order(
+                    ref_structure,
+                    mobile_structure,
+                    chains=sorted(set(binder_chains + target_chains)),
+                )
 
-            ref_target, mobile_target = get_matched_ca_atoms(ref_structure, mobile_structure, target_chains)
+            ref_target, mobile_target = get_matched_ca_atoms(ref_structure, mobile_structure, target_chains, **({"contract_revision": revision} if revision is not None else {}))
             superimposer = Superimposer()
             superimposer.set_atoms(ref_target, mobile_target)
             superimposer.apply(mobile_structure.get_atoms())
             rmsd_target = superimposer.rms
 
-            ref_all, mobile_all = get_matched_ca_atoms(ref_structure, mobile_structure, None)
+            ref_all, mobile_all = get_matched_ca_atoms(ref_structure, mobile_structure, None, **({"contract_revision": revision} if revision is not None else {}))
             rmsd_overall = rmsd_without_refit(ref_all, mobile_all)
 
-            ref_binder, mobile_binder = get_matched_ca_atoms(ref_structure, mobile_structure, binder_chains)
+            ref_binder, mobile_binder = get_matched_ca_atoms(ref_structure, mobile_structure, binder_chains, **({"contract_revision": revision} if revision is not None else {}))
             rmsd_binder = rmsd_without_refit(ref_binder, mobile_binder)
 
             final_target_rmsd = round(rmsd_target, 2)
@@ -372,8 +406,9 @@ def align_structure(args):
                     f"anchored target drift {rmsd_target:.2f}A exceeded threshold {strict_target_rmsd:.2f}A"
                 )
         else:
-            renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains=None)
-            ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None)
+            if revision is None:
+                renumber_mobile_residues_by_order(ref_structure, mobile_structure, chains=None)
+            ref_atoms, mobile_atoms = get_matched_ca_atoms(ref_structure, mobile_structure, None, **({"contract_revision": revision} if revision is not None else {}))
             superimposer = Superimposer()
             superimposer.set_atoms(ref_atoms, mobile_atoms)
             superimposer.apply(mobile_structure.get_atoms())
@@ -432,7 +467,11 @@ def main() -> None:
     parser.add_argument("--geometry_mode", choices=["flexible", "conditioned", "frozen"], default="flexible")
     parser.add_argument("--strict_target_rmsd", type=float, default=None)
     parser.add_argument("--ncpus", type=int, default=1, help="Parallel worker count")
+    parser.add_argument("--core_protein_scientific_contract", type=int, default=None, help="Trusted admitted-job revision; never inferred from results")
+    parser.add_argument("--chain_map_json", type=Path, default=None, help="Explicit complete source-to-output chain map")
     args = parser.parse_args()
+    validate_scientific_revision(args.core_protein_scientific_contract)
+    chain_map = json.loads(args.chain_map_json.read_text()) if args.chain_map_json else None
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -449,7 +488,10 @@ def main() -> None:
         logger.error("No Protenix confidence JSONs found in %s", args.protenix_dir)
         raise SystemExit(1)
 
-    chain_roles = load_chain_roles(args.chain_roles_json.expanduser().resolve() if args.chain_roles_json else None)
+    chain_roles = load_chain_roles(
+        args.chain_roles_json.expanduser().resolve() if args.chain_roles_json else None,
+        strict=args.core_protein_scientific_contract == 1,
+    )
     tasks = []
     for json_file in json_files:
         try:
@@ -465,6 +507,13 @@ def main() -> None:
             continue
 
         resolved_roles = chain_roles.get(base_name) or chain_roles.get(design_name) or {}
+        if args.core_protein_scientific_contract == 1 and args.chain_roles_json is not None:
+            # The supplied producer sidecar is candidate-specific authority, not
+            # a hint that may fall back to the batch-wide union of roles.
+            if base_name in chain_roles and design_name in chain_roles and chain_roles[base_name] != chain_roles[design_name]:
+                raise ValueError(f"Contradictory producer chain roles for {design_name}")
+            if not resolved_roles:
+                raise ValueError(f"Missing producer chain roles for {design_name}; no batch role fallback")
         binder_chain_csv = ",".join(resolved_roles.get("binder_chain_ids") or []) or args.binder_chains
         target_chain_csv = ",".join(resolved_roles.get("target_chain_ids") or []) or args.target_chains
 
@@ -478,6 +527,8 @@ def main() -> None:
                 target_chain_csv,
                 args.geometry_mode,
                 args.strict_target_rmsd,
+                args.core_protein_scientific_contract,
+                chain_map,
             )
         )
 

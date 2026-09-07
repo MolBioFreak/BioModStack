@@ -176,8 +176,18 @@ process AlignBoltz {
     script:
 
     def num_processes = task.cpus - 1
+    // Admission-owned marker, never inferred from prediction sidecars.
+    def revision = params.get('core_protein_scientific_contract')
+    if (revision != null && (revision instanceof Boolean || revision.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def scientificArgs = revision == null ? '' : '--core_protein_scientific_contract 1'
+    def quoteRole = { value -> "'" + (value ?: '').toString().replace("'", "'\"'\"'") + "'" }
+    // No A/B inference for marked binder requests. Missing roles reach the strict gate.
+    def roleArgs = revision == null ? '' : "--binder_chains ${quoteRole(params.antibody_chains ?: params.binder_chains)} --target_chains ${quoteRole(params.antigen_chains ?: params.target_chains)}"
 
     """
+    ${revision == null ? '' : 'set -euo pipefail'}
     export MAMBA_ROOT_PREFIX=/opt/conda/
     
     eval "\$(micromamba shell hook --shell bash)"
@@ -189,7 +199,7 @@ process AlignBoltz {
         --design_dir ./ \
         --boltz_dir ./ \
         --output_dir aligned \
-        --design_type ${design_type} \
+        --design_type ${design_type} ${scientificArgs} ${roleArgs} \
         --ncpus ${num_processes} \
         2>&1 | tee alignment_${task.index}.log
     

@@ -69,7 +69,8 @@ def test_active_structure_prediction_dispatches_esmfold2_channel_process():
     nextflow_config = (REPO_ROOT / "nextflow.config").read_text()
 
     assert "'esmfold2'" in workflow
-    assert "--pred_method must be one of: boltz, rf3, protenix, esmfold2" in workflow
+    assert "--pred_method must be one of: boltz, protenix, esmfold2, boltz_protenix" in workflow
+    assert "params.pred_method in ['boltz', 'protenix', 'esmfold2', 'boltz_protenix']" in workflow
     assert "include { ESMFold2Predict } from './esmfold2_experimental.nf'" in module
     assert "ESMFold2Predict(typed_inputs)" in module
     assert "ESMFold2Predict.out.typed_cifs" in module

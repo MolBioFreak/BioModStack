@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides } from './FampnnAnalysisControls';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
@@ -332,6 +333,7 @@ export function ProteinLocalRedesignTemplate({
     const [regionPadding, setRegionPadding] = useState(2);
     const [numDesigns, setNumDesigns] = useState(8);
     const [seqMethod, setSeqMethod] = useState<SequenceMethod>('fampnn');
+    const [fampnnOverrides, setFampnnOverrides] = useState<unknown>(initialValues?.fampnn_analysis_overrides);
     const [seqsPerDesign, setSeqsPerDesign] = useState(8);
     const [fixFixedSidechains, setFixFixedSidechains] = useState(true);
     const [selectedValidators, setSelectedValidators] = useState<ProteinLocalValidator[]>(['protenix_v2']);
@@ -347,6 +349,7 @@ export function ProteinLocalRedesignTemplate({
 
     useEffect(() => {
         if (!initialValues) return;
+        setFampnnOverrides(initialValues.fampnn_analysis_overrides);
         if (typeof initialValues.job_name === 'string' && initialValues.job_name.trim()) setJobName(initialValues.job_name);
         const initialSourcePath = resolveProteinLocalRedesignSourcePath(initialValues);
         if (initialSourcePath) {
@@ -634,7 +637,11 @@ export function ProteinLocalRedesignTemplate({
         setManualRangesText(selectedEditableResidues.size > 0 ? derivedManualRanges : '');
     }, [regionMode, selectedEditableResidues, derivedManualRanges]);
 
+    let fampnnError = '';
+    try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
     const projectDraftJson = JSON.stringify({
+        // Preserve invalid imported requests for explicit repair, never broaden to defaults.
+        fampnn_analysis_overrides: fampnnOverrides,
         input_structure: sourcePath ?? '', redesign_mode: nativeRedesignMode,
         design_chains: normalizeChainList(designChain), context_chains: contextChains,
         redesign_ranges: manualRangesText,
@@ -845,6 +852,7 @@ export function ProteinLocalRedesignTemplate({
 
     const handleSubmit = async () => {
         setError(null);
+        if (effectiveSeqMethod === 'fampnn' && fampnnError) { setError(fampnnError); return; }
         if (!jobName.trim()) {
             setError('Job name is required');
             return;
@@ -961,6 +969,7 @@ export function ProteinLocalRedesignTemplate({
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'region_redesign',
+            ...(effectiveSeqMethod === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
             params: {
                 input_pdb: resolvedPath,
                 model_number: selectedModelNumber ?? undefined,
@@ -1732,6 +1741,7 @@ export function ProteinLocalRedesignTemplate({
 
                         <div className="space-y-4">
                             <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                {effectiveSeqMethod === 'fampnn' && <FampnnAnalysisControls value={fampnnOverrides} onChange={setFampnnOverrides} summaryDefault="Sequence-redesign region selected above" />}
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequence Method</label>
                                 <select
                                     value={effectiveSeqMethod}
@@ -2086,7 +2096,7 @@ export function ProteinLocalRedesignTemplate({
                 </button>
                 <button
                     onClick={() => void handleSubmit()}
-                    disabled={submitMutation.isPending || (
+                    disabled={(effectiveSeqMethod === 'fampnn' && Boolean(fampnnError)) || submitMutation.isPending || (
                         isNativeLocalRedesign && (
                             gpuCatalogLoading
                             || gpuCatalogError

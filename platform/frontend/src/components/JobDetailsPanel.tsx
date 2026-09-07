@@ -8,6 +8,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import type { Job } from '../lib/api';
+import { CandidateAccountingStatus } from './CandidateAccountingStatus';
+import { ExecutionSettingsPanel } from './ExecutionSettingsPanel';
 
 interface DockingResult {
     name: string;
@@ -101,6 +103,8 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                         <span>Output: <code className="text-accent/80">{job.output_dir}</code></span>
                     </div>
 
+                    <CandidateAccountingStatus job={job} />
+                    {['esmfold2', 'esmfold2_experimental', 'antibody_denovo', 'antibody_child'].includes(job.model_id) && <ExecutionSettingsPanel jobId={job.id} />}
                     {/* Results Summary */}
                     {job.status === 'completed' && (
                         <div className="flex flex-wrap gap-2">

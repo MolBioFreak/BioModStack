@@ -1705,7 +1705,7 @@ def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
         if not candidate.exists():
             continue
         manifest = _load_json_any(candidate / "manifest.json")
-        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() == "esmfold2_experimental":
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
             return candidate
         if any(candidate.glob("*.metrics.json")) and (
             any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
@@ -1776,48 +1776,78 @@ async def ingest_esmfold2_results(
     current_job: Optional[Job] = None,
     *,
     commit: bool = True,
+    remove_stage_reviews: bool = False,
 ) -> int:
+    from services.core_protein_result_contract import (
+        CandidateIntegrityError, prepare_esmfold2_publication, revalidate_prepared_publication,
+    )
+    from services.core_protein_scientific_contract import revision_for_job
+
+    # Authority comes from the persisted job, not current_job or a file marker.
+    with session.no_autoflush:
+        persisted_job = await session.get(Job, job_id)
+    strict = revision_for_job(persisted_job) == 1
     final_root = _resolve_esmfold2_final_root(output_path)
     if final_root is None:
+        if strict:
+            raise CandidateIntegrityError("missing_candidate_declaration", "ESMFold2 producer manifest is missing")
         return 0
 
     manifest_path = final_root / "manifest.json"
-    manifest_payload = _load_json_any(manifest_path)
+    manifest_payload = {} if strict else _load_json_any(manifest_path)
     if not isinstance(manifest_payload, dict):
         manifest_payload = {}
 
-    existing_designs = (
-        await session.execute(
-            select(Design).where(
-                Design.job_id == job_id,
-                Design.source_stage.is_(None),
+    with session.no_autoflush:
+        existing_designs = (
+            await session.execute(
+                select(Design).where(
+                    Design.job_id == job_id,
+                    Design.source_stage.is_(None),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
     existing_by_name = {design.name: design for design in existing_designs}
+    prepared = {}
+    receipt = None
+    if strict:
+        prepared, receipt = prepare_esmfold2_publication(persisted_job, final_root, existing_designs)
+        revalidate_prepared_publication(final_root, receipt)
+        if existing_designs:
+            return 0
+
+    # The dispatcher delegates review cleanup here so every strict candidate is
+    # validated once, before any DELETE, autoflush, or publication mutation.
+    if remove_stage_reviews:
+        await session.execute(delete(Design).where(Design.job_id == job_id, Design.source_stage.is_not(None)))
 
     job_context = _job_stage_context(current_job)
     created = 0
     seen_names: set[str] = set()
-    for entry in _esmfold2_sample_entries(final_root, manifest_payload):
+    entries = ([{'sample_id': candidate} for candidate in prepared] if strict
+               else _esmfold2_sample_entries(final_root, manifest_payload))
+    for entry in entries:
         sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
-        metrics_path = _resolve_existing_child_path(final_root, entry.get("metrics"))
-        metrics_payload = _load_json_payload(metrics_path) if metrics_path else None
-        combined_payload: Dict[str, Any] = {}
-        combined_payload.update(manifest_payload)
-        combined_payload.update(entry)
-        if isinstance(metrics_payload, dict):
-            combined_payload.update(metrics_payload)
-        if not sample_id:
-            sample_id = str(combined_payload.get("sample_id") or "").strip()
-
-        structure_path = (
-            _resolve_existing_child_path(final_root, combined_payload.get("cif"))
-            or _resolve_existing_child_path(final_root, combined_payload.get("structure_path"))
-            or (final_root / f"{sample_id}.cif" if sample_id and (final_root / f"{sample_id}.cif").exists() else None)
-            or (final_root / f"{sample_id}.mmcif" if sample_id and (final_root / f"{sample_id}.mmcif").exists() else None)
-            or (final_root / f"{sample_id}.pdb" if sample_id and (final_root / f"{sample_id}.pdb").exists() else None)
-        )
+        if strict:
+            sample_id = entry['sample_id']
+            combined_payload = prepared[sample_id]["payload"]
+            metrics_path = Path(prepared[sample_id]["artifacts"]["metrics"]["path"])
+            structure_path = Path(prepared[sample_id]["artifacts"]["structure"]["path"])
+        else:
+            metrics_path = _resolve_existing_child_path(final_root, entry.get("metrics"))
+            metrics_payload = _load_json_payload(metrics_path) if metrics_path else None
+            combined_payload: Dict[str, Any] = {**manifest_payload, **entry}
+            if isinstance(metrics_payload, dict):
+                combined_payload.update(metrics_payload)
+            if not sample_id:
+                sample_id = str(combined_payload.get("sample_id") or "").strip()
+            structure_path = (
+                _resolve_existing_child_path(final_root, combined_payload.get("cif"))
+                or _resolve_existing_child_path(final_root, combined_payload.get("structure_path"))
+                or (final_root / f"{sample_id}.cif" if sample_id and (final_root / f"{sample_id}.cif").exists() else None)
+                or (final_root / f"{sample_id}.mmcif" if sample_id and (final_root / f"{sample_id}.mmcif").exists() else None)
+                or (final_root / f"{sample_id}.pdb" if sample_id and (final_root / f"{sample_id}.pdb").exists() else None)
+            )
         if structure_path is None:
             print(f"[Ingester] No ESMFold2 structure found for sample {sample_id or '<unknown>'}")
             continue
@@ -1827,14 +1857,20 @@ async def ingest_esmfold2_results(
             continue
         seen_names.add(design_name)
 
-        structure_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-        plddt_candidates = [
-            _normalize_confidence_percent(combined_payload.get("plddt_mean")),
-            _normalize_confidence_percent(combined_payload.get("mean_plddt")),
-            _normalize_confidence_percent(combined_payload.get("plddt")),
-            _normalize_confidence_percent(structure_plddt),
-        ]
-        plddt_overall = next((value for value in plddt_candidates if value is not None), None)
+        structure_plddt, residue_plddt = (prepared[sample_id]["structure_confidence"] if strict
+                                          else extract_plddt_from_pdb(structure_path))
+        native_scalars = {}
+        if strict:
+            native_scalars = {m['metric_key']: m['value'] for m in prepared[sample_id]['block']['metrics']}
+            plddt_overall = native_scalars['plddt'] * 100 if native_scalars['plddt'] is not None else None
+        else:
+            plddt_candidates = [
+                _normalize_confidence_percent(combined_payload.get("plddt_mean")),
+                _normalize_confidence_percent(combined_payload.get("mean_plddt")),
+                _normalize_confidence_percent(combined_payload.get("plddt")),
+                _normalize_confidence_percent(structure_plddt),
+            ]
+            plddt_overall = next((value for value in plddt_candidates if value is not None), None)
         esmfold2_record = _filtered_esmfold2_record(
             combined_payload,
             manifest_path=manifest_path,
@@ -1849,6 +1885,12 @@ async def ingest_esmfold2_results(
             "esmfold2": esmfold2_record,
             "esmfold2_components": combined_payload.get("components"),
         }
+        if strict:
+            confidence_metrics.update(core_protein_scientific_contract=1,
+                                      core_protein_candidate_artifacts=prepared[sample_id]["artifacts"],
+                                      core_protein_scientific=prepared[sample_id]["block"])
+            if receipt.get("execution_settings"):
+                confidence_metrics["core_protein_execution_settings"] = receipt["execution_settings"]
         model_variant = str(combined_payload.get("model_variant") or manifest_payload.get("model_variant") or "").strip() or None
         model_id_or_path = str(combined_payload.get("model_id_or_path") or manifest_payload.get("model_id_or_path") or "").strip() or None
         provenance = {
@@ -1880,8 +1922,8 @@ async def ingest_esmfold2_results(
             "confidence_metrics": confidence_metrics,
             "plddt_overall": plddt_overall,
             "residue_plddt": residue_plddt,
-            "ptm": safe_float(combined_payload.get("ptm")),
-            "iptm": safe_float(combined_payload.get("iptm")),
+            "ptm": native_scalars["ptm"] if strict else safe_float(combined_payload.get("ptm")),
+            "iptm": native_scalars["iptm"] if strict else safe_float(combined_payload.get("iptm")),
             "mpnn_score": None,
             "fampnn_psce": None,
         }
@@ -1902,6 +1944,12 @@ async def ingest_esmfold2_results(
             ))
         created += 1
 
+    if strict:
+        persisted_job.provenance = {**(persisted_job.provenance or {}),
+                                    "core_protein_candidate_publication": receipt}
+        if receipt.get("execution_settings"):
+            persisted_job.provenance = {**persisted_job.provenance,
+                "core_protein_execution_settings": receipt["execution_settings"]}
     if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Ingested {created} ESMFold2 designs for job {job_id}")
@@ -4360,8 +4408,18 @@ async def ingest_job_results(
     else:
         output_path = get_data_root() / output_dir
 
-    job_result = await session.execute(select(Job).where(Job.id == job_id))
-    current_job = job_result.scalar_one_or_none()
+    with session.no_autoflush:
+        job_result = await session.execute(select(Job).where(Job.id == job_id))
+        current_job = job_result.scalar_one_or_none()
+    if current_job is not None:
+        from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
+        retain_filter_stages(current_job, prepare_filter_stages(current_job, output_path))
+    if _is_esmfold2_job(current_job):
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            return await ingest_esmfold2_results(
+                job_id, output_path, session, current_job, commit=commit, remove_stage_reviews=True,
+            )
     is_conformational_mapping = bool(
         current_job and str(current_job.model_id or "").strip().lower() == "conformational_mapping"
     )
@@ -4372,7 +4430,22 @@ async def ingest_job_results(
         commit=commit and not is_conformational_mapping,
     )
     if canonical_count is not None and not is_conformational_mapping:
+        session.info.setdefault("core_protein_native_prevalidated", set()).add(job_id)
         return canonical_count
+
+    if current_job and current_job.model_id in {'boltzgen', 'boltzgen_child'}:
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            from services.boltzgen_candidate_publication import ingest
+            return await ingest(current_job, output_path, session, commit=commit)
+
+    # Preserve specialized terminal owners above; ordinary marked Boltz must
+    # validate its entire declared publication before generic cleanup/autoflush.
+    if current_job and current_job.model_id == 'boltz2' and current_job.mode in {'predict', 'complex'}:
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            from services.boltz_scientific_persistence import ingest_verified_boltz
+            return await ingest_verified_boltz(current_job, output_path, session, commit=commit)
 
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")
@@ -4713,7 +4786,7 @@ async def ingest_job_results(
 
     if _is_esmfold2_job(current_job):
         return await ingest_esmfold2_results(job_id, output_path, session, current_job, commit=commit)
-    
+
     # Only try to process CSV if it exists
     if csv_path.exists():
         # Check if designs already ingested for this job
@@ -5223,6 +5296,43 @@ def _coerce_optional_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def _verify_maturation_comparison_binding(design: "Design", job: "Job", score_data: Dict[str, Any]) -> None:
+    """Verify existing producer sidecars against persisted candidate/source paths.
+
+    Name matching locates a score, but is not comparison authority. Never use a
+    score-supplied path or digest to select the reference or request to verify.
+    """
+    import hashlib
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    if design.job_id != job.id:
+        raise ValueError("comparison ingress requires the design's owning Job")
+    if "comparisons" not in score_data:
+        comparison_fields = (
+            "rmsd_backbone", "selected_rmsd_backbone", "nonselected_rmsd_backbone",
+            "primary_loop_rmsd", "comparison_request_sha256",
+        )
+        if any(score_data.get(key) is not None for key in comparison_fields):
+            raise ValueError("maturation comparison evidence missing for full-domain metrics")
+        return
+    try:
+        candidate_path = Path(design.pdb_path)
+        candidate = candidate_path.read_bytes()
+        reference = Path(design.source_pdb_path).read_bytes()
+        request_bytes = Path(str(candidate_path) + ".comparison.json").read_bytes()
+        request = canonical_json_loads(request_bytes)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("missing or invalid maturation comparison binding artifacts") from exc
+    if not isinstance(request, dict) or not isinstance(score_data["comparisons"], dict):
+        raise ValueError("invalid maturation comparison binding")
+    for role, snapshot in (("candidate", candidate), ("reference", reference)):
+        digest = hashlib.sha256(snapshot).hexdigest()
+        if score_data.get(role + "_sha256") != digest or request.get(role + "_sha256") != digest:
+            raise ValueError(f"maturation comparison {role} identity mismatch")
+    if score_data.get("comparison_request_sha256") != hashlib.sha256(request_bytes).hexdigest():
+        raise ValueError("maturation comparison request identity mismatch")
+
+
 def _apply_ppiflow_score_fields(design: "Design", score_data: Dict[str, Any]) -> bool:
     changed = False
     scalar_fields = {
@@ -5242,6 +5352,38 @@ def _apply_ppiflow_score_fields(design: "Design", score_data: Dict[str, Any]) ->
         "ppiflow_objective_mode": str(score_data.get("objective_mode")).strip().lower() if score_data.get("objective_mode") not in (None, "") else None,
         "ppiflow_objective_score": _coerce_optional_float(score_data.get("objective_score")),
     }
+    # A comparison record owns its full-domain value. Never replace an
+    # unavailable full-domain result with a bare RMSD or its matched subset.
+    comparisons = score_data.get("comparisons")
+    if isinstance(comparisons, dict):
+        from services.scientific_artifacts import resolve_json_value
+
+        confidence = copy.deepcopy(resolve_json_value(getattr(design, "confidence_metrics", None)) or {})
+        confidence["maturation_comparisons"] = copy.deepcopy(comparisons)
+        confidence["maturation_comparison_request_sha256"] = score_data.get("comparison_request_sha256")
+        if confidence != getattr(design, "confidence_metrics", None):
+            design.confidence_metrics = confidence
+            changed = True
+        for field_name, domain in (
+            ("maturation_rmsd", "whole_binder"),
+            ("maturation_selected_rmsd", "selected"),
+            ("maturation_nonselected_rmsd", "nonselected"),
+            ("ppiflow_primary_loop_rmsd", score_data.get("primary_loop")),
+        ):
+            record = comparisons.get(domain, {})
+            complete = (
+                isinstance(record, dict) and record.get("reason") is None
+                and record.get("reference_coverage") == 1.0
+                and record.get("candidate_coverage") == 1.0
+                and type(record.get("matched_count")) is int and record["matched_count"] > 0
+                and record.get("expected_reference_count") == record["matched_count"]
+                and record.get("expected_candidate_count") == record["matched_count"]
+                and record.get("unmatched_reference") == []
+                and record.get("unmatched_candidate") == []
+                and not record.get("subset")
+                and type(record.get("value")) in (int, float)
+            )
+            scalar_fields[field_name] = _coerce_optional_float(record.get("value")) if complete else None
     for field_name, new_value in scalar_fields.items():
         if getattr(design, field_name, None) != new_value:
             setattr(design, field_name, new_value)
@@ -5343,6 +5485,87 @@ def _inherit_source_design_metrics(
     return changed
 
 
+def _persist_ppiflow_rank_evidence(
+    design: "Design", job: "Job", *, score_snapshot: bytes, score_path: Path,
+) -> None:
+    """Bind the existing maturation scorer's raw Rosetta result, never invent iPTM.
+
+    score_maturation.py hashes the exact candidate snapshot consumed by PyRosetta
+    and emits the configured InterfaceAnalyzerMover interface. The owning design
+    supplies the primary-document mapping. Filename matching only locates the
+    sidecar: its candidate SHA must also match the persisted structure bytes.
+
+    The current maturation workflow does not run a scalar-iPTM producer. Neither
+    validator labels, inherited scalars nor AF3 pairwise CSV fields establish the
+    same-coordinate/same-interface join. Keep that input absent until an actual
+    producer-bound source exists; do not create another scoring stage here.
+    """
+    import hashlib
+    from services.core_protein_scientific_contract import revision_for_job
+    from services.frustrampnn.contracts import canonical_json_loads
+    from services.design_metrics import build_ppiflow_rank_envelope
+
+    if revision_for_job(job) != 1:
+        return
+    if design.job_id != job.id:
+        raise ValueError("rank ingress requires the design's owning Job")
+    payload = canonical_json_loads(score_snapshot)
+    if not isinstance(payload, dict):
+        raise ValueError("invalid maturation score document")
+    score = payload.get("score_data", payload)
+    if not isinstance(score, dict):
+        raise ValueError("invalid maturation score document")
+    source_hash = hashlib.sha256(score_snapshot).hexdigest()
+    try:
+        structure_hash = hashlib.sha256(Path(design.pdb_path).read_bytes()).hexdigest()
+    except (OSError, TypeError):
+        structure_hash = None
+    binding = {"candidate_id": design.name, "document_id": "primary",
+               "structure_sha256": structure_hash}
+    # before_flush externalizes confidence in-place; a non-expiring identity
+    # map can still hold that reference even after a subsequent ORM query.
+    # Merge verified artifact content, never add payload fields to a reference.
+    from services.scientific_artifacts import resolve_json_value
+
+    confidence = dict(resolve_json_value(design.confidence_metrics) or {})
+    # Never retain prior/unverified rank inputs across an ingress generation.
+    inputs: Dict[str, Any] = {}
+    interface = score.get("rosetta_interface_id")
+    if score.get("rosetta_interface_score") is not None:
+        inputs["rosetta_interface_score"] = {
+            **binding, "structure_sha256": score.get("candidate_sha256"),
+            "value": score["rosetta_interface_score"], "interface_id": interface,
+            "source_sha256": source_hash, "artifact_path": str(score_path),
+            "source_field": "rosetta_interface_score",
+            "producer_version": "biomodstack_ppiflow_maturation_v1",
+            "unit": score.get("rosetta_interface_score_unit"),
+            "metric_kind": ("raw_interface_score" if
+                score.get("rosetta_interface_analyzer_used") is True
+                and score.get("rosetta_interface_score_direction") == "more_negative_is_better"
+                and score.get("objective_formula_version") == "biomodstack_ppiflow_maturation_v1"
+                else "unverified_interface_score"),
+        }
+        # Preserve aliases before normalization so disagreements cannot disappear.
+        for key in ("rosetta_interface_score", "rosetta_interface_dg"):
+            confidence.pop(key, None)
+            if key in score:
+                confidence[key] = score[key]
+    confidence["ppiflow_rank_binding"] = binding
+    confidence["ppiflow_rank_inputs"] = inputs
+    design.confidence_metrics = confidence
+    descriptor = {
+        "metric_key": "ppiflow_paper_rank_score", "unit": "composite_score",
+        "direction": "higher_is_better",
+        "scope": interface if isinstance(interface, str) and interface.strip() else "unresolved_interface",
+        "producer_version": "ppiflow-result-v1", "derivation_version": "paper-rank-v1",
+    }
+    confidence["ppiflow_rank_metric"] = build_ppiflow_rank_envelope(
+        design, descriptor=descriptor, expected_source={
+            "artifact_sha256": source_hash, "candidate_id": design.name, "document_id": "primary",
+        })
+    design.confidence_metrics = dict(confidence)
+
+
 async def ingest_maturation_data(
     job_id: str,
     output_path: Path,
@@ -5392,6 +5615,8 @@ async def ingest_maturation_data(
     updated_count = 0
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
+    from services.core_protein_scientific_contract import revision_for_job
+    strict_maturation = revision_for_job(current_job) == 1
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     geometry_applied_design_ids: set[str] = set()
@@ -5445,8 +5670,15 @@ async def ingest_maturation_data(
 
         try:
             import json as json_mod
-            data = json_mod.loads(json_path.read_text())
+            score_snapshot = json_path.read_bytes()
+            if strict_maturation:
+                from services.frustrampnn.contracts import canonical_json_loads
+                data = canonical_json_loads(score_snapshot)
+            else:
+                data = json_mod.loads(score_snapshot)
         except Exception as e:
+            if strict_maturation:
+                raise ValueError(f"invalid marked maturation JSON: {json_path}") from e
             print(f"[Ingester] Error parsing maturation JSON {json_path}: {e}")
             continue
         score_data = data.get("score_data") if isinstance(data, dict) and isinstance(data.get("score_data"), dict) else data
@@ -5461,7 +5693,11 @@ async def ingest_maturation_data(
             )
         )
         design = result.scalar_one_or_none()
-        
+
+        # New-contract evidence belongs only to this Job's candidate. Never
+        # hydrate a historical parent/sibling through the legacy name fallback.
+        if not design and strict_maturation:
+            continue
         if not design:
             import sqlalchemy as sa
             # 1. Broaden search to include batch family and iteration source lineage
@@ -5501,7 +5737,13 @@ async def ingest_maturation_data(
         if not design:
             continue
         
+        if strict_maturation:
+            _verify_maturation_comparison_binding(design, current_job, score_data)
         _apply_ppiflow_score_fields(design, score_data)
+        if strict_maturation:
+            _persist_ppiflow_rank_evidence(
+                design, current_job, score_snapshot=score_snapshot, score_path=json_path,
+            )
 
         if epitope_residues and design.id not in geometry_applied_design_ids:
             try:

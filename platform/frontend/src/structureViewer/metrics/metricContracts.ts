@@ -64,6 +64,8 @@ export interface MetricDatasetMetadata {
     readonly shape?: readonly [number, number];
     readonly rowAxis?: readonly ResidueRef[];
     readonly columnAxis?: readonly ResidueRef[];
+    /** Explicit directed matrix identity; absent retains the legacy symmetric renderer. */
+    readonly matrixDirection?: 'directed';
     readonly originalIndices?: readonly number[];
     readonly reduction?: { readonly method: string; readonly sourceShape: readonly [number, number]; readonly parameters: Readonly<Record<string, number | string | boolean>> };
 }

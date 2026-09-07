@@ -1,3 +1,5 @@
+import { BoltzGenRankControls } from './BoltzGenRankControls';
+import { FampnnAnalysisControls, hydrateFampnnOverrides, fampnnOverridePayload } from './FampnnAnalysisControls';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
@@ -294,7 +296,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     });
     const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => ({
         ...buildGeneratorOnlyStageSelection(),
-        sequence_design: initialValues?.initial_orchestration_sequence_design === true,
+        sequence_design: initialValues?.initial_orchestration_sequence_design !== undefined
+            ? initialValues.initial_orchestration_sequence_design === true
+            : initialValues?.seq_design_fampnn === true || initialValues?.seq_designer === 'fampnn',
         ppiflow: initialValues?.initial_orchestration_ppiflow === true,
         validation: initialValues?.initial_orchestration_validation === true,
         qc: initialValues?.initial_orchestration_qc === true,
@@ -377,6 +381,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<SeqDesigner>('fampnn');
+    const [fampnnOverrides, setFampnnOverrides] = useState<unknown>(initialValues?.fampnn_analysis_overrides);
+    useEffect(() => {
+        setFampnnOverrides(initialValues?.fampnn_analysis_overrides);
+        if (initialValues?.initial_orchestration_sequence_design !== undefined || initialValues?.seq_design_fampnn === true || initialValues?.seq_designer === 'fampnn') {
+            setDeNovoStageSelection(current => ({ ...current, sequence_design: initialValues.initial_orchestration_sequence_design !== undefined
+                ? initialValues.initial_orchestration_sequence_design === true : true }));
+        }
+    }, [initialValues]);
+    let fampnnError = '';
+    try { hydrateFampnnOverrides(fampnnOverrides, false); } catch (error) { fampnnError = String(error); }
     const [fampnnConstraintMode, setFampnnConstraintMode] = useState<'generic' | 'antibody'>('antibody');
     const [useAntiberty, setUseAntiberty] = useState(false);  // Disabled by default, planned for removal
     const [, setUseThermoMPNN] = useState(true);  // Legacy setter retained for template/state hydration
@@ -1677,6 +1691,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     };
 
     const handleSubmit = async () => {
+        if (effectiveSeqDesigner === 'fampnn' && fampnnError) return;
         // When skipping early steps, target PDB and epitope are not required
         const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
         const runSequenceDesign = effectiveSeqDesigner !== 'none';
@@ -1866,6 +1881,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 mode: antibodyPipelineMode,
                 pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
+                    ...(effectiveSeqDesigner === 'fampnn' ? fampnnOverridePayload(fampnnOverrides, false) : {}),
                     target_pdb: isRefinementMode ? undefined : pdbPath,
                     target_model_number: isRefinementMode ? undefined : selectedTargetModel || undefined,
                     pdb_source: isRefinementMode ? undefined : 'upload',
@@ -3424,7 +3440,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         />
                                     </label>
                                     <label className="text-xs text-slate-500">
-                                        Min pLDDT
+                                        Min native pLDDT (0–100; not design pTM)
                                         <input
                                             type="number"
                                             min={0}
@@ -3447,7 +3463,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         />
                                     </label>
                                     <label className="text-xs text-slate-500">
-                                        Min confidence score
+                                        Min affinity probability (0–1)
                                         <input
                                             type="number"
                                             min={0}
@@ -3458,23 +3474,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
                                         />
                                     </label>
-                                    <label className="text-xs text-slate-500">
-                                        Metrics override
-                                        <input
-                                            type="text"
-                                            value={boltzgenMetricsOverride}
-                                            onChange={(e) => setBoltzgenMetricsOverride(e.target.value)}
-                                            placeholder="plddt=none filter_rmsd=none"
-                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
-                                        />
-                                    </label>
+                                    <BoltzGenRankControls value={boltzgenMetricsOverride} onChange={setBoltzgenMetricsOverride} />
                                     <label className="text-xs text-slate-500 sm:col-span-2">
                                         Additional filters
                                         <input
                                             type="text"
                                             value={boltzgenAdditionalFilters}
                                             onChange={(e) => setBoltzgenAdditionalFilters(e.target.value)}
-                                            placeholder="affinity_probability>0.8 design_ptm>=0.75"
+                                            placeholder="affinity_probability>0.8 design_ptm>0.75"
                                             className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
                                         />
                                     </label>
@@ -5279,6 +5286,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div> {/* End RIGHT COLUMN */}
             </div > {/* End grid */}
 
+            {effectiveSeqDesigner === 'fampnn' && <FampnnAnalysisControls value={fampnnOverrides} onChange={setFampnnOverrides}
+                allowSummaryOverride={false}
+                summaryDefault="Sequence-designed antibody region, including already-authorized framework design"
+                mutationDefault="Resolved CDR residues minus fixed/protected positions" />}
             {/* Submit Button */}
             <div className="mt-8 flex justify-end gap-3">
                 {/* Template Manager Button */}
@@ -5292,6 +5303,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <button
                     onClick={handleSubmit}
                     disabled={
+                        (effectiveSeqDesigner === 'fampnn' && Boolean(fampnnError)) ||
                         submitMutation.isPending ||
                         launchMutagenesisMutation.isPending ||
                         isUploading ||
@@ -5356,6 +5368,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     try {
                         // Load template params into state
                         const p = template.params || {};
+                        setFampnnOverrides(p.fampnn_analysis_overrides);
                         const loaded: string[] = [];
                         const skipped: string[] = [];
                         interactiveWorkflowTouchedRef.current = false;
@@ -5384,7 +5397,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 loaded.push('denovo_generator');
                             }
                             setDeNovoStageSelection({
-                                sequence_design: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_sequence_design === true,
+                                sequence_design: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_sequence_design !== undefined
+                                    ? p.initial_orchestration_sequence_design === true
+                                    : p.seq_design_fampnn === true || p.seq_designer === 'fampnn',
                                 ppiflow: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_ppiflow === true,
                                 validation: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_validation === true,
                                 qc: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_qc === true,
@@ -5603,6 +5618,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     }
                 }}
                 currentParams={{
+                    fampnn_analysis_overrides: fampnnOverrides,
                     // Core settings
                     job_name: jobName,
                     denovo_generator: deNovoGenerator,
