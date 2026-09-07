@@ -11,6 +11,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -170,6 +171,34 @@ def run_gate(name, command, cwd, env, output, expected=(), pytest_gate=False):
     return record
 
 
+def acceptance_case_results(output: Path) -> list[dict]:
+    """Join each declared requirement selector to actual passing test results."""
+    receipts = {name: json.loads((output / name / 'receipt.json').read_text())
+                for name in ('root', 'api', 'mounted')}
+    cases = json.loads((HERE / 'scientific_acceptance_cases.json').read_text())['cases']
+    if len(cases) != 48 or len({case['id'] for case in cases}) != 48:
+        raise ValueError('expected 48 distinct acceptance cases')
+    results = []
+    for case in cases:
+        evidence = []
+        for test in case['tests']:
+            file, *classes, name = test['selector'].split('::')
+            gate = 'api' if file.startswith('platform/api/') else 'mounted' if file.startswith('platform/frontend/') else 'root'
+            relative = file.removeprefix('platform/api/').removeprefix('platform/frontend/')
+            classname = '.'.join([relative.removesuffix('.py').replace('/', '.'), *classes]) if gate != 'mounted' else relative
+            # Vitest .each expands its explicitly declared string placeholder.
+            pattern = re.escape(name).replace('%s', '.+?')
+            matches = [row for row in receipts[gate]['testcases'] if row['class'] == classname
+                       and re.fullmatch(pattern + (r'(?:\[.*\])?' if gate != 'mounted' else ''), row['name'])]
+            if not matches or any(row['outcome'] != 'passed' for row in matches):
+                raise ValueError(f"unproven acceptance selector {case['id']}: {test['selector']}")
+            evidence.append({'selector': test['selector'], 'gate': gate, 'executed': matches})
+        if not evidence:
+            raise ValueError(f"empty acceptance case {case['id']}")
+        results.append({'id': case['id'], 'status': 'passed_bounded_software_evidence', 'evidence': evidence})
+    return results
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', required=True)
@@ -228,6 +257,9 @@ def main(argv=None):
         report['gates'].append(run_gate('mounted', ['pnpm', 'exec', 'vitest', 'run', '--config', 'tests/vitest.scientific.config.ts'], front, env, output, GATES['frontend']))
         report['gates'].append(run_gate('typecheck', ['pnpm', 'exec', 'tsc', '--noEmit', '--incremental', 'false', '-p', 'tsconfig.app.json'], front, env, output))
         report['gates'].append(run_gate('pure', ['pnpm', 'exec', 'tsx', '--test', '--test-reporter=tap', *GATES['pure']], front, env, output))
+        cases = acceptance_case_results(output)
+        save(output / 'acceptance-cases.json', cases)
+        report['acceptance_case_count'] = len(cases)
     except Exception as exc:
         report['error'] = str(exc)
     finally:

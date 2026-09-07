@@ -14,6 +14,25 @@ import run_scientific_acceptance as driver
 
 
 class HarnessTests(unittest.TestCase):
+    def test_acceptance_results_require_executed_passing_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = {'cases': [{'id': f'A-{i}', 'tests': [{'selector': 'tests/example.py::test_ok'}]} for i in range(48)]}
+            (root / 'scientific_acceptance_cases.json').write_text(json.dumps(cases))
+            for gate in ('root', 'api', 'mounted'):
+                (root / gate).mkdir()
+                (root / gate / 'receipt.json').write_text(json.dumps({'testcases': []}))
+            with patch.object(driver, 'HERE', root):
+                with self.assertRaisesRegex(ValueError, 'unproven acceptance'):
+                    driver.acceptance_case_results(root)
+                record = {'testcases': [{'class': 'tests.example', 'name': 'test_ok[value]', 'outcome': 'passed'}]}
+                (root / 'root/receipt.json').write_text(json.dumps(record))
+                self.assertEqual(len(driver.acceptance_case_results(root)), 48)
+                record['testcases'][0]['outcome'] = 'skipped'
+                (root / 'root/receipt.json').write_text(json.dumps(record))
+                with self.assertRaisesRegex(ValueError, 'unproven acceptance'):
+                    driver.acceptance_case_results(root)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
