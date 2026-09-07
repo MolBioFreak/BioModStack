@@ -1,0 +1,949 @@
+{
+  "document": "BMS-CP-SCI-01 revision 1",
+  "selector_note": "Python IDs are exact base selectors; runtime parameter IDs and outcomes come from selected.json and JUnit. JS titles may be test.each templates. References identify relevant checks, not complete requirement satisfaction. Review limitations before any acceptance claim.",
+  "cases": [
+    {
+      "id": "A-CT-01",
+      "requirement": "New admission assigns the server-owned revision through normal and generic entrypoints. A caller cannot suppress or downgrade it. Missing required new evidence never enters a legacy fallback.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_admission.py::test_admission_persists_server_revision_and_keeps_old_rows",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_caller_cannot_supply_reserved_marker",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_identity.py::test_marked_pae_without_producer_map_never_calls_legacy_loader",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CT (see layer_limitations)"
+    },
+    {
+      "id": "A-CT-02",
+      "requirement": "Disposable pre-activation records and artifacts remain byte/value unchanged during new-job admission, finalization, and reads. Old in-flight attempts retain their revision. A new submission from an old template receives current validation.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_old_rows_and_new_clone_are_independent",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_admission.py::test_reused_legacy_child_is_unchanged",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_admission.py::test_fresh_legacy_child_resubmit_uses_current_validation",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_routes.py::test_unmarked_reads_keep_legacy_shapes_without_rewriting_history",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CT (see layer_limitations)"
+    },
+    {
+      "id": "A-CT-03",
+      "requirement": "Every new metric state survives schema validation, Python serialization, TypeScript parsing, and display. Contradictory states, Boolean measurements, nonfinite numbers, and unknown fields fail.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_ok_state_rejects_noncanonical_scalar",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_non_ok_state_requires_null_and_reason",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_closed_schema_and_no_coercion",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_wire.py::test_real_strict_loader_api_serialization_equals_mounted_consumer_fixture",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/canonicalAnalyticsMounted.test.tsx::raw metric transport rejects a downgraded canonical marker",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "CT (see layer_limitations)"
+    },
+    {
+      "id": "A-CT-04",
+      "requirement": "A mixed-contract query keeps incompatible meanings separate and performs no historical writes or repair scan.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_canonical_scientific_analytics.py::test_mixed_parent_keeps_legacy_values_out_of_native_cohorts",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_analysis_dispatch.py::test_correlation_real_dispatch_isolates_contracts",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CT (see layer_limitations)"
+    },
+    {
+      "id": "A-CT-05",
+      "requirement": "Source-hash, candidate, or policy-revision substitutions fail even when artifact dimensions and candidate counts remain unchanged.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_authoritative_artifact_binding_rejects_substitution",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_candidate_document_and_source_must_match_external_authority",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CT (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-01",
+      "requirement": "An H/L/T matrix whose native order is T/H/L binds each cell to the intended residues after API-to-viewer transport.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_native_directional_axes_preserved_and_scoring_maps_cells",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_wire.py::test_real_strict_loader_api_serialization_equals_mounted_consumer_fixture",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::real pane builder preserves directed T/H/L axes, distinct pixels, readout, click and keyboard pairs",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::provided independently sampled rectangular map retains both provider orders without reduction",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::API-shaped MAX_AXIS overflow remains explicit unavailable through the builder",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::provider sampled projection of oversized native source is supported without re-reducing",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::supported 512 axes pass every cell beyond the old 250000-pair bound",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::unmarked overflow keeps the existing bounded symmetric behavior",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificPairMatrixMounted.test.tsx::unmarked legacy matrix retains union ordering and symmetric last-write rendering",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-02",
+      "requirement": "Same dimensions with a swapped or foreign axis fail before rendering a scientific layer.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_boltz_native_producer_identity.py::NativeIdentityTest::test_native_ledger_rejects_consistently_swapped_claimed_axis",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_strict_axes_fail_closed_on_foreign_or_missing_identity",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-03",
+      "requirement": "Author residues 100, 100A, and 100B remain distinct in structure records, CB coordinates, interface counts, and viewer selections.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_strict_insertion_outputs_are_independently_correct",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_strict_pdb_selection_and_absent_namespaces",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-04",
+      "requirement": "A PDB and equivalent mmCIF preserve equivalent biological identity despite different label/author numbering.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_strict_cif_preserves_dual_namespaces_and_instances",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_strict_pdb_selection_and_absent_namespaces",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-05",
+      "requirement": "Reordered provider chains resolve through an explicit map; missing and ambiguous maps fail. A successful remap does not trigger alphabetical role selection.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_scientific_alignment_roles.py::test_explicit_chain_remap_then_role_validation",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_alignment_roles.py::test_missing_overlapping_ambiguous_roles_fail",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_alignment_roles.py::test_strict_protenix_matching_never_uses_sequential_fallback",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-06",
+      "requirement": "Native A/B/C and direct H/L/T controls continue to work. A downsampled matrix without an axis map is unavailable with a visible reason.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_scientific_residue_identity.py::test_native_directional_axes_preserved_and_scoring_maps_cells",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_wire.py::test_real_strict_loader_downsample_retains_native_axes",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_routes.py::test_marked_endpoints_do_not_serve_positional_history",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-ID-07",
+      "requirement": "Source or candidate mismatch blocks attachment. Selecting another candidate clears or re-resolves residue selections against that candidate.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_boltz_native_producer_identity.py::NativeIdentityTest::test_strict_consumer_rejects_foreign_hash_and_identity",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_scientific_viewer_wire.py::test_api_wire_rejects_invalid_native_projection",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::mounted API native axes reach the existing workbench without alphabetical reassignment",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::marked missing map leaves structure mounted and an explicit reason instead of legacy metrics",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::numeric chain metrics never become A/B/C or turn null into zero for marked designs",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::same-size alphabetical reassignment is rejected by the mounted consumer",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::downsample uses declared native sample indexes instead of chain lengths",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::candidate switches remount the selection owner and reject stale candidate payloads",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::late residue response cannot overwrite the newer candidate, even without transport cancellation",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "ID (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-01",
+      "requirement": "All standard channels decode to the pinned upstream letters; X never becomes a standard substitution. Numeric confidence on valid rows is invariant to the label correction.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_pinned_alphabet_and_source_identity",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_positive_x_is_confidence_only_not_mutation_source_or_target",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-02",
+      "requirement": "Fixed zero rows remain unscored under both all-residue and fixed-residue scopes; no tied zero-evidence mutations appear.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_fixed_zero_row_is_unscored_and_not_mutatable",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-03",
+      "requirement": "Workflows with different declared scopes produce different resolved sets while using the same analyzer. Permitted overrides round-trip; prohibited overrides fail admission.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_independent_scope_overrides_and_fixed_exclusion",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_workflow_transport.py::test_each_real_owner_passes_policy_without_psce_scope_reuse",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_fampnn_policy_admission.py::test_typed_override_admission_persists_only_declaration",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_fampnn_policy_admission.py::test_forbidden_override_has_zero_writes",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-04",
+      "requirement": "Shape mismatch, unknown dialect, foreign selectors, negative probabilities, and NaN/Inf fail or become typed invalid evidence according to requiredness.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_rejects_malformed_producer_arrays",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_policy_and_identity_fail_closed",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_probability_contract_rejects_malformed_rows",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-05",
+      "requirement": "Empty scored scope produces null summaries and a reason. Partial scope reports exact counts and coverage; complete-required scope fails.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_empty_scope_and_required_coverage",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_presence_does_not_redefine_selected_scope",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FA-06",
+      "requirement": "Valid zero probabilities have the specified entropy/log behavior without invented EPS scores.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_zero_probability_is_not_epsilon_evidence",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_strict_contract.py::test_probability_roundoff_tolerance_preserves_zero_channels",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "FA (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-01",
+      "requirement": "CSV and NPZ paths with design pTM and no native pLDDT never emit or rank a pLDDT substitute.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_native_csv_no_fabricated_confidence",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_npz_missing_not_ptm_substitute",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_native_rank_defaults_preserve_complete_rank_algorithm",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-02",
+      "requirement": "Missing RMSD remains unavailable. Native RMSD zero passes a valid maximum gate; missing and NaN/Inf do not pass.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_npz_missing_not_ptm_substitute",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_strict_threshold_zero",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-03",
+      "requirement": "Each enabled minimum/maximum criterion is checked at below/equal/above boundary values. Explicit zero bounds stay enabled.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_strict_threshold_zero",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_workflow_marker_and_zero_transport",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-04",
+      "requirement": "Disabled optional metrics do not reject otherwise valid candidates. Unsupported selected metrics fail with a clear reason.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_disabled_gate_requires_no_evidence",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_boltzgen_request_compatibility.py::test_effective_rank_is_native_declared_and_typed",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-05",
+      "requirement": "RF3 emitted filenames associate with the correct declared summary; a same-sized foreign summary fails identity validation.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_exact_rf3_sidecar_and_all_dispositions",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_foreign_same_name_metadata_is_invalid",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-06",
+      "requirement": "Structural calculation failure is distinguishable from a genuine zero count. Every input has exactly one disposition.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_secondary_computed_zero_vs_exception",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_boltzgen_cli_publishes_every_input",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_unified_invalid_metrics_still_publish",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-FL-07",
+      "requirement": "Primary and additional BoltzGen filters reject malformed/nonfinite evidence consistently. Existing valid native ranking controls remain stable.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_real_wrapper_to_filter_required_metrics",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_native_rank_defaults_preserve_complete_rank_algorithm",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_selection_excludes_unrankable_before_shortcut_and_sort",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "FL (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-01",
+      "requirement": "An ESMFold2 manifest declaring two publications with one missing structure fails, including a typed missing-candidate identity.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_declared_set_prevalidated_before_any_row",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_direct_dispatch_invalid_last_structure_preserves_transaction",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-02",
+      "requirement": "A cohort with deliberate filter rejections and a complete selected set succeeds under its existing terminal policy.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_intentional_rejection_accounts_without_requested_count_equality",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_boltzgen_candidate_accounting.py::test_filter_publication_ingestion_finalization_and_replay",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-03",
+      "requirement": "Equal counts with one substituted candidate fail. Duplicate IDs and an extra undeclared publication fail.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_equal_count_substitution_duplicates_and_extras",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_boltzgen_candidate_accounting.py::test_whole_publication_validated_before_any_write",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-04",
+      "requirement": "Existing usable rows plus a missing expected candidate cannot produce a green complete job.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_prior_rows_plus_loss_fails_with_retained_partial",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_generic_finalizer_revalidates_exact_persisted_set",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-05",
+      "requirement": "Idempotent finalization preserves exact rows; cancellation and review-gate races retain their existing precedence.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_replay_is_identical_or_rejected",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_two_session_authority_wins_after_ingest_commit",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-CA-06",
+      "requirement": "Zero-survivor behavior matches the owning workflow and remains separate from ingestion loss.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_candidates.py::test_native_zero_survivor_finalizer_keeps_no_candidates",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_rf_filter_stage_accounting.py::test_zero_survivor_stage_retained_on_terminal_failure",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "CA (see layer_limitations)"
+    },
+    {
+      "id": "A-PR-01",
+      "requirement": "Native scalar iPTM plus same-scope Rosetta yields the exact formula and availability true.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_native_scalar_bound_rank",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_ppiflow_rank_ingress.py::test_actual_ingress_sqlite_reopen_api",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "PR (see layer_limitations)"
+    },
+    {
+      "id": "A-PR-02",
+      "requirement": "pTM-only, backend-name-only, and pairwise-only cases remain unavailable even with Rosetta present.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_no_substitutes",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "PR (see layer_limitations)"
+    },
+    {
+      "id": "A-PR-03",
+      "requirement": "Zero, nonfinite, foreign-candidate, and incompatible-interface cases follow domain and identity rules.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_zero_is_legitimate",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_invalid_iptm",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_invalid_binding",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_invalid_rosetta_scalar_is_a_typed_record",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "PR (see layer_limitations)"
+    },
+    {
+      "id": "A-PR-04",
+      "requirement": "API completeness and rendered availability agree with the actual numeric rank builder.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_core_protein_rank.py::test_native_scalar_bound_rank",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_ppiflow_rank_ingress.py::test_actual_ingress_sqlite_reopen_api",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "PR (see layer_limitations)"
+    },
+    {
+      "id": "A-PT-01",
+      "requirement": "A request through real API normalization and workflow argument construction reaches an instrumented non-model command with all top-level MSA fields intact.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_real_workflow_non_model_capture",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_top_level_msa_false_zero_and_receipt",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "PT (see layer_limitations)"
+    },
+    {
+      "id": "A-PT-02",
+      "requirement": "Boolean false survives both alias normalization and command construction; component-level MSA remains supported.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_component_msa_keeps_own_scope",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_top_level_msa_false_zero_and_receipt",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "PT (see layer_limitations)"
+    },
+    {
+      "id": "A-PT-03",
+      "requirement": "OpenMM false/true/absent produce the expected flag and effective-settings origin.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_wp06_openmm_transport.py::test_antibody_cdr_transport",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_openmm_transport.py::test_null_settings_default_without_false_request_origin",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_openmm_transport.py::test_explicit_settings_and_tier_derivation",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "PT (see layer_limitations)"
+    },
+    {
+      "id": "A-PT-04",
+      "requirement": "Contradictory aliases, invalid bounds/types, and missing required MSA fail before invoking the command.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_invalid_request_fails_before_command",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_api_invalid_marked_settings",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_parameter_transport.py::test_api_marked_alias_conflict",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_wp06_openmm_transport.py::test_invalid_falsey_wrapper_value_never_executes",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "PT (see layer_limitations)"
+    },
+    {
+      "id": "A-PT-05",
+      "requirement": "Requested/effective settings shown in the UI match the captured command input. The test command is explicitly a fixture, not model-inference evidence.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_wp06_persisted_receipts.py::test_receipt_from_executed_argv_to_persisted_api",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_wp06_persisted_receipts.py::test_openmm_receipts_persist_through_real_finalizer",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/wp06ExecutionSettingsMounted.test.tsx::mounted %s job details show persisted ASGI receipt, not raw JSON",
+          "layer": "mounted UI (test.each title template)"
+        }
+      ],
+      "limitations": "PT (see layer_limitations)"
+    },
+    {
+      "id": "A-MC-01",
+      "requirement": "Complete identity-matched structures reproduce the intended current formula and frame convention.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_complete_explicit_renumbering_preserves_frame_and_formula",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_g09_native_transport.py::test_real_native_parsers_and_fampnn_export_preserve_insertion_identity",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "MC (see layer_limitations)"
+    },
+    {
+      "id": "A-MC-02",
+      "requirement": "Missing termini, deleted loops, partial overlap, and numbering shifts cannot receive an unqualified full-domain value.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_partial_or_zero_never_reports_full_domain",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_declared_deleted_terminus_remains_in_denominator",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_integer_overlap_is_not_authority",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "MC (see layer_limitations)"
+    },
+    {
+      "id": "A-MC-03",
+      "requirement": "Explicit renumbering and subset scopes report correct correspondence and both coverage denominators.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_complete_explicit_renumbering_preserves_frame_and_formula",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_explicit_subset_is_named_and_cannot_fill_full_value",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_maturation_coverage_ingress.py::test_existing_ingress_preserves_both_domains_and_subset_without_promoting_it",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/maturationEvidenceMounted.test.tsx::renders the native-data to scorer to SQLite API response without recomputation",
+          "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/maturationEvidenceMounted.test.tsx::shows both coverage denominators, unmatched identities, distinct subset, and exact rank reason",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "MC (see layer_limitations)"
+    },
+    {
+      "id": "A-MC-04",
+      "requirement": "Zero overlap stays unavailable; an RMSD-dependent objective fails on missing RMSD while the independent selected-interface policy is preserved.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_partial_or_zero_never_reports_full_domain",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_rmsd_dependent_objectives_block_missing_and_accept_zero",
+          "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_correspondence.py::test_selected_interface_does_not_acquire_rmsd_gate",
+          "layer": "helper / instrumented workflow"
+        }
+      ],
+      "limitations": "MC (see layer_limitations)"
+    },
+    {
+      "id": "A-AN-01",
+      "requirement": "Measured zero, missing, and invalid metrics remain distinct through API serialization, parser, and mounted chart/table.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_boltzgen_analytics.py::test_boltzgen_published_analytics_wire",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_canonical_scientific_analytics.py::test_actual_api_transports_canonical_scalar_sources",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_truthful_analytics.py::test_canonical_values_never_coerce",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/boltzgenAnalyticsMounted.test.tsx::published BoltzGen %s reaches the actual dashboard",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "AN (see layer_limitations)"
+    },
+    {
+      "id": "A-AN-02",
+      "requirement": "Nested heterogeneous records produce no synthetic mean/min/max. Explicit homogeneous aggregates retain their unit and scope.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_truthful_analytics.py::test_unverified_marked_plotly_does_not_read_legacy_or_nested_json",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_truthful_analytics.py::test_incompatible_descriptor_never_enters_distribution",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "AN (see layer_limitations)"
+    },
+    {
+      "id": "A-AN-03",
+      "requirement": "Complete-case paired analytics preserve candidate identity and correct counts under asymmetric missingness.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_truthful_analytics.py::test_distributions_and_pair_denominators_are_candidate_bound",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_canonical_scientific_analytics.py::test_esmfold2_actual_api_retains_asymmetric_missingness",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/frontend/tests/vitest/canonicalAnalyticsMounted.test.tsx::published SQLite API bytes reach mounted native scalar table and paired plot",
+          "layer": "mounted UI"
+        }
+      ],
+      "limitations": "AN (see layer_limitations)"
+    },
+    {
+      "id": "A-AN-04",
+      "requirement": "Empty cohorts and mixed-contract cohorts follow the specified unavailable/isolation rules without modifying stored data.",
+      "evidence_status": "source-indexed; not executed or accepted by this mapping",
+      "tests": [
+        {
+          "selector": "platform/api/tests/test_truthful_analytics.py::test_empty_and_invalid_observed_sets_keep_reasons",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_canonical_scientific_analytics.py::test_mixed_parent_keeps_legacy_values_out_of_native_cohorts",
+          "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_core_protein_analysis_dispatch.py::test_correlation_real_dispatch_isolates_contracts",
+          "layer": "API / disposable persistence"
+        }
+      ],
+      "limitations": "AN (see layer_limitations)"
+    }
+  ],
+  "layer_limitations": {
+    "CT": "Admission activation is mocked locally; ACTIVATED_CALLERS remains off. Disposable-history controls are not a historical scan. A Python state test alone does not establish every TypeScript/display path.",
+    "ID": "Synthetic chain/residue arrays and structure bytes; matrix/viewer fixtures are not model-inference or rendered molecular-engine accuracy evidence. Separate PDB/mmCIF controls do not alone prove all equivalent-file pairings.",
+    "FA": "Pinned producer-shaped synthetic tensors; no sampling model runs. Caller policy transport/admission fixtures do not authorize held caller activation or establish mutation-guidance ingestion.",
+    "FL": "Synthetic CSV/NPZ/filter inputs. Selected threshold tests must be checked against every requested criterion; zero-bound controls alone do not prove a full below/equal/above matrix. Native ranking means software native-dialect data, not inference.",
+    "CA": "Disposable SQLite and synthetic manifest/filter publication; no live finalization or historical repair. Terminal-policy coverage is limited to explicitly exercised owners and race branches.",
+    "PR": "Synthetic bound scalar evidence. API numeric availability is covered by source selectors; do not infer complete rendered PPIFlow availability from unrelated analytics UI tests.",
+    "PT": "Instrumented non-model commands; no MSA search, ESMFold2 inference or OpenMM physics. The persisted OpenMM API fixture uses synthetic receipt construction unless an explicit captured receipt is provided; its UI check is not by itself an argv-to-UI chain.",
+    "MC": "Sealed native parser/export definitions and synthetic PDBs execute without models; PyRosetta physics is injected. Coverage/formula/frame transport is software evidence only.",
+    "AN": "Synthetic persisted/API fixtures and mocked chart drawing/network adapters. Mounted DOM marks/tables are checked, not graphical renderer pixels, live cohorts or historical writes."
+  }
+}
