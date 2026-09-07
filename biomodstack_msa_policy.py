@@ -31,6 +31,8 @@ def requires_msa_search(model_id: str, params: Mapping[str, Any]) -> bool:
     flag = {"boltz2": "boltz_use_msa", "protenix": "protenix_use_msa"}.get(model_id)
     if flag and params.get(flag) in (False, "false", "0", 0):
         return False
+    if model_id == "protenix" and params.get("protenix_msa_backend") in {"none", "esm"}:
+        return False
     # Cache-only is an explicit fail-on-miss operation, not permission to search.
     if params.get("msa_cache_only") in (True, "true", "1", 1):
         return False

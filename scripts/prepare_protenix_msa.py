@@ -127,16 +127,20 @@ def _hydrate_old_precomputed_dir(chain: Dict[str, Any]) -> None:
 
 def all_protein_chains_have_msa(payload: List[Dict[str, Any]]) -> bool:
     saw_protein = False
+    complete = True
     for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
         saw_protein = True
         _hydrate_old_precomputed_dir(chain)
         paired_path, unpaired_path = _existing_msa_paths(chain)
-        if paired_path and paired_path.exists():
+        supplied = [path for path in (paired_path, unpaired_path) if path is not None]
+        if not supplied:
+            complete = False
             continue
-        if unpaired_path and unpaired_path.exists():
-            continue
-        return False
-    return saw_protein
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_msa_handoff import validate_a3m
+        for path in supplied:
+            validate_a3m(path, str(chain.get("sequence", "")))
+    return saw_protein and complete
 
 
 def choose_backend(requested: str, stats: Dict[str, int], max_tasks: int, max_chains: int, max_residues: int) -> str:
@@ -254,6 +258,9 @@ def hydrate_chains_from_shared_cache(
         cached = _cached_a3m_path(cache_root, sequence)
         if cached is None:
             continue
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_msa_handoff import validate_a3m
+        validate_a3m(cached, sequence)
         is_binder = bool(set(_chain_ids(chain)) & binder_chain_id_set)
         role_key = "binder" if is_binder else "default"
         profile_key = (sequence, role_key)
@@ -374,6 +381,9 @@ def _write_sanitized_a3m(
 
 
 def prepare_with_colabfold_api(input_json: Path, output_json: Path, work_dir: Path, host: str) -> Path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_controller import require_controller_submission
+    require_controller_submission(host or DEFAULT_COLABFOLD_API_HOST)
     os.environ["MMSEQS_SERVICE_HOST_URL"] = (host or DEFAULT_COLABFOLD_API_HOST).strip()
     try:
         from runner.msa_search import update_infer_json
@@ -677,6 +687,8 @@ def prepare_with_local_msa(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare Protenix-compatible MSA inputs")
+    parser.add_argument('--prepared-inputs', default='', help='Controller-owned portable MSA input directory')
+    parser.add_argument('--prepared-sha256', default='', help='Envelope-bound MSA manifest digest')
     parser.add_argument("--input_json", required=True, help="Input Protenix JSON")
     parser.add_argument("--output_json", required=True, help="Output JSON with MSA paths")
     parser.add_argument("--out_dir", required=True, help="Working directory for MSA artifacts")
@@ -734,6 +746,13 @@ def main() -> None:
         return
 
     hydrated_from_cache = 0
+    if getattr(args, 'prepared_inputs', ''):
+        from biomodstack_msa_handoff import hydrate_prepared_protenix_task
+        payload = hydrate_prepared_protenix_task(payload, Path(args.prepared_inputs), args.prepared_sha256)
+        dump_json(output_json, payload)
+        if args.report_json:
+            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, 'controller_prepared', stats)
+        return
     if args.cache_dir:
         hydrated_from_cache = hydrate_chains_from_shared_cache(
             payload,
@@ -758,6 +777,9 @@ def main() -> None:
         print(str(output_json), flush=True)
         return
 
+    if getattr(args, "cache_only", False):
+        raise RuntimeError("MSA cache-only miss; search is not permitted")
+
     backend = choose_backend(
         requested=args.backend,
         stats=stats,
@@ -769,8 +791,11 @@ def main() -> None:
 
     local_msa_runtime_contract: Dict[str, Any] | None = None
     if backend == "colabfold_api":
+        # Preserve partially hydrated and user-supplied chains in API input.
+        hydrated_input = out_dir / "hydrated-input.json"
+        dump_json(hydrated_input, payload)
         prepared = prepare_with_colabfold_api(
-            input_json=input_json,
+            input_json=hydrated_input,
             output_json=output_json,
             work_dir=out_dir,
             host=args.colabfold_api_host,

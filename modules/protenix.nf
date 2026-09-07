@@ -41,7 +41,7 @@ process ProtenixPredict {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(producer_meta), val(sequence), val(sequence_name)
+    tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)
 
     output:
     tuple val(producer_meta), path("predictions/**/*.cif"), emit: typed_cifs, optional: true
@@ -194,6 +194,7 @@ PY
             echo "[PROTENIX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            ${prepared_msa ? '--prepared-inputs "' + prepared_msa + '" --prepared-sha256 "' + params.protenix_prepared_msa_sha256 + '"' : ''} \\
             --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\

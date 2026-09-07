@@ -339,7 +339,8 @@ def test_hydrate_chains_from_shared_cache_materializes_cached_a3m(tmp_path: Path
 def test_full_cache_hit_short_circuits_colabfold_api_backend(tmp_path: Path, monkeypatch) -> None:
     sequence = "ABCDEFGH"
     cache_root = tmp_path / "cache"
-    _write_cache_a3m(cache_root, sequence, ">query\nABCDEFGH\n>hit1\nABcDEFGH\n")
+    # Lowercase insertion does not consume a query column.
+    _write_cache_a3m(cache_root, sequence, ">query\nABCDEFGH\n>hit1\nABcCDEFGH\n")
     input_json = tmp_path / "input.json"
     output_json = tmp_path / "output.json"
     report_json = tmp_path / "msa_report.json"

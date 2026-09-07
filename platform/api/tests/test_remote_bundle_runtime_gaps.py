@@ -86,6 +86,9 @@ def package(tmp_path, monkeypatch):
     from services import gpu_config, msa_server
     monkeypatch.setattr(gpu_config, 'read_scheduler_config', lambda: {})
     monkeypatch.setattr(msa_server, 'read_server_settings', lambda: {})
+    # Runtime-only probes explicitly request the model-supported no-MSA path.
+    # Prepared/search MSA transport is exercised by test_msa_bundle_integration.
+    command.extend(['--protenix_use_msa', 'false'])
     return roots, release, job, target, command
 
 
@@ -145,7 +148,7 @@ def test_effective_dependency_inventory_omits_other_model_runtime_defaults():
 
 def test_actual_normalized_nextflow_command_omits_unrelated_original_params(package):
     roots, release, job, target, command = package
-    normalized = dict(job.params, protenix_msa_backend='colabfold_api', sequence='AAAA',
+    normalized = dict(job.params, protenix_msa_backend='colabfold_api', sequence='AAAA', protenix_use_msa=False,
                       api_python=str(roots['runtime']/'current/venv/bin/python'))
     argv = nextflow.build_nextflow_command('protenix', 'predict', normalized, job.output_dir, job_id=job.id)
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv)
@@ -175,7 +178,7 @@ def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     normalized = dict(
         msa_provider='colabfold_api', allow_retries=False, sequence='AAAA', gpu_id=0,
         protenix_n_sample=5, protenix_n_cycle=10, protenix_n_step=200,
-        protenix_seeds='42', protenix_use_msa=True, protenix_use_template=False,
+        protenix_seeds='42', protenix_use_msa=False, protenix_use_template=False,
         run_frustrampnn=True, pred_method='protenix', structure_validator='protenix',
         api_python=str(roots['runtime']/'current/venv/bin/python'),
     )

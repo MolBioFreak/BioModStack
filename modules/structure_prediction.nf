@@ -1612,7 +1612,9 @@ workflow structure_prediction_wf {
 
             if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
                 // Protenix takes [sequence, name] and handles MSA internally via protenix prep
-                ProtenixPredict(typed_inputs)
+                ProtenixPredict(typed_inputs.map { meta, seq, name ->
+                    tuple(meta, seq, name, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+                })
                 protenix_canonical_outputs = canonicalProducerOutputs(
                     ProtenixPredict.out.typed_cifs, 'protenix'
                 )
@@ -1641,7 +1643,9 @@ workflow structure_prediction_wf {
             }
 
             if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
-                ProtenixPredict(typed_inputs)
+                ProtenixPredict(typed_inputs.map { meta, seq, name ->
+                    tuple(meta, seq, name, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+                })
                 protenix_canonical_outputs = canonicalProducerOutputs(
                     ProtenixPredict.out.typed_cifs, 'protenix'
                 )
@@ -1662,7 +1666,9 @@ workflow structure_prediction_wf {
 
         if (pred_method == 'protenix' || pred_method == 'boltz_protenix') {
             // Protenix handles its own MSA via built-in protenix prep or ESM
-            ProtenixPredict(typed_inputs)
+            ProtenixPredict(typed_inputs.map { meta, seq, name ->
+                    tuple(meta, seq, name, params.protenix_prepared_msa_dir ? file(params.protenix_prepared_msa_dir, checkIfExists: true) : [])
+                })
             protenix_canonical_outputs = canonicalProducerOutputs(
                 ProtenixPredict.out.typed_cifs, 'protenix'
             )

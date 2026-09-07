@@ -3281,6 +3281,24 @@ def normalize_plr_input_pdb_path(
     return normalized
 
 
+def compile_controller_protenix_input(params: Dict[str, Any]) -> list:
+    """Exact native input for the remote standalone sequence predictor.
+
+    This is transport compilation, not a second scientific parameter registry.
+    Complex/batch child workflows need their own native compiler and fail closed.
+    """
+    if any(params.get(key) for key in ('complex_json_path', 'complex_batch_dir',
+                                      'complex_components', 'sequence_batch_json_path')):
+        raise ValueError('Controller MSA handoff does not yet support Protenix complex/batch inputs')
+    import re
+    sequence = str(params.get('sequence_input') or '')
+    if not sequence or not re.fullmatch(r'[A-Z]+', sequence):
+        raise ValueError('Controller MSA handoff requires a compiled literal protein sequence_input')
+    seeds = [int(seed.strip()) for seed in str(params.get('protenix_seeds') or '42').split(',')]
+    return [{'name': str(params.get('sequence_name') or 'predicted'), 'modelSeeds': seeds,
+             'sequences': [{'proteinChain': {'sequence': sequence, 'count': 1}}]}]
+
+
 def build_job_nextflow_command(job, params, output_dir):
     """All launch/rebuild paths join request origin from their owning persisted Job."""
     from services.core_protein_scientific_contract import workflow_params
@@ -3306,7 +3324,12 @@ def build_nextflow_command(
     # Shared preview and scheduler/replay command compilation gate.
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)
+    # Controller execution metadata is not a scientific Nextflow parameter.
+    params.pop("remote_result_policy", None)
+    params.pop("execution_policy", None)
     # Only the persisted launch owner may add this transport after compilation.
+    params.pop('protenix_prepared_msa_dir', None)
+    params.pop('protenix_prepared_msa_sha256', None)
     params.pop('boltz_launch_authority_base64', None)
     params.pop('boltz_launch_authority_path', None)
     params.pop('boltz_launch_authority_sha256', None)

@@ -595,6 +595,30 @@ def prepare_remote_bundle(
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"
     command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    prepared_msa = None
+    if str(job.model_id).lower() == 'protenix':
+        from services.msa_policy import apply_msa_policy
+        effective_params = apply_msa_policy('protenix', effective_params)
+        if any(key in effective_params for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256')):
+            raise RemoteBundleError('Prepared MSA transport is controller-owned, not caller supplied')
+        search = (str(effective_params.get('protenix_use_msa', True)).lower() != 'false'
+                  and effective_params.get('protenix_msa_backend') not in {'none', 'esm'})
+        if search:
+            workflows = {Path(value).name for value in command if value.endswith('.nf')}
+            if workflows != {'structure_prediction.nf'} or effective_params.get('pred_method', 'protenix') != 'protenix':
+                raise RemoteBundleError('Controller MSA handoff supports only standalone Protenix sequence prediction; '
+                                        'complex/child/mixed-predictor workflows are not prepared. No worker search is permitted.')
+            required_source = ('biomodstack_msa_handoff.py', 'scripts/prepare_protenix_msa.py')
+            if any(not (source_root / name).is_file() for name in required_source):
+                raise RemoteBundleError('Immutable source revision is missing the prepared MSA consumer; include the MSA modules before release')
+            from services.msa_preparation import prepare_remote_protenix_inputs
+            prepared_msa = staging_root / 'prepared-msa'
+            try:
+                prepare_remote_protenix_inputs(effective_params, prepared_msa)
+            except (ValueError, RuntimeError, OSError) as exc:
+                raise RemoteBundleError(f'Controller MSA preparation failed before remote staging: {exc}') from exc
+            command = [*command, '--protenix_prepared_msa_dir', str(prepared_msa),
+                       '--protenix_prepared_msa_sha256', _sha256_file(prepared_msa / 'msa-inputs.json')]
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_records: list[RemoteFileRecord] = []
