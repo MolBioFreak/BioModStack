@@ -369,6 +369,12 @@ def _input_assets(
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
     system_roots = {get_weights_root().resolve(), get_container_dir().resolve()}
+    # Store destinations are worker-owned output locations, not input assets.
+    if "--runtime_image_store" in command:
+        store_index = command.index("--runtime_image_store") + 1
+        if store_index >= len(command):
+            raise RemoteBundleError("runtime image store destination is missing")
+        system_roots.add(Path(command[store_index]).resolve())
     candidates = [*_flatten_strings(params), *(str(value) for value in command[1:])]
     for raw in candidates:
         if not raw.startswith("/"):
@@ -645,7 +651,8 @@ def prepare_remote_bundle(
     }
     for flag, destination in {"-w": f"{remote_attempt}/work", "--work_dir": f"{remote_attempt}/work",
                               "--msa_cache_dir": f"{remote_attempt}/msa-cache",
-                              "--cm_api_runtime_dir": f"{remote_runtime}/support-python"}.items():
+                              "--cm_api_runtime_dir": f"{remote_runtime}/support-python",
+                              "--runtime_image_store": f"{remote_root}/cache/runtime-images"}.items():
         if flag in command:
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
@@ -672,6 +679,7 @@ def prepare_remote_bundle(
         "BMS_DATA": f"{remote_attempt}/data",
         "BMS_WEIGHTS": f"{remote_runtime}/weights",
         "BMS_CONTAINER_DIR": f"{remote_runtime}/containers",
+        "BMS_RUNTIME_IMAGE_STORE": f"{remote_root}/cache/runtime-images",
         "BMS_CM_API_RUNTIME_DIR": f"{remote_runtime}/support-python",
         "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",

@@ -5,9 +5,13 @@ import importlib.util
 import json
 import os
 import stat
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from services.conformational_mapping.protenix import (
     ProtenixMappingError,
@@ -53,13 +57,17 @@ def _verified_image(tmp_path: Path):
     tmp_path.mkdir(parents=True, exist_ok=True)
     image = tmp_path / "protenix.sif"
     image.write_bytes(b"immutable executed container bytes\n")
-    snapshot = tmp_path / "verified-protenix.sif"
+    reference = tmp_path / "runtime-image-reference.json"
     receipt = tmp_path / "runtime-image-receipt.json"
-    preflight.create_verified_image_snapshot(
+    preflight.create_verified_image_reference(
         image=image,
         expected_sha256=_sha(image),
-        snapshot=snapshot,
+        store_root=tmp_path / "store",
+        reference=reference,
         receipt=receipt,
+    )
+    snapshot = preflight.resolve_verified_image_reference(
+        reference=reference, receipt=receipt, expected_sha256=_sha(image), store_root=tmp_path / "store",
     )
     return image, snapshot, receipt
 
@@ -74,52 +82,50 @@ def test_host_preflight_snapshots_opened_image_and_emits_observed_identity(tmp_p
     assert receipt["observed_source"]["device"] == image.stat().st_dev
     assert receipt["observed_source"]["inode"] == image.stat().st_ino
     assert receipt["verified_snapshot"]["sha256"] == _sha(snapshot)
-    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o444
+    assert stat.S_IMODE(snapshot.stat().st_mode) & 0o222 == 0
+    assert snapshot.stat().st_ino != image.stat().st_ino
     assert stat.S_IMODE(receipt_path.stat().st_mode) == 0o444
+    schema = json.loads((REPO_ROOT / "schemas/conformational_mapping/cm_runtime_image_receipt_v1.schema.json").read_text())
+    Draft202012Validator(schema).validate(receipt)
 
 
 def test_host_preflight_rejects_registry_digest_mismatch_without_outputs(tmp_path: Path) -> None:
     preflight = _load(PREFLIGHT_PATH, "prepare_runtime_image_attestation_mismatch")
     image = tmp_path / "protenix.sif"
     image.write_bytes(b"unexpected")
-    snapshot = tmp_path / "verified-protenix.sif"
+    reference = tmp_path / "reference.json"
     receipt = tmp_path / "runtime-image-receipt.json"
-
     with pytest.raises(preflight.RuntimeImageAttestationError, match="digest"):
-        preflight.create_verified_image_snapshot(
-            image=image,
-            expected_sha256="0" * 64,
-            snapshot=snapshot,
-            receipt=receipt,
+        preflight.create_verified_image_reference(
+            image=image, expected_sha256="0" * 64, store_root=tmp_path / "store",
+            reference=reference, receipt=receipt,
         )
-    assert not snapshot.exists()
+    assert not reference.exists()
     assert not receipt.exists()
 
 
-def test_host_preflight_detects_path_swap_after_open(tmp_path: Path, monkeypatch) -> None:
+def test_host_preflight_detects_path_swap_after_publication(tmp_path: Path, monkeypatch) -> None:
     preflight = _load(PREFLIGHT_PATH, "prepare_runtime_image_attestation_swap")
     image = tmp_path / "protenix.sif"
     image.write_bytes(b"opened bytes")
     replacement = tmp_path / "replacement.sif"
     replacement.write_bytes(b"replacement bytes")
-    snapshot = tmp_path / "verified-protenix.sif"
+    reference = tmp_path / "reference.json"
     receipt = tmp_path / "runtime-image-receipt.json"
-    original_copy = preflight._copy_descriptor
+    original_publish = preflight.publish_image
 
-    def copy_then_swap(source_fd: int, destination: Path):
-        result = original_copy(source_fd, destination)
+    def publish_then_swap(*args):
+        result = original_publish(*args)
         os.replace(replacement, image)
         return result
 
-    monkeypatch.setattr(preflight, "_copy_descriptor", copy_then_swap)
+    monkeypatch.setattr(preflight, "publish_image", publish_then_swap)
     with pytest.raises(preflight.RuntimeImageAttestationError, match="changed"):
-        preflight.create_verified_image_snapshot(
-            image=image,
-            expected_sha256=hashlib.sha256(b"opened bytes").hexdigest(),
-            snapshot=snapshot,
-            receipt=receipt,
+        preflight.create_verified_image_reference(
+            image=image, expected_sha256=hashlib.sha256(b"opened bytes").hexdigest(),
+            store_root=tmp_path / "store", reference=reference, receipt=receipt,
         )
-    assert not snapshot.exists()
+    assert not reference.exists()
     assert not receipt.exists()
 
 
@@ -294,16 +300,113 @@ def test_execution_attestation_rejects_staged_image_swap_and_source_commit_misma
         )
 
 
-def test_canonical_process_executes_and_remeasures_the_verified_image_snapshot() -> None:
-    module = (REPO_ROOT / "modules" / "conformational_mapping_protenix.nf").read_text(encoding="utf-8")
-    config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
+def _render_module_shell(script: str, **values: object) -> str:
+    for key, value in values.items():
+        script = script.replace("${" + key + "}", str(value))
+    return script.replace("\\$", "$")
 
-    assert 'container { "${preflight}/runtime-image.sif" }' in module
-    assert 'RUNTIME_IMAGE="\\$PREFLIGHT/runtime-image.sif"' in module
-    protenix_label = config.split("withLabel: Protenix {", 1)[1].split("withLabel:", 1)[0]
-    assert "container =" not in protenix_label
-    assert "BMS_PROTENIX_RUNTIME_IMAGE" not in protenix_label
-    assert "protenixImageBind" not in protenix_label
+
+def test_canonical_transport_copies_only_receipts_and_executes_shared_reference(tmp_path: Path) -> None:
+    """Exercise actual module shell commands and copy staging, not token checks.
+
+    This is a transport test with tiny image bytes, not a scientific/container run.
+    The Apptainer-owned environment value is supplied at the execution boundary.
+    """
+    module = (REPO_ROOT / "modules" / "conformational_mapping_protenix.nf").read_text()
+    publish_command = module.split("    ${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py", 1)[1]
+    publish_command = "${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py" + publish_command.split("    ${params.api_python} ${params.code_root}/scripts/prepare_protenix_execution_snapshot.py", 1)[0]
+    before_script = module.split("    beforeScript {", 1)[1].split('"""', 2)[1]
+    executing_script = '    RUNTIME_IMAGE="${runtime_image}"' + module.split('    RUNTIME_IMAGE="${runtime_image}"', 1)[1].split("    mkdir -p native_protenix", 1)[0]
+    image = tmp_path / "source.sif"
+    image.write_bytes(b"small transport fixture, not a real SIF")
+    digest = _sha(image)
+    store = tmp_path / "store"
+    shared = store / "objects" / "sha256" / digest / "runtime.sif"
+    identities = []
+    for attempt in range(2):
+        work = tmp_path / f"preflight-{attempt}"
+        root = work / "protenix_preflight"
+        (root / "request").mkdir(parents=True)
+        registry = root / "request" / "cm_runtime_registry_v1.json"
+        registry.write_text(json.dumps({"container_digest": "sha256:" + digest}))
+        rendered = _render_module_shell(publish_command, **{
+            "params.api_python": sys.executable, "params.code_root": REPO_ROOT,
+            "image_path": image, "image_store": store,
+        })
+        subprocess.run(["bash", "-euc", rendered], cwd=work,
+                       env=os.environ | {"REGISTRY": str(registry)}, check=True, capture_output=True)
+        identities.append((shared.stat().st_dev, shared.stat().st_ino, shared.stat().st_ctime_ns))
+        # Same physical staging primitive as Nextflow stageInMode copy; only the
+        # small preflight directory is a path input, shared image is a val input.
+        staged = tmp_path / f"execution-{attempt}" / "protenix_preflight"
+        shutil.copytree(root, staged)
+        assert not list(work.rglob("*.sif"))
+        assert not list(staged.parent.rglob("*.sif"))
+        values = {"params.api_python": sys.executable, "params.code_root": REPO_ROOT,
+                  "store": store, "image_store": store, "object_dir": shared.parent,
+                  "runtime_image": shared, "preflight": staged, "preflight_source": root}
+        result = subprocess.run(["bash", "-euc", _render_module_shell(before_script, **values)],
+                                cwd=staged.parent, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        env = os.environ | {"REGISTRY": str(staged / "request/cm_runtime_registry_v1.json"),
+                            "PREFLIGHT": str(staged), "IMAGE_RECEIPT": str(staged / "runtime-image-receipt.json"),
+                            "APPTAINER_CONTAINER": str(shared)}
+        command = _render_module_shell(executing_script, **values)
+        result = subprocess.run(["bash", "-euc", command], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        wrong = subprocess.run(["bash", "-euc", command],
+                               env=env | {"APPTAINER_CONTAINER": str(image)}, capture_output=True, text=True)
+        assert wrong.returncode != 0
+        assert "actual executing runtime image differs" in wrong.stderr
+    assert identities[0] == identities[1]
+    assert list(store.rglob("*.sif")) == [shared]
+    assert 'container { runtime_image }' in module
+    assert 'tuple val(request_id), path(preflight), val(runtime_image)' in module
+
+
+@pytest.mark.parametrize("tamper", ["path", "digest", "identity", "receipt", "replacement", "corrupt"])
+def test_shared_reference_rejects_forgery_or_changed_object(tmp_path: Path, tamper: str) -> None:
+    preflight = _load(PREFLIGHT_PATH, "prepare_runtime_image_reference_tamper")
+    image, shared, receipt = _verified_image(tmp_path)
+    reference = tmp_path / "runtime-image-reference.json"
+    ref = json.loads(reference.read_text())
+    if tamper == "path":
+        ref["path"] = str(image)  # Same bytes outside the independently configured CAS.
+    elif tamper == "digest":
+        ref["identity"]["sha256"] = "0" * 64
+    elif tamper == "identity":
+        ref["identity"]["inode"] += 1
+    elif tamper == "receipt":
+        receipt.chmod(0o644)
+        payload = json.loads(receipt.read_text())
+        payload["expected_sha256"] = "0" * 64
+        receipt.write_text(json.dumps(payload))
+        ref["receipt_sha256"] = _sha(receipt)  # Rehashing a forged receipt is insufficient.
+    elif tamper == "replacement":
+        shared.parent.chmod(0o700)
+        replacement = shared.parent / "replacement.sif"
+        replacement.write_bytes(shared.read_bytes())
+        replacement.chmod(0o400)
+        os.replace(replacement, shared)
+        shared.parent.chmod(0o500)
+    else:
+        shared.chmod(0o600)
+        shared.write_bytes(b"corrupt shared object")
+        shared.chmod(0o400)
+    reference.chmod(0o644)
+    reference.write_text(json.dumps(ref))
+    with pytest.raises(preflight.RuntimeImageAttestationError):
+        preflight.resolve_verified_image_reference(
+            reference=reference, receipt=receipt, expected_sha256=_sha(image), store_root=tmp_path / "store",
+        )
+    if tamper == "corrupt":
+        with pytest.raises(preflight.RuntimeImageAttestationError):
+            preflight.create_verified_image_reference(
+                image=image, expected_sha256=_sha(image), store_root=tmp_path / "store",
+                reference=tmp_path / "retry/reference.json", receipt=tmp_path / "retry/receipt.json",
+            )
+        assert not (tmp_path / "retry/reference.json").exists()
+        assert shared.read_bytes() == b"corrupt shared object"  # Never silently repair.
 
 
 def test_finalizer_rejects_registry_shaped_identity_without_observed_attestation() -> None:

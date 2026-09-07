@@ -664,6 +664,11 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     assert "StartLimitIntervalSec=300" in api_unit
     assert "StartLimitBurst=3" in api_unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" in api_unit
+    assert 'BMS_RUNTIME_IMAGE_STORE=' in api_unit
+    assert '/.image-store/references/development.env' in api_unit
+    adapter_unit = units[services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE]
+    assert 'BMS_RUNTIME_IMAGE_STORE=' in adapter_unit
+    assert '/.image-store/references/development.env' in adapter_unit
 
     telemetry_unit = units[services.TELEMETRY_SERVICE]
     assert f"ExecStart={project_root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector" in telemetry_unit

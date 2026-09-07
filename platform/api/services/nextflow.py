@@ -3792,6 +3792,7 @@ def build_nextflow_command(
         "data_root": explicit_data_root,
         "weights_root": explicit_weights_root,
         "container_dir": explicit_container_dir,
+        "runtime_image_store": os.getenv("BMS_RUNTIME_IMAGE_STORE") or str(Path(explicit_container_dir) / ".image-store"),
         "rfd_models": explicit_rfd_models,
         "af2_models": explicit_af2_models,
         "boltz_models": explicit_boltz_models,

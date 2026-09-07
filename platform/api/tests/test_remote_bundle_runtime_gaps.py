@@ -154,6 +154,10 @@ def test_actual_normalized_nextflow_command_omits_unrelated_original_params(pack
     assert '--msa_local_db' not in prepared.envelope.command
     assert '--af2_models' not in prepared.envelope.command
     assert str(roots['data']) not in ' '.join(prepared.envelope.command)
+    store = prepared.envelope.command[prepared.envelope.command.index('--runtime_image_store') + 1]
+    assert store == prepared.envelope.environment['BMS_RUNTIME_IMAGE_STORE']
+    assert store.endswith('/cache/runtime-images')
+    assert '/attempts/' not in store
 
 
 @pytest.mark.parametrize('native,expected', [(None, 'colabfold_api'), ('auto', 'colabfold_api'), ('local', 'local')])
