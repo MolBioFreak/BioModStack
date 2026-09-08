@@ -1,3 +1,7 @@
+import { MsaProviderReadiness } from './MsaProviderReadiness';
+import { hydrateColabfoldMsaSettings, hydrateMsaProvider, hydrateNeurosnapMsaSettings, type SavedMsaProvider } from '../lib/msaPolicy';
+import { ColabfoldMsaControls } from './ColabfoldMsaControls';
+import { NeurosnapMsaControls } from './NeurosnapMsaControls';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -313,9 +317,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
     const [msaUseEnv, setMsaUseEnv] = useState<boolean | undefined>(initialValues?.msa_use_env);
     const [msaNumIterations, setMsaNumIterations] = useState<number | undefined>(initialValues?.msa_num_iterations);
-    const [msaProvider, setMsaProvider] = useState<'local' | 'colabfold_api'>(
-        initialValues?.msa_provider === 'local' ? 'local' : DEFAULT_STRUCTURE_MSA_PROVIDER
+    const [msaProvider, setMsaProvider] = useState<SavedMsaProvider>(
+        hydrateMsaProvider(initialValues?.msa_provider ?? (['none', 'esm'].includes(initialValues?.protenix_msa_backend) ? undefined : initialValues?.protenix_msa_backend) ?? DEFAULT_STRUCTURE_MSA_PROVIDER)
     );
+    const [msaBackend, setMsaBackend] = useState<string>(initialValues?.protenix_msa_backend ?? msaProvider);
+    const [colabfoldMsa, setColabfoldMsa] = useState(() => hydrateColabfoldMsaSettings(initialValues ?? {}));
+    const [neurosnapMsa, setNeurosnapMsa] = useState(() => hydrateNeurosnapMsaSettings(initialValues ?? {}));
     const [msaTargetShardMode, setMsaTargetShardMode] = useState<StructureMsaTargetShardMode>(
         normalizeMsaTargetShardMode(initialValues?.msa_target_shard_mode ?? DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE)
     );
@@ -778,6 +785,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_n_step = protenixNStep;
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
+            params.protenix_msa_backend = msaBackend;
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
@@ -790,6 +798,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             } else {
             Object.assign(params, buildStructureMsaSubmitParams({
                 provider: msaProvider,
+                neurosnap: neurosnapMsa,
+                colabfold: colabfoldMsa,
                 preset: msaPreset,
                 targetShardMode: msaTargetShardMode,
                 targetShards: msaTargetShards,
@@ -851,7 +861,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -1059,6 +1069,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_n_step = protenixNStep;
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
+            params.protenix_msa_backend = msaBackend;
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
@@ -1080,6 +1091,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         if (msaNeeded) {
             Object.assign(params, buildStructureMsaSubmitParams({
                 provider: msaProvider,
+                neurosnap: neurosnapMsa,
+                colabfold: colabfoldMsa,
                 preset: msaPreset,
                 targetShardMode: msaTargetShardMode,
                 targetShards: msaTargetShards,
@@ -2277,11 +2290,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         <label className="text-xs text-[var(--text-secondary)] block mb-1">MSA Provider</label>
                                         <select
                                             value={msaProvider}
-                                            onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
+                                            onChange={(e) => { setMsaProvider(e.target.value as SavedMsaProvider); setMsaBackend(e.target.value); }}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
                                             <option value="local" disabled>Local search disabled — re-preview with API</option>
-                                            <option value="colabfold_api" disabled={numParallelJobs > 1}>
+                                            <option value="auto">Auto → ColabFold API</option>
+                                            <option value="neurosnap_api">Neurosnap API — external keyed service</option>
+                                            <option value="colabfold_api">
                                                 {MSA_POLICY.label}
                                             </option>
                                         </select>
@@ -2291,6 +2306,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     </div>
                                 </div>
 
+                                <MsaProviderReadiness provider={msaProvider} />
+                                {(msaProvider === 'colabfold_api' || msaProvider === 'auto') && <ColabfoldMsaControls value={colabfoldMsa} onChange={value => { setColabfoldMsa(value); if (msaUseEnv !== undefined) setMsaUseEnv(value.colabfold_use_env); }} />}
+                                {msaProvider === 'neurosnap_api' && <NeurosnapMsaControls value={neurosnapMsa} onChange={setNeurosnapMsa} />}
                                 {msaProvider === 'colabfold_api' && (
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5">
                                         <div>
@@ -2372,6 +2390,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     </div>
                                 )}
 
+                                <fieldset disabled={msaProvider !== 'local'}>
+                                <legend>Legacy local-search controls (not API settings; saved values retained for inspection)</legend>
                                 {/* MSA Quality Preset - Primary Setting */}
                                 <div>
                                     <label className="text-sm font-medium text-[var(--text-primary)] block mb-2">MSA Quality Preset</label>
@@ -2549,6 +2569,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         />
                                     </div>
                                 </div>
+                                </fieldset>
                                 <div className="p-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
                                     {msaCacheLoading ? (
                                         <p className="text-xs text-[var(--text-muted)]">Checking local MSA cache...</p>

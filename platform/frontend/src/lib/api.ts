@@ -1375,7 +1375,7 @@ export interface AntibodyCdrIndelConfig {
     allowed_aas?: string[];
     blocked_aas?: string[];
     predictor: 'boltz2' | 'protenix';
-    msa_provider: 'local' | 'colabfold_api';
+    msa_provider: 'local' | 'colabfold_api' | 'neurosnap_api';
 }
 
 export interface LaunchAntibodyIterationRequest {
@@ -1409,7 +1409,7 @@ export interface ManualMutagenesisConfig {
     chain_id?: string;
     mutation_sets: string[];
     predictor: 'boltz2' | 'protenix';
-    msa_provider: 'local' | 'colabfold_api';
+    msa_provider: 'local' | 'colabfold_api' | 'neurosnap_api';
 }
 
 export interface LaunchManualMutagenesisRequest {

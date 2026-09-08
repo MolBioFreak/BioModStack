@@ -1,3 +1,4 @@
+import { hydrateColabfoldMsaSettings, hydrateNeurosnapMsaSettings } from '../lib/msaPolicy';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { BoltzGenRankControls } from './BoltzGenRankControls';
 import { FampnnAnalysisControls, hydrateFampnnOverrides, fampnnOverridePayload } from './FampnnAnalysisControls';
@@ -754,7 +755,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         chain_id: '',
         mutation_sets_text: '',
         predictor: 'protenix' as 'protenix' | 'boltz2',
-        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api',
+        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api' | 'neurosnap_api',
     });
     const [cdrIndelConfig, setCdrIndelConfig] = useState({
         loop_ids: ['H1', 'H2', 'H3'],
@@ -766,7 +767,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         allowed_aas: [] as string[],
         blocked_aas: [] as string[],
         predictor: 'protenix' as 'protenix' | 'boltz2',
-        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api',
+        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api' | 'neurosnap_api',
     });
     const detectedAntibodyType = String(detectedCDRs?.antibody_type || '').trim().toLowerCase();
     const isSingleDomainFramework = frameworkType === 'nanobody'
@@ -1960,6 +1961,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_n_cycle: qualitySettings.protenix_n_cycle,
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
+                    ...hydrateNeurosnapMsaSettings(qualitySettings),
+                    ...hydrateColabfoldMsaSettings(qualitySettings),
                     protenix_use_template: qualitySettings.protenix_use_template,
                     protenix_anchor_target: qualitySettings.protenix_anchor_target,
                     protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
@@ -2828,11 +2831,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             MSA Provider
                                             <select
                                                 value={manualMutagenesisConfig.msa_provider}
-                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, msa_provider: e.target.value as 'local' | 'colabfold_api' }))}
+                                                onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, msa_provider: e.target.value as 'local' | 'colabfold_api' | 'neurosnap_api' }))}
                                                 className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                                             >
                                                 <option value="local" disabled>Local search disabled — re-preview with API</option>
                                                 <option value="colabfold_api">ColabFold Server</option>
+                                                <option value="neurosnap_api">Neurosnap API — external keyed service</option>
                                             </select>
                                         </label>
                                         <label className="lg:col-span-3 text-xs text-slate-400">
@@ -3000,12 +3004,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                         value={cdrIndelConfig.msa_provider}
                                                         onChange={(e) => setCdrIndelConfig((current) => ({
                                                             ...current,
-                                                            msa_provider: e.target.value === 'colabfold_api' ? 'colabfold_api' : 'local',
+                                                            msa_provider: e.target.value as 'local' | 'colabfold_api' | 'neurosnap_api',
                                                         }))}
                                                         className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
                                                     >
                                                         <option value="local" disabled>Local search disabled — re-preview with API</option>
                                                         <option value="colabfold_api">{MSA_POLICY.label}</option>
+                                                <option value="neurosnap_api">Neurosnap API — external keyed service</option>
                                                     </select>
                                                 </label>
                                             </div>
@@ -5650,6 +5655,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protenix_n_cycle: qualitySettings.protenix_n_cycle,
                     protenix_use_msa: qualitySettings.protenix_use_msa,
                     protenix_msa_backend: qualitySettings.protenix_msa_backend,
+                    ...hydrateNeurosnapMsaSettings(qualitySettings),
+                    ...hydrateColabfoldMsaSettings(qualitySettings),
                     protenix_use_template: qualitySettings.protenix_use_template,
                     protenix_anchor_target: qualitySettings.protenix_anchor_target,
                     protenix_anchor_strict: qualitySettings.protenix_anchor_strict,

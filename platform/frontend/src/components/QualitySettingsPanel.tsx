@@ -1,8 +1,11 @@
+import { ColabfoldMsaControls } from './ColabfoldMsaControls';
+import { NeurosnapMsaControls } from './NeurosnapMsaControls';
+import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, hydrateNeurosnapMsaSettings } from '../lib/msaPolicy';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import React, { useEffect, useState } from 'react';
 import { applyPpiFlowStageMode, applyPpiFlowTuningProfile, getPpiFlowOptimizationScenario, normalizePpiFlowTuningProfile } from './qualitySettingsLogic';
 
-export interface QualitySettings {
+export interface QualitySettings extends Partial<ColabfoldMsaSettings> {
     // Local MSA search quality (used by MSA-consuming validators)
     msa_preset: 'maximum' | 'balanced' | 'fast';
 
@@ -34,7 +37,12 @@ export interface QualitySettings {
     protenix_n_step: number;
     protenix_n_cycle: number;
     protenix_use_msa: boolean;
-    protenix_msa_backend: 'auto' | 'local' | 'colabfold_api';
+    protenix_msa_backend: 'auto' | 'local' | 'colabfold_api' | 'neurosnap_api';
+    msa_neurosnap_coverage_percent?: number;
+    msa_neurosnap_identity_percent?: number;
+    msa_neurosnap_max_sequences?: number;
+    msa_neurosnap_force_uppercase?: boolean;
+    msa_neurosnap_pad_sequences?: boolean;
     protenix_use_template: boolean;
     protenix_anchor_target: boolean;
     protenix_anchor_strict: boolean;
@@ -988,7 +996,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
 
     const msaEnabled = structureValidator === 'protenix' ? settings.protenix_use_msa : settings.boltz_use_msa;
     const showProtenixMsaProvider = structureValidator === 'protenix' && settings.protenix_use_msa;
-    const showRemoteMsaHost = showProtenixMsaProvider && settings.protenix_msa_backend !== 'local';
+    const showRemoteMsaHost = showProtenixMsaProvider && ['auto', 'colabfold_api'].includes(settings.protenix_msa_backend);
     const showLocalMsaRuntime = false; // Interim policy: never offer local search controls.
 
     return (
@@ -1533,6 +1541,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             <option value="auto">Auto → ColabFold API — external service</option>
                                             <option value="local" disabled>Local search disabled — re-preview with API</option>
                                             <option value="colabfold_api">{MSA_POLICY.label}</option>
+                                            <option value="neurosnap_api">Neurosnap API — external keyed service</option>
                                         </select>
                                         <p className="mt-1 text-[10px] text-slate-600">
                                             {MSA_POLICY.local_disabled} {MSA_POLICY.disclosure}
@@ -1556,6 +1565,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 </div>
                             )}
 
+                            {showRemoteMsaHost && <ColabfoldMsaControls value={hydrateColabfoldMsaSettings(settings)} onChange={value => onSettingsChange({ ...settings, ...value })} />}
+                            {showProtenixMsaProvider && settings.protenix_msa_backend === 'neurosnap_api' && <NeurosnapMsaControls value={hydrateNeurosnapMsaSettings(settings)} onChange={value => onSettingsChange({ ...settings, ...value })} />}
                             {showLocalMsaRuntime && (
                                 <div className="rounded-lg border border-slate-800 overflow-hidden">
                                     <button
