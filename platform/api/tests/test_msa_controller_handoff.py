@@ -109,33 +109,29 @@ def test_controller_endpoint_substitution_denied(controller):
         prepare(controller, {}, lambda: require_controller_submission('https://alternate.invalid'))
 
 
-def test_controller_service_prepares_and_packages_with_offline_native_adapter(controller, tmp_path, monkeypatch):
-    import prepare_protenix_msa as adapter
-    from services.msa_preparation import prepare_protenix_inputs
+def test_controller_service_packages_shared_api_result(controller, tmp_path, monkeypatch):
+    import hashlib
+    from services import msa_preparation
     source = tmp_path / 'input.json'
     source.write_text(json.dumps([{'name': 'fixture', 'sequences': [
         {'proteinChain': {'sequence': 'AAAA', 'count': 1}}]}]))
     calls = []
-    def native(input_json, output_json, work_dir, host):
-        require_controller_submission(host)
-        calls.append(1)
-        alignment = tmp_path / 'native-fixture.a3m'
-        alignment.write_text('>q\nAAAA\n>fixture\nAA-A\n')
-        payload = json.loads(input_json.read_text())
-        payload[0]['sequences'][0]['proteinChain']['unpairedMsaPath'] = str(alignment)
-        output_json.write_text(json.dumps(payload))
-        return output_json
-    monkeypatch.setattr(adapter, 'prepare_with_colabfold_api', native)
-    monkeypatch.setattr('services.msa_preparation.qualify_protenix_controller_runtime',
-                        lambda _: {'version': 'offline-fixture-not-installed', 'msa_search_sha256': 'f'*64})
+    alignment = tmp_path / 'api-fixture.a3m'
+    alignment.write_text('>q\nAAAA\n>fixture\nAA-A\n')
+    def api_result(*, sequences, params):
+        calls.append(sequences)
+        return {'provider': 'colabfold_api', 'request_digest': 'fixture',
+                'cache_hit': False, 'provenance': {'fixture': True},
+                'artifacts': [{'chain_index': 0, 'role': 'unpaired', 'path': str(alignment),
+                               'sha256': hashlib.sha256(alignment.read_bytes()).hexdigest()}]}
+    monkeypatch.setattr(msa_preparation, 'prepare_model_msa', api_result)
     destination = tmp_path / 'prepared'
-    result = prepare_protenix_inputs(controller, source, destination, {'protenix_msa_backend': 'auto'})
+    result = msa_preparation.prepare_protenix_inputs(controller, source, destination,
+                                                     {'protenix_msa_backend': 'auto'})
     assert result['settings']['protenix_msa_backend'] == 'colabfold_api'
     assert result['artifacts'][0]['role'] == 'unpaired'
-    assert prepare_protenix_inputs(controller, source, destination, {'protenix_msa_backend': 'auto'}) == result
-    assert calls == [1]
-    with pytest.raises(ValueError, match='no execution mapping'):
-        prepare_protenix_inputs(controller, source, destination, {'msa_num_iterations': 7})
+    assert calls == [['AAAA']]
+    assert result['provenance']['backend'] == 'colabfold_api'
 
 
 def test_real_protenix_handoff_relocated_and_consumed(tmp_path, monkeypatch):

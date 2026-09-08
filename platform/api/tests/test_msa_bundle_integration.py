@@ -134,11 +134,13 @@ runpy.run_path(script,run_name='__main__')
         hydrate_prepared_protenix_task(payload, source, sha)
 
 
-def test_missing_runtime_fails_before_bundle_ready(offline_bundle, monkeypatch):
+def test_provider_failure_blocks_bundle_ready(offline_bundle, monkeypatch):
     roots, job, target, command, cached = offline_bundle
     cached.unlink()
-    monkeypatch.delenv('BMS_MSA_CONTROLLER_CONFIG', raising=False)
-    with pytest.raises(bundle.RemoteBundleError, match='runtime unavailable or unpinned'):
+    def unavailable(**kwargs):
+        raise RuntimeError('MSA provider unavailable: offline failure fixture')
+    monkeypatch.setattr(msa_preparation, 'prepare_model_msa', unavailable)
+    with pytest.raises(bundle.RemoteBundleError, match='MSA provider unavailable'):
         bundle.prepare_remote_bundle(job=job, target=target, command=command)
     assert not Path(target.remote_root).exists()
     assert not list((roots['data']/'remote-execution').rglob('execution-envelope.json'))
@@ -166,43 +168,25 @@ def test_no_msa_does_not_prepare(offline_bundle, monkeypatch):
     assert not result.input_transfers
 
 
-def test_offline_native_generation_is_packaged_by_bundle(offline_bundle, tmp_path, monkeypatch):
+def test_offline_api_generation_is_packaged_by_bundle(offline_bundle, tmp_path, monkeypatch):
     _, job, target, command, cached = offline_bundle
     cached.unlink()
-    config = tmp_path/'controller-config.json'
-    config.write_text(json.dumps({'role': 'msa_controller',
-        'machine_id': Path('/etc/machine-id').read_text().strip(),
-        'qualified_single_egress': True, 'egress_identity': 'offline-fixture-NOT-qualified',
-        'state_dir': str(tmp_path/'controller-state')}))
-    monkeypatch.setenv('BMS_MSA_CONTROLLER_CONFIG', str(config))
-    monkeypatch.setattr(msa_preparation, 'qualify_protenix_controller_runtime',
-                        lambda _: {'version': 'offline-fixture-not-installed', 'msa_search_sha256': 'f'*64})
-    import prepare_protenix_msa as adapter
-    from biomodstack_msa_controller import require_controller_submission
     calls = []
-    def offline_native(input_json, output_json, work_dir, host):
-        require_controller_submission(host)
-        calls.append(host)
-        payload = json.loads(input_json.read_text())
-        msa = work_dir/'native.a3m'
+    def offline_provider(*, sequences, params):
+        calls.append(sequences)
+        msa = tmp_path / 'fixture-provider.a3m'
         msa.write_bytes(A3M)
-        payload[0]['sequences'][0]['proteinChain']['unpairedMsaPath'] = str(msa)
-        output_json.write_text(json.dumps(payload))
-        return output_json
-    monkeypatch.setattr(adapter, 'prepare_with_colabfold_api', offline_native)
+        return {'provider': 'colabfold_api', 'request_digest': 'fixture-not-service',
+                'cache_hit': False, 'provenance': {'fixture': True},
+                'artifacts': [{'chain_index': 0, 'role': 'unpaired', 'path': str(msa),
+                               'sha256': hashlib.sha256(A3M).hexdigest()}]}
+    monkeypatch.setattr(msa_preparation, 'prepare_model_msa', offline_provider)
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
-    assert calls == ['https://api.colabfold.com']  # fixture call, no network
+    assert calls == [[SEQUENCE]]
     receipt = json.loads((prepared.input_transfers[0].source/'msa-inputs.json').read_text())
-    assert receipt['provenance']['controller_runtime']['version'] == 'offline-fixture-not-installed'
-    assert not (tmp_path/'controller-state/active.json').exists()
+    assert receipt['provenance']['backend'] == 'colabfold_api'
+    assert receipt['provenance']['fixture'] is True
     assert not Path(target.remote_root).exists()
-
-
-def test_runtime_pin_rejects_uninstalled_adapter(tmp_path):
-    config = tmp_path/'pin.json'
-    config.write_text(json.dumps({'protenix_runtime': {'version': 'not-installed', 'msa_search_sha256': 'f'*64}}))
-    with pytest.raises(RuntimeError, match='runtime unavailable or unpinned'):
-        msa_preparation.qualify_protenix_controller_runtime(config)
 
 
 def test_native_compile_rejects_batch_and_preserves_seeds():

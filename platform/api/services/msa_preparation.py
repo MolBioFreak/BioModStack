@@ -3,7 +3,7 @@
 Internal service boundary, deliberately not a worker-accessible search endpoint.
 Remote bundle compilation calls this boundary before transport and stages the
 portable directory as mandatory input. Public preparation remains unavailable
-without deployment-owned controller qualification and an installed runtime pin.
+without the shared provider configuration and cache boundary.
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ for path in (ROOT, ROOT / 'scripts'):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from biomodstack_msa_controller import PUBLIC_HOST, prepare
 from biomodstack_msa_handoff import digest, package_alignments, resolve_alignments
 from biomodstack_msa_policy import apply_msa_policy
 
@@ -59,33 +58,6 @@ def materialize_protenix_inputs(source: Path, output_json: Path, settings: dict)
     return output_json
 
 
-def qualify_protenix_controller_runtime(config_path: Path | None) -> dict:
-    """Check deployment-owned in-process native adapter pin before queue entry.
-
-    A SIF or a worker environment is not an in-process controller runtime.
-    No installation, subprocess, provider import or public request is performed.
-    """
-    import importlib.metadata
-    import importlib.util
-    try:
-        if config_path is None or not config_path.is_absolute():
-            raise ValueError('BMS_MSA_CONTROLLER_CONFIG must be an absolute deployment-owned path')
-        config = json.loads(config_path.read_text())
-        pin = config['protenix_runtime']
-        version = importlib.metadata.version('protenix')
-        spec = importlib.util.find_spec('runner.msa_search')
-        if (not isinstance(pin, dict) or not pin.get('version') or
-                version != pin['version'] or spec is None or not spec.origin or
-                digest(Path(spec.origin).read_bytes()) != pin.get('msa_search_sha256')):
-            raise ValueError('native adapter version/digest does not match deployment pin')
-        return {'version': version, 'msa_search_sha256': pin['msa_search_sha256']}
-    except (OSError, KeyError, ValueError, ImportError, TypeError) as exc:
-        raise RuntimeError('Controller Protenix MSA runtime unavailable or unpinned: configure '
-                           'BMS_MSA_CONTROLLER_CONFIG with protenix_runtime.version and '
-                           'protenix_runtime.msa_search_sha256 for the installed in-process '
-                           'runner.msa_search. Worker public-API fallback is forbidden.') from exc
-
-
 def prepare_remote_protenix_inputs(params: dict, destination: Path) -> dict:
     """Called by immutable remote bundle compilation before any transport.
 
@@ -103,7 +75,8 @@ def prepare_remote_protenix_inputs(params: dict, destination: Path) -> dict:
     with tempfile.TemporaryDirectory(prefix='.msa-input-', dir=destination.parent) as scratch:
         scratch = Path(scratch)
         cache = str(params.get('msa_cache_dir') or '')
-        if cache:
+        from services.msa_provider_setup import selected_provider
+        if cache and selected_provider(params) == 'colabfold_api':
             hydrate_chains_from_shared_cache(payload, scratch / 'cache', cache)
         input_json = scratch / 'input.json'
         input_json.write_text(json.dumps(payload))
@@ -115,46 +88,54 @@ def prepare_remote_protenix_inputs(params: dict, destination: Path) -> dict:
         return prepare_protenix_inputs(config, input_json, destination, settings)
 
 
-def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict) -> dict:
-    """Prepare using the real model adapter on the bound controller computer.
+def prepare_model_msa(*, sequences: list[str], params: dict) -> dict:
+    """All model adapters share the same provider client and persistent cache."""
+    from biomodstack_msa_api import prepare_msa
+    from services.msa_provider_setup import (
+        cache_root, credential_file, provider_settings, selected_provider,
+    )
+    provider = selected_provider(params)
+    return prepare_msa(
+        sequences=sequences, provider=provider, settings=provider_settings(params),
+        cache_root=cache_root(),
+        credential_file=credential_file() if provider == "neurosnap_api" else None,
+        cache_only=params.get("msa_cache_only") in (True, "true", "1", 1),
+    )
 
-    Supplied complete alignments bypass external preparation. No-MSA requests
-    remain the responsibility of the existing model compiler, not this service.
+
+def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict) -> dict:
+    """Package supplied inputs or cached API alignments; no inference install.
+
+    The legacy positional config_path is retained for caller compatibility, not
+    used as a fabricated runtime/egress qualification. Provider configuration is
+    deployment-owned via the shared setup boundary.
     """
-    from prepare_protenix_msa import load_json, all_protein_chains_have_msa, prepare_with_colabfold_api
+    from prepare_protenix_msa import load_json, all_protein_chains_have_msa, iter_protein_chains
     effective = apply_msa_policy('protenix', settings)
     payload = load_json(input_json)
     if all_protein_chains_have_msa(payload):
         return export_protenix_inputs(payload, destination, effective, {'backend': 'supplied'})
-    if effective.get('msa_cache_only') in (True, 'true', 1) or effective.get('protenix_use_msa') in (False, 'false', 0):
-        raise ValueError('Preparation cannot search for cache-only or no-MSA requests')
+    if effective.get('protenix_use_msa') in (False, 'false', 0):
+        raise ValueError('Preparation cannot search for no-MSA requests')
     if effective.get('protenix_msa_backend') in {'none', 'esm'}:
         raise ValueError('Non-search Protenix backend must use its model compiler')
-    runtime = qualify_protenix_controller_runtime(config_path)
-    supported_search_keys = {'msa_provider', 'protenix_msa_backend', 'protenix_use_msa', 'msa_cache_only'}
-    unsupported = sorted(key for key in effective
-                         if ('msa' in key.lower() or key.startswith('colabfold_'))
-                         and key not in supported_search_keys)
-    if unsupported:
-        raise ValueError('Controller Protenix adapter has no execution mapping for MSA settings: '
-                         + ', '.join(unsupported))
-    request = {'model': 'protenix', 'input_sha256': digest(input_json.read_bytes()), 'settings': effective,
-               'controller_runtime': runtime, 'destination': str(destination.resolve())}
-
-    def operation():
-        import tempfile
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        # Provider scratch and absolute model-native paths are not delivery inputs.
-        with tempfile.TemporaryDirectory(prefix='.msa-provider-', dir=destination.parent) as scratch:
-            work = Path(scratch)
-            prepared = prepare_with_colabfold_api(input_json, work / 'prepared.json', work, PUBLIC_HOST)
-            return export_protenix_inputs(load_json(prepared), destination, effective,
-                                         {'backend': 'colabfold_api', 'service': PUBLIC_HOST,
-                                          'controller_runtime': runtime, 'provider_database_version': None})
-
-    result = prepare(config_path, request, operation)
-    # Completed replay is not proof that local files remain intact.
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix='.msa-verify-', dir=destination.parent) as scratch:
-        materialize_protenix_inputs(destination, Path(scratch) / 'verified.json', effective)
-    return result
+    chains = [chain for _, _, chain in iter_protein_chains(payload)]
+    if not chains:
+        raise ValueError('MSA preparation requires protein chains')
+    result = prepare_model_msa(sequences=[chain['sequence'] for chain in chains], params=effective)
+    # Fill only missing roles; explicitly supplied native data remains unchanged.
+    for artifact in result['artifacts']:
+        index = artifact['chain_index']
+        if type(index) is not int or not 0 <= index < len(chains):
+            raise ValueError('MSA provider returned an invalid chain identity')
+        key = {'unpaired': 'unpairedMsaPath', 'paired': 'pairedMsaPath'}.get(artifact['role'])
+        if key is None:
+            raise ValueError('MSA provider returned an invalid alignment role')
+        path = Path(artifact['path'])
+        if digest(path.read_bytes()) != artifact['sha256']:
+            raise ValueError('Cached MSA artifact changed before model packaging')
+        if not chains[index].get(key):
+            chains[index][key] = str(path)
+    return export_protenix_inputs(payload, destination, effective,
+        {**result['provenance'], 'backend': result['provider'],
+         'request_digest': result['request_digest'], 'cache_hit': result['cache_hit']})

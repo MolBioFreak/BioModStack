@@ -39,6 +39,13 @@ from paths import get_results_dir, get_msa_cache_dir
 router = APIRouter(prefix="/api/msa", tags=["msa"])
 
 
+@router.get("/providers")
+async def get_msa_provider_readiness():
+    """Non-submitting provider/cache configuration for browser and agent setup."""
+    from services.msa_provider_setup import provider_readiness
+    return provider_readiness()
+
+
 _msa_server_status_cache: dict[str, dict] = {}
 _msa_server_status_cache_time: dict[str, float] = {}
 _MSA_SERVER_STATUS_CACHE_TTL_SECONDS = 5.0

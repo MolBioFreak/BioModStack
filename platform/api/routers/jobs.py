@@ -6024,21 +6024,21 @@ async def _create_job(
     # Local search is disabled; API batch admission remains fail-closed.
     default_msa_provider = _default_msa_provider_for_job(job_data.model_id, job_data.mode)
     msa_provider = str(job_data.params.get("msa_provider", default_msa_provider) or default_msa_provider).strip().lower()
-    if msa_provider not in {"", "colabfold_api"}:
+    if msa_provider not in {"", "colabfold_api", "neurosnap_api"}:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid msa_provider '{msa_provider}'. Enabled search backend: colabfold_api; local search is disabled.",
+            detail=f"Invalid msa_provider '{msa_provider}'. Enabled search backends: colabfold_api, neurosnap_api; local search is disabled.",
         )
     if msa_provider:
         job_data.params["msa_provider"] = msa_provider
 
     from services.msa_policy import requires_msa_search
-    if msa_provider == "colabfold_api" and requires_msa_search(job_data.model_id, job_data.params):
+    if msa_provider in {"colabfold_api", "neurosnap_api"} and requires_msa_search(job_data.model_id, job_data.params):
         if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "msa_provider=colabfold_api is currently supported only for single-job "
+                    "API MSA preparation is supported for "
                     "structure launches (boltz2/rf3/protenix predict|complex, "
                     "boltz_cp_experimental design)."
                 ),
@@ -6046,13 +6046,13 @@ async def _create_job(
         if mutagenesis_variants:
             raise HTTPException(
                 status_code=422,
-                detail="msa_provider=colabfold_api is not yet supported for mutagenesis batch jobs.",
+                detail="API MSA preparation does not use the legacy local mutagenesis batch launcher.",
             )
-        if num_jobs > 1:
-            raise HTTPException(
-                status_code=422,
-                detail="msa_provider=colabfold_api currently requires num_parallel_jobs=1.",
-            )
+        from services.msa_provider_setup import preflight_msa_provider
+        try:
+            preflight_msa_provider(job_data.model_id, job_data.params)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     
     validated_variant_params = None
     if is_mutagenesis and scientific_revision is not None:
