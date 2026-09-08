@@ -11,10 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import tempfile
 from pathlib import Path
 
-from lib.shared_runtime_images import publish_image
+from lib.shared_runtime_images import _publish_image_locked
+from lib.runtime_image_lifecycle import transaction, commit_release
 
 ALLOWED_KEYS = frozenset({
     "BMS_NGS_RUNTIME_SIF", "BMS_CM_CONFORNETS_CONTAINER_PATH",
@@ -36,31 +36,14 @@ def publish_references(store_root: Path, lane: str, images: dict) -> Path:
             raise ValueError("each image requires exactly source and sha256")
         if not all(isinstance(value[k], str) and value[k] for k in value):
             raise ValueError("image source and sha256 must be nonempty strings")
-    lines = ["# Managed shared runtime references; image digest is encoded in each path.",
-             f"BMS_RUNTIME_IMAGE_STORE={store_root}"]
-    for key, value in sorted(images.items()):
-        image = publish_image(Path(value["source"]), store_root, value["sha256"])
-        lines.append(f"{key}={image}")
-    directory = store_root / "references"
-    directory.mkdir(mode=0o700, exist_ok=True)
-    if directory.is_symlink():
-        raise ValueError("runtime references directory must not be a symlink")
-    target = directory / f"{lane}.env"
-    fd, temporary = tempfile.mkstemp(prefix=f".{lane}-", dir=directory)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write("\n".join(lines) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
-        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return target
+    # One fence spans object acquisition and reference commit: retirement cannot
+    # interleave in the gap. Legacy callers still receive a lane .env Path.
+    with transaction(store_root) as root:
+        manifest = {}
+        for key, value in sorted(images.items()):
+            image = _publish_image_locked(Path(value["source"]), root, value["sha256"])
+            manifest[key] = {"sha256": image.parent.name, "path": str(image)}
+        return commit_release(root, lane, manifest)
 
 
 def main() -> None:
