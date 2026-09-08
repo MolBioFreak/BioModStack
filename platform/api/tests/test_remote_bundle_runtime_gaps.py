@@ -191,12 +191,11 @@ def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     assert effective.get('protenix_msa_backend') == 'colabfold_api', {
         key: value for key, value in effective.items() if 'msa' in key
     }
-    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv)
-    sources = {transfer.origin.name for transfer in prepared.runtime_transfers}
-    assert sources == {'protenix.sif', 'frustrampnn.sif', 'protenix', 'r1'}
-    assert '--msa_local_db' not in prepared.envelope.command
-    assert prepared.envelope.command[prepared.envelope.command.index('--protenix_msa_backend') + 1] == 'colabfold_api'
-    assert prepared.input_transfers == ()
+    # Do not silently drop an enabled stage or feed an alias to its strict registry.
+    assets = bundle._runtime_assets('protenix', 'predict', effective)
+    assert {'containers/protenix.sif', 'containers/frustrampnn.sif'} <= {relative for _, relative in assets}
+    with pytest.raises(bundle.RemoteBundleError, match='exact-path registry and no-follow'):
+        bundle.prepare_remote_bundle(job=job, target=target, command=argv)
 
 
 @pytest.mark.asyncio

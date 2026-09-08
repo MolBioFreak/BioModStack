@@ -51,6 +51,7 @@ class PreparedRemoteBundle:
     source_transfer: TransferPlan
     runtime_transfers: tuple[TransferPlan, ...]
     input_transfers: tuple[TransferPlan, ...]
+    runtime_images: tuple[CacheTransferArtifact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,7 @@ class CacheTransferArtifact:
     size_bytes: int
     mode: int
     role: str
+    aliases: tuple[str, ...] = ()
 
 
 def uncached_runtime_transfers(bundle: PreparedRemoteBundle) -> tuple[TransferPlan, ...]:
@@ -74,7 +76,9 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
 
     Relocated support-python contains destination-dependent bytes and symlinks;
     it deliberately stays on the verified legacy transport path. Regular source,
-    workflow, SIF and model files share the same byte-addressed cache protocol.
+    workflow and model files share the ordinary byte-addressed cache protocol.
+    SIF identities/aliases come from the authenticated manifest and use the worker's
+    shared-image store, never ordinary mutable materializations.
     """
     result: list[CacheTransferArtifact] = []
     for record in bundle.envelope.files:
@@ -105,7 +109,7 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
             source=source, remote_destination=destination, sha256=record.sha256,
             size_bytes=record.size_bytes, mode=record.mode, role=relative.parts[0],
         ))
-    return tuple(result)
+    return tuple(result) + tuple(getattr(bundle, "runtime_images", ()))
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -257,6 +261,11 @@ def _under(path: Path, root: Path) -> bool:
         return False
 
 
+def _is_runtime_image(path: Path, relative: str) -> bool:
+    """Only SIF runtime leaves use immutable references, never inputs/weights trees."""
+    return relative.lower().endswith(".sif") and path.is_file()
+
+
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tuple[Path, str]]:
     container_root = get_container_dir().resolve()
     weights_root = get_weights_root().resolve()
@@ -316,7 +325,7 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         normalized_key = str(key).lower()
         if not any(
             token in normalized_key
-            for token in ("container_path", "_container", "checkpoint_path", "runtime_lock", "repo_path")
+            for token in ("container_path", "_container", "runtime_sif", "checkpoint_path", "runtime_lock", "repo_path")
         ):
             continue
         if isinstance(value, str) and value.startswith("/"):
@@ -350,6 +359,9 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
     for path, relative in assets:
         if not path.exists():
             raise RemoteBundleError(f"Required runtime asset is unavailable: {path}")
+        if _is_runtime_image(path, relative) and not any(
+                _under(path, root) for root in (container_root, weights_root, data_root)):
+            raise RemoteBundleError(f"Runtime image alias escapes managed storage: {path}")
         existing = deduped.get(relative)
         if existing is not None and existing != path:
             raise RemoteBundleError(f"Runtime package destination collision: {relative}")
@@ -437,12 +449,23 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
         if value.startswith("--"):
             raw = command[index + 1] if index + 1 < len(command) and not command[index + 1].startswith("--") else True
             params[value[2:]] = {"true": True, "false": False}.get(raw, raw) if isinstance(raw, str) else raw
+    from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, resolve_ont_workflow_alias
+    if resolve_ont_workflow_alias(model_id) in CANONICAL_ONT_WORKFLOWS:
+        # Dorado preflight rejects symlink runtime_sif. Pin the supported typed
+        # selector explicitly rather than letting Nextflow choose our name alias.
+        if not params.get("dorado_runtime_sif"):
+            selected = os.getenv("BMS_NGS_RUNTIME_SIF") or str(get_container_dir() / "dorado.sif")
+            command = [*command, "--dorado_runtime_sif", selected]
+            params["dorado_runtime_sif"] = selected
+        selected = params["dorado_runtime_sif"]
+        if not isinstance(selected, str) or not Path(selected).is_absolute():
+            raise RemoteBundleError("Dorado runtime SIF selector must be an absolute managed path")
     omitted: set[str] = set()
     if model_id.lower() == "protenix":
         omitted.update({"rfd_models", "af2_models", "boltz_models", "alphafold_params"})
         omitted.update(key for key in params if key.startswith(("bcp_", "esmf_", "plr_", "md_", "rfantibody_")))
         omitted.update(key for key in params
-                       if any(token in key for token in ("container_path", "_container", "checkpoint_path", "runtime_lock", "repo_path"))
+                       if any(token in key for token in ("container_path", "_container", "runtime_sif", "checkpoint_path", "runtime_lock", "repo_path"))
                        and not key.startswith(("protenix_", "frustrampnn_")))
         backend = str(params.get("protenix_msa_backend", "auto")).lower()
         provider = str(params.get("msa_provider", "")).strip().lower()
@@ -625,15 +648,38 @@ def prepare_remote_bundle(
                 raise RemoteBundleError(f'Controller MSA preparation failed before remote staging: {exc}') from exc
             command = [*command, '--protenix_prepared_msa_dir', str(prepared_msa),
                        '--protenix_prepared_msa_sha256', _sha256_file(prepared_msa / 'msa-inputs.json')]
+    if str(job.model_id).lower() == "frustrampnn" or effective_params.get("run_frustrampnn") is True:
+        raise RemoteBundleError(
+            "Remote shared-image execution is not supported for FrustraMPNN: its exact-path "
+            "registry and no-follow consumer need a canonical-image selector. "
+            "Cache-only provisioning remains available; no partial scientific launch was performed."
+        )
+
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
     runtime_records: list[RemoteFileRecord] = []
     runtime_transfers: list[TransferPlan] = []
     runtime_path_map: dict[str, str] = {}
+    images: dict[str, CacheTransferArtifact] = {}
+    manifest_destination = ""
+    manifest_sha256 = ""
     remote_runtime = f"{remote_attempt}/materialized/runtime"
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
+        if _is_runtime_image(path, relative):
+            # Preserve semantic aliases, but transfer/publish only one object per digest.
+            source = path.resolve()
+            record = _record_file(source, f"runtime/{relative}", "runtime")
+            shared = f"{remote_root}/cache/runtime-images/objects/sha256/{record.sha256}/runtime.sif"
+            previous = images.get(record.sha256)
+            aliases = tuple(sorted(set((previous.aliases if previous else ()) + (destination,))))
+            images[record.sha256] = CacheTransferArtifact(
+                previous.source if previous else source, shared, record.sha256,
+                record.size_bytes, 0o400, "image", aliases)
+            runtime_path_map[str(path)] = shared
+            runtime_path_map[str(source)] = shared
+            continue
         if relative == "support-python":
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
@@ -641,6 +687,19 @@ def prepare_remote_bundle(
         runtime_records.extend(_records_for_source(source, f"runtime/{relative}", "runtime"))
         runtime_transfers.append(TransferPlan(source, destination, origin=path))
         runtime_path_map[str(path.resolve())] = destination
+    if images:
+        manifest = staging_root / ".bms-runtime-images.json"
+        manifest.write_bytes(_canonical_bytes({
+            "schema": "bms.runtime-image-references.v1",
+            "runtime_root": remote_runtime,
+            "images": [{"sha256": image.sha256, "size_bytes": image.size_bytes,
+                        "aliases": list(image.aliases)} for image in sorted(images.values(), key=lambda x: x.sha256)],
+        }))
+        manifest_destination = f"{remote_runtime}/{manifest.name}"
+        manifest_record = _record_file(manifest, f"runtime/{manifest.name}", "runtime")
+        manifest_sha256 = manifest_record.sha256
+        runtime_records.append(manifest_record)
+        runtime_transfers.append(TransferPlan(manifest, manifest_destination, origin=manifest))
     runtime_identity = hashlib.sha256(
         _canonical_bytes([record.model_dump(mode="json") for record in runtime_records])
     ).hexdigest()
@@ -685,6 +744,15 @@ def prepare_remote_bundle(
         translated_command[0] = f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{remote_runtime}/support-python/venv/bin/python"
+
+    if images:
+        # The normal worker authenticates this small manifest as a regular bundle file.
+        # This stdlib-only boundary verifies immutable objects and all semantic aliases
+        # before exec; no SIF or external symlink is smuggled through file records.
+        translated_command = ["python3", f"{remote_source}/platform/api/tools/bms_artifact_cache.py",
+                              "--root", f"{remote_root}/cache/artifacts/v1",
+                              "--execute-runtime", manifest_destination,
+                              "--manifest-sha256", manifest_sha256, "--", *translated_command]
 
     result_contract = resolve_job_result_contract(job)
     assignment = (
@@ -767,4 +835,5 @@ def prepare_remote_bundle(
         source_transfer=TransferPlan(source_root, remote_source),
         runtime_transfers=tuple(runtime_transfers),
         input_transfers=tuple(input_transfers),
+        runtime_images=tuple(sorted(images.values(), key=lambda image: image.sha256)),
     )

@@ -13,7 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
@@ -50,7 +50,10 @@ def artifact(value):
         raise ValueError('invalid_digest')
     if type(size) is not int or size < 0:
         raise ValueError('invalid_size')
-    return {'sha256': digest, 'size_bytes': size}
+    kind = value.get('kind')
+    if kind not in (None, 'runtime_image'):
+        raise ValueError('invalid_artifact_kind')
+    return {'sha256': digest, 'size_bytes': size, **({'kind': kind} if kind else {})}
 
 
 def regular(fd):
@@ -78,6 +81,106 @@ class Cache:
         for name in ('objects/sha256', 'locks', 'incoming'):
             with directory(self.root / name, create=True):
                 pass
+
+    @property
+    def image_store(self):
+        # Same worker-local authority used by scientific runtime consumers.
+        if self.root.parts[-3:] != ('cache', 'artifacts', 'v1'):
+            raise ValueError('invalid_worker_cache_root')
+        return Path(self.root.parent.parent / 'runtime-images')
+
+    def image_path(self, item):
+        return self.image_store / 'objects/sha256' / item['sha256'] / 'runtime.sif'
+
+    def verify_runtime(self, value):
+        item = artifact(value)
+        info = runtime_images().verify_image(self.image_path(item), item['sha256'])
+        if info['size'] != item['size_bytes']:
+            raise ValueError('runtime_image_size_mismatch')
+        return self.image_path(item)
+
+    def probe_runtime(self, item):
+        # Only absence of the digest DIRECTORY means missing. Incomplete/corrupt
+        # published objects must fail, never trigger replacement of runnable bytes.
+        parent = self.image_path(item).parent
+        with directory(parent.parent, create=True) as fd:
+            try:
+                os.stat(parent.name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return {**item, 'state': 'missing'}
+        self.verify_runtime(item)
+        return {**item, 'state': 'cache_hit'}
+
+    def ingest_runtime(self, item, source):
+        if self.probe_runtime(item)['state'] == 'cache_hit':
+            return {**item, 'state': 'ready', 'cache_hit': True}
+        # One private upload -> one independently copied immutable object. Never
+        # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
+        with directory(source.parent) as parent:
+            fd = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            try:
+                if not verified(fd, item):
+                    raise ValueError('runtime_image_identity_mismatch')
+            finally:
+                os.close(fd)
+        runtime_images().publish_image(Path(source), self.image_store, item['sha256'])
+        self.verify_runtime(item)
+        return {**item, 'state': 'ready', 'cache_hit': False}
+
+    def runtime_alias(self, value, destination, runtime_root, *, check=False):
+        item = artifact(value)
+        target = self.verify_runtime(item)
+        root, destination = PurePosixPath(str(runtime_root)), PurePosixPath(str(destination))
+        attempts = self.root.parent.parent.parent / 'attempts'
+        relative = root.relative_to(attempts)
+        if (not root.is_absolute() or '..' in root.parts or len(relative.parts) != 3
+                or relative.parts[1:] != ('materialized', 'runtime')
+                or str(uuid.UUID(relative.parts[0])) != relative.parts[0]
+                or '..' in destination.parts or destination == root
+                or not destination.is_relative_to(root)):
+            raise ValueError('unsafe_runtime_alias')
+        with directory(destination.parent, create=not check) as parent:
+            # Exact, controller-derived target only, not arbitrary external links.
+            if check:
+                if os.readlink(destination.name, dir_fd=parent) != str(target):
+                    raise ValueError('runtime_alias_mismatch')
+            else:
+                os.symlink(str(target), destination.name, dir_fd=parent)
+                os.fsync(parent)
+        return {**item, 'state': 'ready'}
+
+    def materialize_entry(self, row, destination_root):
+        if row['artifact'].get('kind') == 'runtime_image':
+            item = artifact(row['artifact'])
+            if str(self.image_path(item)) != row['destination']:
+                raise ValueError('runtime_image_destination_mismatch')
+            self.verify_runtime(item)
+            for alias in row['aliases']:
+                self.runtime_alias(item, alias, row['runtime_root'])
+            return {**item, 'state': 'ready'}
+        return self.materialize(row['artifact'], row['destination'], destination_root, row.get('mode', 0o644))
+
+    def execute_runtime(self, manifest, command, expected_sha256):
+        path = Path(manifest)
+        with directory(path.parent) as parent:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            with os.fdopen(fd, 'rb') as stream:
+                regular(stream.fileno())
+                payload = stream.read(8 * 1024 * 1024 + 1)
+                if len(payload) > 8 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != expected_sha256:
+                    raise ValueError('runtime_manifest_identity_mismatch')
+                references = json.loads(payload)
+        if references['schema'] != 'bms.runtime-image-references.v1':
+            raise ValueError('invalid_runtime_manifest')
+        if path != Path(references['runtime_root']) / '.bms-runtime-images.json':
+            raise ValueError('invalid_runtime_manifest_path')
+        for row in references['images']:
+            self.verify_runtime(row)
+            for alias in row['aliases']:
+                self.runtime_alias(row, alias, references['runtime_root'], check=True)
+        if not command:
+            raise ValueError('missing_runtime_command')
+        os.execvp(command[0], command)
 
     def emit(self, item, state, **kw):
         self.events({**item, 'state': state, 'timestamp': time.time(), **kw})
@@ -118,6 +221,8 @@ class Cache:
 
     def probe(self, value):
         item = artifact(value)
+        if item.get('kind') == 'runtime_image':
+            return self.probe_runtime(item)
         with self.locked(item), self.objects(item) as parent:
             state = self.state(parent, item)
         self.emit(item, state)
@@ -158,6 +263,8 @@ class Cache:
         source = PurePosixPath(str(source))
         if '..' in source.parts or not source.is_relative_to(self.root / 'incoming'):
             raise ValueError('source_outside_incoming')
+        if item.get('kind') == 'runtime_image':
+            return self.ingest_runtime(item, source)
         with self.locked(item), self.objects(item) as parent:
             state = self.state(parent, item)
             self.emit(item, state)
@@ -248,6 +355,8 @@ class Cache:
 
     def materialize(self, value, destination, destination_root, mode=0o644):
         item = artifact(value)
+        if item.get('kind') == 'runtime_image':
+            raise ValueError('runtime_images_require_references')
         destination, root = PurePosixPath(str(destination)), PurePosixPath(str(destination_root))
         if (not root.is_absolute() or '..' in root.parts or '..' in destination.parts
                 or not destination.is_relative_to(root) or destination == root
@@ -269,11 +378,36 @@ class Cache:
         return {**item, 'state': 'ready'}
 
 
+def runtime_images():
+    """Load the exact shared stdlib helper: installed peer or committed source."""
+    import importlib.util
+    peer = Path(__file__).with_name('shared_runtime_images.py')
+    if not peer.exists():
+        peer = Path(__file__).resolve().parents[3] / 'scripts/lib/shared_runtime_images.py'
+    # Shared publisher dependencies (including lifecycle) live beside that module.
+    # The peer directory is either the authenticated helper generation or source archive.
+    if str(peer.parent) not in sys.path:
+        sys.path.insert(0, str(peer.parent))
+    spec = importlib.util.spec_from_file_location('_bms_shared_runtime_images', peer)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("shared_runtime_image_helper_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', required=True)
     parser.add_argument('--events-jsonl')
+    parser.add_argument('--execute-runtime')
+    parser.add_argument('--manifest-sha256')
+    parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.execute_runtime:
+        command = args.command[1:] if args.command[:1] == ['--'] else args.command
+        Cache(args.root).execute_runtime(args.execute_runtime, command, args.manifest_sha256)
+        return
     def events(value):
         if args.events_jsonl:
             path = PurePosixPath(args.events_jsonl)
@@ -298,7 +432,7 @@ def main():
     elif action == 'materialize_links':
         result = {'artifacts': [cache.materialize_link(row['artifact'], row['destination'], request['destination_root'], row['target']) for row in request['entries']]}
     elif action == 'materialize_many':
-        result = {'artifacts': [cache.materialize(row['artifact'], row['destination'], request['destination_root'], row.get('mode', 0o644)) for row in request['entries']]}
+        result = {'artifacts': [cache.materialize_entry(row, request['destination_root']) for row in request['entries']]}
     elif action == 'materialize':
         result = cache.materialize(request['artifact'], request['destination'], request['destination_root'], request.get('mode', 0o644))
     else:

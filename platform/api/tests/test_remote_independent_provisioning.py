@@ -77,7 +77,9 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
             assert len(uploads) == expected_uploads
             for artifact in inventory['artifacts']:
                 digest = artifact['sha256']
-                obj = tmp_path / 'worker/cache/artifacts/v1/objects/sha256' / digest[:2] / digest
+                obj = (tmp_path / 'worker/cache/runtime-images/objects/sha256' / digest / 'runtime.sif'
+                       if artifact['name'].endswith('.sif') else
+                       tmp_path / 'worker/cache/artifacts/v1/objects/sha256' / digest[:2] / digest)
                 assert hashlib.sha256(obj.read_bytes()).hexdigest() == digest
             if expected_uploads == 2 and len([r for r in calls if r['action'] == 'probe']) >= 4:
                 obj.chmod(0o600)
@@ -122,12 +124,13 @@ async def test_readback_detects_post_ingest_corruption(assets, local_transport, 
     async def corrupt_after_ingest(**kwargs):
         receipts = await original(**kwargs)
         digest = receipts[0]['sha256']
-        obj = Path(connection.remote_root) / 'cache/artifacts/v1/objects/sha256' / digest[:2] / digest
+        obj = Path(connection.remote_root) / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif'
         obj.chmod(0o600)
         obj.write_bytes(b'corrupt after ingest')
         return receipts
     monkeypatch.setattr(cache, '_cache_artifacts', corrupt_after_ingest)
-    with pytest.raises(ValueError, match='verification failed'):
+    import subprocess
+    with pytest.raises(subprocess.CalledProcessError):
         await cache.provision_cache(connection=connection, entries=entries,
             operation_id=str(uuid.uuid4()), progress=cache._noop, check_fence=cache._noop)
 
