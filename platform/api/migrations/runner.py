@@ -477,14 +477,6 @@ def _validate_applied_migration_content(conn: sqlite3.Connection) -> None:
                 )
             continue
         observed = _migration_content_sha256(migration)
-        # Migration 45's only approved evolution removes singleton-index
-        # creation; migration 46 removes that index on deployed databases.
-        # Accept only this exact byte pair, retaining the historical ledger
-        # checksum rather than blessing arbitrary edits or rewriting history.
-        if (version == 45
-                and recorded == "4a7e8cc1b0708d5a8c8dce438fa970ddd821ba9c06f9de624192e43ecacb44d7"
-                and observed == "81e46510c46e09021e69c716f77ffd3e5663ed32c7c98d0ea055235987eac859"):
-            continue
         if recorded != observed:
             raise RuntimeError(
                 f"schema migration content changed after application for version {version}"

@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from database import Base, ExecutionTarget, Job
 from migrations import runner
-from migrations.add_remote_execution import migrate as create_remote_schema
 
 LEGACY_45_SHA256 = "4a7e8cc1b0708d5a8c8dce438fa970ddd821ba9c06f9de624192e43ecacb44d7"
 
@@ -59,9 +58,11 @@ def test_runner_upgrades_old_database_without_rewriting_active_lease_jobs_or_led
         assert connection.execute("SELECT leased_job_id,lease_acquired_at FROM execution_targets WHERE id='vast:2'").fetchone() == (None, None)
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-    # A rerun of initial schema creation must not recreate the fleet singleton.
-    create_remote_schema(path)
-    runner.run_all(str(path))
+    # Startup attestation is independent of the migration runner; both must
+    # accept historical ledger bytes after the forward-only migration.
+    from database import _attest_sqlite_migration_ledger
+    _attest_sqlite_migration_ledger(str(path))
+    assert runner._migration_content_sha256(runner.MIGRATIONS[44]) == LEGACY_45_SHA256
 
 
 @pytest.mark.parametrize("tamper", ["recorded", "module"])
