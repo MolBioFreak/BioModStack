@@ -52,6 +52,9 @@ def test_full_retirement_preserves_exact_survivor(files, cas, remove_directory):
         os.link(survivor, survivor.with_suffix(".retained-hardlink"))
     old = survivor.stat()
     parent = survivor.parent.stat()
+    if remove_directory:
+        source.chmod(0o400)
+        source.parent.chmod(0o500)
     p = life.plan_legacy_retirement(store, source, [survivor], digest,
                                     remove_directory=remove_directory)
     source_inode = source.stat().st_ino
@@ -69,6 +72,32 @@ def test_full_retirement_preserves_exact_survivor(files, cas, remove_directory):
         assert survivor.parent.stat() == parent
     with pytest.raises(FAIL):
         life.purge_legacy_retirement(store, receipt, **AUTH)
+
+
+@pytest.mark.parametrize('stage', ['rename', 'unlink'])
+def test_readonly_snapshot_mode_restored_on_mutation_failure(files, monkeypatch, stage):
+    source, survivor, store, digest = files
+    source.chmod(0o400)
+    source.parent.chmod(0o500)
+    p = plan(files, remove_directory=True)
+    receipt = life.apply_legacy_retirement(store, p, **AUTH) if stage == 'unlink' else None
+    original = getattr(os, stage)
+    def fail_selected(path, *args, **kwargs):
+        if str(path) == 'runtime.sif' or str(path).startswith('.quarantine-legacy-'):
+            fd = kwargs.get('src_dir_fd', kwargs.get('dir_fd'))
+            assert isinstance(fd, int)
+            assert os.fstat(fd).st_mode & 0o777 == 0o700
+            raise OSError('injected mutation failure')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(os, stage, fail_selected)
+    with pytest.raises(OSError, match='injected mutation failure'):
+        if stage == 'rename':
+            life.apply_legacy_retirement(store, p, **AUTH)
+        else:
+            life.purge_legacy_retirement(store, receipt, **AUTH)
+    assert source.parent.stat().st_mode & 0o777 == 0o500
+    assert survivor.read_bytes() == b'temporary image bytes' * 1000
+    assert (source if receipt is None else Path(receipt['quarantine'])).exists()
 
 
 @pytest.mark.parametrize("target", ["source", "survivor"])

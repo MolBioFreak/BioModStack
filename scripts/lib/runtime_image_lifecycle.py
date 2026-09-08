@@ -447,6 +447,26 @@ def _save_legacy_receipt(root, receipt):
                  json.dumps(receipt, sort_keys=True, indent=2) + "\n")
 
 
+@contextmanager
+def _legacy_snapshot_directory_write(parent, *, remove_directory):
+    """Temporarily unlock only an explicitly retired private snapshot directory.
+
+    The caller has pinned/validated the external snapshot parent and its sole
+    file. Published object/survivor directories never reach this context. Restore
+    the exact mode on success or failure before recording/rechecking identity.
+    """
+    mode = os.fstat(parent).st_mode & 0o7777
+    unlock = remove_directory and not (mode & 0o200)
+    if unlock:
+        os.fchmod(parent, mode | 0o200)
+    try:
+        yield
+    finally:
+        if unlock:
+            os.fchmod(parent, mode)
+            os.fsync(parent)
+
+
 def apply_legacy_retirement(root, plan, *, maintenance_authorization):
     """Revalidate exact reviewed plan; same-parent rename, zero bytes reclaimed.
 
@@ -480,8 +500,9 @@ def apply_legacy_retirement(root, plan, *, maintenance_authorization):
             _check_file(source, *opened)
             if current["remove_directory"] and set(os.listdir(parent)) != {source.name}:
                 raise Error("unknown private snapshot directory entries")
-            os.rename(source.name, quarantine.name, src_dir_fd=parent, dst_dir_fd=parent)
-            os.fsync(parent)
+            with _legacy_snapshot_directory_write(parent, remove_directory=current["remove_directory"]):
+                os.rename(source.name, quarantine.name, src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
         with _file(quarantine) as opened:
             observed = _legacy_identity(quarantine, opened, current["digest"])
         # Rename changes ctime only; record the new stable identity for purge.
@@ -530,13 +551,15 @@ def purge_legacy_retirement(root, receipt, *, maintenance_authorization):
             raise Error("source reappeared; refusing purge")
         if plan["remove_directory"] and entries != {quarantine.name}:
             raise Error("unknown private snapshot directory entries")
-        # Pin the outer directory before unlink as well. Never chmod anything.
+        # Pin the outer directory before unlink. Only the explicitly retired
+        # private snapshot parent may be temporarily unlocked; never survivors.
         outer = stack.enter_context(_directory(source.parent.parent))
         _check_directory(source.parent, parent)
         _recheck_legacy_survivors(kept)
         _check_file(quarantine, *opened)
-        os.unlink(quarantine.name, dir_fd=parent)
-        os.fsync(parent)
+        with _legacy_snapshot_directory_write(parent, remove_directory=plan["remove_directory"]):
+            os.unlink(quarantine.name, dir_fd=parent)
+            os.fsync(parent)
         if plan["remove_directory"]:
             _check_directory(source.parent.parent, outer)
             _check_directory(source.parent, parent)
