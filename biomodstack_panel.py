@@ -133,12 +133,12 @@ SETUP_HELP = {
     "configure": "Save first-install settings from a settings JSON file. Existing installations cannot be replaced here; use Storage and compute for supported edits. Preview settings first. No services start.",
     "recover": "Finish an interrupted settings update using the recovery ID from its report. Do not use this for package installation.",
     "provision-plan": "List the files and tools required by the selected models. Enter model IDs below. Nothing is downloaded.",
-    "verify": "Check whether the selected models have the files and tools they need. Enter model IDs below. No downloads or jobs are started.",
+    "verify": "Check a previous model installation. First run Preview model requirements for the same models. Enter the model installation ID from the earlier installation report (not the preview). No downloads or jobs are started.",
 }
 SETUP_INPUTS = {
     "discover": ("models",), "plan": ("models",),
     "configure-preview": ("document",), "configure": ("document",),
-    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models",),
+    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models", "model_operation", "plan_digest"),
 }
 SETUP_MUTATIONS = {
     "python-bootstrap": "Install the required Python packages? An internet connection may be needed. This does not download models or start services.",
@@ -148,7 +148,7 @@ SETUP_MUTATIONS = {
 }
 
 
-def build_setup_command(action: str, *, document: str = "", operation: str = "", models: str = "") -> list[str]:
+def build_setup_command(action: str, *, document: str = "", operation: str = "", models: str = "", plan_digest: str = "") -> list[str]:
     """Strict argv adapter; all validation and installation remain in the CLI."""
     if action not in SETUP_ACTIONS:
         raise ValueError("Choose an action from the Setup menu.")
@@ -169,6 +169,12 @@ def build_setup_command(action: str, *, document: str = "", operation: str = "",
             raise ValueError("Enter the model IDs to check under Options, separated by commas.")
         for model in selected:
             command += ["--model", model]
+    if action == "verify":
+        if len(plan_digest) != 64 or any(c not in "0123456789abcdef" for c in plan_digest):
+            raise ValueError("Run Preview model requirements first. It fills in the model check ID for the same model selection.")
+        if not operation:
+            raise ValueError("Enter the model installation ID (operation_id) from its installation report. If models have not been installed, use Preview model requirements instead.")
+        command += ["--expect-plan-sha256", plan_digest, "--operation-id", operation]
     return command
 
 
@@ -819,6 +825,8 @@ class BioModStackPanel(Adw.Application):
             ("document", "Settings file (JSON)", "Full path to an existing settings file, starting with /"),
             ("operation", "Recovery ID", "Copy operation_id from the interrupted settings report"),
             ("models", "Model IDs (comma-separated)", "For example: protenix, boltz2"),
+            ("model_operation", "Model installation ID", "Copy operation_id from the model installation report, not a settings report"),
+            ("plan_digest", "Model check ID", "Filled by Preview model requirements; or copy its plan_digest"),
         ):
             entry = Gtk.Entry(hexpand=True)
             entry.set_placeholder_text(hint)
@@ -866,9 +874,11 @@ class BioModStackPanel(Adw.Application):
     def _on_setup_action(self, button):
         action = self.setup_action_combo.get_active_id()
         try:
-            command = build_setup_command(action, **{
-                key: entry.get_text().strip() for key, entry in self.setup_entries.items()
-            })
+            values = {key: entry.get_text().strip() for key, entry in self.setup_entries.items()}
+            model_operation = values.pop("model_operation")
+            if action == "verify":
+                values["operation"] = model_operation
+            command = build_setup_command(action, **values)
         except ValueError as exc:
             self._setup_feedback("Not started. Check the required input.", str(exc))
             return
@@ -1043,6 +1053,8 @@ class BioModStackPanel(Adw.Application):
                 try:
                     report = json.loads(result.stdout)
                     detail = str(report.get("status", "Report available"))
+                    if report.get("action") == "provision-plan" and report.get("plan_digest"):
+                        self.setup_entries["plan_digest"].set_text(str(report["plan_digest"]))
                 except (ValueError, AttributeError):
                     detail = "See Details"
                 outcome = "Completed" if result.returncode == 0 else "Needs attention"

@@ -41,7 +41,11 @@ def test_recovery_and_scientific_checks_require_explicit_selection(monkeypatch):
         with pytest.raises(ValueError):
             module.build_setup_command(action)
     assert module.build_setup_command("recover", operation="reviewed-op")[-2:] == ["--operation-id", "reviewed-op"]
-    assert module.build_setup_command("verify", models="protenix")[-2:] == ["--model", "protenix"]
+    command = module.build_setup_command("verify", models="protenix", operation="existing-model-install", plan_digest="a" * 64)
+    assert command[4:] == ["--model", "protenix", "--expect-plan-sha256", "a" * 64, "--operation-id", "existing-model-install"]
+    for values in ({"models": "protenix"}, {"models": "protenix", "plan_digest": "a" * 64}):
+        with pytest.raises(ValueError):
+            module.build_setup_command("verify", **values)
     assert set(module.SETUP_MUTATIONS) == {"python-bootstrap", "frontend-bootstrap", "configure", "recover"}
 
 
@@ -83,7 +87,7 @@ def test_every_action_explains_inputs_and_scope(monkeypatch):
     assert set(module.SETUP_INPUTS) <= set(module.SETUP_ACTIONS)
     assert "Existing installations cannot be replaced" in module.SETUP_HELP["configure"]
     assert module.SETUP_INPUTS["recover"] == ("operation",)
-    assert module.SETUP_INPUTS["verify"] == ("models",)
+    assert module.SETUP_INPUTS["verify"] == ("models", "model_operation", "plan_digest")
     assert all(text.strip() for text in module.SETUP_HELP.values())
 
 

@@ -54,6 +54,9 @@ for action in module.SETUP_ACTIONS:
     # pretend host configuration. Valid configuration acceptance belongs in a sandbox.
     panel.setup_entries['document'].set_text('/nonexistent-bms-smoke/settings.json')
     panel.setup_entries['models'].set_text('protenix')
+    if action == 'verify':
+        assert len(panel.setup_entries['plan_digest'].get_text()) == 64
+        panel.setup_entries['model_operation'].set_text('nonexistent-bms-smoke-model-install')
     panel.setup_run_button.emit('clicked')
     assert 'Working' in text()
     assert not panel.setup_run_button.get_sensitive()
