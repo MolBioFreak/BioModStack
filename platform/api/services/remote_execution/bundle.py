@@ -641,6 +641,8 @@ def prepare_remote_bundle(
             and not effective_params.get('complex_json_path')):
         raise RemoteBundleError('Controller-prepared or supplied Boltz MSA inputs are required before remote bundling')
     if str(job.model_id).lower() == 'protenix':
+        if effective_params.get('pred_method', 'protenix') != 'protenix':
+            raise RemoteBundleError('A mixed model invocation requires separate model-native MSA preparation')
         search = (str(effective_params.get('protenix_use_msa', True)).lower() != 'false'
                   and effective_params.get('protenix_msa_backend') not in {'none', 'esm'})
         if search and not effective_params.get('protenix_prepared_msa_dir'):

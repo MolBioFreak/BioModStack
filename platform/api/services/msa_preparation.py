@@ -103,6 +103,28 @@ def prepare_model_msa(*, sequences: list[str], params: dict) -> dict:
     )
 
 
+def _protenix_paired_headers(data: bytes) -> bytes:
+    """Pinned Protenix bd54a05 native row-group header convention.
+
+    colab_request_utils.py:327-336 encodes paired row indices in UniRef
+    headers for get_species_ids. These are native opaque pairing groups,
+    not claims of biological taxonomy. Raw provider bytes remain cached.
+    """
+    lines = []
+    row = -1
+    for line in data.decode('ascii').splitlines():
+        if line.startswith('>'):
+            row += 1
+            if row == 0:
+                line = '>query'
+            else:
+                parts = line[1:].split('\t')
+                parts[0] = f'{parts[0]}_{row}/'
+                line = '>' + '\t'.join(parts) + f'_{row}'
+        lines.append(line)
+    return ('\n'.join(lines) + '\n').encode('ascii')
+
+
 def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict) -> dict:
     """Package supplied inputs or cached API alignments; no inference install.
 
@@ -123,19 +145,28 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
     if not chains:
         raise ValueError('MSA preparation requires protein chains')
     result = prepare_model_msa(sequences=[chain['sequence'] for chain in chains], params=effective)
-    # Fill only missing roles; explicitly supplied native data remains unchanged.
-    for artifact in result['artifacts']:
-        index = artifact['chain_index']
-        if type(index) is not int or not 0 <= index < len(chains):
-            raise ValueError('MSA provider returned an invalid chain identity')
-        key = {'unpaired': 'unpairedMsaPath', 'paired': 'pairedMsaPath'}.get(artifact['role'])
-        if key is None:
-            raise ValueError('MSA provider returned an invalid alignment role')
-        path = Path(artifact['path'])
-        if digest(path.read_bytes()) != artifact['sha256']:
-            raise ValueError('Cached MSA artifact changed before model packaging')
-        if not chains[index].get(key):
-            chains[index][key] = str(path)
-    return export_protenix_inputs(payload, destination, effective,
-        {**result['provenance'], 'backend': result['provider'],
-         'request_digest': result['request_digest'], 'cache_hit': result['cache_hit']})
+    import tempfile
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.native-pairing-', dir=destination.parent) as scratch:
+        # Fill only missing roles; explicitly supplied native data remains unchanged.
+        for artifact in result['artifacts']:
+            index = artifact['chain_index']
+            if type(index) is not int or not 0 <= index < len(chains):
+                raise ValueError('MSA provider returned an invalid chain identity')
+            key = {'unpaired': 'unpairedMsaPath', 'paired': 'pairedMsaPath'}.get(artifact['role'])
+            if key is None:
+                raise ValueError('MSA provider returned an invalid alignment role')
+            path = Path(artifact['path'])
+            if digest(path.read_bytes()) != artifact['sha256']:
+                raise ValueError('Cached MSA artifact changed before model packaging')
+            if artifact['role'] == 'paired' and result['provider'] == 'colabfold_api':
+                converted = Path(scratch) / f'chain-{index}-paired.a3m'
+                converted.write_bytes(_protenix_paired_headers(path.read_bytes()))
+                path = converted
+            if not chains[index].get(key):
+                chains[index][key] = str(path)
+        return export_protenix_inputs(payload, destination, effective,
+            {**result['provenance'], 'backend': result['provider'],
+             'request_digest': result['request_digest'], 'cache_hit': result['cache_hit'],
+             'paired_conversion': 'protenix-bd54a05-native-row-group-headers-v1'
+                 if any(a['role'] == 'paired' for a in result['artifacts']) and result['provider'] == 'colabfold_api' else None})

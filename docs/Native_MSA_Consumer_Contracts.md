@@ -77,7 +77,8 @@ labels or bare `TaxID=`**. Unrecognized paired headers get empty species IDs.
 Native `protenix/web_service/colab_request_utils.py` lines 314–336 rewrites
 ColabFold paired headers with a row-index suffix before writing `pairing.a3m`.
 Thus preserving raw shared-client paired bytes into `pairedMsaPath` is not proof
-of correct complex pairing. A controller adapter must apply that native
-row-group/header contract (explicitly recorded as synthetic pairing labels, not
-biological taxonomy), or reject incompatible headers. This follow-up does not
-edit the separately owned Protenix preparation/client policy boundary.
+of correct complex pairing. The integrated controller adapter applies that native
+row-group/header convention and records `protenix-bd54a05-native-row-group-headers-v1`
+as the conversion identity; cached provider bytes remain immutable. A regression
+checks matching row-group extraction and unchanged alignment rows. This is native
+input-contract proof, not live complex inference acceptance.

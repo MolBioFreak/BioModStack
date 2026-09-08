@@ -194,7 +194,7 @@ def test_neurosnap_alias_defaults_and_bounds():
     assert api.validate_settings("colabfold_api", {})["use_env"] is True
 
 
-@pytest.mark.parametrize("sequences", [[], ["short"], [SEQ.lower()], [SEQ + "\n"], [SEQ, SEQ2], ["A" * 25001]])
+@pytest.mark.parametrize("sequences", [[], ["short"], [SEQ.lower()], [SEQ + "\n"], [SEQ] * 11, ["A" * 25001]])
 def test_neurosnap_sequence_bounds_before_submit(tmp_path, setup, sequences):
     transport = FixtureHTTP()
     with pytest.raises(api.MSAAPIError):
@@ -550,3 +550,45 @@ def test_public_cache_only_contract(tmp_path, setup, monkeypatch):
     monkeypatch.setenv("BMS_MSA_API_STATE_ROOT", str(tmp_path / "public-authority"))
     with pytest.raises(api.MSAAPIError, match="no verified"):
         api.prepare_msa(**setup, cache_only=True)
+
+
+def test_neurosnap_independent_chains_share_cache_and_preserve_identity(tmp_path, setup):
+    second = [response("fixture-second"), response("completed"),
+              response({"out": [["native.a3m", "1 KB"]]}), response(a3m(SEQ2, "query"))]
+    transport = FixtureHTTP(*ns_success(), *second)
+    c = client(tmp_path, transport)
+    args = {**setup, "sequences": [SEQ, SEQ2, SEQ]}
+    result = c.prepare_msa(**args)
+    assert [a['chain_index'] for a in result['artifacts']] == [0, 1, 2]
+    assert result['artifacts'][0]['sha256'] == result['artifacts'][2]['sha256']
+    assert len([call for call in transport.calls if call[0] == 'POST']) == 2
+    replay = c.prepare_msa(**{**args, 'cache_only': True, 'credential_file': None})
+    assert replay['cache_hit'] is True
+    assert replay['artifacts'] == result['artifacts']
+    assert len([call for call in transport.calls if call[0] == 'POST']) == 2
+
+
+def test_colabfold_short_sequence_does_not_inherit_neurosnap_minimum(tmp_path, setup):
+    seq = 'ACDEFGHIK'
+    transport = FixtureHTTP(*cf_success([seq]))
+    result = client(tmp_path, transport).prepare_msa(**{**cf_args(setup), 'sequences': [seq]})
+    assert result['artifacts']
+    with pytest.raises(api.MSAAPIError, match='20-25000'):
+        api.effective_settings('neurosnap_api', {}, [seq])
+
+
+def test_native_mmseqs_tab_separated_hit_headers_are_preserved():
+    # Synthetic fixture shaped after the actual live MMseqs hit metadata header.
+    data = f'>101\n{SEQ}\n>fixture_hit\t115\t0.894\t3.629E-27\t0\t19\n{SEQ}\n'.encode()
+    assert api.validate_a3m(data, SEQ) == 2
+    with pytest.raises(api.MSAAPIError, match='header'):
+        api.validate_a3m(data.replace(b'fixture_hit', b'bad\x01header'), SEQ)
+
+
+def test_cached_input_is_available_while_another_submission_owns_lock(tmp_path, setup):
+    c = client(tmp_path, FixtureHTTP(*ns_success()))
+    first = c.prepare_msa(**setup)
+    with c._authority('neurosnap_api'):
+        cached = c.prepare_msa(**{**setup, 'cache_only': True, 'credential_file': None})
+    assert cached['cache_hit'] is True
+    assert cached['artifacts'] == first['artifacts']

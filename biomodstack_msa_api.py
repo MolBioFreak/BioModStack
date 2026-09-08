@@ -95,8 +95,9 @@ def effective_settings(provider: str, settings: dict, sequences: list[str]) -> d
     for seq in sequences:
         if not isinstance(seq, str) or not re.fullmatch(r"[ACDEFGHIKLMNPQRSTVWYBXZJUO]+", seq):
             raise MSAAPIError("protein sequences must be uppercase, ungapped residue strings")
-        if not 20 <= len(seq) <= 25000:
-            raise MSAAPIError("supported sequence length is 20-25000 residues")
+        minimum = 20 if provider == 'neurosnap_api' else 1
+        if not minimum <= len(seq) <= 25000:
+            raise MSAAPIError(f"supported sequence length is {minimum}-25000 residues")
     aliases = {
         "msa_neurosnap_coverage_percent": "coverage",
         "msa_neurosnap_identity_percent": "identity_threshold",
@@ -251,7 +252,8 @@ def validate_a3m(data: bytes, sequence: str) -> int:
         if not line:
             continue
         if line.startswith(">"):
-            if len(line) == 1 or any(ord(c) < 32 for c in line):
+            # Native MMseqs headers contain tab-separated hit metadata.
+            if len(line) == 1 or any(ord(c) < 32 and c != '\t' for c in line):
                 raise MSAAPIError("invalid A3M header")
             if current is not None:
                 rows.append(current)
@@ -597,15 +599,39 @@ class MSAClient:
     def prepare_msa(self, *, sequences: list[str], provider: str, settings: dict,
                     cache_root: Path, credential_file: Path | None = None,
                     cache_only: bool = False) -> dict:
+        if provider == 'neurosnap_api' and isinstance(sequences, list) and len(sequences) > 1:
+            # Independent unpaired chains use documented monomer jobs. This
+            # preserves per-chain cache/recovery and avoids guessing a provider
+            # multi-query pairing/output convention. Repeated chains reuse cache.
+            if len(sequences) > 10:
+                raise MSAAPIError('sequences must contain 1-10 protein chains')
+            normalized = [effective_settings(provider, settings, [seq]) for seq in sequences]
+            results = [self.prepare_msa(sequences=[seq], provider=provider, settings=settings,
+                        cache_root=cache_root, credential_file=credential_file, cache_only=cache_only)
+                       for seq in sequences]
+            artifacts = [{**artifact, 'chain_index': index}
+                         for index, result in enumerate(results) for artifact in result['artifacts']]
+            identity = dict(provider=provider, sequences=sequences, settings=normalized[0],
+                            chain_requests=[result['request_digest'] for result in results])
+            return dict(provider=provider, request_digest=_hash(_json(identity)), artifacts=artifacts,
+                        cache_hit=all(result['cache_hit'] for result in results),
+                        provenance=dict(service=SERVICES[provider], effective_settings=normalized[0],
+                            operation='independent-unpaired-chain-searches',
+                            chain_receipts=[result['provenance'] for result in results],
+                            database_version=None, live_qualification='not_asserted'))
         identity, digest = self._identity(sequences, provider, settings)
         settings = identity["settings"]
         root = _directory(cache_root)
+        entry = _directory(root / provider / digest)
+        # Published artifacts are immutable and revalidated; a cache hit does
+        # not need the submission lock or a provider credential.
+        if (entry / "manifest.json").exists():
+            return self._replay(entry, identity, digest)
+        if cache_only:
+            raise MSAAPIError("no verified provider/settings/query-bound cached MSA")
         with self._authority(provider) as active:
-            entry = _directory(root / provider / digest)
             if (entry / "manifest.json").exists():
                 return self._replay(entry, identity, digest)
-            if cache_only:
-                raise MSAAPIError("no verified provider/settings/query-bound cached MSA")
             state_path = entry / "state.json"
             state = _load(state_path) if state_path.exists() else dict(identity=identity, request_digest=digest)
             if state.get("identity") != identity or state.get("request_digest") != digest:

@@ -151,7 +151,7 @@ def test_real_protenix_handoff_relocated_and_consumed(tmp_path, monkeypatch):
     a3m.unlink()
     runtime_input = materialize_protenix_inputs(worker, worker / 'input.json', settings)
     output = worker / 'output.json'
-    monkeypatch.setattr(adapter, 'parse_args', lambda: SimpleNamespace(backend='auto', input_json=str(runtime_input),
+    monkeypatch.setattr(adapter, 'parse_args', lambda: SimpleNamespace(prepared_inputs=None, prepared_sha256=None, backend='auto', input_json=str(runtime_input),
         output_json=str(output), out_dir=str(worker / 'work'), cache_dir=None, report_json=None))
     monkeypatch.setattr(adapter, 'prepare_with_colabfold_api', lambda **kw: pytest.fail('worker search'))
     adapter.main()

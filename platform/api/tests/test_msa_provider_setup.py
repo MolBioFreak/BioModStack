@@ -100,10 +100,29 @@ def test_shared_provider_result_reaches_native_model_and_relocates(tmp_path, mon
     worker = tmp_path / 'worker'
     destination.rename(worker)
     cached.unlink()
-    output = preparation.materialize_protenix_inputs(worker, worker / 'input.json', settings)
+    output = preparation.materialize_protenix_inputs(worker, worker / 'input.json', receipt['settings'])
     model = json.loads(output.read_text())
     assert model[0]['modelSeeds'] == [7, 19]
     chain = model[0]['sequences'][0]['proteinChain']
     assert chain['count'] == 2
     assert Path(chain['unpairedMsaPath']).read_bytes() == raw
     assert 'pairedMsaPath' not in chain
+
+
+def test_protenix_paired_conversion_matches_pinned_native_group_convention():
+    import re
+    first = b'>101\nAAAA\n>UniRef100_A0A_TEST\t90\t0.9\nAA-A\n'
+    second = b'>102\nCCCC\n>UniRef100_B0B_TEST\t80\t0.8\nCC-C\n'
+    # Use normal UniRef accessions (no embedded suffix) as provided by MMseqs.
+    first = first.replace(b'A0A_TEST', b'A0A')
+    second = second.replace(b'B0B_TEST', b'B0B')
+    converted = [preparation._protenix_paired_headers(data) for data in (first, second)]
+    groups = []
+    for data in converted:
+        header = data.decode().splitlines()[2][1:]
+        group = re.match(r'^UniRef100_[^_]+_([^_/]+)', header).group(1)
+        groups.append(group)
+        assert data.decode().splitlines()[0] == '>query'
+    assert groups == ['1', '1']
+    assert converted[0].splitlines()[3] == b'AA-A'
+    assert converted[1].splitlines()[3] == b'CC-C'

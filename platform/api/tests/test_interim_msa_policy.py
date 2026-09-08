@@ -106,15 +106,17 @@ def test_api_failure_propagates_without_local_or_empty_fallback(tmp_path, monkey
     source.write_text(json.dumps([{'name': 'test', 'sequences': [{'proteinChain': {'sequence': 'AAAA', 'count': 1}}]}]))
     output = tmp_path / 'output.json'
     monkeypatch.setattr(prep, 'parse_args', lambda: SimpleNamespace(
+        prepared_inputs=None, prepared_sha256=None,
         backend='auto', input_json=str(source), output_json=str(output), out_dir=str(tmp_path / 'work'),
         cache_dir=None, report_json=None, small_max_tasks=1, small_max_protein_chains=1,
         small_max_total_residues=1, colabfold_api_host='unchanged-provider'))
+    from services import msa_preparation
     def fail(**kwargs):
         raise failure
-    monkeypatch.setattr(prep, 'prepare_with_colabfold_api', fail)
+    monkeypatch.setattr(msa_preparation, 'prepare_model_msa', fail)
     monkeypatch.setattr(prep, 'prepare_with_local_msa', lambda **kwargs: pytest.fail('local fallback'))
     with pytest.raises(type(failure), match=str(failure)):
-        prep.main()
+        msa_preparation.prepare_protenix_inputs(None, source, tmp_path / 'prepared', {})
     assert not output.exists()
 
 
@@ -131,6 +133,7 @@ def test_existing_alignment_reused_without_search(tmp_path, monkeypatch):
     source.write_text(json.dumps(payload))
     output = tmp_path / 'output.json'
     monkeypatch.setattr(prep, 'parse_args', lambda: SimpleNamespace(
+        prepared_inputs=None, prepared_sha256=None,
         backend='auto', input_json=str(source), output_json=str(output),
         out_dir=str(tmp_path / 'work'), cache_dir=None, report_json=None))
     monkeypatch.setattr(prep, 'prepare_with_colabfold_api', lambda **kwargs: pytest.fail('search'))

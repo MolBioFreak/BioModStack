@@ -20,6 +20,19 @@ SEQUENCE = 'MKTLLILAVVAAALA'
 A3M = f'>query\n{SEQUENCE}\n>UniRef_fixture TaxID=9606\nMKTLL-LAVVAAALA\n>environment_fixture\nMKTLLILAVVAA-LA\n'.encode()
 
 
+def controller_bundle(*, job, target, command, **kwargs):
+    # Exercise the same preparation-before-command-sealing boundary as launch.
+    from services.model_msa_handoff import prepare_launch_msa
+    compiled, params = bundle.compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    if not params.get('protenix_prepared_msa_dir'):
+        destination = Path(job.output_dir) / 'prepared-msa'
+        effective = prepare_launch_msa(str(job.model_id), params, destination)
+        for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
+            if effective.get(key):
+                compiled += ['--' + key, str(effective[key])]
+    return bundle.prepare_remote_bundle(job=job, target=target, command=compiled, **kwargs)
+
+
 @pytest.fixture
 def offline_bundle(tmp_path, monkeypatch):
     def deny(*args, **kwargs):
@@ -70,7 +83,7 @@ def offline_bundle(tmp_path, monkeypatch):
 
 def test_bundle_relocated_real_consumer_without_public_outbound(offline_bundle, tmp_path):
     roots, job, target, command, cached = offline_bundle
-    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    prepared = controller_bundle(job=job, target=target, command=command)
     envelope = prepared.envelope
     inputs = [record for record in envelope.files if record.role == 'input']
     assert len(inputs) == 3  # portable receipt, pairing query and unpaired hits
@@ -140,13 +153,13 @@ def test_provider_failure_blocks_bundle_ready(offline_bundle, monkeypatch):
     def unavailable(**kwargs):
         raise RuntimeError('MSA provider unavailable: offline failure fixture')
     monkeypatch.setattr(msa_preparation, 'prepare_model_msa', unavailable)
-    with pytest.raises(bundle.RemoteBundleError, match='MSA provider unavailable'):
-        bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    with pytest.raises(RuntimeError, match='MSA provider unavailable'):
+        controller_bundle(job=job, target=target, command=command)
     assert not Path(target.remote_root).exists()
     assert not list((roots['data']/'remote-execution').rglob('execution-envelope.json'))
 
 
-@pytest.mark.parametrize('mutation', ['complex', 'mixed', 'caller_transport'])
+@pytest.mark.parametrize('mutation', ['mixed', 'caller_transport'])
 def test_unsupported_paths_fail_before_transport(offline_bundle, mutation):
     _, job, target, command, _ = offline_bundle
     if mutation == 'complex':
@@ -155,8 +168,8 @@ def test_unsupported_paths_fail_before_transport(offline_bundle, mutation):
         command[command.index('--pred_method')+1] = 'boltz_protenix'
     else:
         command += ['--protenix_prepared_msa_dir', '/foreign']
-    with pytest.raises(bundle.RemoteBundleError, match='controller-owned|supports only'):
-        bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    with pytest.raises(bundle.RemoteBundleError, match='mixed|unavailable'):
+        controller_bundle(job=job, target=target, command=command)
     assert not Path(target.remote_root).exists()
 
 
@@ -164,7 +177,7 @@ def test_no_msa_does_not_prepare(offline_bundle, monkeypatch):
     _, job, target, command, cached = offline_bundle
     cached.unlink()
     monkeypatch.setattr(msa_preparation, 'prepare_remote_protenix_inputs', lambda *_: pytest.fail('No-MSA must not prepare'))
-    result = bundle.prepare_remote_bundle(job=job, target=target, command=command+['--protenix_use_msa', 'false'])
+    result = controller_bundle(job=job, target=target, command=command+['--protenix_use_msa', 'false'])
     assert not result.input_transfers
 
 
@@ -181,7 +194,7 @@ def test_offline_api_generation_is_packaged_by_bundle(offline_bundle, tmp_path, 
                 'artifacts': [{'chain_index': 0, 'role': 'unpaired', 'path': str(msa),
                                'sha256': hashlib.sha256(A3M).hexdigest()}]}
     monkeypatch.setattr(msa_preparation, 'prepare_model_msa', offline_provider)
-    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    prepared = controller_bundle(job=job, target=target, command=command)
     assert calls == [[SEQUENCE]]
     receipt = json.loads((prepared.input_transfers[0].source/'msa-inputs.json').read_text())
     assert receipt['provenance']['backend'] == 'colabfold_api'
@@ -198,7 +211,7 @@ def test_native_compile_rejects_batch_and_preserves_seeds():
 def test_real_nextflow_stages_handoff_with_science_stub(offline_bundle, tmp_path):
     import os
     _, job, target, command, _ = offline_bundle
-    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    prepared = controller_bundle(job=job, target=target, command=command)
     msa = prepared.input_transfers[0].source
     sha = hashlib.sha256((msa/'msa-inputs.json').read_bytes()).hexdigest()
     jar = Path.home()/'.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'

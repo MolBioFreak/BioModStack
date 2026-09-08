@@ -95,6 +95,12 @@ def provider_readiness() -> dict:
     blockers: list[str] = []
     try:
         root = cache_root()
+        if any(path.is_symlink() for path in (root, *root.parents)):
+            blockers.append("MSA cache must not traverse symlinks")
+        if root.exists():
+            info = root.stat()
+            if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                blockers.append("MSA API cache must be service-owned and not group/world writable")
         parent = root
         while not parent.exists() and parent != parent.parent:
             parent = parent.parent
