@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "6f2cd5e1f4b552b9d9c24445721dbc7a800b587943ec09e341e7190692c9d1b7",
+  "content_sha256": "a0af4db27c7140f5ed76fe0514c2224a1089f7741f6a13c1060911fdfaf2f9cd",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -1229,8 +1229,8 @@
     },
     {
       "path": "scripts/biomodstack_dev_sync.py",
-      "sha256": "1ac3c689b2536c0371a3913d25742e86035fbce7e4be1362d392d9b701fedde1",
-      "size_bytes": 48825
+      "sha256": "0ae50eb7c806d3520016072c70f1ccf092214d5d97f06e5296d6550abdd69f33",
+      "size_bytes": 52516
     },
     {
       "path": "scripts/build_ngs_molbio_runtime_implementation_record.py",
@@ -1377,8 +1377,8 @@
     "content_sha256": "74e7f698e4ccb000407dc631e0d1592a90a1398a37fb572809c7db2ed6bc66ed",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "04218cc6758cb45f44a3aba31d97c5ef4ea0f247",
-  "successor_source_tree": "408b172418257274b81cba68953842378dc99f49",
+  "successor_source_commit": "62d1d680e32e13f6ac9155fe16ff9ae05899c5cf",
+  "successor_source_tree": "8ade1764175c690860a1cd0b5deeb3bf78934a26",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
