@@ -29,7 +29,13 @@ process ProbeConfornets {
     script:
     """printf '%s' '${task.container}' > confornets.txt"""
 }
-workflow { ProbeProtenix(); ProbeConfornets() }
+process ProbeExperimentalConfornets {
+    label 'ConforNets'
+    output: path('experimental.txt')
+    script:
+    """printf '%s' '${task.container}' > experimental.txt"""
+}
+workflow { ProbeProtenix(); ProbeConfornets(); ProbeExperimentalConfornets() }
 ''')
     (tmp_path / 'nextflow.config').write_text((REPO / 'nextflow.config').read_text() + '''
 apptainer.enabled = false
@@ -56,12 +62,19 @@ process.memory = '256 MB'
         if selection == 'params':
             expected = [value.replace('/shared/', '/explicit/') for value in expected]
             params.update(protenix_container_path=expected[0], cm_confornets_container_path=expected[1])
+    # Experimental Confornets is a distinct scientific build: CM's environment
+    # selector must never choose it. Its explicit system parameter remains separate.
+    experimental = str(tmp_path / 'containers/confornets.sif')
+    if selection == 'params':
+        experimental = str(tmp_path / 'experimental/objects/sha256' / ('c' * 64) / 'runtime.sif')
+        params['cn_container_path'] = experimental
+    expected.append(experimental)
     (tmp_path / 'params.json').write_text(json.dumps(params))
     run = subprocess.run(['java', '-jar', str(jars[-1]), 'run', 'main.nf', '-offline',
                           '-params-file', 'params.json'], cwd=tmp_path, env=env,
                          capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stdout + run.stderr
-    for filename, value in zip(('protenix.txt', 'confornets.txt'), expected):
+    for filename, value in zip(('protenix.txt', 'confornets.txt', 'experimental.txt'), expected):
         results = list((tmp_path / 'work').rglob(filename))
         assert len(results) == 1
         assert results[0].read_text() == value
