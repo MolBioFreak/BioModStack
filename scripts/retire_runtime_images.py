@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Explicit shared-image lifecycle inspection and quarantine (never deletion).
+"""Explicit shared-image retirement; no unattended garbage collection.
 
-Plan/why-kept prints a dry-run JSON receipt. Apply consumes that exact reviewed
-receipt, revalidates roots/leases/identity, and requires external quiescence.
-Quarantine does not reclaim disk space. Physical purge and grace policy remain
-separately authorized migration work; there is deliberately no unattended GC.
+CAS plan/apply only quarantines unretained objects. Legacy-plan takes one exact
+external --source, expected --digest and repeatable --survivor paths. Review its
+JSON, then legacy-apply --plan FILE under an externally fenced maintenance window.
+It renames in place, reclaiming zero bytes, and emits a durable receipt. Review
+that receipt before explicit legacy-purge --receipt FILE, which rehashes all
+survivors and the quarantined file before unlinking that single allocation.
+--remove-empty-snapshot-directory binds removal of only the known private NGS
+parent (containing runtime.sif alone), using rmdir, never recursive deletion.
+Both mutations require --maintenance-authorization CHANGE_ID; this assertion is
+NOT proof of fenced admissions, quiescent jobs/qualification or absent aliases.
+Interrupted operations fail closed and retain evidence for manual reconciliation.
 """
 import argparse
 import json
@@ -12,7 +19,8 @@ from pathlib import Path
 
 from lib.runtime_image_lifecycle import (
     apply_retirement, forget_release, load_state, plan_retirement,
-    select_release, transaction,
+    select_release, transaction, plan_legacy_retirement, apply_legacy_retirement,
+    purge_legacy_retirement, _read, _unique_keys,
 )
 from lib.shared_runtime_images import _directory
 
@@ -33,8 +41,27 @@ def main():
     select = commands.add_parser("select-release", help="select exact retained lane release/rollback")
     select.add_argument("--lane", choices=("development", "production"), required=True)
     select.add_argument("--release", required=True)
+    legacy = commands.add_parser("legacy-plan", help="review one external redundant allocation and preserved survivors")
+    legacy.add_argument("--source", type=Path, required=True)
+    legacy.add_argument("--survivor", type=Path, action="append", required=True)
+    legacy.add_argument("--digest", required=True)
+    legacy.add_argument("--remove-empty-snapshot-directory", action="store_true")
+    for name, option in (("legacy-apply", "--plan"), ("legacy-purge", "--receipt")):
+        command = commands.add_parser(name)
+        command.add_argument(option, type=Path, required=True)
+        command.add_argument("--maintenance-authorization", required=True,
+                             help="externally established admissions/qualification/job/alias fence identity")
     args = parser.parse_args()
-    if args.command in {"plan", "why-kept"}:
+    if args.command == "legacy-plan":
+        result = plan_legacy_retirement(args.store_root, args.source, args.survivor, args.digest,
+            remove_directory=args.remove_empty_snapshot_directory)
+    elif args.command in {"legacy-apply", "legacy-purge"}:
+        path = args.plan if args.command == "legacy-apply" else args.receipt
+        evidence = json.loads(_read(path), object_pairs_hook=_unique_keys)
+        action = apply_legacy_retirement if args.command == "legacy-apply" else purge_legacy_retirement
+        result = action(args.store_root, evidence,
+                        maintenance_authorization=args.maintenance_authorization)
+    elif args.command in {"plan", "why-kept"}:
         result = plan_retirement(args.store_root, args.digest)
     elif args.command == "apply":
         result = {"quarantine": str(apply_retirement(args.store_root, json.loads(args.plan.read_text()),
