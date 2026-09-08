@@ -123,7 +123,7 @@ def provider_readiness() -> dict:
             "configured": not errors,
             "credential_configured": configured,
             "authentication": "not_checked" if provider == "neurosnap_api" else "not_required",
-            "live_acceptance": "not_run",
+            "live_acceptance": "not_checked_by_setup",
             "blockers": errors,
         }
     return {"default_provider": "colabfold_api", "local_search_enabled": False,
