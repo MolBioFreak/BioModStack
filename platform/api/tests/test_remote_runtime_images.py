@@ -306,15 +306,52 @@ async def test_dorado_typed_selector_passes_actual_strict_sif_gate(package, loca
         native.build_preflight(runtime_sif=alias, **kwargs)
 
 
-def test_frustrampnn_strict_alias_is_blocked_at_admission(package, tmp_path):
+@pytest.mark.asyncio
+@pytest.mark.parametrize('controller_alias', [False, True])
+async def test_frustrampnn_preserves_strict_materialization(
+        package, local_transport, tmp_path, monkeypatch, controller_alias):
     from services.frustrampnn import runtime as strict
+    from dataclasses import replace
     roots, release, job, target, command = package
     source = roots['containers'] / 'frustrampnn.sif'
-    source.write_bytes(b'not an executed scientific image')
+    data = b'not an executed scientific image'
+    source.write_bytes(data)
+    if controller_alias:
+        backing = roots['containers'] / 'shared/frustra.sif'
+        backing.parent.mkdir()
+        source.rename(backing)
+        source.symlink_to('shared/frustra.sif')
+    command += ['--run_frustrampnn', 'true']
+    # The supported dynamic stage must not disable other image deduplication.
+    command += ['--protenix_container_path', str(roots['containers'] / 'protenix.sif')]
+    monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
+    monkeypatch.setattr(cache, 'current_source_identity', lambda *_: ('a' * 40, 'b' * 40))
+    await cache.prewarm_cache(connection=target, job=job, command=command, source_revision='a' * 40,
+                             source_tree='b' * 40, operation_id=str(uuid.uuid4()),
+                             progress=cache._noop, check_fence=cache._noop)
+    before = len(local_transport[1])
+    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    records = [r for r in prepared.envelope.files if r.relative_path.endswith('.sif')]
+    assert [r.relative_path for r in records] == ['runtime/containers/frustrampnn.sif']
+    assert records[0].link_target is None
+    assert len(prepared.runtime_images) == 1
+    await cache.stage_cached_bundle(connection=target, bundle=prepared)
+    assert not any(path.endswith('.sif') for path in local_transport[1][before:])
+    legacy = Path(prepared.remote_runtime_dir) / 'containers/frustrampnn.sif'
+    assert legacy.is_file() and not legacy.is_symlink()
+    assert legacy.read_bytes() == data
+    identity = replace(strict.FRUSTRAMPNN_RUNTIME_IDENTITY, configured_sif_path=str(legacy))
+    assert strict.validate_configured_container_path(legacy, identity=identity) == str(legacy)
+    with strict.open_verified_container(legacy, hashlib.sha256(data).hexdigest()):
+        pass
+    assert strict.cm_analysis_runtime_registry_v1(legacy.parent)['container_name'] == legacy.name
     alias = tmp_path / 'frustrampnn-alias.sif'
-    alias.symlink_to(source)
+    alias.symlink_to(legacy)
     with pytest.raises(strict.RuntimeValidationError, match='without following symlinks'):
         strict.open_regular_no_follow(alias, label='FrustraMPNN container')
-    job.model_id = 'frustrampnn'
-    with pytest.raises(bundle.RemoteBundleError, match='canonical-image selector'):
-        bundle.prepare_remote_bundle(job=job, target=target, command=command)
+    image = prepared.runtime_images[0]
+    assert all(Path(alias).is_symlink() for alias in image.aliases)
+    assert not list((Path(target.remote_root) / 'cache/artifacts/v1/objects').rglob(image.sha256))
+    # Explicitly account for the compatibility exception's retained ordinary copy.
+    assert list((Path(target.remote_root) / 'cache/artifacts/v1/objects').rglob(records[0].sha256))
+    assert not list((Path(target.remote_root) / 'cache/runtime-images/objects').rglob(records[0].sha256))

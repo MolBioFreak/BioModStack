@@ -12,7 +12,7 @@ import uuid
 from paths import get_code_root
 from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source,
-                     _safe_extract, _is_runtime_image)
+                     _safe_extract, _is_runtime_image, _legacy_runtime_image)
 from .transport import run_remote, rsync_to_remote
 
 
@@ -192,7 +192,8 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory):
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                                                   record.size_bytes, record.mode,
                                                   'source' if prefix.startswith('source/') else
-                                                  'image' if _is_runtime_image(local, record.relative_path) else 'runtime'))
+                                                  'image' if (_is_runtime_image(local, record.relative_path)
+                                                              and not _legacy_runtime_image(record.relative_path)) else 'runtime'))
     return entries
 
 

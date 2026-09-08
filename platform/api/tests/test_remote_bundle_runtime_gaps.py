@@ -194,8 +194,12 @@ def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     # Do not silently drop an enabled stage or feed an alias to its strict registry.
     assets = bundle._runtime_assets('protenix', 'predict', effective)
     assert {'containers/protenix.sif', 'containers/frustrampnn.sif'} <= {relative for _, relative in assets}
-    with pytest.raises(bundle.RemoteBundleError, match='exact-path registry and no-follow'):
-        bundle.prepare_remote_bundle(job=job, target=target, command=argv)
+    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv)
+    sif_records = [r for r in prepared.envelope.files if r.relative_path.endswith('.sif')]
+    assert [r.relative_path for r in sif_records] == ['runtime/containers/frustrampnn.sif']
+    assert sif_records[0].link_target is None
+    assert len(prepared.runtime_images) == 1
+    assert all(alias.endswith('/protenix.sif') for alias in prepared.runtime_images[0].aliases)
 
 
 @pytest.mark.asyncio

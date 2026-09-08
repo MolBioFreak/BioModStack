@@ -77,8 +77,9 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
     Relocated support-python contains destination-dependent bytes and symlinks;
     it deliberately stays on the verified legacy transport path. Regular source,
     workflow and model files share the ordinary byte-addressed cache protocol.
-    SIF identities/aliases come from the authenticated manifest and use the worker's
-    shared-image store, never ordinary mutable materializations.
+    Shared SIF identities/aliases come from the authenticated manifest and use the
+    worker's shared-image store. FrustraMPNN alone retains ordinary authenticated
+    materialization for its exact-path, no-follow consumer.
     """
     result: list[CacheTransferArtifact] = []
     for record in bundle.envelope.files:
@@ -264,6 +265,13 @@ def _under(path: Path, root: Path) -> bool:
 def _is_runtime_image(path: Path, relative: str) -> bool:
     """Only SIF runtime leaves use immutable references, never inputs/weights trees."""
     return relative.lower().endswith(".sif") and path.is_file()
+
+
+def _legacy_runtime_image(relative: str) -> bool:
+    # FrustraMPNN requires its registered semantic path to be a no-follow regular
+    # file. Keep this one legacy materialization until that consumer is migrated;
+    # it retains an ordinary cache object plus a per-attempt copy, not deduped SIFs.
+    return relative.removeprefix("runtime/") == "containers/frustrampnn.sif"
 
 
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tuple[Path, str]]:
@@ -648,12 +656,6 @@ def prepare_remote_bundle(
                 raise RemoteBundleError(f'Controller MSA preparation failed before remote staging: {exc}') from exc
             command = [*command, '--protenix_prepared_msa_dir', str(prepared_msa),
                        '--protenix_prepared_msa_sha256', _sha256_file(prepared_msa / 'msa-inputs.json')]
-    if str(job.model_id).lower() == "frustrampnn" or effective_params.get("run_frustrampnn") is True:
-        raise RemoteBundleError(
-            "Remote shared-image execution is not supported for FrustraMPNN: its exact-path "
-            "registry and no-follow consumer need a canonical-image selector. "
-            "Cache-only provisioning remains available; no partial scientific launch was performed."
-        )
 
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}
@@ -667,7 +669,10 @@ def prepare_remote_bundle(
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
-        if _is_runtime_image(path, relative):
+        if _is_runtime_image(path, relative) and _legacy_runtime_image(relative):
+            # Materialize bytes, not a controller alias, for the strict consumer.
+            source = path.resolve()
+        elif _is_runtime_image(path, relative):
             # Preserve semantic aliases, but transfer/publish only one object per digest.
             source = path.resolve()
             record = _record_file(source, f"runtime/{relative}", "runtime")
