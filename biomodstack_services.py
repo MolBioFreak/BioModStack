@@ -1342,6 +1342,29 @@ def desktop_exec_arg(value: object) -> str:
     return '"' + text + '"'
 
 
+def _runtime_reference_directive(store: Path, lane: str) -> str:
+    """An installed/explicit managed reference is required, never optional.
+
+    A fresh installation without references can start discovery/qualification;
+    it has no image authority and scientific admission must report unavailable.
+    """
+    explicit = os.environ.get(f"BMS_{lane.upper()}_RUNTIME_IMAGE_REFERENCE_FILE", "").strip()
+    reference = Path(explicit) if explicit else store / "references" / f"{lane}.env"
+    if not reference.is_absolute():
+        raise ServiceManagerError("Runtime image reference must be an absolute path")
+    required = bool(explicit) or os.path.lexists(reference)
+    state_path = store / "references" / "state.json"
+    if os.path.lexists(state_path):
+        try:
+            state = json.loads(state_path.read_text())
+            if not isinstance(state, dict) or not isinstance(state.get("current"), dict):
+                raise ValueError("invalid current runtime references")
+            required = required or lane in state["current"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ServiceManagerError("Runtime image reference state is unavailable") from exc
+    return f"EnvironmentFile={systemd_value(reference)}" if required else ""
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -1449,7 +1472,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment={systemd_value(f"BMS_CONTAINER_DIR={production_container_dir}")}
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
             Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
-            EnvironmentFile={systemd_value('-' + str(runtime_image_store / 'references' / 'production.env'))}
+            Environment=BMS_RUNTIME_IMAGE_LANE=production
+            {_runtime_reference_directive(runtime_image_store, 'production')}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}")}
             Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
             Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
@@ -1561,14 +1585,14 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         os.environ.get("BMS_DEV_CM_CONFORNETS_CONTAINER_PATH")
         or resolved.get(
             "dev_cm_confornets_container_path",
-            shared_data_root / "dev" / "apptainer" / "confornets-canonical.sif",
+            "",
         )
     )
     dev_ngs_runtime_sif = str(
         os.environ.get("BMS_DEV_NGS_RUNTIME_SIF")
         or resolved.get(
             "dev_ngs_runtime_sif",
-            shared_data_root / "dev" / "apptainer" / "dorado-v1.3.1-samtools-v1.24.sif",
+            "",
         )
     )
     ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
@@ -1689,10 +1713,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
         Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
         Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
-        Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
-        Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
+        {("Environment=" + systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")) if dev_confornets_container else ""}
+        {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
-        EnvironmentFile={systemd_value('-' + str(runtime_image_store / 'references' / 'development.env'))}
+        Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {_runtime_reference_directive(runtime_image_store, 'development')}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1750,10 +1775,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
         Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
         Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
-        Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
-        Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
+        {("Environment=" + systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")) if dev_confornets_container else ""}
+        {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
-        EnvironmentFile={systemd_value('-' + str(runtime_image_store / 'references' / 'development.env'))}
+        Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {_runtime_reference_directive(runtime_image_store, 'development')}
         Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
         Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}
         Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}

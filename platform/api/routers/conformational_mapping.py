@@ -14,10 +14,18 @@ import tempfile
 import uuid
 import copy
 import stat
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Mapping, Sequence, cast
 from urllib.parse import urlsplit
+
+# Use the publisher's existing release authority and no-follow CAS verifier.
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.runtime_image_lifecycle import load_state, object_path
+from lib.shared_runtime_images import verify_image
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -697,26 +705,42 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _server_confornets_identity() -> dict[str, str]:
-    image_name = os.environ.get("BMS_CM_CONFORNETS_CONTAINER_PATH", "").strip()
-    configured_image = (
-        Path(image_name)
-        if image_name
-        else get_container_dir() / "confornets-canonical.sif"
-    )
-    if configured_image.is_symlink():
-        raise HTTPException(
-            status_code=503, detail="canonical ConforNets image selector may not be a symlink"
-        )
+def _registered_image_digest(selector: str) -> str:
+    """Select approved release bytes, never promote an arbitrary path hash.
+
+    The existing shared-store release manifests (including their legacy env
+    projection) are the only installation authority. Explicit selectors may pin
+    a retained release; defaults select the current lane. This is read-only:
+    discovery neither publishes images nor upgrades historical references.
+    """
+    root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+                or get_container_dir() / ".image-store")
+    configured = os.environ.get(selector, "").strip()
     try:
-        image = configured_image.resolve(strict=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=503, detail="canonical ConforNets image is not installed"
-        ) from exc
-    if not image.is_file() or image.is_symlink():
-        raise HTTPException(status_code=503, detail="canonical ConforNets image is not installed")
-    digest = _sha256_path(image)
+        if not root.is_absolute():
+            raise ValueError("runtime image store must be absolute")
+        state = load_state(root)
+        if configured:
+            candidates = [release["images"][selector]
+                          for release in state["releases"].values()
+                          if selector in release["images"]
+                          and release["images"][selector]["path"] == configured]
+            if not candidates:
+                raise ValueError("configured image is not a retained managed reference")
+            image = candidates[0]
+        else:
+            lane = os.environ.get("BMS_RUNTIME_IMAGE_LANE", "production")
+            image = state["releases"][state["current"][lane]]["images"][selector]
+        path = object_path(root, image["sha256"])
+        if str(path) != image["path"]:
+            raise ValueError("managed image path differs from shared store")
+        return verify_image(path, image["sha256"])["sha256"]
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail=f"registered runtime image is unavailable: {selector}") from exc
+
+
+def _server_confornets_identity() -> dict[str, str]:
+    digest = _registered_image_digest("BMS_CM_CONFORNETS_CONTAINER_PATH")
     return {
         "backend_version": "canonical-4df561a",
         "backend_commit": "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d",
@@ -804,15 +828,15 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
             "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
         }
     if backend == "protenix_v2_ensemble":
-        image = get_container_dir() / "protenix.sif"
+        digest = _registered_image_digest("BMS_PROTENIX_CONTAINER_PATH")
         checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
-        if not image.is_file() or image.is_symlink() or not checkpoint.is_file() or checkpoint.is_symlink():
+        if not checkpoint.is_file() or checkpoint.is_symlink():
             raise HTTPException(status_code=503, detail="registered Protenix runtime is unavailable")
         return {
             "schema_name": "cm_runtime_registry", "schema_version": 1,
             "backend_version": "protenix-v2", "backend_commit": "c3bfc365b3e1341a11935eddfe7bfdc308092147",
             "runtime_identity": "installed-protenix-v2", "model_id": "protenix-v2",
-            "container_digest": f"sha256:{_sha256_path(image)}",
+            "container_digest": f"sha256:{digest}",
             "checkpoint_sha256": _sha256_path(checkpoint),
             "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
             "analysis_runtime": analysis_runtime,

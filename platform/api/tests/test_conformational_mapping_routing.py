@@ -55,7 +55,8 @@ def test_server_confornets_identity_matches_the_executed_upstream_commit(
 ) -> None:
     image = tmp_path / "confornets-canonical.sif"
     image.write_bytes(b"canonical-confornets")
-    monkeypatch.setattr(cm_router, "get_container_dir", lambda: tmp_path)
+    monkeypatch.setattr(cm_router, "_registered_image_digest",
+                        lambda _: hashlib.sha256(image.read_bytes()).hexdigest())
 
     identity = cm_router._server_confornets_identity()
 
