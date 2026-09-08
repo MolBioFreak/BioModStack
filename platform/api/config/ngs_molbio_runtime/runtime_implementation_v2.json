@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "662c5a5fc296764bfc93bf896dfac033ec0d01a604bc3ea1921f1a6295a5d76a",
+  "content_sha256": "e6d5d527ccf918294a83fa5750e2b3b823667c86a9d822b1a2ffb6c966bcb1e7",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -69,8 +69,8 @@
     },
     {
       "path": "biomodstack_services.py",
-      "sha256": "fb576b692603e4867102ad2b7a73d5634d7f23fb347275703cd2624be04aa95d",
-      "size_bytes": 111474
+      "sha256": "3f2a623d59f6a71106f48ac89acccbde3509fb736de38d7dff59fb36f836338b",
+      "size_bytes": 112029
     },
     {
       "path": "config/ngs/dorado_v1.3.1.lock.json",
@@ -163,6 +163,16 @@
       "size_bytes": 9297
     },
     {
+      "path": "modules/ngs/clone_validation.nf",
+      "sha256": "415b45382113f16acb9fb98972f9ef2975365ea8a5e443c779a1483dfd3ff0b1",
+      "size_bytes": 9508
+    },
+    {
+      "path": "modules/ngs/construct_verify.nf",
+      "sha256": "c7a801e1701a2cc72dd89434b75917cf4249b3714d35de4b19d9a0bc0da252b2",
+      "size_bytes": 2978
+    },
+    {
       "path": "modules/ngs/dorado_align.nf",
       "sha256": "bde21dc97b90d51b6c8a5be8d5ccfc5e70511855552051c3b67b86f05e683c08",
       "size_bytes": 7058
@@ -179,8 +189,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "b2cdb06e710e84055a2f66da40777ee8f207bac7292add798bd0b291e459f153",
-      "size_bytes": 97708
+      "sha256": "ad8d96c37e2d1e1037aac30f6ed654946af098823eb4a3446dbec6e17cfe3398",
+      "size_bytes": 97844
     },
     {
       "path": "packages/sequence-utils/src/index.js",
@@ -649,8 +659,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "0d8272d51fb25a852d0484b0992bf460813e04dce1861d2c1c43cef0efa197c0",
-      "size_bytes": 184574
+      "sha256": "c7ed340d2613d7423c5ed04203419c80879620012152c3c5ef9f8dadfd338c66",
+      "size_bytes": 184627
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -753,6 +763,21 @@
       "size_bytes": 61292
     },
     {
+      "path": "platform/api/services/remote_execution/bundle.py",
+      "sha256": "71cb464a8924eecce389b9fae7ef021dda172e9ab5b8025679fc0bc5a61b96e5",
+      "size_bytes": 40562
+    },
+    {
+      "path": "platform/api/services/remote_execution/cache.py",
+      "sha256": "ae8fa8490da05e3e021d0312ca1ff4cdf8297699319f18eab51dbe923c8b2bf7",
+      "size_bytes": 15810
+    },
+    {
+      "path": "platform/api/services/remote_execution/managed_inventory.py",
+      "sha256": "cc4d2ff9f7be00a68e43d3dad389fb45a72dbee85f6b9165576eab2ef8454c47",
+      "size_bytes": 6943
+    },
+    {
       "path": "platform/api/services/resource_usage_evidence.py",
       "sha256": "587f6c365ed5059e28d4bb0da69e06c83aea3d6f0c0a9d9b374a2edbe1e0dd30",
       "size_bytes": 78267
@@ -829,8 +854,8 @@
     },
     {
       "path": "platform/api/tests/test_biomodstack_services.py",
-      "sha256": "8a0bcd6fb07ef5e66b55866ae107e53f14947f8cbaa444301a23039c05d3de7e",
-      "size_bytes": 81057
+      "sha256": "07c72ad424f6c36126f4f6c22c06a8f93a3bb13ca37e8c0f2eec37e8f76f586d",
+      "size_bytes": 81145
     },
     {
       "path": "platform/api/tests/test_core_runtime_workflow_guard.py",
@@ -844,8 +869,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "bdfbf476b8584fa00af47c242eabdd7915a80c01f82817133923614bc6fc3ef8",
-      "size_bytes": 173556
+      "sha256": "bd9e215715ebc9739fb3cc29cb0e41741528f61a53fd9d29d7103febdbd99384",
+      "size_bytes": 173586
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -886,6 +911,16 @@
       "path": "platform/api/tests/test_scientific_artifacts.py",
       "sha256": "58e6fbd2a96615e242d7a841c5d7433f8dc837f440479f54cab9e98f24960dc6",
       "size_bytes": 27303
+    },
+    {
+      "path": "platform/api/tools/bms_artifact_cache.py",
+      "sha256": "b5802400ca73f10f673c9eb7bd0a5981eba2ee10457c26dbeaea6178016d06a2",
+      "size_bytes": 20943
+    },
+    {
+      "path": "platform/api/tools/bms_managed_runtime.py",
+      "sha256": "4faf4ee6d4e0a25e1a8435220fbc12ef07f8672c3bbdd21d697c4aee79aa213e",
+      "size_bytes": 18269
     },
     {
       "path": "platform/api/uv.lock",
@@ -1214,8 +1249,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-      "sha256": "e2947582c542f0ee5f01d3313136919da16c66b318fb4197bb49d9970c1a7966",
-      "size_bytes": 15018
+      "sha256": "07632866def7c8f44965aaaa6515099cc9260f8a4d621675fdf05e4842aa5e79",
+      "size_bytes": 15457
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -1268,9 +1303,14 @@
       "size_bytes": 7414
     },
     {
+      "path": "scripts/lib/runtime_image_lifecycle.py",
+      "sha256": "3dfa85b8150a525e8b8de968c11db145d40fe0c68a5979dd94ec679f8241333a",
+      "size_bytes": 15134
+    },
+    {
       "path": "scripts/lib/shared_runtime_images.py",
-      "sha256": "38e95ae48ca0cb853bbc826a1a1ff99f5c48cb77a8e05e93bd487bcabce9ec63",
-      "size_bytes": 10435
+      "sha256": "8194937b6dc06c6774597b5016529890509c4db6525f3a629e9ddd71143b17b8",
+      "size_bytes": 13431
     },
     {
       "path": "scripts/ont_raw_signal_lookup.py",
@@ -1299,8 +1339,13 @@
     },
     {
       "path": "scripts/publish_runtime_images.py",
-      "sha256": "0a3cea413d6599aaeaea0d81a3d169ef4779947c45de988e4783ad99b9e7b1a9",
-      "size_bytes": 3265
+      "sha256": "38b916b071fdeca1f5a2c6f487af8bde480936c30a2000180a2c3f6f47b00319",
+      "size_bytes": 2720
+    },
+    {
+      "path": "scripts/retire_runtime_images.py",
+      "sha256": "7151396fe730af40fa217d21a8ea30147388f20443709f74bcc7ef10b849ab0d",
+      "size_bytes": 3100
     },
     {
       "path": "scripts/run_ngs_molbio_payload_ownership_audit.py",
@@ -1374,11 +1419,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "74e7f698e4ccb000407dc631e0d1592a90a1398a37fb572809c7db2ed6bc66ed",
+    "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "7e3a6a4c5e0a49fc8274655e4034842b9e95a0d3",
-  "successor_source_tree": "a768e89501caf67b3d533326da61ce4ede8e0bb6",
+  "successor_source_commit": "e50c41c958c9a9541b3c087dcea70cc55e3a78b8",
+  "successor_source_tree": "d01c95b7d7eddb2a41c48aa3a3346966832f3790",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
