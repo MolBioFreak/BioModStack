@@ -142,6 +142,9 @@
     "platform/api/services/ont_submission_trust.py",
     "platform/api/services/payload_ownership_audit.py",
     "platform/api/services/protein_project_capabilities.py",
+    "platform/api/services/remote_execution/bundle.py",
+    "platform/api/services/remote_execution/cache.py",
+    "platform/api/services/remote_execution/managed_inventory.py",
     "platform/api/services/resource_usage_evidence.py",
     "platform/api/services/restriction_analysis.py",
     "platform/api/services/restriction_catalog.py",
@@ -169,6 +172,8 @@
     "platform/api/tests/test_ont_signal_runtime_contract.py",
     "platform/api/tests/test_ont_signal_workbench.py",
     "platform/api/tests/test_scientific_artifacts.py",
+    "platform/api/tools/bms_artifact_cache.py",
+    "platform/api/tools/bms_managed_runtime.py",
     "platform/api/uv.lock",
     "platform/api/workflow_job_runner.py",
     "platform/frontend/src/App.tsx",
@@ -270,5 +275,5 @@
     "workflows/oligo_design.nf"
   ],
   "schema": "bms.ngs-molbio.runtime-source-denominator.v2",
-  "content_sha256": "74e7f698e4ccb000407dc631e0d1592a90a1398a37fb572809c7db2ed6bc66ed"
+  "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822"
 }
