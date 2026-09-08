@@ -196,4 +196,3 @@ def test_frustra_central_digest_not_arbitrary_release_membership(approved, monke
     with pytest.raises(bundle.RemoteBundleError):
         bundle.compile_remote_dependencies('protenix', 'predict',
             ['nextflow', 'run', 'main.nf', '--run_frustrampnn', 'true'])
-
