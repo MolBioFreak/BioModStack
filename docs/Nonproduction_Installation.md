@@ -4,6 +4,27 @@ This is the human and automation interface for a clean **Development** installat
 Production deployment, model-license acceptance, scientific qualification and GPU
 acceptance are separate operations, not implied by a running control plane.
 
+## Native launcher
+
+Reopen **BioModStack Control Panel** from the desktop launcher after an update.
+The **Installation Setup (Development)** section is directly below Status. Choose
+an action and click **Run setup action**; expand **Full setup report** to inspect
+the complete CLI receipt, blockers and diagnostics (including nonzero exits).
+Python/frontend plan, install and verify use the same commands documented below.
+Install and configuration mutations require confirmation; opening the menu never
+installs dependencies. **Configuration and model options** accepts an absolute
+install JSON path, a recovery operation ID, or comma-separated model IDs. Preview
+the document before Apply; copy recovery IDs from the full report. Discovery and
+setup planning explicitly select Development, independent of Quick Actions.
+
+Scientific artifact planning and verification are read-only. Actual provisioning,
+license acceptance and provisioning resume remain in the explicit reviewed CLI
+workflow; the launcher never downloads scientific artifacts or rents remote hosts.
+Setup does not activate services or production. Use existing Quick Actions for
+service operation after reviewing configuration. The panel no longer collects,
+caches or passes an admin password; managed user-service operation is unchanged,
+and foreign port/privilege errors are reported rather than bypassed.
+
 ## Base prerequisites and boundaries
 
 Provide Linux, a supported Python with `pip`, and compatible Node/npm (Node 22 is

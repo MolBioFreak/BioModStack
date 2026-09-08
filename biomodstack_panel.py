@@ -105,6 +105,53 @@ SYNC_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 SYNC_CONTROL_PATH = SYNC_STATE_DIR / "dev-sync-control.json"
 SYNC_SCRIPT = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
 
+SETUP_ACTIONS = {
+    "discover": "Discover installation",
+    "plan": "Plan Development setup",
+    "python-plan": "Plan Python dependencies",
+    "python-bootstrap": "Install Python dependencies",
+    "python-verify": "Verify Python dependencies",
+    "frontend-plan": "Plan frontend dependencies",
+    "frontend-bootstrap": "Install frontend dependencies",
+    "frontend-verify": "Verify frontend dependencies",
+    "configure-preview": "Preview install document",
+    "configure": "Apply install document",
+    "recover": "Recover configuration operation",
+    "provision-plan": "Plan selected model artifacts (read-only)",
+    "verify": "Verify selected model artifacts (read-only)",
+}
+SETUP_MUTATIONS = {
+    "python-bootstrap": "Install locked Python dependencies in the installer-owned external root. Network access may be required. No scientific artifacts or services are started.",
+    "frontend-bootstrap": "Install locked frontend dependencies and link node_modules in this checkout. Network access may be required. No production build or service is started.",
+    "configure": "Apply the selected install document through the configuration authority. This changes installation paths/settings for subsequent service operations; review Preview first. No service is started.",
+    "recover": "Recover the specified durable configuration operation through the existing recovery authority. This may commit installation settings. No service is started.",
+}
+
+
+def build_setup_command(action: str, *, document: str = "", operation: str = "", models: str = "") -> list[str]:
+    """Strict argv adapter; all validation and installation remain in the CLI."""
+    if action not in SETUP_ACTIONS:
+        raise ValueError("Choose a supported setup action")
+    command = ["bash", str(START_SCRIPT), action, "--json"]
+    if action in {"discover", "plan"}:
+        command += ["--runtime", "dev"]
+    if action in {"configure-preview", "configure"}:
+        if not document or not Path(document).is_absolute():
+            raise ValueError("Enter an absolute install JSON path under Configuration and model options")
+        command += ["--document", document]
+    if action == "recover":
+        if not operation:
+            raise ValueError("Enter the operation ID from the configuration receipt")
+        command += ["--operation-id", operation]
+    if action in {"discover", "plan", "provision-plan", "verify"}:
+        selected = list(dict.fromkeys(item.strip() for item in models.split(",") if item.strip()))
+        if action in {"provision-plan", "verify"} and not selected:
+            raise ValueError("Enter explicit model IDs for scientific artifact planning/verification")
+        for model in selected:
+            command += ["--model", model]
+    return command
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -422,7 +469,6 @@ class BioModStackPanel(Adw.Application):
         self.window = None
         self.config = load_config()
         self.current_log = "api"
-        self.cached_sudo_password = ""
         
     def do_activate(self):
         if self.window:
@@ -468,7 +514,7 @@ class BioModStackPanel(Adw.Application):
         
         # Build UI sections
         content.append(self._build_status_section())
-        content.append(self._build_privilege_section())
+        content.append(self._build_setup_section())
         content.append(self._build_runtime_ports_section())
         content.append(self._build_bioxp_section())
         content.append(self._build_actions_section())
@@ -728,32 +774,79 @@ class BioModStackPanel(Adw.Application):
         
         return group
 
-    def _build_privilege_section(self) -> Gtk.Widget:
-        """Privileged-action credentials."""
-        group = Adw.PreferencesGroup()
-        group.set_title("Privileges")
+    def _build_setup_section(self) -> Gtk.Widget:
+        """Expose the supported installer, never a second installation authority."""
+        group = Adw.PreferencesGroup(title="Installation Setup (Development)")
+        group.set_description(
+            "Runs as your user; no admin password is needed. Plans and checks do not "
+            "install dependencies. Setup does not start services or approve scientific work."
+        )
+        self.setup_action_combo = Gtk.ComboBoxText()
+        for action, label in SETUP_ACTIONS.items():
+            self.setup_action_combo.append(action, label)
+        self.setup_action_combo.set_active_id("discover")
+        row = Adw.ActionRow(title="Setup action")
+        row.add_suffix(self.setup_action_combo)
+        run = Gtk.Button(label="Run setup action")
+        run.connect("clicked", self._on_setup_action)
+        row.add_suffix(run)
+        group.add(row)
 
-        password_row = Adw.ActionRow()
-        password_row.set_title("Admin Password")
-        password_row.set_subtitle("Used for privileged API restart/port-clear actions. Cached in memory only.")
-
-        password_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.password_entry = Gtk.PasswordEntry()
-        self.password_entry.set_show_peek_icon(True)
-        self.password_entry.set_width_chars(20)
-        self.password_entry.set_hexpand(True)
-        self.password_entry.connect("changed", self._on_password_changed)
-        password_box.append(self.password_entry)
-
-        btn_clear_password = Gtk.Button(label="Clear")
-        btn_clear_password.connect("clicked", self._on_clear_password)
-        password_box.append(btn_clear_password)
-
-        password_row.add_suffix(password_box)
-        password_row.set_activatable_widget(self.password_entry)
-        group.add(password_row)
-
+        options = Adw.ExpanderRow(title="Configuration and model options")
+        options.set_subtitle("Document path for configuration; operation ID for recovery; model IDs for checks")
+        self.setup_entries = {}
+        for key, title in (("document", "Install JSON path"),
+                           ("operation", "Recovery operation ID"),
+                           ("models", "Model IDs (comma-separated)")):
+            entry = Gtk.Entry(hexpand=True)
+            option = Adw.ActionRow(title=title)
+            option.add_suffix(entry)
+            options.add_row(option)
+            self.setup_entries[key] = entry
+        group.add(options)
+        self.setup_status_row = Adw.ActionRow(title="Setup result", subtitle="Choose Discover installation, then Run setup action.")
+        group.add(self.setup_status_row)
+        output_row = Adw.ExpanderRow(title="Full setup report")
+        self.setup_output = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                         wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        output_scroll = Gtk.ScrolledWindow(min_content_height=180, max_content_height=300)
+        output_scroll.set_child(self.setup_output)
+        output_row.add_row(output_scroll)
+        group.add(output_row)
+        note = Adw.ActionRow(title="Scientific provisioning remains explicitly reviewed")
+        note.set_subtitle("Plan and verify selected models here. Artifact downloads, license acceptance and provisioning use the documented CLI; no automatic approvals, remote rentals or production activation.")
+        group.add(note)
         return group
+
+    def _on_setup_action(self, button):
+        action = self.setup_action_combo.get_active_id()
+        try:
+            command = build_setup_command(action, **{
+                key: entry.get_text().strip() for key, entry in self.setup_entries.items()
+            })
+        except ValueError as exc:
+            self.setup_status_row.set_subtitle(str(exc))
+            return
+        if getattr(self, "_service_action_active", False):
+            self.setup_status_row.set_subtitle("Wait for the current action to finish.")
+            return
+        if action in SETUP_MUTATIONS:
+            dialog = Gtk.MessageDialog(transient_for=self.window, modal=True,
+                message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
+                text=SETUP_ACTIONS[action], secondary_text=SETUP_MUTATIONS[action])
+            dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dialog.add_button("Continue", Gtk.ResponseType.ACCEPT)
+            dialog.set_default_response(Gtk.ResponseType.CANCEL)
+
+            def respond(confirmation, response):
+                confirmation.destroy()
+                if response == Gtk.ResponseType.ACCEPT:
+                    self._run_service_action("Setup: " + action, command)
+
+            dialog.connect("response", respond)
+            dialog.present()
+        else:
+            self._run_service_action("Setup: " + action, command)
 
     def _on_open_ui(self, button):
         show_notification("Opening UI", "Launching the BioModStack shell...")
@@ -846,7 +939,10 @@ class BioModStackPanel(Adw.Application):
         self._update_dev_updates_control()
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(f"{label} in progress…")
-        show_notification(label, "BioModStack service action started.")
+        if label.startswith("Setup: "):
+            self.setup_status_row.set_subtitle(f"{label} in progress…")
+            self.setup_output.get_buffer().set_text("Waiting for the installer report…")
+        show_notification(label, "BioModStack action started.")
 
         def worker() -> None:
             result = None
@@ -857,7 +953,9 @@ class BioModStackPanel(Adw.Application):
                     env=self._script_env(),
                     capture_output=True,
                     text=True,
-                    timeout=360,
+                    timeout=None if label.startswith("Setup: ") else 360,
+                    stdin=subprocess.DEVNULL,
+                    cwd=PROJECT_ROOT,
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
@@ -885,6 +983,19 @@ class BioModStackPanel(Adw.Application):
                 subtitle = f"{label} failed (exit {returncode}): {detail}"
                 notification_title = f"{label} Failed"
 
+        if label.startswith("Setup: "):
+            output = str(error) if error else "\n".join(
+                part for part in (result.stdout, result.stderr) if part
+            )
+            if error is None:
+                try:
+                    report = json.loads(result.stdout)
+                    detail = str(report.get("status", "Report available"))
+                except (ValueError, AttributeError):
+                    detail = "See full setup report"
+                subtitle = f"{label}: {detail} (exit {result.returncode})"
+            self.setup_status_row.set_subtitle(subtitle)
+            self.setup_output.get_buffer().set_text(output)
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(subtitle)
         self._update_dev_updates_control()
@@ -897,8 +1008,6 @@ class BioModStackPanel(Adw.Application):
         for key in list(env):
             if key.startswith("BMS_") or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
-        if self.cached_sudo_password:
-            env["BMS_SUDO_PASSWORD"] = self.cached_sudo_password
         return env
     
     def _build_logs_section(self) -> Gtk.Widget:
@@ -1231,12 +1340,6 @@ X-GNOME-Autostart-enabled=true
         self.config["notifications"] = row.get_active()
         save_config(self.config)
 
-    def _on_password_changed(self, entry):
-        self.cached_sudo_password = entry.get_text()
-
-    def _on_clear_password(self, button):
-        self.cached_sudo_password = ""
-        self.password_entry.set_text("")
     
     def _refresh_status(self):
         """Refresh all status displays."""

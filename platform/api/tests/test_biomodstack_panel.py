@@ -263,10 +263,11 @@ def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_a
         _update_jobs_row=lambda: calls.append("jobs"),
         _update_db_info=lambda: calls.append("db"),
         _update_bioxp_row=lambda: calls.append("bioxp"),
+        _update_dev_updates_control=lambda: calls.append("updates"),
     )
 
     assert module.BioModStackPanel._refresh_status(panel) is True
-    assert calls == ["status", "jobs", "db", "bioxp"]
+    assert calls == ["status", "jobs", "db", "bioxp", "updates"]
 
 
 def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> None:
@@ -323,7 +324,8 @@ def test_panel_script_env_scrubs_inherited_runtime_identity(monkeypatch) -> None
     monkeypatch.setenv("BMS_DEV_API_HOST_PORT", "8002")
     monkeypatch.setenv("BMS_API_IMAGE", "biomodstack/api:stale")
     monkeypatch.setenv("COMPOSE_PROJECT_NAME", "wrong-project")
-    panel = SimpleNamespace(cached_sudo_password="secret-in-memory")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "inherited-must-be-discarded")
+    panel = SimpleNamespace()
 
     env = module.BioModStackPanel._script_env(panel)
 
@@ -331,7 +333,7 @@ def test_panel_script_env_scrubs_inherited_runtime_identity(monkeypatch) -> None
     assert "BMS_DEV_API_HOST_PORT" not in env
     assert "BMS_API_IMAGE" not in env
     assert "COMPOSE_PROJECT_NAME" not in env
-    assert env["BMS_SUDO_PASSWORD"] == "secret-in-memory"
+    assert "BMS_SUDO_PASSWORD" not in env
 
 
 def test_panel_restart_all_passes_detected_runtime_to_action_runner(monkeypatch) -> None:
@@ -382,6 +384,7 @@ def test_panel_failed_service_action_is_visible_and_actionable(monkeypatch) -> N
         action_status_row=row,
         _service_action_active=True,
         _refresh_status_once=lambda: False,
+        _update_dev_updates_control=lambda: None,
     )
     result = SimpleNamespace(returncode=78, stdout="", stderr="ERROR: api port 8000 owner: foreign\n")
     monkeypatch.setattr(module, "show_notification", lambda title, message: notifications.append((title, message)))
