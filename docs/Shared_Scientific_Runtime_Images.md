@@ -20,7 +20,7 @@ Publish a complete lane selection with:
 python scripts/publish_runtime_images.py --store-root PATH --lane development --manifest FILE
 ```
 
-The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
+The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
 
 Managed Development API/adapter units consume the selected store's Development reference projection. Runtime-specific settings explicitly selected by a supported caller are resolved at execution rather than prematurely freezing Nextflow defaults. Publication alone never restarts services, migrates production, removes originals or proves live adoption.
 
@@ -61,6 +61,18 @@ python scripts/retire_runtime_images.py --store-root PATH forget-release --relea
 `apply --plan FILE --maintenance-authorization CHANGE_ID` revalidates under the lifecycle fence and **quarantines by rename, not deletion**. The authorization identifies an externally established maintenance window: admissions fenced, all legacy/queued/resumable users accounted for, and no untracked aliases/users. A string alone cannot establish those conditions. Quarantine reclaims zero bytes. Physical purge/grace policy is a separate explicitly reviewed maintenance action. Current references alone and an unprivileged open-FD scan are insufficient grounds for deletion.
 
 ## Acceptance boundary
+
+A deduplication fix is incomplete until every affected supported workflow actually
+invokes its selected singular image. Reader support, environment inspection and
+bytes reclaimed are not substitutes for this execution contract. Verification
+must cover the actual submission command compiler, local container launch, remote
+dependency inventory and translated worker command, saved-job prewarm, independent
+provisioning where publicly supported, managed startup probes, and retained retry
+configuration. Tests must remove conventional originals and record the actual
+container path or pinned image inode at invocation; repeated attempts must not
+create task-local SIF copies. Do not insert selector arguments in a test that the
+production compiler should have supplied. Distinct experimental and canonical
+builds retain distinct scientific identities even when both use the same store.
 
 Automated tests cover real temporary filesystem publication, concurrent publishers, killed publication processes, reference migration/rollback, retained leases, quarantine fencing, remote transport and real Nextflow configuration resolution. Synthetic fixture bytes and fake model commands do not prove scientific inference. Live-image checks must separately exercise real Apptainer execution and verify unchanged image identity/allocation; model/GPU qualification remains distinct.
 
