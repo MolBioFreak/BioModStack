@@ -101,7 +101,16 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
     }
     assert required <= set(denominator["paths"])
     assert {'scripts/lib/shared_runtime_images.py', 'scripts/publish_runtime_images.py'} <= set(denominator['paths'])
-    assert len(denominator["paths"]) == 264
+    assert {
+        'scripts/lib/runtime_image_lifecycle.py', 'scripts/retire_runtime_images.py',
+        'modules/ngs/clone_validation.nf', 'modules/ngs/construct_verify.nf',
+        'platform/api/services/remote_execution/bundle.py',
+        'platform/api/services/remote_execution/cache.py',
+        'platform/api/services/remote_execution/managed_inventory.py',
+        'platform/api/tools/bms_artifact_cache.py',
+        'platform/api/tools/bms_managed_runtime.py',
+    } <= set(denominator['paths'])
+    assert len(denominator["paths"]) == 273
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:
