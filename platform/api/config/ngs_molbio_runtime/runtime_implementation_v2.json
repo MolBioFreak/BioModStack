@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "282c79b6fdd3842a930752ead06866bb48e9baddd403793178569d74b067a053",
+  "content_sha256": "09eee24faeda456e2594f01d4fa57864b77e3ebee101c5e7caf9c76fdd7603d8",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -464,8 +464,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "79fbdd3ee64a4ecb3e5d1bbb7fa409fc4f0b8c4256cb777813e329ea7f1e7f4d",
-      "size_bytes": 442044
+      "sha256": "49b3339b9e29d2efc789d702bf370f1612ac43cd436195f43e972bd542e6c82f",
+      "size_bytes": 442147
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -654,8 +654,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "89745e294f5f967f3fa863da8f3611c950207a190220b012211aa5fb2551c170",
-      "size_bytes": 228289
+      "sha256": "568c443b948a51db1cc6bb3f1a7ba716da7c863c56466a4690cbb6912b676c25",
+      "size_bytes": 229882
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -764,8 +764,8 @@
     },
     {
       "path": "platform/api/services/remote_execution/bundle.py",
-      "sha256": "71cb464a8924eecce389b9fae7ef021dda172e9ab5b8025679fc0bc5a61b96e5",
-      "size_bytes": 40562
+      "sha256": "07907f15ef8f03357cc8c1943fd646fd3ec9754e1e47edae948cc70d9c3c8cb8",
+      "size_bytes": 39764
     },
     {
       "path": "platform/api/services/remote_execution/cache.py",
@@ -1104,8 +1104,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "fdcdc3d3175e56a202aa380b4e1a24847772c47f3d8d9586bbd79227fc31bc80",
-      "size_bytes": 210463
+      "sha256": "676433e20d8d68ea25e36ac8b21bb09cbea93427ad4977239e6da55a59461409",
+      "size_bytes": 210499
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "699f1b17935dd964630bce8104592190c07b60c8",
-  "successor_source_tree": "eb23c2177de478e20d4b1069b49c3e3c86b433e9",
+  "successor_source_commit": "0d5b8d03d7fb78a5b889206c2cad0fe6cbeed160",
+  "successor_source_tree": "1ee6404b97fe13aa2e7784e418fb85df6854dc4a",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
