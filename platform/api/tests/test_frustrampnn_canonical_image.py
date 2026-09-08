@@ -134,6 +134,10 @@ def test_retained_v1_result_reopens_without_rewriting_receipt(tmp_path, monkeypa
 def test_canonical_source_used_for_registered_stage(selected, package, monkeypatch):
     from services.remote_execution import bundle
     canonical, _, identity = selected
+    # The package fixture resets controller installation variables. Bind this
+    # registered-stage fixture to the store containing its verified object.
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(canonical.parents[3]))
+    monkeypatch.setenv('BMS_FRUSTRAMPNN_SIF', str(canonical))
     monkeypatch.setattr(runtime, 'FRUSTRAMPNN_RUNTIME_IDENTITY', identity)
     entries = bundle._runtime_assets('protenix', 'predict', {'run_frustrampnn': True})
     assert (canonical, 'containers/frustrampnn.sif') in entries
