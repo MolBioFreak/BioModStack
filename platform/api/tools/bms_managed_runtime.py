@@ -46,7 +46,10 @@ def validate_manifest(value, cache):
         raise ValueError('invalid_artifacts')
     names = set()
     for row in rows:
-        if set(row) != {'name', 'sha256', 'size_bytes', 'mode'}:
+        fields = {'name', 'sha256', 'size_bytes', 'mode'}
+        if row.get('kind') == 'runtime_image':
+            fields.add('kind')
+        if set(row) != fields:
             raise ValueError('invalid_artifact')
         cache.artifact(row)
         name = row['name']
@@ -55,6 +58,8 @@ def validate_manifest(value, cache):
                 or len(path.parts) < 2 or path.parts[0] not in {'containers', 'weights'}
                 or name in names or type(row['mode']) is not int or not 0 <= row['mode'] <= 0o777):
             raise ValueError('invalid_artifact_path')
+        if (path.parts[0] == 'containers') != (row.get('kind') == 'runtime_image'):
+            raise ValueError('legacy_or_invalid_image_storage')
         names.add(name)
     if any(str(parent) in names for name in names for parent in PurePosixPath(name).parents):
         raise ValueError('conflicting_artifact_paths')
@@ -98,11 +103,30 @@ def publish(path, value, cache):
                 pass
 
 
+def image_storage(root, cache):
+    # Reuse Cache's authoritative path/verification methods without its writing
+    # constructor: inventory must not create absent cache directories.
+    class Reader(cache.Cache):
+        def __init__(self):
+            self.root = PurePosixPath(root.parent.parent / 'cache/artifacts/v1')
+    return Reader()
+
+
 def observe(root, manifest, cache) -> dict[str, Any]:
     digest = validate_manifest(manifest, cache)
     release = root / 'releases' / digest
     rows = []
     for row in manifest['artifacts']:
+        if row.get('kind') == 'runtime_image':
+            try:
+                image_storage(root, cache).verify_runtime(row)
+                state = 'verified'
+            except FileNotFoundError:
+                state = 'missing'
+            except (OSError, ValueError, RuntimeError):
+                state = 'corrupt'
+            rows.append({k: row[k] for k in ('name', 'sha256', 'size_bytes')} | {'state': state})
+            continue
         path = release / row['name']
         state = 'missing'
         try:
@@ -219,18 +243,24 @@ def admit(root, manifest, expected_boot, cache):
         # the wrong device. This is still only a point-in-time preflight.
         cache_root = root.parent.parent / 'cache/artifacts/v1'
         paths = {cache_root / 'incoming', cache_root / 'locks'}
-        paths.update(cache_root / 'objects/sha256' / r['sha256'][:2] for r in manifest['artifacts'])
+        paths.update(cache_root / 'objects/sha256' / r['sha256'][:2]
+                     for r in manifest['artifacts'] if r.get('kind') != 'runtime_image')
+        if any(r.get('kind') == 'runtime_image' for r in manifest['artifacts']):
+            paths.add(image_storage(root, cache).image_store)
         for path in paths:
             with cache.directory(path, create=True) as current:
                 if os.fstat(current).st_dev != os.fstat(parent).st_dev:
                     raise ValueError('managed_filesystem_changed')
-        result = {'admission': check_space(parent, manifest, manifest['artifacts'] * 3)}
+        # Images peak at upload + immutable shared object, never a managed copy.
+        peak = [r for r in manifest['artifacts']
+                for _ in range(2 if r.get('kind') == 'runtime_image' else 3)]
+        result = {'admission': check_space(parent, manifest, peak)}
         fence()
         return result
 
 
 def install(root, manifest, expected_boot, cache):
-    """One worker process owns admission, all copies and activation."""
+    """Own admission, weight copies and activation of shared image references."""
     digest = validate_manifest(manifest, cache)
     with admission_lock(root, cache) as (parent, fence):
         if boot_id() != expected_boot:
@@ -246,6 +276,8 @@ def install(root, manifest, expected_boot, cache):
             current = None
         if missing and current == {'release_sha256': digest}:
             raise ValueError('active_generation_damaged')
+        if any(r.get('kind') == 'runtime_image' for r in missing):
+            raise ValueError('incomplete_shared_image')
         budget = check_space(parent, manifest, missing)
         def copy_progress(event):
             if event.get('state') == 'transferring':
@@ -307,7 +339,8 @@ def activate(root, manifest, expected_boot, cache, fence=lambda: None):
     result = observe(root, manifest, cache)
     if any(row['state'] != 'verified' for row in result['artifacts']):
         raise ValueError('incomplete_release')
-    # Manifest and all copied bytes are durable before the active identity changes.
+    # Weight copies and prepublished shared images are verified before activation.
+    # The manifest records image identity, never another full managed SIF.
     # Prior content-addressed generations remain intact for explicit recovery.
     # Keep directory-entry durability ordered before active publication as well
     # as file fsyncs. No pre-activation failure may replace the prior identity.
@@ -345,7 +378,7 @@ def main():
     elif request['action'] == 'install':
         result = install(root, request['manifest'], request['boot_id'], cache)
     elif request['action'] == 'admit':
-        # Incoming + cache object + managed copy, even for cache hits.
+        # Incoming + cache object (+ managed copy for weights), even for hits.
         # This short conservative preflight reserves nothing.
         result = admit(root, request['manifest'], request['boot_id'], cache)
     elif request['action'] == 'activate':

@@ -50,7 +50,8 @@ def endpoint_digest(target):
 def manifest_for(selection, entries, source):
     return dict(selection=selection.model_dump(), source_revision=source[0], source_tree=source[1],
         artifacts=[dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes,
-                        mode=e.mode) for e in entries])
+                        mode=e.mode, **({'kind': 'runtime_image'} if e.role == 'image' else {}))
+                   for e in entries])
 
 
 def release_digest(manifest):
@@ -88,6 +89,10 @@ def validate_observation(result, manifests):
     if len(result.releases) != len(manifests):
         raise ValueError('Managed inventory identity mismatch')
     for observed, manifest in zip(result.releases, manifests, strict=True):
+        # Old copied-image metadata cannot certify shared-image storage.
+        if any((r['name'].startswith('containers/')) != (r.get('kind') == 'runtime_image')
+               for r in manifest['artifacts']):
+            raise ValueError('Managed image storage identity mismatch')
         expected_artifacts = [{k: r[k] for k in ('name', 'sha256', 'size_bytes')} for r in manifest['artifacts']]
         if (not expected_artifacts or observed.release_sha256 != release_digest(manifest)
                 or observed.selection.model_dump() != manifest['selection']

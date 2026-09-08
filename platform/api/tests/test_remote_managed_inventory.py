@@ -65,13 +65,20 @@ async def test_cumulative_inventory_rehashes_without_host_assets(mounted, assets
     assert not inventory['scientific_ready'] and not inventory['critical_runtime_ready']
     assert all(r['state'] == 'verified' for r in inventory['releases'])
     assert len(uploads) == 2
+    # Both selections share precisely one independently verified immutable SIF.
+    images = list(worker.rglob('*.sif'))
+    assert len(images) == 1
+    assert 'cache/runtime-images/objects/sha256' in str(images[0])
+    assert images[0].stat().st_nlink == 1
+    assert not list((worker / 'managed-assets').rglob('*.sif'))
     before = len(calls)
     assert (await client.get('/vast:1/runtime-inventory')).json() == inventory
     assert len(calls) == before  # GET never SSHs or rewrites evidence.
     model = inventory['releases'][0]
     generation = worker / 'managed-assets/v1/releases' / model['release_sha256']
     for row in model['artifacts']:
-        path = generation / row['name']
+        path = (worker / 'cache/runtime-images/objects/sha256' / row['sha256'] / 'runtime.sif'
+                if row['name'].startswith('containers/') else generation / row['name'])
         assert hashlib.sha256(path.read_bytes()).hexdigest() == row['sha256']
         assert path.stat().st_mode & 0o222 == 0
     # Observation uses saved authoritative manifests, not local model availability.
@@ -89,13 +96,15 @@ async def test_cumulative_inventory_rehashes_without_host_assets(mounted, assets
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('damage,expected', [('corrupt', 'corrupt'), ('mode', 'incompatible'),
+@pytest.mark.parametrize('damage,expected', [('corrupt', 'corrupt'), ('mode', 'corrupt'),
     ('symlink', 'corrupt'), ('marker', 'unverified'), ('missing', 'missing')])
 async def test_observation_reports_real_damage(mounted, damage, expected):
     client, controller, worker, _ = mounted
     await provision(client, controller, 'image')
     result = (await client.get('/vast:1/runtime-inventory')).json()['releases'][0]
-    path = worker / 'managed-assets/v1/releases' / result['release_sha256'] / result['artifacts'][0]['name']
+    path = worker / 'cache/runtime-images/objects/sha256' / result['artifacts'][0]['sha256'] / 'runtime.sif'
+    if damage in {'symlink', 'missing'}:
+        path.parent.chmod(0o700)
     if damage == 'corrupt':
         path.chmod(0o600)
         path.write_bytes(b'corrupt')
@@ -193,7 +202,9 @@ async def test_incomplete_activation_preserves_previous_release(mounted, assets,
     async def incomplete(connection, request, fence):
         if request['action'] == 'install':
             digest = request['manifest']['artifacts'][0]['sha256']
-            (worker / 'cache/artifacts/v1/objects/sha256' / digest[:2] / digest).unlink()
+            path = worker / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif'
+            path.parent.chmod(0o700)
+            path.unlink()
         return await original(connection, request, fence)
     monkeypatch.setattr(mi, 'helper_call', incomplete)
     await provision(client, controller, 'image')
@@ -240,7 +251,7 @@ async def test_cancel_before_activation_retains_cache_not_readiness(mounted, mon
     assert not (worker / 'managed-assets/v1/active/image-protenix.json').exists()
     assert (await client.get('/vast:1/runtime-inventory')).json() is None
     digest = preview['artifacts'][0]['sha256']
-    assert (worker / 'cache/artifacts/v1/objects/sha256' / digest[:2] / digest).exists()
+    assert (worker / 'cache/runtime-images/objects/sha256' / digest / 'runtime.sif').exists()
 
 
 @pytest.mark.asyncio
@@ -265,6 +276,23 @@ async def test_malformed_managed_metadata_is_not_readiness(mounted, store, damag
 
 
 @pytest.mark.asyncio
+async def test_legacy_copied_image_metadata_cannot_certify_shared_storage(mounted, store):
+    client, controller, _, _ = mounted
+    await provision(client, controller, 'image')
+    async with store() as session:
+        target = await session.get(ExecutionTarget, 'vast:1')
+        metadata = copy.deepcopy(target.provider_metadata)
+        saved = metadata['managed_inventory']
+        legacy = saved['manifests'][0]
+        del legacy['artifacts'][0]['kind']
+        saved['observation']['releases'][0]['release_sha256'] = mi.release_digest(legacy)
+        target.provider_metadata = metadata
+        await session.commit()
+    assert (await client.get('/vast:1/runtime-inventory')).json() is None
+    assert (await client.post('/vast:1/runtime-inventory/refresh')).status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_space_preflight_failure_happens_before_asset_upload(mounted, monkeypatch):
     client, controller, worker, (_, uploads) = mounted
     original = mi.helper_call
@@ -286,8 +314,8 @@ def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):
     from tools import bms_artifact_cache as helper
     from tools import bms_managed_runtime as runtime
     data = b'image'
-    manifest = dict(selection=dict(kind='image', model_id='protenix'), source_revision='a'*40,
-        source_tree='b'*40, artifacts=[dict(name='containers/protenix.sif', sha256=hashlib.sha256(data).hexdigest(),
+    manifest = dict(selection=dict(kind='model', model_id='protenix'), source_revision='a'*40,
+        source_tree='b'*40, artifacts=[dict(name='weights/protenix.sif', sha256=hashlib.sha256(data).hexdigest(),
                                           size_bytes=len(data), mode=0o644)])
     root = tmp_path / 'managed'
     release = root / 'releases' / runtime.validate_manifest(manifest, helper)
@@ -295,7 +323,7 @@ def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):
     outside = tmp_path / 'outside'
     outside.mkdir()
     (outside / 'protenix.sif').write_bytes(data)
-    (release / 'containers').symlink_to(outside, target_is_directory=True)
+    (release / 'weights').symlink_to(outside, target_is_directory=True)
     assert runtime.observe(root, manifest, helper)['state'] == 'corrupt'
     with pytest.raises(ValueError, match='incomplete_release'):
         runtime.activate(root, manifest, runtime.boot_id(), helper)

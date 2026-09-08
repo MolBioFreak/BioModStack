@@ -1,4 +1,4 @@
-"""Offline syscall fault injection against real managed filesystem copies."""
+"""Offline fault injection for weight copies and shared image activation."""
 import errno
 import hashlib
 import importlib.util
@@ -26,24 +26,73 @@ def tree(tmp_path):
     managed = load('bms_managed_runtime')
     root = tmp_path / 'worker/managed-assets/v1'
     storage = cache.Cache(tmp_path / 'worker/cache/artifacts/v1')
-    def manifest(data=b'old image', names=('containers/test.sif',)):
+    def manifest(data=b'old image', names=('weights/test.sif',)):
         digest = hashlib.sha256(data).hexdigest()
         source = Path(storage.root) / 'incoming' / digest
         source.write_bytes(data)
         row = dict(sha256=digest, size_bytes=len(data))
         storage.ingest(row, source)
-        return dict(selection=dict(kind='image', model_id='test'), source_revision='a'*40,
+        return dict(selection=dict(kind='model', model_id='test'), source_revision='a'*40,
                     source_tree='b'*40,
                     artifacts=[dict(row, name=name, mode=0o644) for name in names])
     prior = manifest()
     managed.install(root, prior, managed.boot_id(), cache)
-    marker = root / 'active/image-test.json'
+    marker = root / 'active/model-test.json'
     return managed, cache, root, manifest, prior, marker
+
+
+def test_shared_image_activation_reuses_authoritative_object(tmp_path, monkeypatch):
+    cache, m = load('bms_artifact_cache'), load('bms_managed_runtime')
+    root = tmp_path / 'worker/managed-assets/v1'
+    storage = cache.Cache(tmp_path / 'worker/cache/artifacts/v1')
+    data = b'shared SIF'
+    row = dict(name='containers/test.sif', sha256=hashlib.sha256(data).hexdigest(),
+               size_bytes=len(data), mode=0o644, kind='runtime_image')
+    manifest = dict(selection=dict(kind='image', model_id='test'), source_revision='a'*40,
+                    source_tree='b'*40, artifacts=[row])
+    source = Path(storage.root) / 'incoming/image'
+    source.write_bytes(data)
+    storage.ingest(row, source)
+    image = storage.verify_runtime(row)
+    before = image.stat()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('managed image activation must not copy a SIF')
+    monkeypatch.setattr(cache.Cache, '_publish_copy', forbidden)
+    for selection in ('image', 'model'):
+        selected = manifest | {'selection': dict(kind=selection, model_id='test')}
+        result = m.install(root, selected, m.boot_id(), cache)
+        assert result['release']['state'] == 'verified'
+        assert result['admission']['additional_copy_bytes'] == 0
+    after = image.stat()
+    assert all(getattr(after, key) == getattr(before, key) for key in
+               ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+    assert list(root.rglob('*.sif')) == []
+    assert list((Path(storage.root) / 'objects').rglob('*')) == [Path(storage.root) / 'objects/sha256']
+    # A legacy manifest must not bless even correctly hashed old copied bytes.
+    legacy = manifest | {'artifacts': [{k: v for k, v in row.items() if k != 'kind'}]}
+    with pytest.raises(ValueError, match='legacy_or_invalid_image_storage'):
+        m.install(root, legacy, m.boot_id(), cache)
+    image.chmod(0o600)
+    image.write_bytes(b'corrupt')
+    with pytest.raises(ValueError, match='active_generation_damaged'):
+        m.install(root, manifest, m.boot_id(), cache)
+    assert m.observe(root, manifest, cache)['state'] == 'corrupt'
+    assert image.read_bytes() == b'corrupt'
+
+
+def test_image_observation_is_read_only_when_store_absent(tmp_path):
+    cache, m = load('bms_artifact_cache'), load('bms_managed_runtime')
+    root = tmp_path / 'worker/managed-assets/v1'
+    manifest = dict(selection=dict(kind='image', model_id='test'), source_revision='a'*40,
+                    source_tree='b'*40, artifacts=[dict(name='containers/test.sif', sha256='c'*64,
+                        size_bytes=1, mode=0o644, kind='runtime_image')])
+    assert m.observe(root, manifest, cache)['state'] == 'missing'
+    assert not list(tmp_path.iterdir())
 
 
 def test_missing_copy_accounting_and_reuse(tree, monkeypatch):
     m, cache, root, make, prior, marker = tree
-    successor = make(b'next', ('containers/a.sif', 'containers/b.sif'))
+    successor = make(b'next', ('weights/a.sif', 'weights/b.sif'))
     result = m.install(root, successor, m.boot_id(), cache)
     assert result['admission']['additional_copy_bytes'] >= 2 * len(b'next')
     assert result['admission']['reservation'] is False
@@ -52,7 +101,7 @@ def test_missing_copy_accounting_and_reuse(tree, monkeypatch):
     monkeypatch.setattr(cache.Cache, '_publish_copy', forbidden)
     result = m.install(root, successor, m.boot_id(), cache)
     assert result['admission']['additional_copy_bytes'] == 0
-    assert (root / 'releases' / m.validate_manifest(prior, cache) / 'containers/test.sif').read_bytes() == b'old image'
+    assert (root / 'releases' / m.validate_manifest(prior, cache) / 'weights/test.sif').read_bytes() == b'old image'
 
 
 def test_low_space_rejects_before_first_copy(tree, monkeypatch):
@@ -166,7 +215,7 @@ def test_symlink_parent_cannot_redirect_copy(tree, tmp_path):
     release.mkdir()
     outside = tmp_path / 'outside'
     outside.mkdir()
-    (release / 'containers').symlink_to(outside)
+    (release / 'weights').symlink_to(outside)
     with pytest.raises(OSError):
         m.install(root, successor, m.boot_id(), cache)
     assert list(outside.iterdir()) == []
@@ -191,7 +240,7 @@ def test_boot_change_during_copy_prevents_activation(tree, monkeypatch):
 
 def test_damaged_active_generation_is_not_rewritten(tree):
     m, cache, root, make, prior, marker = tree
-    leaf = root / 'releases' / m.validate_manifest(prior, cache) / 'containers/test.sif'
+    leaf = root / 'releases' / m.validate_manifest(prior, cache) / 'weights/test.sif'
     leaf.chmod(0o600)
     leaf.write_bytes(b'damage')
     with pytest.raises(ValueError, match='active_generation_damaged'):
@@ -257,7 +306,7 @@ def test_parent_renamed_during_copy_cannot_activate(tree, monkeypatch):
     original = cache.Cache._publish_copy
     def rename_after_copy(storage, source, out, name, row, mode):
         original(storage, source, out, name, row, mode)
-        path = root / 'releases' / m.validate_manifest(successor, cache) / 'containers'
+        path = root / 'releases' / m.validate_manifest(successor, cache) / 'weights'
         path.rename(path.with_name('retained'))
         path.mkdir()
     monkeypatch.setattr(cache.Cache, '_publish_copy', rename_after_copy)
@@ -291,6 +340,6 @@ def test_preupload_rejects_cache_on_another_device(tree, monkeypatch):
 
 def test_manifest_path_prefix_collision_rejected(tree):
     m, cache, root, make, prior, marker = tree
-    manifest = make(b'new', ('containers/a', 'containers/a/b'))
+    manifest = make(b'new', ('weights/a', 'weights/a/b'))
     with pytest.raises(ValueError, match='conflicting_artifact_paths'):
         m.install(root, manifest, m.boot_id(), cache)
