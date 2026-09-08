@@ -249,11 +249,23 @@ MSA artifacts required for downstream inference must be delivered to the assigne
 
 ### Alternatives researched, not selected or integrated
 
-Neurosnap is a possible second option, explicitly deferred from immediate bridge work. Basic authentication/rate lookup succeeded, but paired-MSA and scientific output compatibility remain unvalidated. No paid evaluation or provider integration is part of the current work package.
+**Scope amendment approved by Christian:** Neurosnap/keyed MSA API integration is now part of the bridge work package alongside the currently enabled ColabFold API. This supersedes the earlier deferral, not ColabFold's current operating policy. Section 17 defines the bounded extension. Paired-MSA and scientific output compatibility remain unvalidated; inclusion in scope is not provider acceptance or authorization for an unbounded paid evaluation.
 - **Tamarind Bio:** hosted MMseqs2 MSA offering; its tool description says searches run in Tamarind's environment rather than an external server. Evaluate API access, database/pairing/output compatibility, pricing, terms and privacy before any adoption.
 - **Neurosnap:** advertises MMseqs2 MSA generation through its API. Evaluate database versions, pairing, retention/privacy, quotas and contract compatibility; it is not certified as a ColabFold drop-in here.
 - **NVIDIA MSA Search NIM:** documented deployable API server software. Self-hosting is a long-term infrastructure candidate, not a confirmed public hosted replacement in this review.
 
 Sources: https://github.com/sokrypton/ColabFold (README usage constraint); https://app.tamarind.bio/tools/msa ; https://docs.tamarind.bio/tasks/structure-prediction ; https://neurosnap.ai/service/mmseqs2+MSA+Generation ; https://docs.nvidia.com/nim/bionemo/msa-search/2.5.0/api-reference.html . Public documentation/search evidence only; no provider account, billable request, sequence submission or integration test performed. Dynamic pages were not all directly extractable; hosted claims are attributed, not acceptance-certified.
 
-This finalized specification is the product/design baseline. It does not assert implemented features, live deployment, performance or scientific acceptance. The visual prototype remains illustrative; its older discussion labels do not override this specification.
+## 17. Keyed MSA API extension — in scope, not yet accepted
+
+Add Neurosnap as an explicitly selected keyed provider alongside ColabFold using the existing controller preparation and portable-input handoff. Do not redesign worker orchestration, silently replace the current provider, or re-enable local search. References above to ColabFold-only describe the currently enabled implementation; this section expands the implementation scope.
+
+- Discover the provider's actual API/service schema, authentication, supported database/pairing controls, native output and operation lifecycle from authoritative evidence; do not invent endpoint or compatibility claims.
+- Add the provider through the existing supported configuration/setup interface, with server-owned credential references and human/agent setup parity. Readiness reports missing credentials/runtime or unsupported capabilities without exposing secret values. Never commit credentials or include them in worker bundles/receipts.
+- Preserve complete provider-specific scientific settings through the existing typed schema, browser/API selection, preview, persisted request, clone/retry and provenance. Existing ColabFold jobs keep their selected provider; no automatic cross-provider fallback or sequence disclosure.
+- Reuse controller-side submit/poll/download/validation and worker artifact delivery. Provider ticket recovery, throttling, authentication failure, cancellation and ambiguous submission remain explicit; do not claim cancellation stopped remote work unless the provider proves it.
+- Preserve and validate A3M query/chain identities, pairing semantics and native model input contracts. Unsupported provider/model/workflow combinations fail closed rather than coercing paired data or declaring universal compatibility.
+- Verify contract tests first, then a separately bounded live provider check once approved credentials and scientific acceptance inputs are available. A provider key alone is not an accepted scientific/runtime contract.
+- Continue incremental deployment of the ready bridge independently; the new provider does not block that deployment or imply the broader MSA coverage is already implemented.
+
+This finalized specification is the product/design baseline. It does not assert implemented features, live deployment, performance or scientific acceptance. The visual prototype remains illustrative; its older discussion labels do not override this specification. The section 17 scope amendment supersedes earlier provider deferral statements.
