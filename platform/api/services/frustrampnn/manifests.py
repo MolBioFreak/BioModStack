@@ -506,12 +506,41 @@ def _observed_cardinality(relative: str, payload: bytes, instance: Any | None) -
     return None
 
 
+def _retained_v1_request_for_validation(
+    request: Mapping[str, Any], receipt: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Validate a relocated v1 configuration without rewriting retained bytes.
+
+    Only the historical host location may differ. Reconstruct its complete
+    configuration digest from today's scientific authority and the validated
+    receipt, then adapt a detached schema-validation view. Inventory and closure
+    hashes continue to consume the original request, receipt and manifest bytes.
+    """
+    from .configuration import configuration_sha256, global_configuration
+
+    current = global_configuration()
+    parameters = request.get("parameters", {})
+    recorded_digest = parameters.get("configuration_sha256")
+    if recorded_digest is None or recorded_digest == current["configuration_sha256"]:
+        return request
+    validate_schema("frustrampnn_execution_receipt_v1", receipt)
+    _validate_receipt_argv(receipt)
+    historical = global_configuration()
+    historical["runtime"]["configured_sif_path"] = receipt["configured_sif_path"]
+    if recorded_digest != configuration_sha256(historical):
+        raise ManifestValidationError("retained request configuration hash mismatch")
+    return {**request, "parameters": {
+        **parameters, "configuration_sha256": current["configuration_sha256"],
+    }}
+
+
 def _record(
     relative: str,
     payload: bytes,
     declared_cardinality: Mapping[str, Any] | None,
     *,
     allow_legacy_external_authority: bool = False,
+    retained_v1_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema_name: str | None = None
     schema_version: int | None = None
@@ -547,6 +576,12 @@ def _record(
             raise ManifestValidationError(f"schema identity mismatch for {relative}")
         try:
             schema_instance = instance
+            if (
+                schema_key == "workflow_component_request_v1"
+                and retained_v1_receipt is not None
+                and isinstance(instance, Mapping)
+            ):
+                schema_instance = _retained_v1_request_for_validation(instance, retained_v1_receipt)
             if (
                 allow_legacy_external_authority
                 and schema_key == "workflow_component_request_v2"
@@ -600,7 +635,9 @@ def _build_result_manifest_v1(root: Path | str) -> dict[str, Any]:
         _, _, instances[relative] = _json_identity(payloads[relative], relative)
     request = instances["workflow_component_request_v1.json"]
     try:
-        validate_schema("workflow_component_request_v1", request)
+        validate_schema("workflow_component_request_v1", _retained_v1_request_for_validation(
+            request, instances["frustrampnn_execution_receipt_v1.json"],
+        ))
     except Exception as exc:
         raise ManifestValidationError(f"request schema validation failed: {exc}") from exc
     external_authority = request["identity_authority"] in {
@@ -639,6 +676,7 @@ def _build_result_manifest_v1(root: Path | str) -> dict[str, Any]:
             relative,
             payloads[relative],
             cardinalities[relative],
+            retained_v1_receipt=instances["frustrampnn_execution_receipt_v1.json"],
         )
         for relative in artifact_paths
     ]
@@ -992,12 +1030,15 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
     ):
         raise ManifestValidationError("receipt stdout/stderr artifact references are not canonical")
     if (
-        receipt["sif_sha256"] != identity.sif_sha256
-        # Retained v1 receipts may name the original installation object.
-        # This is provenance only; it never selects a new execution path.
-        or receipt["configured_sif_path"] not in {
-            identity.configured_sif_path, str(_runtime.get_container_path(identity.sif_name)),
-        }
+        # Compare image authority while lexically validating both locations.
+        # A retained v1 location is hash-bound provenance, not an execution
+        # selector: it need not exist or share the current installation root.
+        # Executions still validate and pin the current configured CAS object.
+        not _runtime.compatible_runtime_identity(
+            {key: receipt[key] for key in ("configured_sif_path", "sif_sha256")},
+            {"configured_sif_path": identity.configured_sif_path,
+             "sif_sha256": identity.sif_sha256},
+        )
         or receipt["executable_path"] != identity.executable_path
         or receipt["executable_sha256"] != identity.executable_sha256
         or receipt["checkpoint_path"] != identity.checkpoint_path
@@ -1209,11 +1250,16 @@ def _validate_result_manifest_v1(
     )
     if paths != list(expected_paths):
         raise ManifestValidationError("manifest path order/set is not canonical")
+    _, _, retained_receipt = _json_identity(
+        payloads["frustrampnn_execution_receipt_v1.json"],
+        "frustrampnn_execution_receipt_v1.json",
+    )
     for declared in records:
         observed_record = _record(
             declared["relative_path"],
             payloads[declared["relative_path"]],
             declared["cardinality"],
+            retained_v1_receipt=retained_receipt,
         )
         if dict(declared) != observed_record:
             raise ManifestValidationError(
