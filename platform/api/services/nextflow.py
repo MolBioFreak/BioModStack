@@ -1086,7 +1086,9 @@ def _build_boltz_cp_sequence_entry(
             "id": component_id,
             "sequence": sequence,
         }
-        if not use_msa:
+        if component.get("msa_path"):
+            protein_payload["msa"] = str(component["msa_path"])
+        elif not use_msa:
             protein_payload["msa"] = "empty"
         return {"protein": protein_payload}
 
@@ -1156,7 +1158,9 @@ def _write_boltz_cp_input_yaml(
             "id": [primary_chain_id],
             "sequence": sequence,
         }
-        if not use_msa:
+        if params.get("msa_path"):
+            protein_payload["msa"] = str(params["msa_path"])
+        elif not use_msa:
             protein_payload["msa"] = "empty"
         sequences = [{"protein": protein_payload}]
 
@@ -2245,6 +2249,24 @@ async def launch_nextflow_job(
             )
 
         try:
+            # Provider work runs once on BMS, before native input sealing. Remote
+            # bundles transfer these inputs regardless of result-return policy.
+            from services.model_msa_handoff import prepare_launch_msa
+            if model_id == 'boltz_cp_experimental' and not launch_params.get('bcp_input_path'):
+                cp_input = _write_boltz_cp_input_yaml(
+                    output_dir=output_dir, params=launch_params,
+                    complex_components=launch_params.get('complex_components'))
+                if cp_input:
+                    launch_params['bcp_input_path'] = str(cp_input)
+            launch_params = await asyncio.to_thread(
+                prepare_launch_msa, model_id, launch_params, Path(output_dir) / 'prepared-msa')
+            if model_id == 'boltz2':
+                # Persist controller materialization before the immutable Boltz
+                # input roster is compared with its persisted launch request.
+                job.params = {**dict(job.params or {}), **{
+                    key: launch_params[key] for key in ('msa_path', 'complex_components')
+                    if key in launch_params}}
+                await session.commit()
             # Resolve the same command/input owner used at execution, then seal
             # its input roster before even a workflow-adapter handoff.
             if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
@@ -3303,8 +3325,12 @@ def build_job_nextflow_command(job, params, output_dir):
     """All launch/rebuild paths join request origin from their owning persisted Job."""
     from services.core_protein_scientific_contract import workflow_params
     requested = (job.provenance or {}).get('core_protein_requested_params')
-    return build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
+    command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
         output_dir, job_id=job.id, requested_params=requested)
+    for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
+        if params.get(key):
+            command.extend(['--' + key, str(params[key])])
+    return command
 
 
 def build_nextflow_command(
