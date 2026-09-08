@@ -9,19 +9,20 @@ import copy
 import json
 from pathlib import Path
 
-from biomodstack_msa_handoff import digest, validate_a3m
+from biomodstack_msa_handoff import digest
+from biomodstack_boltz_msa import a3m_rows, validate_boltz_msa, write_paired_csv
+from biomodstack_msa_handoff import validate_a3m
 
 
 def enabled(value, default=False):
     return default if value is None else str(value).lower() in {'true', '1', 'yes', 'on'}
 
 
-def native_alignments(result: dict, sequences: list[str], destination: Path) -> list[Path]:
-    """Verify shared cache bytes and emit Boltz/ESMFold native unpaired A3Ms.
+def native_alignments(result: dict, sequences: list[str], destination: Path, *, model_id: str = 'boltz2') -> list[Path]:
+    """Verify cache artifacts; emit A3M or Boltz CSV with shared row-group keys.
 
-    These native consumers do not accept a separate paired A3M. Refuse paired
-    hits rather than silently stripping pairing or inventing taxonomy IDs.
-    Query-only paired files carry no pairing information and may be omitted.
+    Paired role rows are already ordered by the shared provider. All chains
+    must carry the same paired depth; never infer groups from FASTA labels.
     """
     paths = {}
     for artifact in result['artifacts']:
@@ -34,8 +35,6 @@ def native_alignments(result: dict, sequences: list[str], destination: Path) -> 
         if digest(source.read_bytes()) != artifact['sha256']:
             raise ValueError('Shared MSA cache artifact digest mismatch')
         data = validate_a3m(source, sequences[index])
-        if role == 'paired' and sum(line.startswith('>') for line in data.decode().splitlines()) > 1:
-            raise ValueError('Separate paired A3M hits require a model-native pairing adapter; refusing loss of pairing')
         destination.mkdir(parents=True, exist_ok=True)
         target = destination / f'chain-{index}-{role}.a3m'
         target.write_bytes(data)
@@ -45,6 +44,23 @@ def native_alignments(result: dict, sequences: list[str], destination: Path) -> 
     (destination / 'provider-provenance.json').write_text(json.dumps({
         key: result.get(key) for key in ('provider', 'request_digest', 'provenance', 'cache_hit')
     }, sort_keys=True, indent=2))
+    paired = {i: a3m_rows(p.read_bytes()) for (i, role), p in paths.items() if role == 'paired'}
+    if any(len(rows) > 1 for rows in paired.values()):
+        if len(paired) != len(sequences) or len({len(rows) for rows in paired.values()}) != 1:
+            raise ValueError('Paired alignments require equal row counts for every requested chain')
+        outputs = []
+        for index in range(len(sequences)):
+            target = destination / f'chain-{index}.csv'
+            write_paired_csv(target, paths[index, 'unpaired'].read_bytes(),
+                             paths[index, 'paired'].read_bytes(),
+                             deduplicates_paired=model_id == 'boltz_cp_experimental')
+            outputs.append(target.resolve())
+        (destination / 'pairing-groups.json').write_text(json.dumps({
+            'schema': 'bms.boltz-row-groups.v1', 'key_semantics': 'provider-paired-row-index-not-taxonomy',
+            'chain_indices': list(range(len(sequences))),
+            'paired_rows': len(next(iter(paired.values()))) - 1,
+        }, sort_keys=True, indent=2))
+        return outputs
     return [paths[index, 'unpaired'] for index in range(len(sequences))]
 
 
@@ -69,7 +85,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
         return effective
     if model_id == 'rf3':
         if enabled(params.get('rf3_use_msa')):
-            raise ValueError('RF3 has no executable prediction workflow in this source revision (structure_prediction rejects pred_method=rf3)')
+            raise ValueError('RF3 has no executable prediction workflow in this source revision (structure_prediction rejects pred_method=rf3). Native RF3 accepts per-component msa_path A3M with TaxID= pairing, not separate paired A3M or Boltz CSV; see docs/Native_MSA_Consumer_Contracts.md')
         return effective
     is_boltz = model_id in {'boltz2', 'boltz_cp_experimental'}
     if is_boltz and not enabled(params.get('boltz_use_msa')):
@@ -90,12 +106,12 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
         missing = [c for c in proteins if not c.get('msa_path')]
         for c in proteins:
             if c.get('msa_path'):
-                validate_a3m(Path(c['msa_path']), c['sequence'])
+                validate_boltz_msa(Path(c['msa_path']), c['sequence'])
     else:
         supplied = params.get('msa_path') or params.get('esmf_msa_path')
         sequence = str(params.get('sequence_input') or params.get('sequence') or '').strip()
         if supplied:
-            validate_a3m(Path(supplied), sequence)
+            validate_boltz_msa(Path(supplied), sequence)
             return effective
         missing = [{'sequence': sequence}]
     if missing:
@@ -104,7 +120,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
         from services.msa_preparation import prepare_model_msa
         result = prepare_model_msa(sequences=sequences, params=effective)
-        paths = native_alignments(result, sequences, destination)
+        paths = native_alignments(result, sequences, destination, model_id=model_id)
         for component, path in zip(missing, paths):
             component['msa_path'] = str(path)
     if proteins:
@@ -129,15 +145,15 @@ def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
     if missing:
         from services.msa_preparation import prepare_model_msa
         sequences = [p['sequence'] for p in missing]
-        paths = native_alignments(prepare_model_msa(sequences=sequences, params=params), sequences, destination / 'alignments')
+        paths = native_alignments(prepare_model_msa(sequences=sequences, params=params), sequences, destination / 'alignments', model_id='boltz_cp_experimental')
         for protein, path in zip(missing, paths):
             protein['msa'] = str(path)
     for index, protein in enumerate(proteins):
         path = Path(protein['msa'])
         if not path.is_absolute():
             path = source.parent / path
-        data = validate_a3m(path, protein['sequence'])
-        relative = f'chain-{index}.a3m'
+        data = validate_boltz_msa(path, protein['sequence'])
+        relative = f'chain-{index}.csv' if path.suffix.lower() == '.csv' else f'chain-{index}.a3m'
         (destination / relative).write_bytes(data)
         protein['msa'] = relative
     (destination / 'input.yaml').write_text(yaml.safe_dump(payload, sort_keys=False))
