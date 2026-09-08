@@ -50,8 +50,12 @@ def test_blocked_json_and_stderr_remain_visible(monkeypatch):
     captured = {}
     row = SimpleNamespace(set_subtitle=lambda text: captured.update(subtitle=text))
     buffer = SimpleNamespace(set_text=lambda text: captured.update(output=text))
+    control = SimpleNamespace(set_sensitive=lambda value: None)
     panel = SimpleNamespace(setup_status_row=row, setup_output=SimpleNamespace(get_buffer=lambda: buffer),
+        setup_run_button=control, setup_action_combo=control, setup_options=control,
+        setup_details_row=SimpleNamespace(set_expanded=lambda value: None),
         _update_dev_updates_control=lambda: None, _refresh_status_once=lambda: None)
+    panel._setup_feedback = lambda *args: module.BioModStackPanel._setup_feedback(panel, *args)
     monkeypatch.setattr(module, "show_notification", lambda *args: None)
     report = json.dumps({"status": "blocked", "errors": [{"code": "missing_prerequisite"}]})
     result = SimpleNamespace(returncode=3, stdout=report, stderr="additional diagnostics")
@@ -70,6 +74,29 @@ def test_plain_labels_preserve_internal_actions(monkeypatch):
     for text in (*module.SETUP_ACTIONS.values(), *module.SETUP_MUTATIONS.values()):
         assert not any(term in text.lower() for term in
             ("artifact", "installer-owned", "external root", "authority", "provisioning"))
+
+
+def test_every_action_explains_inputs_and_scope(monkeypatch):
+    module = load_module(monkeypatch)
+    assert set(module.SETUP_HELP) == set(module.SETUP_ACTIONS)
+    assert len(module.SETUP_HELP) == 13
+    assert set(module.SETUP_INPUTS) <= set(module.SETUP_ACTIONS)
+    assert "Existing installations cannot be replaced" in module.SETUP_HELP["configure"]
+    assert module.SETUP_INPUTS["recover"] == ("operation",)
+    assert module.SETUP_INPUTS["verify"] == ("models",)
+    assert all(text.strip() for text in module.SETUP_HELP.values())
+
+
+def test_feedback_never_leaves_details_blank(monkeypatch):
+    module = load_module(monkeypatch)
+    captured = {}
+    panel = SimpleNamespace(
+        setup_status_row=SimpleNamespace(set_subtitle=lambda text: captured.update(status=text)),
+        setup_output=SimpleNamespace(get_buffer=lambda: SimpleNamespace(set_text=lambda text: captured.update(output=text))),
+        setup_details_row=SimpleNamespace(set_expanded=lambda expanded: captured.update(expanded=expanded)),
+    )
+    module.BioModStackPanel._setup_feedback(panel, "Completed", "")
+    assert captured == {"status": "Completed", "output": "No diagnostic output was returned.", "expanded": True}
 
 
 def test_password_surface_is_removed(monkeypatch):

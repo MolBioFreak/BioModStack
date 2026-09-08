@@ -120,10 +120,30 @@ SETUP_ACTIONS = {
     "provision-plan": "Preview model requirements",
     "verify": "Check models",
 }
+SETUP_HELP = {
+    "discover": "Check tools, storage and available hardware. No changes are made. Model IDs are optional.",
+    "plan": "Show what Development needs before setup. No packages are installed or services started. Model IDs are optional.",
+    "python-plan": "Show the Python version, package list and installation location. No changes are made.",
+    "python-bootstrap": "Install the locked Python packages in a separate environment for this checkout. Preview Python installation shows the location. No models or services are started.",
+    "python-verify": "Check the installed Python environment against the required packages. No changes are made.",
+    "frontend-plan": "Show the web interface's package manager, lockfile and installation location. No changes are made.",
+    "frontend-bootstrap": "Install the locked web interface packages in separate storage for this checkout. Preview web interface installation shows the location. This does not build or start the web interface.",
+    "frontend-verify": "Check the installed web interface packages against the lockfile. No changes are made.",
+    "configure-preview": "Read a settings JSON file and show proposed changes without saving. Enter its full path below.",
+    "configure": "Save first-install settings from a settings JSON file. Existing installations cannot be replaced here; use Storage and compute for supported edits. Preview settings first. No services start.",
+    "recover": "Finish an interrupted settings update using the recovery ID from its report. Do not use this for package installation.",
+    "provision-plan": "List the files and tools required by the selected models. Enter model IDs below. Nothing is downloaded.",
+    "verify": "Check whether the selected models have the files and tools they need. Enter model IDs below. No downloads or jobs are started.",
+}
+SETUP_INPUTS = {
+    "discover": ("models",), "plan": ("models",),
+    "configure-preview": ("document",), "configure": ("document",),
+    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models",),
+}
 SETUP_MUTATIONS = {
     "python-bootstrap": "Install the required Python packages? An internet connection may be needed. This does not download models or start services.",
     "frontend-bootstrap": "Install the packages needed for the web interface? An internet connection may be needed. This does not build or start the web interface.",
-    "configure": "Apply settings from the selected file? Preview settings first to review path and setting changes. These apply the next time you start services; no services start now.",
+    "configure": "Apply first-install settings from the selected file? Preview settings first. Existing installations cannot be replaced here. No services start now.",
     "recover": "Resume the interrupted settings update? This may save installation settings. No services start now.",
 }
 
@@ -784,32 +804,64 @@ class BioModStackPanel(Adw.Application):
         row = Adw.ActionRow(title="Setup action")
         row.add_suffix(self.setup_action_combo)
         run = Gtk.Button(label="Run")
+        self.setup_run_button = run
         run.connect("clicked", self._on_setup_action)
         row.add_suffix(run)
         group.add(row)
+        self.setup_help = Gtk.Label(xalign=0, wrap=True)
+        group.add(self.setup_help)
 
         options = Adw.ExpanderRow(title="Options")
-        options.set_subtitle("For settings updates or model checks")
+        self.setup_options = options
         self.setup_entries = {}
-        for key, title in (("document", "Settings file (JSON)"),
-                           ("operation", "Recovery ID"),
-                           ("models", "Model IDs (comma-separated)")):
+        self.setup_input_rows = {}
+        for key, title, hint in (
+            ("document", "Settings file (JSON)", "Full path to an existing settings file, starting with /"),
+            ("operation", "Recovery ID", "Copy operation_id from the interrupted settings report"),
+            ("models", "Model IDs (comma-separated)", "For example: protenix, boltz2"),
+        ):
             entry = Gtk.Entry(hexpand=True)
-            option = Adw.ActionRow(title=title)
+            entry.set_placeholder_text(hint)
+            entry.set_tooltip_text(hint)
+            option = Adw.ActionRow(title=title, subtitle=hint)
             option.add_suffix(entry)
             options.add_row(option)
             self.setup_entries[key] = entry
+            self.setup_input_rows[key] = option
         group.add(options)
-        self.setup_status_row = Adw.ActionRow(title="Setup result", subtitle="Choose Check system, then click Run.")
+        self.setup_status_row = Adw.ActionRow(title="Setup result")
         group.add(self.setup_status_row)
         output_row = Adw.ExpanderRow(title="Details")
+        self.setup_details_row = output_row
+        output_row.set_expanded(True)
         self.setup_output = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                          wrap_mode=Gtk.WrapMode.WORD_CHAR)
         output_scroll = Gtk.ScrolledWindow(min_content_height=180, max_content_height=300)
         output_scroll.set_child(self.setup_output)
         output_row.add_row(output_scroll)
         group.add(output_row)
+        self.setup_action_combo.connect("changed", self._on_setup_selection)
+        self._on_setup_selection(self.setup_action_combo)
         return group
+
+    def _setup_feedback(self, status: str, detail: str) -> None:
+        self.setup_status_row.set_subtitle(status)
+        self.setup_output.get_buffer().set_text(detail or "No diagnostic output was returned.")
+        self.setup_details_row.set_expanded(True)
+
+    def _on_setup_selection(self, combo):
+        action = combo.get_active_id()
+        help_text = SETUP_HELP[action]
+        self.setup_help.set_text(help_text)
+        inputs = SETUP_INPUTS.get(action, ())
+        for key, row in self.setup_input_rows.items():
+            row.set_visible(key in inputs)
+        self.setup_options.set_visible(bool(inputs))
+        required = action not in {"discover", "plan"}
+        self.setup_options.set_subtitle("Required for this action" if required else "Optional: limit the check to model IDs")
+        self.setup_options.set_expanded(bool(inputs) and required)
+        self._setup_feedback("Not run yet. Review the action, then click Run.",
+                             SETUP_ACTIONS[action] + "\n\n" + help_text + "\n\nNo action has been run for this selection.")
 
     def _on_setup_action(self, button):
         action = self.setup_action_combo.get_active_id()
@@ -818,12 +870,13 @@ class BioModStackPanel(Adw.Application):
                 key: entry.get_text().strip() for key, entry in self.setup_entries.items()
             })
         except ValueError as exc:
-            self.setup_status_row.set_subtitle(str(exc))
+            self._setup_feedback("Not started. Check the required input.", str(exc))
             return
         if getattr(self, "_service_action_active", False):
             self.setup_status_row.set_subtitle("Wait for the current action to finish.")
             return
         if action in SETUP_MUTATIONS:
+            self._setup_feedback("Waiting for confirmation. Nothing changed yet.", SETUP_MUTATIONS[action])
             dialog = Gtk.MessageDialog(transient_for=self.window, modal=True,
                 message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
                 text=SETUP_ACTIONS[action], secondary_text=SETUP_MUTATIONS[action])
@@ -835,6 +888,8 @@ class BioModStackPanel(Adw.Application):
                 confirmation.destroy()
                 if response == Gtk.ResponseType.ACCEPT:
                     self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
+                else:
+                    self._setup_feedback("Cancelled. Nothing changed.", SETUP_ACTIONS[action] + " was not run.")
 
             dialog.connect("response", respond)
             dialog.present()
@@ -933,8 +988,11 @@ class BioModStackPanel(Adw.Application):
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(f"{label} in progress…")
         if label.startswith("Setup: "):
-            self.setup_status_row.set_subtitle(f"{label} in progress…")
-            self.setup_output.get_buffer().set_text("Waiting for results…")
+            self._setup_feedback(f"{label} — Working…",
+                                 label + "\n\nWorking… The report will appear here when the command finishes. Package installation may take several minutes.")
+            self.setup_run_button.set_sensitive(False)
+            self.setup_action_combo.set_sensitive(False)
+            self.setup_options.set_sensitive(False)
         show_notification(label, "BioModStack action started.")
 
         def worker() -> None:
@@ -946,6 +1004,7 @@ class BioModStackPanel(Adw.Application):
                     env=self._script_env(),
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=None if label.startswith("Setup: ") else 360,
                     stdin=subprocess.DEVNULL,
                     cwd=PROJECT_ROOT,
@@ -986,9 +1045,12 @@ class BioModStackPanel(Adw.Application):
                     detail = str(report.get("status", "Report available"))
                 except (ValueError, AttributeError):
                     detail = "See Details"
-                subtitle = f"{label}: {detail} (exit {result.returncode})"
-            self.setup_status_row.set_subtitle(subtitle)
-            self.setup_output.get_buffer().set_text(output)
+                outcome = "Completed" if result.returncode == 0 else "Needs attention"
+                subtitle = f"{label}: {outcome} — {detail} (exit {result.returncode})"
+            self._setup_feedback(subtitle, output)
+            self.setup_run_button.set_sensitive(True)
+            self.setup_action_combo.set_sensitive(True)
+            self.setup_options.set_sensitive(True)
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(subtitle)
         self._update_dev_updates_control()
