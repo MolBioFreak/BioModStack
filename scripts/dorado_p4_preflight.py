@@ -43,14 +43,17 @@ def _verified_runtime_location(runtime_sif: Path, expected: str) -> tuple[Path, 
                           and selected.parent.parent.parent.name == "objects")
     canonical = store / "objects" / "sha256" / expected / "runtime.sif" if store else None
     if canonical_selector:
-        if selected.parent.name != expected or (canonical is not None and selected != canonical):
+        if selected.parent.name != expected or (configured and canonical is not None and selected != canonical):
             raise ValueError("Dorado runtime canonical selector identity mismatch")
         canonical = selected
     if canonical is None:
         if selected.is_symlink() or not selected.is_file() or _sha256(selected) != expected:
             raise ValueError("Dorado runtime SIF identity mismatch")
         return selected, None
-    identity = verify_image(canonical, expected)
+    try:
+        identity = verify_image(canonical, expected)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Dorado runtime SIF identity mismatch") from exc
     if selected != canonical:
         if selected.is_symlink():
             # Inspect only the final link text, not an arbitrary symlink chain.
