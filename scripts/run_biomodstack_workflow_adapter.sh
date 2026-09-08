@@ -174,7 +174,10 @@ PY
 
 provision_cm_api_runtime() {
     local source_venv="$PROJECT_DIR/platform/api/.venv"
-    local source_python source_runtime stage runtime_name runtime_dir target_python next_link
+    local source_python source_runtime stage runtime_name runtime_dir target_python next_link probe_image
+    # Validate the installation-selected image before creating a runtime generation.
+    # This read-only lookup never publishes images or changes scientific attestations.
+    probe_image="$(python3 "$PROJECT_DIR/scripts/select_workflow_adapter_image.py")"
     mkdir -p "$CM_API_RUNTIME_DIR/releases"
     exec 9>"${CM_API_RUNTIME_DIR}/.provision.lock"
     flock -x 9
@@ -204,7 +207,7 @@ provision_cm_api_runtime() {
     mv -T "$stage" "$runtime_dir"
     stage="$runtime_dir"
     apptainer exec --no-home --bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR" \
-        "${BMS_CONTAINER_DIR:-${BMS_DATA:-/mnt/BioModStack}/apptainer}/protenix.sif" \
+        "$probe_image" \
         "$runtime_dir/venv/bin/python" -c 'import jsonschema'
 
     next_link="${CM_API_RUNTIME_DIR}/.current.${runtime_name}"
