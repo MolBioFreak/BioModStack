@@ -1,5 +1,6 @@
 """Known callback-dependent workflows must never run a partial remote recipe."""
 import pytest
+from test_remote_bundle_runtime_gaps import isolated_image_selection
 from services.remote_execution.bundle import compile_remote_dependencies, RemoteBundleError
 
 

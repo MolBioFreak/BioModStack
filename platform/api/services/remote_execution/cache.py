@@ -14,6 +14,7 @@ from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_so
                      compile_remote_dependencies, _runtime_assets, _records_for_source,
                      _safe_extract, _is_runtime_image)
 from .transport import run_remote, rsync_to_remote
+from .images import resolve_image
 
 
 async def _noop(*args, **kwargs):
@@ -205,8 +206,9 @@ def independent_plan(selection):
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
-        path = root / ref.relative_path
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
+        path = (resolve_image(ref.relative_path, root) if ref.kind == 'image'
+                else root / ref.relative_path)
+        if (path.is_symlink() or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
         for record in _records_for_source(path, prefix, 'runtime'):
