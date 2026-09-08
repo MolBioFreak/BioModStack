@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$SCRIPT_DIR/configuration_read_guard.sh"
 COMPOSE_FILE="$PROJECT_DIR/compose.core-runtime.yml"
 CONTROLLER="$SCRIPT_DIR/biomodstack_core_runtime_controller.py"
 ACTION="${1:-up}"
@@ -90,6 +91,7 @@ for key in "${!_BMS_LAUNCH_ENV[@]}"; do
     esac
     export "$key=${_BMS_LAUNCH_ENV[$key]}"
 done
+bms_configuration_read_finish
 load_root_owned_mk1d_recovery_gid
 
 if [ -z "${BMS_STATE_DIR:-}" ]; then

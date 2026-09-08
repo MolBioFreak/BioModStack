@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$SCRIPT_DIR/configuration_read_guard.sh"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -97,6 +98,7 @@ fi
 for key in "${!_BMS_LAUNCH_ENV[@]}"; do
     export "$key=${_BMS_LAUNCH_ENV[$key]}"
 done
+bms_configuration_read_finish
 restore_systemd_authority_environment
 pin_nextflow_java
 
@@ -105,10 +107,8 @@ pin_nextflow_java
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/biomodstack/uv}"
 mkdir -p "$UV_CACHE_DIR"
 
-if ! command -v uv >/dev/null 2>&1; then
-    echo "BioModStack workflow adapter launcher requires uv on PATH" >&2
-    exit 1
-fi
+source "$SCRIPT_DIR/python_runtime_guard.sh"
+bms_python_runtime_resolve || exit $?
 
 export BMS_HOME="$PROJECT_DIR"
 unset BMS_WORKFLOW_ADAPTER_URL
@@ -173,18 +173,16 @@ PY
 }
 
 provision_cm_api_runtime() {
-    local source_venv="$PROJECT_DIR/platform/api/.venv"
-    local source_python source_runtime stage runtime_name runtime_dir target_python next_link probe_image
-    # Validate the installation-selected image before creating a runtime generation.
-    # This read-only lookup never publishes images or changes scientific attestations.
-    probe_image="$(python3 "$PROJECT_DIR/scripts/select_workflow_adapter_image.py")"
+    local source_venv="$API_SOURCE_VENV"
+    local source_python source_runtime stage runtime_name runtime_dir target_python next_link
+    # CM_API_SUPPORT_IMAGE was selected by the shared read-only probe authority
+    # before entering this function; clean controllers do not create a generation.
+    source_python="$(readlink -f "$source_venv/bin/python")"
+    [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; return 1; }
+    source_runtime="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" python-runtime "$source_python")" || return $?
     mkdir -p "$CM_API_RUNTIME_DIR/releases"
     exec 9>"${CM_API_RUNTIME_DIR}/.provision.lock"
     flock -x 9
-
-    source_python="$(readlink -f "$source_venv/bin/python")"
-    source_runtime="$(dirname "$(dirname "$source_python")")"
-    [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; return 1; }
 
     stage="$(mktemp -d "${CM_API_RUNTIME_DIR}/.stage.XXXXXX")"
     runtime_name="runtime-${stage##*.stage.}"
@@ -207,7 +205,7 @@ provision_cm_api_runtime() {
     mv -T "$stage" "$runtime_dir"
     stage="$runtime_dir"
     apptainer exec --no-home --bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR" \
-        "$probe_image" \
+        "$CM_API_SUPPORT_IMAGE" \
         "$runtime_dir/venv/bin/python" -c 'import jsonschema'
 
     next_link="${CM_API_RUNTIME_DIR}/.current.${runtime_name}"
@@ -218,8 +216,32 @@ provision_cm_api_runtime() {
 }
 
 cd "$PROJECT_DIR/platform/api"
-uv sync --locked
-provision_cm_api_runtime
-export BMS_CM_API_RUNTIME_DIR
-export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
+if [ -n "$BMS_MANAGED_PYTHON" ]; then
+    API_SOURCE_VENV="$(dirname "$(dirname "$BMS_MANAGED_PYTHON")")"
+else
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "BioModStack workflow adapter launcher requires uv on PATH" >&2
+        exit 1
+    fi
+    uv sync --locked
+    API_SOURCE_VENV="$PROJECT_DIR/platform/api/.venv"
+fi
+CM_API_SUPPORT_IMAGE="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" image "$PROJECT_DIR")" || exit $?
+if [ -n "$CM_API_SUPPORT_IMAGE" ]; then
+    provision_cm_api_runtime
+    export BMS_CM_API_RUNTIME_DIR="$CM_API_RUNTIME_DIR"
+    export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
+elif [ "${BMS_WORKFLOW_ADAPTER_LANE,,}" = development ]; then
+    # The host control plane does not require optional scientific containers.
+    # Do not advertise a stale/unprobed portable interpreter. Model admission
+    # continues to require the existing registered runtime and attestation.
+    unset BMS_API_PYTHON
+    echo "CM support runtime unprovisioned: no installed/selected Protenix or Frustra image; scientific runtime admission remains required." >&2
+else
+    echo "BioModStack workflow adapter is blocked: CM support image is unprovisioned." >&2
+    exit 78
+fi
+if [ -n "$BMS_MANAGED_PYTHON" ]; then
+    exec "$BMS_MANAGED_PYTHON" -m uvicorn workflow_adapter_app:app --port "$BMS_WORKFLOW_ADAPTER_PORT" --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log
+fi
 exec uv run --no-sync uvicorn workflow_adapter_app:app --port "$BMS_WORKFLOW_ADAPTER_PORT" --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log

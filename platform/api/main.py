@@ -210,8 +210,10 @@ async def lifespan(app: FastAPI):
         logger.info("[STARTUP] ONT signal-workbench worker disabled: approved Squigualiser runtime policy absent or mismatched")
     else:
         _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
-        await _ont_signal_worker.start()
-        logger.info("[STARTUP] governed ONT signal-workbench worker started")
+        if await _ont_signal_worker.start():
+            logger.info("[STARTUP] governed ONT signal-workbench worker started")
+        else:
+            logger.warning("[STARTUP] ONT signal-workbench backend unavailable: worker blocked; scientific work unchanged; restart after provisioning to retry recovery")
 
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,

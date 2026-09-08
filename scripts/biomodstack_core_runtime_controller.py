@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 COMPOSE_FILE = PROJECT_ROOT / "compose.core-runtime.yml"
 GENERATED_OWNERSHIP_NORMALIZER = PROJECT_ROOT / "scripts" / "normalize_generated_ownership.py"
 ALL_SERVICES = (
@@ -108,6 +110,8 @@ def publish_state(status: str, **updates: Any) -> dict[str, Any]:
 
 
 def compose_command(*args: str) -> list[str]:
+    from biomodstack_configuration import assert_configuration_readable
+    assert_configuration_readable()
     command = ["docker", "compose"]
     env_file = str(os.getenv("BMS_CORE_RUNTIME_ENV_FILE") or "").strip()
     if env_file:

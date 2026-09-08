@@ -522,7 +522,7 @@ def test_operator_frontend_unit_binds_exact_candidate_root_identity_and_prod_api
     assert "Environment=VITE_BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in unit
     assert "Environment=VITE_BMS_BUILD_ID=release-operator-7" in unit
     assert "Environment=VITE_BMS_BUILD_TIME=2026-07-27T15:04:05Z" in unit
-    assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:8000" in unit
+    assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18000" in unit
     assert "8002" not in unit
     assert release.services.DEV_TARGET_UNIT not in unit
 

@@ -32,6 +32,11 @@ def test_actual_startup_probe(tmp_path, mode):
     # locking and generation publication without copying/installing a live venv.
     source_python = project / "python-runtime/bin/python3.12"
     executable(source_python, "#!/bin/sh\nexit 0\n")
+    # Model the standalone layout now required before any prefix copy. This
+    # remains a recording fixture, not a claim of a real Python distribution.
+    stdlib = project / "python-runtime/lib/python3.12"
+    stdlib.mkdir(parents=True)
+    (stdlib / "os.py").write_text("# test-only standalone layout marker\n")
     venv = project / "platform/api/.venv"
     (venv / "bin").mkdir(parents=True)
     (venv / "bin/python").symlink_to(source_python)

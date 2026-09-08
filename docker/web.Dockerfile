@@ -9,7 +9,7 @@ ENV VITE_BMS_BUILD_SHA=$BMS_BUILD_SHA \
     VITE_BMS_BUILD_TIME=$BMS_BUILD_TIME
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+RUN corepack enable && corepack prepare pnpm@10.11.0 --activate
 
 COPY . /app
 

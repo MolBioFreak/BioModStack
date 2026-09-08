@@ -102,6 +102,60 @@ def model_runtime_dependencies(model_id: str) -> tuple[RuntimeDependencyRef, ...
     return tuple(refs)
 
 
+class RuntimeAcquisitionArtifact(BaseModel):
+    """Release-owner reviewed byte manifest, not user-supplied launch settings.
+
+    Entries are added only to the existing model YAML authority after release
+    review. No production acquisition approval is implied by an empty list.
+    """
+    model_config = {"extra": "forbid", "frozen": True}
+    artifact_id: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
+    dependency: RuntimeDependencyRef
+    url: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0, strict=True)
+    source_authority: str = Field(min_length=1)
+    approval_ref: str = Field(min_length=1)
+    license_id: Optional[str] = None
+    redirect_policy: Optional[Dict[str, Any]] = None
+    member_path: Optional[str] = None
+
+
+def model_acquisition_plan(model_id: str) -> dict:
+    """Resolve approved metadata against existing runtime dependency authority.
+
+    Missing closure/metadata is an explicit blocker; URLs from legacy scripts,
+    local SIF paths and qualification attestations are not acquisition approval.
+    """
+    try:
+        refs = model_runtime_dependencies(model_id)
+    except ValueError as exc:
+        return {"model_id": model_id, "artifacts": [], "blockers": [
+            {"code": "runtime_closure_unavailable", "detail": str(exc)}]}
+    model = get_registry().get_model(model_id)
+    assert model is not None  # Closure resolution above already checked availability.
+    artifacts, blockers = [], []
+    allowed = {(ref.kind, ref.relative_path) for ref in refs}
+    ids = [entry.artifact_id for entry in model.acquisition]
+    if len(ids) != len(set(ids)) or any(
+        (entry.dependency.kind, entry.dependency.relative_path) not in allowed
+        for entry in model.acquisition
+    ):
+        return {"model_id": model_id, "artifacts": [], "blockers": [
+            {"code": "invalid_acquisition_dependency_binding"}]}
+    for ref in refs:
+        entries = [entry for entry in model.acquisition
+                   if entry.dependency == ref]
+        if not entries:
+            blockers.append({"code": "approved_acquisition_metadata_missing",
+                             **ref.model_dump()})
+        for entry in entries:
+            artifacts.append({"dependency": ref.model_dump(), "member_path": entry.member_path,
+                              "manifest": {
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": ref.kind}})
+    return {"model_id": model_id, "artifacts": artifacts, "blockers": blockers}
+
+
 class ModelDefinition(BaseModel):
     """Complete definition of a model/tool."""
     id: str
@@ -110,6 +164,7 @@ class ModelDefinition(BaseModel):
     category: str  # backbone_generation, sequence_design, structure_prediction, docking
     description: str
     container: str
+    acquisition: List[RuntimeAcquisitionArtifact] = Field(default_factory=list)
     workflow: Optional[str] = None
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)

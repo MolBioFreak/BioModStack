@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e25e3ce1009c5edc8b96b2c66704b8bc3702dd178ee00bb5d78d4a40633dc29b",
+  "content_sha256": "bb14b07cd2914c486682e227fec809100543ef7fb987995bbad1d9498904189a",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -59,18 +59,18 @@
     },
     {
       "path": "biomodstack_local_resources.py",
-      "sha256": "e9c4710f2cbfed849b5463365e314fa1201afc08272327d4439c3f28ca370d2f",
-      "size_bytes": 2627
+      "sha256": "c79abde00bf20a44e186823012c45c2539017c3aeb1da88da3bdc8f365200f8e",
+      "size_bytes": 8776
     },
     {
       "path": "biomodstack_runtime_profile.py",
-      "sha256": "7b353e72f70bd8fdc9ecb120fc35e6c626100271253f59fb4b57d4410ce3c706",
-      "size_bytes": 39049
+      "sha256": "78f98d3e59d4954d565903069955bc8083efbd85f0d7a558fbb65d276553d68a",
+      "size_bytes": 45736
     },
     {
       "path": "biomodstack_services.py",
-      "sha256": "d0f5c589bbc9b7c271dbffa819b79bf59523c595b4e7e3ab5a3d2d15c4091bfe",
-      "size_bytes": 113413
+      "sha256": "00ffd142098fcdd77bb614a48323e13a14bd135a4431a9ee235cba9ac1637f39",
+      "size_bytes": 114380
     },
     {
       "path": "config/ngs/dorado_v1.3.1.lock.json",
@@ -319,8 +319,8 @@
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "10d946a12084c37762383e40548c68cf9508fe09526dd8a3accacd0c0e748c29",
-      "size_bytes": 19857
+      "sha256": "0c21bfb6c09798167b3d2198fbab0b6a1e4a7629c323906876601138e31d8973",
+      "size_bytes": 20049
     },
     {
       "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
@@ -389,8 +389,8 @@
     },
     {
       "path": "platform/api/model_registry.py",
-      "sha256": "e051942a3a01e9cc1ddcb5c7210a78e2e1dc8c082c22bb810159896a4c62a1a9",
-      "size_bytes": 11614
+      "sha256": "a7be591d04e7437875bbd2e1e50feec622cb4b32b583eb7ac1376eb04123cc90",
+      "size_bytes": 14213
     },
     {
       "path": "platform/api/molbio_database.py",
@@ -744,8 +744,8 @@
     },
     {
       "path": "platform/api/services/ont_signal_worker.py",
-      "sha256": "00fc6017c48e2fd33bb13c7b140cbe0108444d1f9474ee4d608612c13e545f53",
-      "size_bytes": 150813
+      "sha256": "1a70d807e97c0aab57fd149bb95ecf61c8f4606c693b86d83e297daf370297c1",
+      "size_bytes": 151862
     },
     {
       "path": "platform/api/services/ont_submission_trust.py",
@@ -854,8 +854,8 @@
     },
     {
       "path": "platform/api/tests/test_biomodstack_services.py",
-      "sha256": "07c72ad424f6c36126f4f6c22c06a8f93a3bb13ca37e8c0f2eec37e8f76f586d",
-      "size_bytes": 81145
+      "sha256": "a54374a3350571d0d09fdc82ac207dfb7a7d535c76e9f230a37c21620685f8d7",
+      "size_bytes": 82369
     },
     {
       "path": "platform/api/tests/test_core_runtime_workflow_guard.py",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "e567a5e62aa8b3d814f88e9b5b83eccfb573cd01",
-  "successor_source_tree": "aaf3713e08057f77808290945e84eeaa187c97fc",
+  "successor_source_commit": "bf2abfc81036177d02f30b98b86895d756700de7",
+  "successor_source_tree": "1426f10145f539a2136d48a571760127cb2129d5",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
