@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "ffcb816b79f718c2c90e5bde5011bd291a5f1d645740fe644e914776ee7caed3",
+  "content_sha256": "e25e3ce1009c5edc8b96b2c66704b8bc3702dd178ee00bb5d78d4a40633dc29b",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -189,8 +189,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "89eea3fcb2284799ef34c6ea8fc6d7b6ddf73af544f0d18119ef0a03b518f8d6",
-      "size_bytes": 97886
+      "sha256": "535a24620d2813e747d91e0505707522a03a24d64fa06fe37106a8d1aa7cb444",
+      "size_bytes": 97890
     },
     {
       "path": "packages/sequence-utils/src/index.js",
@@ -764,13 +764,13 @@
     },
     {
       "path": "platform/api/services/remote_execution/bundle.py",
-      "sha256": "cbd25233c9fc73b5d9f2130cccf676f6d55048c25216d74865d469f7f0066773",
-      "size_bytes": 39966
+      "sha256": "e71369ee60727c769a6b141e4614985d96fa50a8b6844dcc30b0b71e242d165b",
+      "size_bytes": 42072
     },
     {
       "path": "platform/api/services/remote_execution/cache.py",
-      "sha256": "ec42fa6d66b8174f6334a6230b64c4035dd1801b1a8f66974e128c89e569b5a3",
-      "size_bytes": 15671
+      "sha256": "530557ab886e516185bc441ba6fb1ac87bb6f65c72e1e20fdc00214735c628d9",
+      "size_bytes": 15818
     },
     {
       "path": "platform/api/services/remote_execution/managed_inventory.py",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "a3f6d415bf5f853d6836446c46e4b2ca55b6e3e6",
-  "successor_source_tree": "2897b6afa7e30af3fc1a297f84c00648e00b153a",
+  "successor_source_commit": "e567a5e62aa8b3d814f88e9b5b83eccfb573cd01",
+  "successor_source_tree": "aaf3713e08057f77808290945e84eeaa187c97fc",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
