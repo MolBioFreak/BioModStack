@@ -890,13 +890,15 @@ def _sha256_descriptor(descriptor: int) -> str:
 
 
 def _runtime_image_store(source: Path) -> Path:
+    from paths import get_container_dir
+
     configured = os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
-    container_dir = os.environ.get("BMS_CONTAINER_DIR", "").strip()
     if configured:
         root = Path(configured).expanduser()
     else:
-        container_root = Path(container_dir).expanduser() if container_dir else source.parent
-        root = container_root / ".image-store"
+        # Resolve the installation profile as well as environment overrides.
+        # A source may already be an object; its parent is never a store root.
+        root = get_container_dir().expanduser() / ".image-store"
     if not root.is_absolute():
         raise AlignmentSessionError("shared NGS runtime image store path is invalid")
     return root

@@ -124,7 +124,7 @@ process RunCloneValidation {
 }
 
 process CloneValidationAdapter {
-    label 'local_cpu'
+    label 'fastq_qc_cpu'
     publishDir "${params.out_dir}/assembly/adapter", mode: 'copy'
     tag "clone_validation_adapter"
 
@@ -150,16 +150,13 @@ process CloneValidationAdapter {
     def adapter = shellQuote("${codeRoot}/scripts/adapt_wf_clone_validation.py")
     def inputBuilder = shellQuote("${codeRoot}/scripts/build_construct_verification_input.py")
     def supportBuilder = shellQuote("${codeRoot}/scripts/build_fastq_support_tables.py")
-    def containerDir = params.container_dir ?: ''
-    def doradoImage = shellQuote("${containerDir}/dorado.sif")
+
     """
     set -euo pipefail
     if command -v samtools >/dev/null 2>&1; then
         SAMTOOLS_CMD=(samtools)
-    elif command -v apptainer >/dev/null 2>&1 && [[ -f ${doradoImage} ]]; then
-        SAMTOOLS_CMD=(apptainer exec ${doradoImage} samtools)
     else
-        echo "samtools not found on host and no fallback dorado container available" >&2
+        echo "samtools missing from the selected NGS runtime" >&2
         exit 127
     fi
 
