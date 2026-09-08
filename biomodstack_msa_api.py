@@ -40,7 +40,7 @@ must not be reused as proof of a currently identical remote database.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -54,7 +54,7 @@ import stat
 import tarfile
 import tempfile
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 SERVICES = {"colabfold_api": "https://api.colabfold.com",
             "neurosnap_api": "https://neurosnap.ai/api"}
@@ -278,6 +278,7 @@ class HTTPResponse:
     status: int
     body: bytes
     retry_after: str | None = None
+    location: str | None = field(default=None, repr=False)
 
 
 class RequestsTransport:
@@ -297,7 +298,7 @@ class RequestsTransport:
                             raise MSAAPIError("remote response exceeds size limit")
                         chunks.append(chunk)
                     return HTTPResponse(response.status_code, b"".join(chunks),
-                                        response.headers.get("Retry-After"))
+                                        response.headers.get("Retry-After"), response.headers.get("Location"))
         except requests.RequestException:
             raise MSAAPIError("provider transport failure") from None
 
@@ -345,6 +346,30 @@ class MSAClient:
         finally:
             os.close(fd)
 
+    def _signed_output(self, response, path, key):
+        # Neurosnap's native file endpoint returns a signed Cloudflare R2 URL.
+        # Only this download boundary may cross origins, with NO API credential.
+        location = response.location or ''
+        try:
+            target = urlsplit(location)
+            valid = (target.scheme == 'https' and not target.username and not target.password
+                     and target.port in (None, 443) and not target.fragment
+                     and re.fullmatch(r'ns-job-files\.[0-9a-f]{32}\.r2\.cloudflarestorage\.com', target.hostname or '')
+                     and target.path == '/' + path.removeprefix('/job/file/')
+                     and bool(target.query) and not any(ord(c) < 33 for c in location)
+                     and not (key and key in location))
+        except ValueError:
+            valid = False
+        if not valid:
+            raise MSAAPIError('unsafe provider file redirect; existing state retained')
+        try:
+            result = self.transport.request('GET', location, headers={},
+                                            timeout=self.config.timeout, max_bytes=self.config.max_bytes)
+        except Exception:
+            raise MSAAPIError('signed output download failed; existing state retained') from None
+        # One explicit cross-origin hop only; never chase arbitrary redirects.
+        return result
+
     def _http(self, provider, path, headers, *, method="GET", data=None, files=None):
         attempts = self.config.safe_attempts if method == "GET" else 1
         for attempt in range(attempts):
@@ -357,6 +382,9 @@ class MSAClient:
                 if attempt + 1 == attempts:
                     raise MSAAPIError("provider transport failure; existing state retained") from None
             if response is not None:
+                if (provider == 'neurosnap_api' and method == 'GET'
+                        and path.startswith('/job/file/') and response.status in (302, 303, 307, 308)):
+                    response = self._signed_output(response, path, headers.get('X-API-KEY'))
                 if len(response.body) > self.config.max_bytes:
                     raise MSAAPIError("remote response exceeds size limit")
                 key = headers.get("X-API-KEY")
