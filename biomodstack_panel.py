@@ -106,47 +106,47 @@ SYNC_CONTROL_PATH = SYNC_STATE_DIR / "dev-sync-control.json"
 SYNC_SCRIPT = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
 
 SETUP_ACTIONS = {
-    "discover": "Discover installation",
-    "plan": "Plan Development setup",
-    "python-plan": "Plan Python dependencies",
+    "discover": "Check system",
+    "plan": "Preview Development setup",
+    "python-plan": "Preview Python installation",
     "python-bootstrap": "Install Python dependencies",
-    "python-verify": "Verify Python dependencies",
-    "frontend-plan": "Plan frontend dependencies",
-    "frontend-bootstrap": "Install frontend dependencies",
-    "frontend-verify": "Verify frontend dependencies",
-    "configure-preview": "Preview install document",
-    "configure": "Apply install document",
-    "recover": "Recover configuration operation",
-    "provision-plan": "Plan selected model artifacts (read-only)",
-    "verify": "Verify selected model artifacts (read-only)",
+    "python-verify": "Check Python dependencies",
+    "frontend-plan": "Preview web interface installation",
+    "frontend-bootstrap": "Install web interface dependencies",
+    "frontend-verify": "Check web interface dependencies",
+    "configure-preview": "Preview settings",
+    "configure": "Apply settings",
+    "recover": "Resume settings update",
+    "provision-plan": "Preview model requirements",
+    "verify": "Check models",
 }
 SETUP_MUTATIONS = {
-    "python-bootstrap": "Install locked Python dependencies in the installer-owned external root. Network access may be required. No scientific artifacts or services are started.",
-    "frontend-bootstrap": "Install locked frontend dependencies and link node_modules in this checkout. Network access may be required. No production build or service is started.",
-    "configure": "Apply the selected install document through the configuration authority. This changes installation paths/settings for subsequent service operations; review Preview first. No service is started.",
-    "recover": "Recover the specified durable configuration operation through the existing recovery authority. This may commit installation settings. No service is started.",
+    "python-bootstrap": "Install the required Python packages? An internet connection may be needed. This does not download models or start services.",
+    "frontend-bootstrap": "Install the packages needed for the web interface? An internet connection may be needed. This does not build or start the web interface.",
+    "configure": "Apply settings from the selected file? Preview settings first to review path and setting changes. These apply the next time you start services; no services start now.",
+    "recover": "Resume the interrupted settings update? This may save installation settings. No services start now.",
 }
 
 
 def build_setup_command(action: str, *, document: str = "", operation: str = "", models: str = "") -> list[str]:
     """Strict argv adapter; all validation and installation remain in the CLI."""
     if action not in SETUP_ACTIONS:
-        raise ValueError("Choose a supported setup action")
+        raise ValueError("Choose an action from the Setup menu.")
     command = ["bash", str(START_SCRIPT), action, "--json"]
     if action in {"discover", "plan"}:
         command += ["--runtime", "dev"]
     if action in {"configure-preview", "configure"}:
         if not document or not Path(document).is_absolute():
-            raise ValueError("Enter an absolute install JSON path under Configuration and model options")
+            raise ValueError("Enter the full path to your settings JSON file under Options (starting with /).")
         command += ["--document", document]
     if action == "recover":
         if not operation:
-            raise ValueError("Enter the operation ID from the configuration receipt")
+            raise ValueError("Enter the recovery ID from the previous settings report.")
         command += ["--operation-id", operation]
     if action in {"discover", "plan", "provision-plan", "verify"}:
         selected = list(dict.fromkeys(item.strip() for item in models.split(",") if item.strip()))
         if action in {"provision-plan", "verify"} and not selected:
-            raise ValueError("Enter explicit model IDs for scientific artifact planning/verification")
+            raise ValueError("Enter the model IDs to check under Options, separated by commas.")
         for model in selected:
             command += ["--model", model]
     return command
@@ -776,27 +776,23 @@ class BioModStackPanel(Adw.Application):
 
     def _build_setup_section(self) -> Gtk.Widget:
         """Expose the supported installer, never a second installation authority."""
-        group = Adw.PreferencesGroup(title="Installation Setup (Development)")
-        group.set_description(
-            "Runs as your user; no admin password is needed. Plans and checks do not "
-            "install dependencies. Setup does not start services or approve scientific work."
-        )
+        group = Adw.PreferencesGroup(title="Setup")
         self.setup_action_combo = Gtk.ComboBoxText()
         for action, label in SETUP_ACTIONS.items():
             self.setup_action_combo.append(action, label)
         self.setup_action_combo.set_active_id("discover")
         row = Adw.ActionRow(title="Setup action")
         row.add_suffix(self.setup_action_combo)
-        run = Gtk.Button(label="Run setup action")
+        run = Gtk.Button(label="Run")
         run.connect("clicked", self._on_setup_action)
         row.add_suffix(run)
         group.add(row)
 
-        options = Adw.ExpanderRow(title="Configuration and model options")
-        options.set_subtitle("Document path for configuration; operation ID for recovery; model IDs for checks")
+        options = Adw.ExpanderRow(title="Options")
+        options.set_subtitle("For settings updates or model checks")
         self.setup_entries = {}
-        for key, title in (("document", "Install JSON path"),
-                           ("operation", "Recovery operation ID"),
+        for key, title in (("document", "Settings file (JSON)"),
+                           ("operation", "Recovery ID"),
                            ("models", "Model IDs (comma-separated)")):
             entry = Gtk.Entry(hexpand=True)
             option = Adw.ActionRow(title=title)
@@ -804,18 +800,15 @@ class BioModStackPanel(Adw.Application):
             options.add_row(option)
             self.setup_entries[key] = entry
         group.add(options)
-        self.setup_status_row = Adw.ActionRow(title="Setup result", subtitle="Choose Discover installation, then Run setup action.")
+        self.setup_status_row = Adw.ActionRow(title="Setup result", subtitle="Choose Check system, then click Run.")
         group.add(self.setup_status_row)
-        output_row = Adw.ExpanderRow(title="Full setup report")
+        output_row = Adw.ExpanderRow(title="Details")
         self.setup_output = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                          wrap_mode=Gtk.WrapMode.WORD_CHAR)
         output_scroll = Gtk.ScrolledWindow(min_content_height=180, max_content_height=300)
         output_scroll.set_child(self.setup_output)
         output_row.add_row(output_scroll)
         group.add(output_row)
-        note = Adw.ActionRow(title="Scientific provisioning remains explicitly reviewed")
-        note.set_subtitle("Plan and verify selected models here. Artifact downloads, license acceptance and provisioning use the documented CLI; no automatic approvals, remote rentals or production activation.")
-        group.add(note)
         return group
 
     def _on_setup_action(self, button):
@@ -841,12 +834,12 @@ class BioModStackPanel(Adw.Application):
             def respond(confirmation, response):
                 confirmation.destroy()
                 if response == Gtk.ResponseType.ACCEPT:
-                    self._run_service_action("Setup: " + action, command)
+                    self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
 
             dialog.connect("response", respond)
             dialog.present()
         else:
-            self._run_service_action("Setup: " + action, command)
+            self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
 
     def _on_open_ui(self, button):
         show_notification("Opening UI", "Launching the BioModStack shell...")
@@ -941,7 +934,7 @@ class BioModStackPanel(Adw.Application):
             self.action_status_row.set_subtitle(f"{label} in progress…")
         if label.startswith("Setup: "):
             self.setup_status_row.set_subtitle(f"{label} in progress…")
-            self.setup_output.get_buffer().set_text("Waiting for the installer report…")
+            self.setup_output.get_buffer().set_text("Waiting for results…")
         show_notification(label, "BioModStack action started.")
 
         def worker() -> None:
@@ -992,7 +985,7 @@ class BioModStackPanel(Adw.Application):
                     report = json.loads(result.stdout)
                     detail = str(report.get("status", "Report available"))
                 except (ValueError, AttributeError):
-                    detail = "See full setup report"
+                    detail = "See Details"
                 subtitle = f"{label}: {detail} (exit {result.returncode})"
             self.setup_status_row.set_subtitle(subtitle)
             self.setup_output.get_buffer().set_text(output)

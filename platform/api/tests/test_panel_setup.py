@@ -61,8 +61,19 @@ def test_blocked_json_and_stderr_remain_visible(monkeypatch):
     assert "additional diagnostics" in captured["output"]
 
 
+def test_plain_labels_preserve_internal_actions(monkeypatch):
+    module = load_module(monkeypatch)
+    assert module.SETUP_ACTIONS["discover"] == "Check system"
+    assert module.SETUP_ACTIONS["verify"] == "Check models"
+    assert module.SETUP_ACTIONS["provision-plan"] == "Preview model requirements"
+    assert module.SETUP_ACTIONS["python-bootstrap"] == "Install Python dependencies"
+    for text in (*module.SETUP_ACTIONS.values(), *module.SETUP_MUTATIONS.values()):
+        assert not any(term in text.lower() for term in
+            ("artifact", "installer-owned", "external root", "authority", "provisioning"))
+
+
 def test_password_surface_is_removed(monkeypatch):
     module = load_module(monkeypatch)
     source = module.PROJECT_ROOT.joinpath("biomodstack_panel.py").read_text()
-    for retired in ("Admin Password", "PasswordEntry", "cached_sudo_password", "BMS_SUDO_PASSWORD", "_build_privilege_section"):
+    for retired in ("admin password", "Admin Password", "Scientific provisioning", "PasswordEntry", "cached_sudo_password", "BMS_SUDO_PASSWORD", "_build_privilege_section"):
         assert retired not in source

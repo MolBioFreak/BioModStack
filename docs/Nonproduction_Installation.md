@@ -7,23 +7,22 @@ acceptance are separate operations, not implied by a running control plane.
 ## Native launcher
 
 Reopen **BioModStack Control Panel** from the desktop launcher after an update.
-The **Installation Setup (Development)** section is directly below Status. Choose
-an action and click **Run setup action**; expand **Full setup report** to inspect
-the complete CLI receipt, blockers and diagnostics (including nonzero exits).
-Python/frontend plan, install and verify use the same commands documented below.
-Install and configuration mutations require confirmation; opening the menu never
-installs dependencies. **Configuration and model options** accepts an absolute
-install JSON path, a recovery operation ID, or comma-separated model IDs. Preview
-the document before Apply; copy recovery IDs from the full report. Discovery and
-setup planning explicitly select Development, independent of Quick Actions.
+The **Setup** section is directly below Status. Choose **Check system** and click
+**Run** to get started. Expand **Details** for the full report and any errors.
+Use the Python and web interface actions to preview, install or check dependencies.
+Installs and settings updates ask for confirmation; opening the menu installs nothing.
 
-Scientific artifact planning and verification are read-only. Actual provisioning,
-license acceptance and provisioning resume remain in the explicit reviewed CLI
-workflow; the launcher never downloads scientific artifacts or rents remote hosts.
-Setup does not activate services or production. Use existing Quick Actions for
-service operation after reviewing configuration. The panel no longer collects,
-caches or passes an admin password; managed user-service operation is unchanged,
-and foreign port/privilege errors are reported rather than bypassed.
+Expand **Options** to enter the full path to a settings JSON file, a recovery ID,
+or comma-separated model IDs. Choose **Preview settings** before **Apply settings**.
+To resume an interrupted update, copy its operation ID from the previous report
+into **Recovery ID**, then choose **Resume settings update**. System checks and
+setup previews target Development, independent of Quick Actions.
+
+**Preview model requirements** and **Check models** only inspect models; they do
+not download them. Model downloads and license acceptance use the terminal commands
+documented below. Setup does not start services, rent remote hosts or change
+Production. Use Quick Actions to manage services after reviewing settings.
+Existing service ownership and permission checks remain unchanged.
 
 ## Base prerequisites and boundaries
 

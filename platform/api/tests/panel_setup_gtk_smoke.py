@@ -22,7 +22,7 @@ panel.window.set_child(section)
 texts = []
 
 def walk(widget):
-    for getter in ("get_title", "get_label"):
+    for getter in ("get_title", "get_label", "get_subtitle", "get_description"):
         method = getattr(widget, getter, None)
         if method:
             value = method()
@@ -35,12 +35,17 @@ def walk(widget):
         child = child.get_next_sibling()
 
 walk(section)
-assert "Installation Setup (Development)" in texts
-assert "Run setup action" in texts
-assert "Full setup report" in texts
+assert "Setup" in texts
+assert "Run" in texts
+assert "Details" in texts
 model = panel.setup_action_combo.get_model()
 assert len(model) == len(panel_module.SETUP_ACTIONS)
 assert panel.setup_action_combo.get_active_id() == "discover"
+assert panel.setup_action_combo.get_active_text() == "Check system"
+assert not section.get_description()
+for text in texts + list(panel_module.SETUP_ACTIONS.values()) + list(panel_module.SETUP_MUTATIONS.values()):
+    assert not any(term in text.lower() for term in
+        ("admin password", "scientific provisioning", "artifact", "installer-owned", "external root", "authority"))
 assert not hasattr(panel, "cached_sudo_password")
 
 panel_module.show_notification = lambda *args: None
@@ -73,6 +78,7 @@ for action in panel_module.SETUP_MUTATIONS:
         dialogs[0].response(response)
         assert len(calls) == before + (response == Gtk.ResponseType.ACCEPT)
         if response == Gtk.ResponseType.ACCEPT:
+            assert calls[-1][0] == "Setup: " + panel_module.SETUP_ACTIONS[action]
             assert calls[-1][1] == panel_module.build_setup_command(action,
                 document="/tmp/reviewed install.json", operation="reviewed-operation")
 panel.window.destroy()
