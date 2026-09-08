@@ -35,6 +35,35 @@ def publish(setup):
     return shared.publish_image(source, store, digest)
 
 
+def test_legacy_lane_projection_is_retained_before_first_versioned_update(setup):
+    source, store, digest, spec = setup
+    image = publish(setup)
+    refs = store / "references"
+    refs.mkdir()
+    legacy = lifecycle.environment_text(store, {"images": {
+        "BMS_NGS_RUNTIME_SIF": {"path": str(image), "sha256": digest}}})
+    (refs / "development.env").write_text(legacy)
+    source.write_bytes(b"new generation")
+    spec["BMS_NGS_RUNTIME_SIF"]["sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    publisher.publish_references(store, "development", spec)
+    plan = lifecycle.plan_retirement(store, digest)
+    assert any(reason.startswith("retained-release:") for reason in plan["reasons"])
+    assert not plan["aliases"]
+    assert len(lifecycle.load_state(store)["releases"]) == 2
+
+
+def test_unknown_legacy_projection_cannot_be_overwritten(setup):
+    source, store, digest, spec = setup
+    publish(setup)
+    refs = store / "references"
+    refs.mkdir()
+    old = "BMS_NGS_RUNTIME_SIF=/untracked/custom.sif\n"
+    (refs / "development.env").write_text(old)
+    with pytest.raises(lifecycle.Error, match="legacy"):
+        publisher.publish_references(store, "development", spec)
+    assert (refs / "development.env").read_text() == old
+
+
 def test_retained_rollback_release_is_root_until_explicitly_forgotten(setup):
     source, store, digest, spec = setup
     env = publisher.publish_references(store, "development", spec)

@@ -31,9 +31,9 @@ from routers import ngs_alignment_sessions as ngs_routes  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _isolated_runtime_image_store(monkeypatch: pytest.MonkeyPatch):
+def _isolated_runtime_image_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.delenv("BMS_RUNTIME_IMAGE_STORE", raising=False)
-    monkeypatch.delenv("BMS_CONTAINER_DIR", raising=False)
+    monkeypatch.setenv("BMS_CONTAINER_DIR", str(tmp_path / "apptainer"))
 
 
 @pytest.fixture(autouse=True)

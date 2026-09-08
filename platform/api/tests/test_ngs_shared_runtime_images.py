@@ -76,16 +76,19 @@ def test_samtools_shared_object_reuses_inode_across_source_parents(runtime, tmp_
     assert direct.runtime_identity == identity
 
 
-@pytest.mark.parametrize("setting", ["explicit", "container", "fallback"])
+@pytest.mark.parametrize("setting", ["explicit", "container", "profile"])
 def test_samtools_image_store_precedence(runtime, tmp_path, monkeypatch, setting):
     source, digest, _lock = runtime
     expected_root = tmp_path / "containers" / ".image-store"
     if setting == "explicit":
         expected_root = tmp_path / "shared-store"
         monkeypatch.setenv("BMS_RUNTIME_IMAGE_STORE", str(expected_root))
-    elif setting == "fallback":
+    elif setting == "profile":
+        import paths
         monkeypatch.delenv("BMS_CONTAINER_DIR")
-        expected_root = source.parent / ".image-store"
+        profile_root = tmp_path / "profile-containers"
+        monkeypatch.setattr(paths, "get_container_dir", lambda: profile_root)
+        expected_root = profile_root / ".image-store"
     command = service._samtools_command()
     assert command.runtime_path == expected_root / "objects" / "sha256" / digest / "runtime.sif"
 
