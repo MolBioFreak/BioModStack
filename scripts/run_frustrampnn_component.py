@@ -813,8 +813,9 @@ def _run_component_v2(
         raise
     except (OSError, _runtime.RuntimeValidationError, ManifestValidationError) as exc:
         raise ComponentRunError("request_invalid", str(exc)) from exc
-    if _runtime.runtime_identity_dict(runtime_identity) != configuration.runtime.model_dump(
-        mode="json", exclude_none=False
+    if not _runtime.compatible_runtime_identity(
+        _runtime.runtime_identity_dict(runtime_identity),
+        configuration.runtime.model_dump(mode="json", exclude_none=False),
     ):
         raise ComponentRunError(
             "runtime_identity_mismatch",

@@ -196,10 +196,12 @@ def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     assert {'containers/protenix.sif', 'containers/frustrampnn.sif'} <= {relative for _, relative in assets}
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv)
     sif_records = [r for r in prepared.envelope.files if r.relative_path.endswith('.sif')]
-    assert [r.relative_path for r in sif_records] == ['runtime/containers/frustrampnn.sif']
-    assert sif_records[0].link_target is None
-    assert len(prepared.runtime_images) == 1
-    assert all(alias.endswith('/protenix.sif') for alias in prepared.runtime_images[0].aliases)
+    assert sif_records == []
+    assert len(prepared.runtime_images) == 2
+    selected = prepared.envelope.environment['BMS_FRUSTRAMPNN_SIF']
+    assert any(image.remote_destination == selected and
+               any(alias.endswith('/frustrampnn.sif') for alias in image.aliases)
+               for image in prepared.runtime_images)
 
 
 @pytest.mark.asyncio

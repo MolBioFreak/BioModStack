@@ -58,13 +58,16 @@ def test_rendered_lane_reference_transport(installation, tmp_path, monkeypatch, 
     if explicit:
         store = tmp_path / 'shared $literal % images'
         monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(store))
+    reference = store / 'references' / f'{lane}.env'
+    monkeypatch.setenv(f'BMS_{lane.upper()}_RUNTIME_IMAGE_REFERENCE_FILE', str(reference))
     rendered = manager.render_user_units(ROOT, runtime_mode=mode)
     for unit in units:
         text = rendered[unit]
         envfiles = [line.strip().split('=', 1)[1] for line in text.splitlines()
                     if line.strip().startswith('EnvironmentFile=')]
         decoded = [shlex.split(value)[0].replace('%%', '%') for value in envfiles]
-        assert '-' + str(store / 'references' / f'{lane}.env') in decoded
+        assert str(reference) in decoded
+        assert '-' + str(reference) not in decoded
         assert not any(f"/{'production' if lane == 'development' else 'development'}.env" in p for p in decoded)
         assert manager.systemd_value(f'BMS_RUNTIME_IMAGE_STORE={store}') in text
         # Feed the rendered transport directives to systemd's parser, without
@@ -78,6 +81,34 @@ def test_rendered_lane_reference_transport(installation, tmp_path, monkeypatch, 
         assert check.returncode == 0, check.stdout + check.stderr
         assert 'Invalid' not in check.stderr and 'Failed to parse' not in check.stderr
     assert not store.exists()  # Rendering neither publishes nor promotes a lane.
+
+
+@pytest.mark.parametrize('lane', ['development', 'production'])
+def test_reference_requirement_distinguishes_fresh_and_managed(installation, monkeypatch, lane):
+    store = installation / '.image-store'
+    assert manager._runtime_reference_directive(store, lane) == ''
+    assert not store.exists()
+    reference = store / 'references' / f'{lane}.env'
+    reference.parent.mkdir(parents=True)
+    reference.write_text('# installed reference\n')
+    directive = manager._runtime_reference_directive(store, lane)
+    assert directive == 'EnvironmentFile=' + manager.systemd_value(reference)
+    reference.unlink()
+    (reference.parent / 'state.json').write_text(json.dumps({'current': {lane: 'retained'}}))
+    assert manager._runtime_reference_directive(store, lane) == directive
+    monkeypatch.setenv(f'BMS_{lane.upper()}_RUNTIME_IMAGE_REFERENCE_FILE', str(store / 'missing.env'))
+    assert manager._runtime_reference_directive(store, lane) == 'EnvironmentFile=' + manager.systemd_value(store / 'missing.env')
+
+
+def test_fresh_units_have_no_retired_image_fallback(installation):
+    rendered = manager.render_user_units(ROOT, runtime_mode='dev')
+    for name in [manager.API_SERVICE, manager.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE]:
+        text = rendered[name]
+        assert 'confornets-canonical.sif' not in text
+        assert 'dorado-v1.3.1-samtools-v1.24.sif' not in text
+        assert 'references/development.env' not in text
+        assert 'BMS_RUNTIME_IMAGE_LANE=development' in text
+    assert not (installation / '.image-store').exists()
 
 
 def test_relative_store_fails_closed(installation, monkeypatch):

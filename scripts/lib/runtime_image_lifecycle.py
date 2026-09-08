@@ -19,12 +19,12 @@ import json
 import os
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 from .shared_runtime_images import (
     SharedRuntimeImageError, _absolute, _digest, _directory, _file, _check_file,
-    _lock, verify_image,
+    _lock, verify_image, _hash, _check_directory,
 )
 
 Error = SharedRuntimeImageError
@@ -330,3 +330,242 @@ def apply_retirement(root, plan, *, maintenance_authorization):
             os.rename(current["digest"], name, src_dir_fd=fd, dst_dir_fd=fd)
             os.fsync(fd)
         return quarantine
+
+
+# Legacy retirement is deliberately one reviewed allocation at a time. Evidence
+# lives beside existing quarantine receipts, never in a second reference catalog.
+# The external maintenance fence must cover non-cooperating filesystem writers
+# and admissions throughout BOTH operations; the lifecycle flock alone cannot.
+def _authorization(value):
+    if not isinstance(value, str) or not value.strip():
+        raise Error("explicit maintenance/quiescence authorization is required")
+
+
+def _directory_identity(fd):
+    info = os.fstat(fd)
+    return {key: getattr(info, key) for key in ("st_dev", "st_ino", "st_mode")}
+
+
+def _legacy_identity(path, opened, digest):
+    fd, parent, before = opened
+    actual = _hash(fd)
+    _check_file(path, fd, parent, before)
+    if actual != digest:
+        raise Error("legacy materialization SHA-256 differs from expected digest")
+    return {"sha256": actual, **{key: getattr(before, key) for key in (
+        "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_blocks",
+        "st_mtime_ns", "st_ctime_ns")}, "parent": _directory_identity(parent)}
+
+
+def _legacy_path(value):
+    path = _absolute(value)
+    if str(path) != str(value):
+        raise Error("legacy retirement requires exact absolute paths")
+    return path
+
+
+def _legacy_open(root, source, survivors, digest, stack):
+    source = _legacy_path(source)
+    if source.is_relative_to(root):
+        raise Error("legacy retirement cannot remove any store object or metadata")
+    if not survivors or len(set(survivors)) != len(survivors):
+        raise Error("explicit distinct preserved survivor paths are required")
+    opened = stack.enter_context(_file(source))
+    identity = _legacy_identity(source, opened, digest)
+    # Unlinking only one of several source names cannot reclaim its allocation.
+    # Hardlinked historical SURVIVORS are supported and never modified.
+    if identity["st_nlink"] != 1:
+        raise Error("retiring allocation must have exactly one link")
+    kept = []
+    for value in survivors:
+        path = _legacy_path(value)
+        survivor = stack.enter_context(_file(path))
+        observed = _legacy_identity(path, survivor, digest)
+        if (observed["st_dev"], observed["st_ino"]) == (identity["st_dev"], identity["st_ino"]):
+            raise Error("source and survivor must be different physical allocations")
+        if path.is_relative_to(root):
+            if path != object_path(root, digest):
+                raise Error("unknown survivor path inside store")
+            verify_image(path, digest)
+        kept.append({"path": str(path), "identity": observed})
+    _check_file(source, *opened)
+    _recheck_legacy_survivors(kept)
+    return source, opened, identity, kept
+
+
+def _recheck_legacy_survivors(kept):
+    # All bytes were hashed under this transaction. Recheck metadata/path after
+    # hashing the last file and immediately before acting on the source.
+    for item in kept:
+        with _file(Path(item["path"])) as (fd, parent, before):
+            expected = item["identity"]
+            if any(getattr(before, key) != value for key, value in expected.items()
+                   if key.startswith("st_")) or _directory_identity(parent) != expected["parent"]:
+                raise Error("preserved survivor changed before action")
+            _check_file(Path(item["path"]), fd, parent, before)
+
+
+def _legacy_plan_locked(root, source, survivors, digest, remove_directory, stack):
+    state = load_state(root)
+    _reference_audit(root, state)
+    source, opened, identity, kept = _legacy_open(root, source, survivors, digest, stack)
+    if remove_directory:
+        if source.name != "runtime.sif" or not source.parent.name.startswith(".bms-ngs-runtime-"):
+            raise Error("only a known private NGS snapshot directory can be retired")
+        if set(os.listdir(opened[1])) != {source.name}:
+            raise Error("unknown private snapshot directory entries")
+    with _directory(root) as root_fd:
+        store_identity = _directory_identity(root_fd)
+    return {"schema_version": 1, "kind": "legacy-materialization", "store_root": str(root),
+            "store_identity": store_identity,
+            "generation": state["generation"], "source": str(source), "digest": digest,
+            "identity": identity, "survivors": kept, "remove_directory": remove_directory,
+            "allocated_bytes": identity["st_blocks"] * 512,
+            "requires_maintenance_quiescence": True, "job_reference_coverage": "unproven"}
+
+
+def plan_legacy_retirement(root, source, survivors, digest, *, remove_directory=False):
+    """Hash an explicit external file and ALL preserved equal-digest survivors.
+
+    No inventory discovery, recursive deletion, age-based eligibility or inferred
+    authorization. Paths supplied here are the review allowlist, not a catalog.
+    A historical hardlinked regular survivor need not satisfy current CAS modes.
+    """
+    with transaction(root) as root, ExitStack() as stack:
+        return _legacy_plan_locked(root, str(source), [str(p) for p in survivors],
+                                   _digest(digest), bool(remove_directory), stack)
+
+
+def _legacy_receipt_path(root, token):
+    if not isinstance(token, str) or len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
+        raise Error("invalid legacy retirement receipt token")
+    return root / "quarantine" / ("legacy-" + token + ".json")
+
+
+def _save_legacy_receipt(root, receipt):
+    atomic_write(_legacy_receipt_path(root, receipt["token"]),
+                 json.dumps(receipt, sort_keys=True, indent=2) + "\n")
+
+
+@contextmanager
+def _legacy_snapshot_directory_write(parent, *, remove_directory):
+    """Temporarily unlock only an explicitly retired private snapshot directory.
+
+    The caller has pinned/validated the external snapshot parent and its sole
+    file. Published object/survivor directories never reach this context. Restore
+    the exact mode on success or failure before recording/rechecking identity.
+    """
+    mode = os.fstat(parent).st_mode & 0o7777
+    unlock = remove_directory and not (mode & 0o200)
+    if unlock:
+        os.fchmod(parent, mode | 0o200)
+    try:
+        yield
+    finally:
+        if unlock:
+            os.fchmod(parent, mode)
+            os.fsync(parent)
+
+
+def apply_legacy_retirement(root, plan, *, maintenance_authorization):
+    """Revalidate exact reviewed plan; same-parent rename, zero bytes reclaimed.
+
+    The returned receipt (also durably saved under store/quarantine) is input to
+    purge. Interrupted prepared receipts preserve the plan and recovery path but
+    intentionally cannot authorize purge: reconcile them in fenced maintenance.
+    Neither survivors nor CAS object directory modes/inodes are ever changed.
+    """
+    _authorization(maintenance_authorization)
+    with transaction(root) as root, ExitStack() as stack:
+        current = _legacy_plan_locked(root, plan["source"],
+            [s["path"] for s in plan["survivors"]], _digest(plan["digest"]),
+            plan["remove_directory"], stack)
+        if current != plan:
+            raise Error("legacy retirement plan is stale; review a new plan")
+        source = Path(current["source"])
+        token = uuid.uuid4().hex
+        quarantine = source.with_name(".quarantine-legacy-" + token + ".sif")
+        receipt = {"schema_version": 1, "kind": "legacy-retirement-receipt", "token": token,
+                   "plan": current, "quarantine": str(quarantine), "status": "prepared",
+                   "authorization": maintenance_authorization, "created_ns": time.time_ns(),
+                   "reclaimed_bytes": 0}
+        _save_legacy_receipt(root, receipt)
+        with _file(source) as opened:
+            if _legacy_identity(source, opened, current["digest"]) != current["identity"]:
+                raise Error("source changed before quarantine")
+            parent = opened[1]
+            if quarantine.name in os.listdir(parent):
+                raise Error("quarantine destination already exists")
+            _recheck_legacy_survivors(current["survivors"])
+            _check_file(source, *opened)
+            if current["remove_directory"] and set(os.listdir(parent)) != {source.name}:
+                raise Error("unknown private snapshot directory entries")
+            with _legacy_snapshot_directory_write(parent, remove_directory=current["remove_directory"]):
+                os.rename(source.name, quarantine.name, src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
+        with _file(quarantine) as opened:
+            observed = _legacy_identity(quarantine, opened, current["digest"])
+        # Rename changes ctime only; record the new stable identity for purge.
+        if {k: v for k, v in observed.items() if k != "st_ctime_ns"} != {
+                k: v for k, v in current["identity"].items() if k != "st_ctime_ns"}:
+            raise Error("quarantined identity changed; manual reconciliation required")
+        receipt.update(status="quarantined", quarantine_identity=observed)
+        _save_legacy_receipt(root, receipt)
+        return receipt
+
+
+def purge_legacy_retirement(root, receipt, *, maintenance_authorization):
+    """Explicit irreversible unlink of one verified quarantined allocation.
+
+    Rehash every survivor and the quarantine, compare the authoritative durable
+    receipt and generation, and require source absence. Purge never follows links
+    or recursively removes directories. Allocation is st_blocks*512 of the one
+    removed single-link inode, not a claim about free-space deltas (open FDs and
+    filesystem snapshots/reflinks may defer actual physical reclamation).
+    """
+    _authorization(maintenance_authorization)
+    with transaction(root) as root, ExitStack() as stack:
+        saved = json.loads(_read(_legacy_receipt_path(root, receipt["token"])),
+                           object_pairs_hook=_unique_keys)
+        if saved != receipt or saved["status"] != "quarantined":
+            raise Error("unknown, changed or already consumed legacy receipt")
+        plan = saved["plan"]
+        state = load_state(root)
+        _reference_audit(root, state)
+        if plan["store_root"] != str(root) or plan["generation"] != state["generation"]:
+            raise Error("legacy receipt is stale after reference changes")
+        with _directory(root) as root_fd:
+            if _directory_identity(root_fd) != plan["store_identity"]:
+                raise Error("legacy receipt store identity changed")
+        source = _legacy_path(plan["source"])
+        quarantine = source.with_name(".quarantine-legacy-" + saved["token"] + ".sif")
+        if saved["quarantine"] != str(quarantine):
+            raise Error("unknown quarantine path")
+        _, opened, observed, kept = _legacy_open(root, str(quarantine),
+            [s["path"] for s in plan["survivors"]], plan["digest"], stack)
+        if observed != saved["quarantine_identity"] or kept != plan["survivors"]:
+            raise Error("quarantine or preserved survivor changed; refusing purge")
+        parent = opened[1]
+        entries = set(os.listdir(parent))
+        if source.name in entries:
+            raise Error("source reappeared; refusing purge")
+        if plan["remove_directory"] and entries != {quarantine.name}:
+            raise Error("unknown private snapshot directory entries")
+        # Pin the outer directory before unlink. Only the explicitly retired
+        # private snapshot parent may be temporarily unlocked; never survivors.
+        outer = stack.enter_context(_directory(source.parent.parent))
+        _check_directory(source.parent, parent)
+        _recheck_legacy_survivors(kept)
+        _check_file(quarantine, *opened)
+        with _legacy_snapshot_directory_write(parent, remove_directory=plan["remove_directory"]):
+            os.unlink(quarantine.name, dir_fd=parent)
+            os.fsync(parent)
+        if plan["remove_directory"]:
+            _check_directory(source.parent.parent, outer)
+            _check_directory(source.parent, parent)
+            os.rmdir(source.parent.name, dir_fd=outer)  # fails closed if nonempty
+            os.fsync(outer)
+        saved.update(status="purged", purge_authorization=maintenance_authorization,
+                     purged_ns=time.time_ns(), reclaimed_bytes=plan["allocated_bytes"])
+        _save_legacy_receipt(root, saved)
+        return saved

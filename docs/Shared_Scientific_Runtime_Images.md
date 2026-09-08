@@ -30,6 +30,20 @@ Protenix stages a verified receipt/reference, not a SIF-containing preflight dir
 
 Worker SIF transport publishes into the same per-worker `cache/runtime-images` store and transports small runtime aliases/reference manifests instead of full attempt copies for compatible readers. Input files, support tools and model data keep their existing materialization semantics. Retained legacy cache/attempt images are not automatically deleted by this change. Exact-path/no-follow scientific registries must retain their prior compatible materialization until explicitly migrated; cleanup must not disable a supported workflow just to claim zero copies.
 
+### FrustraMPNN canonical reader
+
+`BMS_FRUSTRAMPNN_SIF` is an installation-owned path selector. Set it to the existing shared store's `objects/sha256/c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da/runtime.sif`, with `BMS_RUNTIME_IMAGE_STORE` identifying that store (default `${BMS_CONTAINER_DIR}/.image-store`). The selector is snapshotted into the existing runtime identity at process startup; restart through the normal managed release process after changing it. It does not select a new model digest, executable or checkpoint. No public request parameter or digest override is added.
+
+Without this selector, the existing exact `${BMS_CONTAINER_DIR}/frustrampnn.sif` regular-file contract remains. With it, existing component/grouped/CM callers may supply that registered semantic name; the central validator returns the configured canonical path without reading or resolving the alias. Arbitrary alternate paths are rejected. The scientific reader verifies the shared store's immutable-object constraints, compares the verified generation with its no-follow descriptor, and retains that descriptor for executable/checkpoint authentication and inference. Opening a symlink directly remains forbidden.
+
+The registered `run_frustrampnn` workflow stage uses the ordinary shared worker image transport for prewarm and launch. Bundles select the canonical worker object through the existing authenticated envelope's `BMS_FRUSTRAMPNN_SIF` environment entry, alongside `BMS_RUNTIME_IMAGE_STORE`; the existing runtime-image manifest authenticates bytes and compatibility aliases. No Frustra-specific store, cache kind or reference schema exists. Same-digest names, provisioning and repeated attempts reuse one worker object rather than retaining ordinary-cache and per-attempt SIF copies. Public standalone model launch/provisioning availability is unchanged.
+
+The Protenix and canonical Confornets Nextflow labels defer their container selection until task evaluation, respecting `protenix_container_path` / `cm_confornets_container_path` (including their existing environment defaults) before semantic-name fallback.
+
+Retained capability inventories and execution configurations remain historical evidence: their own original content hashes are verified without rewriting them, and compatibility compares every scientific runtime field while excluding only the host `configured_sif_path`. The v1 global configuration keeps its original semantic installation path/hash. V1 receipt validation accepts that original registered installation path as provenance after canonical selection. A new retry configuration uses current placement; retained placement never authorizes execution. Fresh-process tests cover reopening/recompiling retained configurations with the original path absent; filesystem tests separately pin a real canonical fixture object with both original and alias absent.
+
+Publication/lane-key enablement and managed unit projection are coordinated with the shared lifecycle owner; reader migration alone neither removes old images nor authorizes live cleanup.
+
 ## Retention and explicit retirement
 
 The lifecycle exposes durable leases (`acquire_lease`, `release_lease`) for callers that can bind queued/running/resumable job ownership. These are **not yet wired into every legacy admission/resume path** and do not expire merely because a process dies. No unattended collector is enabled.

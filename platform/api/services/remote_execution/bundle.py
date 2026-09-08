@@ -78,8 +78,8 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
     it deliberately stays on the verified legacy transport path. Regular source,
     workflow and model files share the ordinary byte-addressed cache protocol.
     Shared SIF identities/aliases come from the authenticated manifest and use the
-    worker's shared-image store. FrustraMPNN alone retains ordinary authenticated
-    materialization for its exact-path, no-follow consumer.
+    worker's shared-image store. Scientific readers pin canonical regular objects;
+    semantic aliases exist only for compatible callers.
     """
     result: list[CacheTransferArtifact] = []
     for record in bundle.envelope.files:
@@ -267,13 +267,6 @@ def _is_runtime_image(path: Path, relative: str) -> bool:
     return relative.lower().endswith(".sif") and path.is_file()
 
 
-def _legacy_runtime_image(relative: str) -> bool:
-    # FrustraMPNN requires its registered semantic path to be a no-follow regular
-    # file. Keep this one legacy materialization until that consumer is migrated;
-    # it retains an ordinary cache object plus a per-attempt copy, not deduped SIFs.
-    return relative.removeprefix("runtime/") == "containers/frustrampnn.sif"
-
-
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tuple[Path, str]]:
     container_root = get_container_dir().resolve()
     weights_root = get_weights_root().resolve()
@@ -343,7 +336,14 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
 
     assets: list[tuple[Path, str]] = []
     for name in sorted(container_names):
-        assets.append((container_root / name, f"containers/{name}"))
+        path = container_root / name
+        if name == "frustrampnn.sif" and os.environ.get("BMS_FRUSTRAMPNN_SIF"):
+            from services.frustrampnn import runtime as frustra_runtime
+            identity = frustra_runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
+            path = Path(frustra_runtime.validate_configured_container_path(identity.configured_sif_path))
+            with frustra_runtime.open_verified_container(path, identity.sif_sha256):
+                pass
+        assets.append((path, f"containers/{name}"))
     for name in sorted(weight_names):
         assets.append((weights_root / name, f"weights/{name}"))
     for path in sorted(extra_paths):
@@ -368,7 +368,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         if not path.exists():
             raise RemoteBundleError(f"Required runtime asset is unavailable: {path}")
         if _is_runtime_image(path, relative) and not any(
-                _under(path, root) for root in (container_root, weights_root, data_root)):
+                _under(path, root) for root in (container_root, weights_root, data_root,
+                    Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE") or container_root / ".image-store"))):
             raise RemoteBundleError(f"Runtime image alias escapes managed storage: {path}")
         existing = deduped.get(relative)
         if existing is not None and existing != path:
@@ -659,10 +660,7 @@ def prepare_remote_bundle(
     for path, relative in runtime_assets:
         destination = f"{remote_runtime}/{relative}"
         source = path
-        if _is_runtime_image(path, relative) and _legacy_runtime_image(relative):
-            # Materialize bytes, not a controller alias, for the strict consumer.
-            source = path.resolve()
-        elif _is_runtime_image(path, relative):
+        if _is_runtime_image(path, relative):
             # Preserve semantic aliases, but transfer/publish only one object per digest.
             source = path.resolve()
             record = _record_file(source, f"runtime/{relative}", "runtime")
@@ -781,6 +779,11 @@ def prepare_remote_bundle(
         "NXF_ANSI_LOG": "false",
         "CUDA_VISIBLE_DEVICES": ",".join(str(value) for value in assigned_gpu_indices),
     }
+
+    frustra_alias = f"{remote_runtime}/containers/frustrampnn.sif"
+    for image in images.values():
+        if frustra_alias in image.aliases:
+            effective_environment["BMS_FRUSTRAMPNN_SIF"] = image.remote_destination
 
     for key, value in dict(environment or {}).items():
         if key in {

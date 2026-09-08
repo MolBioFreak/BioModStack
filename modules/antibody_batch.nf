@@ -234,7 +234,7 @@ process AlignBoltzValidation {
 process BatchProtenixValidation {
     label 'Protenix'
     label 'gpu'
-    container "${params.container_dir}/protenix.sif"
+    container { params.protenix_container_path ?: "${params.container_dir}/protenix.sif" }
 
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
