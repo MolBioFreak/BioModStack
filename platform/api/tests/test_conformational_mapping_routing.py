@@ -471,7 +471,10 @@ def test_cm3_004_cm_namespace_normalization(
     assert request["request_sha256"] == canonical_sha256(
         {key: value for key, value in request.items() if key != "request_sha256"}
     )
-    assert request["confornets"] == _request_params("confornets")["confornets"]
+    # Omitted output_count materializes as the complete configured candidate pool.
+    expected_confornets = _request_params("confornets")["confornets"]
+    assert isinstance(expected_confornets, dict)
+    assert request["confornets"] == {**expected_confornets, "output_count": 24}
     assert request["source"]["kind"] == "api_submission_v1"
     assert request["created_by"] == {"principal_id": "biomodstack-api"}
     assert not list(tmp_path.glob("*.tmp"))
@@ -930,11 +933,19 @@ def test_cm3_004db_typed_submit_request_accepts_only_declared_state_comparison_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authorization_enabled", "principal_id"),
+    [("0", "local-personal-workflow"), ("1", "alice")],
+    ids=["personal-workflow", "authenticated-scientist"],
+)
 async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    authorization_enabled: str,
+    principal_id: str,
 ) -> None:
-    """Exercise the real submit handler through request materialization and persistence."""
+    """Exercise real principal resolution, materialization, and persistence in both modes."""
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", authorization_enabled)
 
     fixture = json.loads(
         (API_ROOT / "tests" / "fixtures" / "conformational_mapping" / "schemas" / "positive" / "all_schemas.json").read_text()
@@ -949,7 +960,7 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
     session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
     try:
         session.add(ConformationalMappingSource(
-            source_id="snapshot", principal_id="alice", source_kind="complex_snapshot",
+            source_id="snapshot", principal_id=principal_id, source_kind="complex_snapshot",
             storage_root=str(source_root), relative_path="snapshot.json",
             content_sha256=hashlib.sha256(snapshot_bytes).hexdigest(), size_bytes=len(snapshot_bytes),
             metadata_json={}, immutable=True,
@@ -982,6 +993,8 @@ async def test_cm3_004dc_submit_route_persists_state_comparison_authority(
             ConformationalMappingRequest.request_id == response["request_id"]
         ))
         assert persisted is not None
+        assert persisted.principal_id == principal_id
+        assert persisted.request_json["created_by"]["principal_id"] == principal_id
         assert persisted.request_json["state_landscape_comparison"] == authority
     finally:
         await session.close()
