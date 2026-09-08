@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "282c79b6fdd3842a930752ead06866bb48e9baddd403793178569d74b067a053",
+  "content_sha256": "b565db894c5c98a326fd7ab2bd3101e9b77de3a8c01b15db2d9b704af5f94d94",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -69,8 +69,8 @@
     },
     {
       "path": "biomodstack_services.py",
-      "sha256": "3f2a623d59f6a71106f48ac89acccbde3509fb736de38d7dff59fb36f836338b",
-      "size_bytes": 112029
+      "sha256": "d0f5c589bbc9b7c271dbffa819b79bf59523c595b4e7e3ab5a3d2d15c4091bfe",
+      "size_bytes": 113413
     },
     {
       "path": "config/ngs/dorado_v1.3.1.lock.json",
@@ -189,8 +189,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "ad8d96c37e2d1e1037aac30f6ed654946af098823eb4a3446dbec6e17cfe3398",
-      "size_bytes": 97844
+      "sha256": "89eea3fcb2284799ef34c6ea8fc6d7b6ddf73af544f0d18119ef0a03b518f8d6",
+      "size_bytes": 97886
     },
     {
       "path": "packages/sequence-utils/src/index.js",
@@ -764,13 +764,13 @@
     },
     {
       "path": "platform/api/services/remote_execution/bundle.py",
-      "sha256": "71cb464a8924eecce389b9fae7ef021dda172e9ab5b8025679fc0bc5a61b96e5",
-      "size_bytes": 40562
+      "sha256": "e1401c2fb5062640dd07e73f752bd1bcf3abc9deec69f70dd1e7469d983ed6f9",
+      "size_bytes": 40764
     },
     {
       "path": "platform/api/services/remote_execution/cache.py",
-      "sha256": "ae8fa8490da05e3e021d0312ca1ff4cdf8297699319f18eab51dbe923c8b2bf7",
-      "size_bytes": 15810
+      "sha256": "ec42fa6d66b8174f6334a6230b64c4035dd1801b1a8f66974e128c89e569b5a3",
+      "size_bytes": 15671
     },
     {
       "path": "platform/api/services/remote_execution/managed_inventory.py",
@@ -1304,8 +1304,8 @@
     },
     {
       "path": "scripts/lib/runtime_image_lifecycle.py",
-      "sha256": "3dfa85b8150a525e8b8de968c11db145d40fe0c68a5979dd94ec679f8241333a",
-      "size_bytes": 15134
+      "sha256": "eca09b27394ed6cabfc6cd52c16309cf36decc72c56065d4fe6330f32c5ec983",
+      "size_bytes": 27544
     },
     {
       "path": "scripts/lib/shared_runtime_images.py",
@@ -1339,13 +1339,13 @@
     },
     {
       "path": "scripts/publish_runtime_images.py",
-      "sha256": "38b916b071fdeca1f5a2c6f487af8bde480936c30a2000180a2c3f6f47b00319",
-      "size_bytes": 2720
+      "sha256": "28406e8fc693940cdcbc16eafd0621f8ec0ea2263282d119d4bb2d17f4a2a860",
+      "size_bytes": 2743
     },
     {
       "path": "scripts/retire_runtime_images.py",
-      "sha256": "7151396fe730af40fa217d21a8ea30147388f20443709f74bcc7ef10b849ab0d",
-      "size_bytes": 3100
+      "sha256": "a077265253b196d9efeba43101471243e0691c62938d6ac3359d99f95d3cb91a",
+      "size_bytes": 5178
     },
     {
       "path": "scripts/run_ngs_molbio_payload_ownership_audit.py",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "699f1b17935dd964630bce8104592190c07b60c8",
-  "successor_source_tree": "eb23c2177de478e20d4b1069b49c3e3c86b433e9",
+  "successor_source_commit": "9c5e21f77f0f0811f348d99e13746934d6ab4fce",
+  "successor_source_tree": "bd7436aca39261b355e30ad4f1481267fffdea18",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
