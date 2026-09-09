@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
+import retainedHistory from '../fixtures/bioxp_retained_history.json';
 
 const completeDeckReceiptFixture = {
     schema_version: 'bioxp.operator_action_receipt.v2',
@@ -2163,6 +2164,20 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
+        expect(state.admissionCalls).toBe(0);
+    });
+
+    it('renders retained live history with numeric timestamps and absent nested stage receipts', async () => {
+        state.history.data.receipts = retainedHistory.receipts;
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Recent Robot Actions') as HTMLElement;
+        expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
+        expect(section.textContent).toContain('Terminal proof unverified');
+        expect(section.textContent).toContain('unverified legacy reconciliation record');
         expect(state.admissionCalls).toBe(0);
     });
 
