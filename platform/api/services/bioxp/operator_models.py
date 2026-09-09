@@ -4119,7 +4119,7 @@ class OperatorActionSpec(BaseModel):
     inputs: list[OperatorInputSpec] = Field(default_factory=list, max_length=128)
     stages: list[str] = Field(default_factory=list, max_length=128)
     aggregate_abort: Literal[True] | None = None
-    physical_scope: Literal["aggregate_oem_all_present_boards"] | None = None
+    physical_scope: Literal["aggregate_oem_all_present_boards", "none_software_flags_and_waiters"] | None = None
     x_only: Literal[False] | None = None
 
     @model_validator(mode="after")
@@ -4200,6 +4200,7 @@ ReceiptStatusT = TypeVar("ReceiptStatusT", bound=str)
 
 class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     model_config = ConfigDict(extra="forbid", strict=True)
+    sequence: StrictInt | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
     transport_exchanges: list[OperatorTransportExchangeV2] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
