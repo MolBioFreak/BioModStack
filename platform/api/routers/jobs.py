@@ -5145,6 +5145,8 @@ async def list_jobs(
         Job.completed_stages,
         Job.awaiting_input,
         Job.awaiting_stage,
+        # Keep summary rows lightweight while preserving execution-policy parity.
+        Job.params["remote_result_policy"].as_string().label("remote_result_policy"),
     )
     selected_entities = summary_columns if summary else (Job,)
     design_counts = (
@@ -5265,7 +5267,9 @@ async def list_jobs(
             model_id=job.model_id,
             mode=job.mode,
             params={} if summary else _public_job_params(job),
-            execution_policy=ExecutionPolicy.from_params(job.params),
+            execution_policy=ExecutionPolicy.from_params(
+                {"remote_result_policy": job.remote_result_policy} if summary else job.params
+            ),
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
