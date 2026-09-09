@@ -284,8 +284,17 @@ class BioXpRobotClient:
             try:
                 collected = await self.request(
                     "collect_hardware_snapshot",
+                    json_data={"automatic": True},
                     timeout_override=_AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS,
                 )
+                if collected.get("published") is False and collected.get("reason") == "operator_action_pending":
+                    # Foreground priority is not a failed controller query.
+                    # Retry observation on a subsequent poll, not after the
+                    # thirty-second transport-failure backoff. Never retry motion.
+                    self._snapshot_retry_after = self._monotonic_clock() + 0.5
+                    return {**payload, "automatic_snapshot_refresh": {
+                        "attempted": True, "published": False, "retry_deferred": True,
+                        "retry_after_s": 0.5, "reason": "operator_action_pending"}}
                 snapshot_id = _require_published_snapshot(collected)
                 payload = await self.probe_status_only()
                 payload = dict(payload)

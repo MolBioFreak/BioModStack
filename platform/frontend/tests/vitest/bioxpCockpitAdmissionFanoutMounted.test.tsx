@@ -86,6 +86,7 @@ const completeDeckReceiptFixture = {
 
 const state = vi.hoisted(() => ({
     stableReset: vi.fn(),
+    quickDashboardProps: undefined as Record<string, unknown> | undefined,
     admissionCalls: 0,
     catalogArgs: [] as unknown[][],
     methodReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown },
@@ -585,7 +586,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
-vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: () => null }));
+vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: (props: Record<string, unknown>) => { state.quickDashboardProps = props; return null; } }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
@@ -642,6 +643,8 @@ describe('critical evidence presentation', () => {
             expect(container.textContent).toContain('MotionUnknown —');
             expect(move.isConnected).toBe(true);
             expect(move.disabled).toBe(true);
+            expect(state.quickDashboardProps?.data).toBe(state.dashboard.data);
+            expect(state.quickDashboardProps?.stale).toBe(true);
             expect(state.v2Catalog).toMatchObject({ isFetching: true, error: null, isStale: false });
             expect(Date.now() - (clock === 'local'
                 ? (state.v2Catalog as typeof state.v2Catalog & { dataUpdatedAt: number }).dataUpdatedAt
@@ -2178,6 +2181,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
         expect(section.textContent).toContain('Terminal proof unverified');
         expect(section.textContent).toContain('unverified legacy reconciliation record');
+        state.history.isError = true;
+        state.history.error = new Error('refresh failed');
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
+        expect(container.textContent).toContain('Robot action history unavailable');
+        expect(container.textContent).not.toContain('No robot action receipts recorded.');
         expect(state.admissionCalls).toBe(0);
     });
 

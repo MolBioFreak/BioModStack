@@ -42,6 +42,7 @@ class SnapshotRefreshTransport(httpx.AsyncBaseTransport):
         self.snapshot_status = snapshot_status
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await request.aread()
         self.requests.append(request)
         if request.method == "POST":
             if self.snapshot_status >= 400:
@@ -245,6 +246,37 @@ def test_probe_refreshes_stale_hardware_evidence_inline() -> None:
         ("GET", "/status"),
     ]
     assert transport.requests[1].extensions["timeout"]["read"] <= 15.0
+    import json
+    assert json.loads(transport.requests[1].content) == {"automatic": True}
+    asyncio.run(client.close())
+
+
+def test_foreground_deferral_does_not_trigger_failure_backoff() -> None:
+    class Deferred(SnapshotRefreshTransport):
+        deferred = True
+        async def handle_async_request(self, request):
+            if request.method == "POST" and self.deferred:
+                self.requests.append(request)
+                return httpx.Response(200, json={"ok": False, "published": False,
+                    "reason": "operator_action_pending"}, request=request)
+            return await super().handle_async_request(request)
+    transport = Deferred(stale=True)
+    now = [0.0]
+    target = ValidatedBioXpTarget(api_url="http://robot:8123", scheme="http",
+        hostname="robot", port=8123, resolved_addresses=(ip_address("100.64.0.10"),))
+    client = BioXpRobotClient(target, transport=transport, monotonic_clock=lambda: now[0])
+    first = asyncio.run(client.probe())
+    assert first["automatic_snapshot_refresh"]["reason"] == "operator_action_pending"
+    assert first["automatic_snapshot_refresh"]["published"] is False
+    now[0] = .1
+    asyncio.run(client.probe())
+    assert len([r for r in transport.requests if r.method == "POST"]) == 1
+    now[0] = .51
+    transport.deferred = False
+    final = asyncio.run(client.probe())
+    assert final["automatic_snapshot_refresh"]["published"] is True
+    assert len([r for r in transport.requests if r.method == "POST"]) == 2
+    assert all(r.url.path in {"/status", "/hardware/snapshot/collect"} for r in transport.requests)
     asyncio.run(client.close())
 
 

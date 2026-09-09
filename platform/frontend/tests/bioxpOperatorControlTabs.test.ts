@@ -76,7 +76,8 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, linkConnected\)/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
     assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/);
-    assert.match(cockpit, /data=\{dashboard\}/);
+    assert.match(cockpit, /data=\{displayTelemetry\}/);
+    assert.match(cockpit, /stale=\{showingLastKnown\}/);
     assert.doesNotMatch(cockpit, /useBioXpOperatorDashboard(?:V2)?\(/);
     assert.doesNotMatch(`${dashboard}\n${cockpit}`, /type="password"|Login required|Authentication required/i);
 });

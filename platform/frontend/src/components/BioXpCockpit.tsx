@@ -226,10 +226,11 @@ function InterruptOutcome({ label, receipt, error, pending, generation, connecte
 
 export function BioXpCockpit() {
     const statusQuery = useBioXpStatus(true);
-    const status = statusQuery.isError ? undefined : statusQuery.data;
+    const status = statusQuery.data;
     const connection = status?.connection;
     const active = connection?.active === true;
-    const linkConnected = active && connection?.reachable !== false;
+    const displayConnected = active && connection?.reachable !== false;
+    const linkConnected = !statusQuery.isError && displayConnected;
     const robotControlReady = linkConnected
         && connection?.runtime_ready === true;
     const configured = connection?.configured === true;
@@ -260,6 +261,11 @@ export function BioXpCockpit() {
         ? catalogV2Query.data : undefined;
     const currentDashboardV2 = currentCatalogV2?.dashboard;
     const currentTelemetry = currentDashboardV2?.telemetry ?? undefined;
+    // Presentation retains the observation in this connection's query key.
+    // Admission still requires currentCatalogV2 and its unchanged expiry.
+    const displayDashboardV2 = displayConnected ? catalogV2Query.data?.dashboard : undefined;
+    const displayTelemetry = displayDashboardV2?.telemetry ?? undefined;
+    const showingLastKnown = displayTelemetry != null && currentTelemetry == null;
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
     const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
@@ -389,8 +395,8 @@ export function BioXpCockpit() {
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
             : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
     const recentCommands = useMemo(
-        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter(isIndexedHistoryReceipt).slice(0, historyLimit),
-        [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
+        () => (!displayConnected ? [] : (historyQuery.data?.receipts ?? [])).filter(isIndexedHistoryReceipt).slice(0, historyLimit),
+        [historyQuery.data?.receipts, displayConnected, historyLimit],
     );
     useEffect(() => {
         resetInvokeOperatorAction();
@@ -1007,12 +1013,13 @@ export function BioXpCockpit() {
             </section>
 
             <BioXpQuickDashboard
-                connected={linkConnected}
-                data={dashboard}
+                connected={displayConnected}
+                data={displayTelemetry}
                 isLoading={catalogV2Query.isLoading}
-                error={catalogV2Query.error}
+                error={statusQuery.error ?? catalogV2Query.error}
                 motionControlsAvailable={motionControlsAvailable}
                 unavailableReason={telemetryUnavailableReason}
+                stale={showingLastKnown}
             />
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
@@ -1534,10 +1541,12 @@ export function BioXpCockpit() {
                         </select>
                     </label>
                 </div>
-                {!linkConnected ? (
+                {!displayConnected ? (
                     <p className="mt-2 text-sm text-slate-400">Connect to load robot action receipts.</p>
-                ) : historyQuery.isError ? null : historyQuery.isLoading ? (
+                ) : historyQuery.isLoading && recentCommands.length === 0 ? (
                     <p role="status" className="mt-2 text-sm text-slate-400">Loading robot action receipts…</p>
+                ) : historyQuery.isError && recentCommands.length === 0 ? (
+                    <p className="mt-2 text-sm text-slate-400">No last-known receipts available; refresh failed.</p>
                 ) : historyQuery.data == null ? (
                     <p className="mt-2 text-sm text-slate-400">Robot action receipts have not been loaded.</p>
                 ) : recentCommands.length === 0 ? (

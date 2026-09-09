@@ -1461,7 +1461,9 @@ export const useBioXpOperatorControlCatalogV2 = (
     enabled = true,
     authorityVersion: string | null = null,
 ) => useQuery({
-    queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled, authorityVersion],
+    // Poll enablement is not an observation identity. Retain same-generation
+    // display data through a transient status error without admitting motion.
+    queryKey: [...operatorV2CatalogKey, connectionGeneration, authorityVersion],
     // A stalled read must not leave Loading forever. Cancellation applies only
     // to this read, never to a dispatched robot action. Keep the existing 15 s
     // authority expiry and single catalog/dashboard owner.

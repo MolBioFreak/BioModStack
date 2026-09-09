@@ -7,6 +7,7 @@ interface BioXpQuickDashboardProps {
     error: unknown;
     motionControlsAvailable: boolean | undefined;
     unavailableReason?: string | null;
+    stale?: boolean;
 }
 
 const panelStyle = {
@@ -24,7 +25,7 @@ const yesNoUnknown = (candidate: boolean | null | undefined) => (
     candidate === true ? 'Yes' : candidate === false ? 'No' : 'Not reported'
 );
 
-export function BioXpQuickDashboard({ connected, data, isLoading, error, motionControlsAvailable, unavailableReason }: BioXpQuickDashboardProps) {
+export function BioXpQuickDashboard({ connected, data, isLoading, error, motionControlsAvailable, unavailableReason, stale = false }: BioXpQuickDashboardProps) {
     return (
         <section aria-label="Live Robot Dashboard" style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
@@ -34,19 +35,22 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                 </span>
             </div>
             {!connected && <div style={panelStyle}>Connect to view robot state.</div>}
-            {connected && isLoading && <div style={panelStyle}>Loading live state…</div>}
+            {connected && isLoading && !data && <div style={panelStyle}>Loading live state…</div>}
+            {connected && stale && data && <div role="status" style={{ ...panelStyle, color: '#fcd34d' }}>
+                Last-known observation — refresh pending or unavailable. Motion admission requires fresh authority.
+            </div>}
             {connected && error !== null && error !== undefined && (
-                <div style={{ ...panelStyle, color: '#fca5a5' }}>Dashboard unavailable: {bioXpErrorText(error)}</div>
+                <div style={{ ...panelStyle, color: '#fca5a5' }}>{data ? 'Refresh failed; last-known values retained' : 'Dashboard unavailable'}: {bioXpErrorText(error)}</div>
             )}
             {connected && !isLoading && error == null && !data && (
                 <div role="status" style={panelStyle}>{unavailableReason ?? 'Robot did not report telemetry; motion availability is unknown.'}</div>
             )}
-            {connected && error == null && data && (
+            {connected && data && (
                 <>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
                         <div style={panelStyle}>
                             <strong>Connection</strong>
-                            <div>{data.connection.live ? 'Live / owned' : 'Not live'}</div>
+                            <div>{stale ? 'Last-known connection state' : data.connection.live ? 'Live / owned' : 'Not live'}</div>
                         </div>
                         <div style={panelStyle}>
                             <strong>Motion controls</strong>
