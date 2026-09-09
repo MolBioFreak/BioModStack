@@ -1076,10 +1076,24 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
         "observed_board_epoch_by_board": {},
     }
 
+    # Robot _compact_v2_receipt uses the common v2 receipt for interrupts.
+    # Keep the raw interrupt detail instead of accepting an obsolete envelope.
+    compact = {
+        **v2_receipt(action_id="oem.y.stop"),
+        "interrupt_evidence": {
+            "source_call_completed": True, "source_return_ok": True,
+            "controller_stop_acknowledged": True,
+            "controller_terminal_state_verified": None,
+            "physical_effect_verified": False, "persistence_state": "committed",
+            "details": y_interrupt_receipt(),
+        },
+        "transport_exchanges": [], "transport_retention_errors": [],
+    }
+    runtime.connection.client.responses["interrupt_operator_action_v1"] = compact
     response = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
 
     assert response.status_code == 200, response.text
-    assert response.json() == y_interrupt_receipt()
+    assert response.json() == compact
     route_name, kwargs = runtime.connection.safety_interrupt_calls[-1]
     assert route_name == "interrupt_operator_action_v1"
     assert kwargs == {
@@ -1094,15 +1108,16 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
     }
 
     runtime.connection.client.responses["interrupt_operator_action_v1"] = {
-        **y_interrupt_receipt(),
+        **compact,
         "action_id": "oem.x.stop",
     }
     mismatch = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
     assert mismatch.status_code == 502
-    assert mismatch.json()["detail"] == "BioXP robot returned an invalid operator-control contract"
+    assert mismatch.json()["detail"]["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
+    assert mismatch.json()["detail"]["robot_evidence"]["action_id"] == "oem.x.stop"
 
-    missing_recovery_hold = y_interrupt_receipt()
-    del missing_recovery_hold["recovery_hold"]
+    missing_recovery_hold = {**compact, "interrupt_evidence": dict(compact["interrupt_evidence"])}
+    del missing_recovery_hold["interrupt_evidence"]["persistence_state"]
     runtime.connection.client.responses["interrupt_operator_action_v1"] = missing_recovery_hold
     incomplete = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
     assert incomplete.status_code == 502
@@ -2147,7 +2162,7 @@ def test_x_dashboard_rejects_unknown_keys_at_each_authority_evidence_leaf(field_
     lifecycle = _exact_x_lifecycle(state="executing")
     if field_path[0] == "prepared_receipt":
         lifecycle["state"] = "prepared_unreferenced"
-        lifecycle["prepared_receipt"] = {"ok": True, "observed_generation": 7, "board_lifecycle_generation": 3, "board_preparation_verified": True, "initialize_without_motion_verified": True, "physical_motion": False, "motor_output_state": "unknown", "motor_torque_verified": False, "receipt": valid_value, "axis": "x", "source_anchor": "ClassControlInterface.initializeMotorsWithoutMotion:3187-3195", "source_exact": True, "literal_switch_mask_writes": []}
+        lifecycle["prepared_receipt"] = {"ok": True, "observed_generation": 7, "board_lifecycle_generation": 3, "board_preparation_verified": True, "initialize_without_motion_verified": True, "physical_motion": False, "motor_output_state": "unknown", "motor_torque_verified": False, "receipt": valid_value, "axis": "x", "source_anchor": "ClassControlInterface.initializeMotorsWithoutMotion:3187-3195", "source_exact": False, "initializer_source_exact": True, "literal_switch_mask_writes": []}
     elif field_path[0] == "active_receipt":
         lifecycle["active_receipt"] = {"command_id": "x-command", "intent": "move_absolute", "idempotency_key": "x-command", "generation": 7, "inputs": valid_value, "status": "executing", "result": None}
     else:
@@ -2239,7 +2254,8 @@ def test_x_lifecycle_last_failure_rejects_invented_and_partial_families():
             "blocker": "ownership_generation_changed_before_preparation",
             "axis": "x",
             "source_anchor": "ClassControlInterface.initializeMotorsWithoutMotion:3187-3195",
-            "source_exact": True,
+            "source_exact": False,
+            "initializer_source_exact": True,
             "literal_switch_mask_writes": [],
         },
         {
@@ -2704,7 +2720,7 @@ def test_z_stop_invocation_skips_catalog_preflight_but_keeps_generation_contract
     assert runtime.connection.client.calls == []
 
 
-def test_z_abort_invocation_uses_independent_interrupt_lane(monkeypatch):
+def test_retired_z_abort_rejects_without_dispatch(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action"] = receipt(
         action_id="oem.z.abort",
@@ -2719,9 +2735,10 @@ def test_z_abort_invocation_uses_independent_interrupt_lane(monkeypatch):
         "inputs": {},
     })
 
-    assert response.status_code == 200, response.text
-    assert response.json()["action_id"] == "oem.z.abort"
-    assert runtime.connection.safety_interrupt_calls[0][1]["path_params"] == {"action_id": "oem.z.abort"}
+    assert response.status_code == 410, response.text
+    assert "retired" in response.json()["detail"]
+    assert runtime.connection.safety_interrupt_calls == []
+    assert runtime.connection.client.calls == []
 
 
 def test_x_stop_and_abort_use_independent_interrupt_lane(monkeypatch):

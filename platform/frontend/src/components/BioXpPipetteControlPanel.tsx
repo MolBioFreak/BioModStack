@@ -46,8 +46,8 @@ const PHYSICAL_CONTROLS = [
     'Load tip physically',
     'Move to waste physically',
     'Detect fluid physically',
-    'Plunger up physically',
-    'Plunger down physically',
+    'Lift pipette head (Z)',
+    'Lower pipette head (Z)',
 ] as const;
 
 const validHardwareTip = (evidence: BioXpPipetteHardwareEvidence | null | undefined): boolean | null => (
@@ -136,9 +136,9 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 return { location_id: 'WASTE_BIN' };
             case 'Detect fluid physically':
                 return { dry_run: false };
-            case 'Plunger up physically':
+            case 'Lift pipette head (Z)':
                 return { location_id: plungerLocation };
-            case 'Plunger down physically':
+            case 'Lower pipette head (Z)':
                 return { location_id: plungerLocation, overpress: false };
         }
     };
@@ -256,14 +256,14 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 {PHYSICAL_CONTROLS.map((label) => {
                     const actionId = physicalActionIdFor(label);
                     const enabled = physicalActionEnabled(actionId);
-                    const reason = physicalActionReason(actionId, 'Robot-owned exact OEM pipette action.');
+                    const reason = physicalActionReason(actionId, 'Robot-owned physical primitive; not the full OEM pipette-panel workflow.');
                     return (
                         <button
                             key={label}
                             type="button"
                             data-physical-pipette-control
                             disabled={!connected || catalogLoading || invokePending || !enabled}
-                            title={enabled ? 'Robot-owned exact OEM pipette action' : reason}
+                            title={enabled ? 'Robot-owned physical primitive; not the full OEM pipette-panel workflow' : reason}
                             onClick={() => dispatchPhysical(label)}
                             className={enabled
                                 ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-xs text-amber-50 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-35'
@@ -274,7 +274,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
                 <label className="flex items-center gap-2">
-                    Plunger Z location
+                    Pipette head Z location
                     <input
                         value={plungerLocation}
                         onChange={(event) => setPlungerLocation(event.target.value.trim().toUpperCase())}
@@ -282,7 +282,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         className="w-40 rounded bg-slate-900 px-2 py-1 font-mono text-xs"
                     />
                 </label>
-                <span className="text-slate-500">PositionTable location for plunger up/down Z moves (e.g. LOC_TC, WASTE_BIN).</span>
+                <span className="text-slate-500">PositionTable location for head Z lift/lower (not liquid-plunger motion). Lower uses overpress=false. Planner tray, well, tip type and home-after fields below do not apply to these physical buttons.</span>
             </div>
 
             <div className="mt-4 rounded border border-slate-700 bg-slate-950/40 p-3">

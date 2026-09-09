@@ -149,7 +149,7 @@ def test_runtime_start_restores_saved_managed_connection(monkeypatch) -> None:
             self.connected += 1
 
     connection = Connection()
-    runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+    runtime = BioXpRuntime(connection=connection, jobs=None)  # type: ignore[arg-type]
 
     asyncio.run(runtime.start())
 
@@ -169,7 +169,7 @@ def test_runtime_start_keeps_failed_restore_truthful_without_crashing_api(monkey
         async def connect(self):
             raise RuntimeError("robot offline")
 
-    runtime = BioXpRuntime(connection=Connection(), commands=None, jobs=None)  # type: ignore[arg-type]
+    runtime = BioXpRuntime(connection=Connection(), jobs=None)  # type: ignore[arg-type]
 
     asyncio.run(runtime.start())
 
@@ -191,7 +191,7 @@ def test_runtime_start_does_not_contact_saved_robot_when_connection_access_is_di
             self.connected += 1
 
     connection = Connection()
-    runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+    runtime = BioXpRuntime(connection=connection, jobs=None)  # type: ignore[arg-type]
 
     asyncio.run(runtime.start())
 
@@ -217,7 +217,7 @@ def test_runtime_start_does_not_wait_for_saved_robot_probe(monkeypatch) -> None:
 
     async def scenario() -> None:
         connection = Connection()
-        runtime = BioXpRuntime(connection=connection, commands=None, jobs=None)  # type: ignore[arg-type]
+        runtime = BioXpRuntime(connection=connection, jobs=None)  # type: ignore[arg-type]
         start_task = asyncio.create_task(runtime.start())
         await asyncio.wait_for(connection.entered.wait(), timeout=0.1)
         await asyncio.sleep(0)
@@ -313,7 +313,8 @@ def test_maintenance_state_projects_from_status_and_nested_command_or_error_resp
         "block_reason": "USB owner changed",
     }
 
-    service.observe_command_response({
+    # Current runtime updates maintenance authority through status, not retired commands.
+    clients[0].probe_result = {**clients[0].probe_result, **{
         "detail": {
             "error": "post_maintenance_motion_recovery_required",
             "maintenance_state": {
@@ -322,7 +323,9 @@ def test_maintenance_state_projects_from_status_and_nested_command_or_error_resp
                 "block_reason": None,
             },
         },
-    })
+    }}
+    del clients[0].probe_result["maintenance_state"]
+    asyncio.run(service.probe_status_only())
     assert service.snapshot().maintenance_state == {
         "motion_blocked": False,
         "recovery_required": False,
@@ -585,7 +588,7 @@ def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
     asyncio.run(service.connect())
 
-    service.clock = lambda: now + timedelta(seconds=31)
+    service.clock = lambda: now + timedelta(seconds=1801)
     snapshot = service.snapshot()
 
     assert snapshot.observation_fresh is False
@@ -654,7 +657,9 @@ def test_connection_and_active_monitor_are_status_only_while_snapshot_refresh_ru
 
         assert service.snapshot().observation_fresh is True
         assert clients[0].status_only_probes >= 3
-        assert clients[0].probes >= 3
+        assert clients[0].probes == 0  # automatic full refresh has a deliberate 20s floor
+        await service._snapshot_refresh_once()
+        assert clients[0].probes == 1
 
         await service.disconnect()
         stopped_status = clients[0].status_only_probes

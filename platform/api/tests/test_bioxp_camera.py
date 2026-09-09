@@ -128,6 +128,9 @@ class FakeCameraClient:
 
 
 class FakeConnection:
+    def snapshot(self):
+        return SimpleNamespace(generation=self.generation)
+
     def __init__(self, *, active: bool = True, generation: int = 77) -> None:
         self.active = active
         self.generation = generation

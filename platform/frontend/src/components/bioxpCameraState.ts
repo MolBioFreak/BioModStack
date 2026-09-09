@@ -3,6 +3,7 @@ export interface BioXpCameraHealthStatus {
     available: boolean;
     frame_sequence: number | null;
     frame_age_seconds: number | null;
+    requestElapsedMs?: number;
     freshness_budget_seconds: number;
     provider_generation: number;
 }
@@ -29,7 +30,9 @@ export function deriveBioXpCameraPresentation({
     if (error) {
         return { label: 'UNAVAILABLE', detail: error, effectiveFrameAgeSeconds: null };
     }
-    if (!status || !status.available || status.state === 'unavailable') {
+    if (!status || !status.available || status.state === 'unavailable'
+        || !Number.isInteger(status.provider_generation) || status.provider_generation < 0
+        || !Number.isFinite(status.freshness_budget_seconds) || status.freshness_budget_seconds <= 0) {
         return {
             label: 'UNAVAILABLE',
             detail: 'No validated camera frame is available from the managed BioXP target.',
@@ -38,9 +41,10 @@ export function deriveBioXpCameraPresentation({
     }
     const effectiveFrameAgeSeconds = status.frame_age_seconds === null
         ? null
-        : status.frame_age_seconds + Math.max(0, nowMs - statusReceivedAtMs) / 1_000;
+        : status.frame_age_seconds + (status.requestElapsedMs ?? 0) / 1_000 + Math.max(0, nowMs - statusReceivedAtMs) / 1_000;
     if (status.state === 'stale'
-        || effectiveFrameAgeSeconds === null
+        || !Number.isInteger(status.frame_sequence) || (status.frame_sequence ?? -1) < 0
+        || effectiveFrameAgeSeconds === null || !Number.isFinite(effectiveFrameAgeSeconds) || effectiveFrameAgeSeconds < 0
         || effectiveFrameAgeSeconds >= status.freshness_budget_seconds) {
         return {
             label: 'STALE',
@@ -57,7 +61,7 @@ export function deriveBioXpCameraPresentation({
     }
     return {
         label: 'LIVE',
-        detail: 'The managed camera proxy reports a fresh, advancing frame.',
+        detail: 'The managed camera proxy reports a fresh frame; stream sequence progress is assessed separately.',
         effectiveFrameAgeSeconds,
     };
 }

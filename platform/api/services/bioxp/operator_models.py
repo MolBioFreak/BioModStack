@@ -4678,6 +4678,85 @@ OperatorLiveActionReceipt = (
 )
 
 
+LegacyDurableCommandStatus = Literal[
+    "queued", "dispatched", "issued_pending", "stop_requested", "abort_requested",
+    "completed", "failed", "ambiguous", "stopped", "aborted", "cancelled",
+    "cleared", "interrupted",
+]
+_LEGACY_DURABLE_NONTERMINAL = frozenset({
+    "queued", "dispatched", "issued_pending", "stop_requested", "abort_requested",
+})
+
+
+class OperatorLegacyDurableCommandReceipt(BaseModel):
+    """Closed read-only OperatorHistoryReader._command_projection contract.
+
+    All projection fields are required, including recorded nulls. Terminal
+    evidence is the source-native terminal_json object (different providers
+    have different payloads), not current BMS authority. Preserve its nested
+    responses, omission markers and evidence references as JSON, without
+    deriving acknowledgements or physical truth from status or HTTP success.
+    This variant is deliberately absent from mutation/live receipt unions.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    schema_version: Literal["bioxp.operator_command_receipt.v1"]
+    source: Literal["legacy_operator_plane"]
+    command_id: str = Field(min_length=1, max_length=160)
+    method_id: str | None = Field(min_length=1, max_length=160)
+    method_sequence: StrictInt | None = Field(ge=0)
+    stream_sequence: StrictInt = Field(ge=0)
+    action_id: str = Field(min_length=1, max_length=160)
+    status: LegacyDurableCommandStatus
+    stored_status: LegacyDurableCommandStatus
+    recovery_required: StrictBool
+    automatic_retry: Literal[False]
+    physical_outcome: Literal["ambiguous"] | None
+    ownership_generation: StrictInt = Field(ge=0)
+    requested_inputs: dict[str, JsonValue]
+    effective_inputs: dict[str, JsonValue]
+    accepted_at: StrictFloat | StrictInt = Field(ge=0)
+    queued_at: StrictFloat | StrictInt = Field(ge=0)
+    dispatched_at: StrictFloat | StrictInt | None = Field(ge=0)
+    finished_at: StrictFloat | StrictInt | None = Field(ge=0)
+    source_noop: StrictBool
+    source_noop_reason: str | None = Field(max_length=4000)
+    remote_acknowledged: StrictBool
+    controller_acknowledged: StrictBool
+    physical_effect_verified: StrictBool
+    terminal_evidence: dict[str, JsonValue] | None
+    sequence: StrictInt = Field(ge=0)
+    state_version: StrictInt = Field(ge=0)
+    expected_board_epoch_by_board: dict[
+        Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")],
+        Annotated[StrictInt, Field(ge=0)],
+    ]
+    terminal_receipt_id: str | None = Field(min_length=1, max_length=240)
+    completion_class: str | None = Field(min_length=1, max_length=160)
+    transition_sequence: StrictInt | None = Field(ge=0)
+
+    @field_validator("automatic_retry", mode="before")
+    @classmethod
+    def require_recorded_false(cls, value: object) -> object:
+        if value is not False:
+            raise ValueError("legacy durable receipt automatic_retry must be boolean false")
+        return value
+
+    @model_validator(mode="after")
+    def bind_legacy_projection(self):
+        nonterminal = self.stored_status in _LEGACY_DURABLE_NONTERMINAL
+        expected_status = "ambiguous" if nonterminal else self.stored_status
+        expected_outcome = "ambiguous" if nonterminal else None
+        if (
+            self.status != expected_status
+            or self.recovery_required is not nonterminal
+            or self.physical_outcome != expected_outcome
+        ):
+            raise ValueError("legacy durable receipt contradicts its recorded status projection")
+        return self
+
+
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
@@ -4692,6 +4771,7 @@ class OperatorActionHistory(BaseModel):
         | OperatorLegacyReconciliationReceipt
         | OperatorMigratedOutcomeUnknownReceipt
         | OperatorLegacyUnindexedPipetteReceipt
+        | OperatorLegacyDurableCommandReceipt
     ] = Field(max_length=500)
 
 

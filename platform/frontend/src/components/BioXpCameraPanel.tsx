@@ -33,15 +33,24 @@ export function BioXpCameraPanel({
     const refetchStream = streamQuery.refetch;
     const ownerRef = useRef<CameraObjectUrlOwner | null>(null);
     const mountedRef = useRef(false);
-    const statusReceivedAtRef = useRef(Date.now());
+    const sessionRef = useRef({ connected, generation: connectionGeneration });
+    if (sessionRef.current.connected !== connected || sessionRef.current.generation !== connectionGeneration) {
+        sessionRef.current = { connected, generation: connectionGeneration };
+    }
+    const streamRequestRef = useRef(0);
+    const requestPendingRef = useRef(false);
+    const providerGenerationRef = useRef<number | null>(null);
+    const sequenceAdvancingRef = useRef(false);
+    const statusReceivedAtRef = useRef(performance.now());
+    const frameAgeFloorMsRef = useRef(0);
     const lastSequenceRef = useRef<number | null>(null);
-    const lastSequenceAdvanceAtRef = useRef(Date.now());
+    const lastSequenceAdvanceAtRef = useRef(performance.now());
     const [imageUrl, setImageUrl] = useState<string | null>(null);
     const [imageError, setImageError] = useState<string | null>(null);
-    const [streamUrl, setStreamUrl] = useState<string | null>(null);
-    const [streamStarted, setStreamStarted] = useState(false);
+    const imageSessionRef = useRef(sessionRef.current);
+    const [streamOverride, setStreamOverride] = useState<{ active: boolean; baseline: typeof streamQuery.data } | null>(null);
     const [pendingAction, setPendingAction] = useState<'latest' | 'snapshot' | 'stream' | null>(null);
-    const [presentationNowMs, setPresentationNowMs] = useState(() => Date.now());
+    const [presentationNowMs, setPresentationNowMs] = useState(() => performance.now());
     const [, bumpPresentationRevision] = useState(0);
 
     useEffect(() => {
@@ -59,33 +68,59 @@ export function BioXpCameraPanel({
         ownerRef.current?.clear();
         setImageUrl(null);
         setImageError(null);
-        setStreamUrl(null);
-        setStreamStarted(false);
+        setStreamOverride(null);
+        streamRequestRef.current += 1;
+        requestPendingRef.current = false;
         setPendingAction(null);
-        const now = Date.now();
+        const now = performance.now();
         statusReceivedAtRef.current = now;
         lastSequenceRef.current = null;
+        providerGenerationRef.current = null;
+        sequenceAdvancingRef.current = false;
         lastSequenceAdvanceAtRef.current = now;
         setPresentationNowMs(now);
         bumpPresentationRevision((revision) => revision + 1);
-    }, [connectionGeneration]);
+    }, [connectionGeneration, connected]);
 
     useEffect(() => {
-        if (!statusQuery.data) return;
-        const receivedAt = statusQuery.dataUpdatedAt || Date.now();
+        if (!connected || !statusQuery.data || statusQuery.isError
+            || statusQuery.data.requestConnectionGeneration !== connectionGeneration) return;
+        const receivedAt = statusQuery.data.receivedAtMonotonicMs ?? performance.now();
+        const sequence = statusQuery.data.frame_sequence;
+        const upstreamAndTransitMs = statusQuery.data.state === 'stale' ? Infinity
+            : (statusQuery.data.frame_age_seconds ?? Infinity) * 1_000
+                + (statusQuery.data.requestElapsedMs ?? 0);
+        // A repeated source identity cannot become younger just because a newer
+        // response reports a smaller upstream age or a shorter browser transit.
+        const sameFrame = providerGenerationRef.current === statusQuery.data.provider_generation
+            && lastSequenceRef.current === sequence;
+        frameAgeFloorMsRef.current = sameFrame
+            ? Math.max(upstreamAndTransitMs, frameAgeFloorMsRef.current + Math.max(0, receivedAt - statusReceivedAtRef.current))
+            : upstreamAndTransitMs;
         statusReceivedAtRef.current = receivedAt;
-        if (statusQuery.data.frame_sequence !== lastSequenceRef.current) {
-            lastSequenceRef.current = statusQuery.data.frame_sequence;
-            lastSequenceAdvanceAtRef.current = receivedAt;
+        if (providerGenerationRef.current !== statusQuery.data.provider_generation) {
+            providerGenerationRef.current = statusQuery.data.provider_generation;
+            lastSequenceRef.current = null;
+            sequenceAdvancingRef.current = false;
         }
-        setPresentationNowMs(Date.now());
+        if (sequence !== null && (lastSequenceRef.current === null || sequence > lastSequenceRef.current)) {
+            sequenceAdvancingRef.current = lastSequenceRef.current !== null;
+            lastSequenceRef.current = sequence;
+            lastSequenceAdvanceAtRef.current = receivedAt;
+        } else if (sequence === null || sequence < (lastSequenceRef.current ?? 0)) {
+            sequenceAdvancingRef.current = false;
+        }
+        setPresentationNowMs(performance.now());
         bumpPresentationRevision((revision) => revision + 1);
-    }, [statusQuery.data, statusQuery.dataUpdatedAt]);
+    }, [statusQuery.data, statusQuery.dataUpdatedAt, statusQuery.isError, connected, connectionGeneration]);
 
     const loadImage = useCallback(async (source: 'latest' | 'snapshot') => {
         const owner = ownerRef.current;
-        if (!owner || connectionGeneration === null || !connected) return;
+        if (!owner || connectionGeneration === null || !connected || requestPendingRef.current) return;
+        const session = sessionRef.current;
         const token = owner.begin();
+        const isCurrent = () => sessionRef.current === session && owner.isCurrent(token) && mountedRef.current;
+        requestPendingRef.current = true;
         setPendingAction(source);
         setImageError(null);
         try {
@@ -95,56 +130,65 @@ export function BioXpCameraPanel({
             if (image.connectionGeneration !== connectionGeneration) {
                 throw new Error('Camera frame belongs to a previous connection');
             }
+            if (!isCurrent()) return;
             const nextUrl = owner.adopt(token, image.blob);
-            if (nextUrl && owner.isCurrent(token) && mountedRef.current) setImageUrl(nextUrl);
+            if (nextUrl && isCurrent()) {
+                imageSessionRef.current = session;
+                setImageUrl(nextUrl);
+            }
         } catch (error) {
-            if (owner.isCurrent(token) && mountedRef.current) setImageError(bioXpErrorText(error));
+            if (isCurrent()) setImageError(bioXpErrorText(error));
         } finally {
-            if (owner.isCurrent(token) && mountedRef.current) {
+            if (isCurrent()) {
                 await refetchStatus().catch(() => undefined);
-                if (owner.isCurrent(token) && mountedRef.current) setPendingAction(null);
+                if (isCurrent()) {
+                    requestPendingRef.current = false;
+                    setPendingAction(null);
+                }
             }
         }
     }, [connected, connectionGeneration, refetchStatus]);
 
-    const serverStreamActive = streamQuery.data?.active === true;
-    const effectiveStreamActive = streamStarted || serverStreamActive;
-
-    useEffect(() => {
-        if (!connectionGeneration || !serverStreamActive) {
-            if (!serverStreamActive) setStreamUrl(null);
-            return;
-        }
-        setStreamUrl((current) => current ?? buildBioXpCameraMjpegUrl(connectionGeneration));
-    }, [connectionGeneration, serverStreamActive]);
+    const serverStreamActive = streamQuery.data?.connection_generation === connectionGeneration && streamQuery.data?.active === true;
+    // A completed local Stop must not be undone by a late pre-Stop poll.
+    // Only another explicit start or a new connection releases that local intent.
+    const effectiveStreamActive = connected && connectionGeneration !== null && (streamOverride?.active === false
+        ? false : streamOverride && streamOverride.baseline === streamQuery.data ? streamOverride.active : serverStreamActive);
 
     const toggleStream = useCallback(async () => {
-        if (connectionGeneration === null || !connected || !mutationEnabled || pendingAction !== null) return;
+        if (connectionGeneration === null || !connected || !mutationEnabled || requestPendingRef.current) return;
+        const session = sessionRef.current;
+        const token = ++streamRequestRef.current;
+        const isCurrent = () => mountedRef.current && sessionRef.current === session && streamRequestRef.current === token;
+        requestPendingRef.current = true;
         setPendingAction('stream');
         setImageError(null);
         try {
             const result = effectiveStreamActive
                 ? await stopBioXpCameraStream(connectionGeneration)
                 : await startBioXpCameraStream(connectionGeneration);
+            if (!isCurrent()) return;
             if (result.connection_generation !== connectionGeneration) {
                 throw new Error('Camera stream belongs to a previous connection');
             }
             if (effectiveStreamActive) {
-                setStreamStarted(false);
-                setStreamUrl(null);
+                setStreamOverride({ active: false, baseline: streamQuery.data });
             } else {
-                setStreamStarted(result.active);
-                setStreamUrl(result.active ? buildBioXpCameraMjpegUrl(connectionGeneration) : null);
+                setStreamOverride({ active: result.active, baseline: streamQuery.data });
             }
             await refetchStream().catch(() => undefined);
         } catch (error) {
-            if (mountedRef.current) setImageError(bioXpErrorText(error));
+            if (isCurrent()) setImageError(bioXpErrorText(error));
         } finally {
-            if (mountedRef.current) setPendingAction(null);
+            if (isCurrent()) {
+                requestPendingRef.current = false;
+                setPendingAction(null);
+            }
         }
-    }, [connected, connectionGeneration, effectiveStreamActive, mutationEnabled, pendingAction, refetchStream]);
+    }, [connected, connectionGeneration, effectiveStreamActive, mutationEnabled, refetchStream, streamQuery.data]);
 
-    const cameraStatus = statusQuery.isError ? undefined : statusQuery.data;
+    const cameraStatus = statusQuery.isError || statusQuery.data?.requestConnectionGeneration !== connectionGeneration
+        ? undefined : statusQuery.data;
     useEffect(() => {
         if (!connected
             || !cameraStatus
@@ -152,7 +196,8 @@ export function BioXpCameraPanel({
             || cameraStatus.state !== 'live'
             || cameraStatus.frame_age_seconds === null) return;
         const budgetMs = cameraStatus.freshness_budget_seconds * 1_000;
-        const effectiveAgeMs = cameraStatus.frame_age_seconds * 1_000
+        const effectiveAgeMs = Math.max(frameAgeFloorMsRef.current,
+            cameraStatus.frame_age_seconds * 1_000 + (cameraStatus.requestElapsedMs ?? 0))
             + Math.max(0, presentationNowMs - statusReceivedAtRef.current);
         const frameRemainingMs = budgetMs - effectiveAgeMs;
         const sequenceRemainingMs = budgetMs
@@ -161,16 +206,21 @@ export function BioXpCameraPanel({
         if (expiryDelayMs <= 0) return;
         const timer = window.setTimeout(
             () => {
-                setPresentationNowMs(Date.now());
+                setPresentationNowMs(performance.now());
                 bumpPresentationRevision((revision) => revision + 1);
             },
-            Math.ceil(expiryDelayMs) + 1,
+            Math.ceil(expiryDelayMs),
         );
         return () => window.clearTimeout(timer);
     }, [cameraStatus, connected, presentationNowMs]);
 
     const presentation = deriveBioXpCameraPresentation({
-        status: cameraStatus ?? null,
+        // Presentation-only age floor; query data retains original upstream fields.
+        status: cameraStatus ? { ...cameraStatus,
+            frame_age_seconds: Math.max(frameAgeFloorMsRef.current / 1_000,
+                (cameraStatus.frame_age_seconds ?? Infinity) + (cameraStatus.requestElapsedMs ?? 0) / 1_000),
+            requestElapsedMs: 0,
+        } : null,
         statusReceivedAtMs: statusReceivedAtRef.current,
         lastSequenceAdvanceAtMs: lastSequenceAdvanceAtRef.current,
         nowMs: presentationNowMs,
@@ -178,11 +228,16 @@ export function BioXpCameraPanel({
     });
     const cameraState = !connected
         ? 'Disconnected'
-        : effectiveStreamActive
-            ? streamQuery.data?.state === 'live' ? 'Video live' : 'Starting video'
-            : presentation.label === 'LIVE' ? 'Ready'
-                : presentation.label === 'STALE' ? 'Stale' : 'Unavailable';
-    const mediaUrl = effectiveStreamActive ? streamUrl : imageUrl;
+        : imageError || streamQuery.isError || streamQuery.data?.state === 'error' || presentation.label === 'UNAVAILABLE'
+            ? 'Unavailable'
+            : presentation.label === 'STALE' ? 'Stale'
+                : effectiveStreamActive
+                    ? streamQuery.data?.state === 'live' && streamQuery.data?.connection_generation === connectionGeneration && sequenceAdvancingRef.current
+                        ? 'Video live' : 'Waiting for advancing frames'
+                    : 'Ready';
+    const mediaUrl = !connected ? null : effectiveStreamActive && connectionGeneration !== null
+        ? buildBioXpCameraMjpegUrl(connectionGeneration)
+        : imageSessionRef.current === sessionRef.current ? imageUrl : null;
 
     return (
         <section className="rounded-xl border border-sky-800/70 bg-sky-950/20 p-3">

@@ -29,6 +29,7 @@ import {
     type BioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
+import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
@@ -187,7 +188,7 @@ function YOperatorError({
             <p className="font-semibold">{label} {outcomeAmbiguous ? 'result pending' : 'failed'} · {presentation.status == null ? 'HTTP status unavailable' : `HTTP ${presentation.status}`} · {presentation.summary}</p>
             {outcomeAmbiguous && <p className="mt-1">The robot may have accepted the command. Checking the current robot receipt. Do not retry.</p>}
             <details className="mt-1">
-                <summary>Raw bounded robot/BMS response</summary>
+                <summary>Bounded robot/BMS error preview (selected fields)</summary>
                 <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all">{presentation.rawJson}</pre>
             </details>
         </div>
@@ -339,8 +340,10 @@ export function BioXpCockpit() {
         null,
     );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
+    const componentStop = useInvokeBioXpOperatorAction('stop');
 
     const resetInvokeOperatorAction = invokeOperatorAction.reset;
+    const resetComponentStop = componentStop.reset;
     const resetInvokeLifecycleAction = invokeLifecycleActionMutation.reset;
     const resetInvokeYAction = invokeYAction.reset;
     const resetInvokeDeckAction = invokeDeckAction.reset;
@@ -371,18 +374,28 @@ export function BioXpCockpit() {
     const motionControlsAvailable = dashboard === undefined || connection?.hardware_fresh !== true
         ? undefined
         : dashboard.motion.enabled === true;
+    const telemetryUnavailableReason = !linkConnected ? 'Connect to view robot state.'
+        : !robotControlReady ? 'Robot runtime is not ready; telemetry is unavailable.'
+            : catalogV2Query.error != null ? `Robot state request failed: ${bioXpErrorText(catalogV2Query.error)}`
+                : catalogV2Query.data?.dashboard.telemetry == null && catalogV2Query.data != null
+                    ? 'Robot did not report telemetry; motion availability is unknown.'
+                    : catalogV2Query.isLoading ? 'Loading robot state; motion availability is unknown.'
+                        : currentCatalogV2 == null ? 'Robot state is missing or stale; waiting for a fresh observation.'
+                            : connection?.hardware_fresh !== true ? 'Hardware observation is stale or not reported; motion availability is unknown.'
+                                : null;
     const motionLabel = motionControlsAvailable === true
         ? 'Available — exact recovered-OEM controls admitted'
         : motionControlsAvailable === false
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
-            : 'Updating';
+            : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
     const recentCommands = useMemo(
         () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter(isIndexedHistoryReceipt).slice(0, historyLimit),
         [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
     );
     useEffect(() => {
         resetInvokeOperatorAction();
-    }, [generation, linkConnected, resetInvokeOperatorAction]);
+        resetComponentStop();
+    }, [generation, linkConnected, resetInvokeOperatorAction, resetComponentStop]);
     useEffect(() => {
         setYCommandId(null);
         setZHomeCommandId(null);
@@ -413,8 +426,8 @@ export function BioXpCockpit() {
         return interruptAggregateAbort;
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => interruptMutation(actionId).isPending;
-    const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending;
-    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending;
+    const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
+    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
     const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyReceipt ?? invokeOperatorAction.data;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
@@ -504,9 +517,61 @@ export function BioXpCockpit() {
     const zAbsoluteMinimum = integerMinimum(zAbsoluteInput);
     const zAbsoluteMaximum = integerMaximum(zAbsoluteInput);
 
+    const currentLifecycleOwnershipGeneration = lifecycleMutationGeneration === generation
+        ? lifecycleOwnershipGeneration
+        : null;
+    const lifecycleDashboardReceipt = lifecycleGenerationCurrent
+        && currentLifecycleActionId !== null
+        && currentLifecycleOwnershipGeneration !== null
+        && lifecycleDashboardBaselineAt !== null
+        && currentDashboardV2?.ownership_generation === currentLifecycleOwnershipGeneration
+        ? (currentDashboardV2?.latest_receipts ?? [])
+            .filter((receipt) => receipt.action_id === currentLifecycleActionId
+                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
+                && receipt.accepted_at >= lifecycleDashboardBaselineAt)
+            .reduce<BioXpOperatorReceiptV2 | undefined>(
+                (latest, receipt) => {
+                    if (latest === undefined || receipt.accepted_at > latest.accepted_at) return receipt;
+                    if (receipt.accepted_at === latest.accepted_at && receipt.terminal && !latest.terminal) return receipt;
+                    return latest;
+                },
+                undefined,
+            )
+        : undefined;
+    const lifecycleReceipt = lifecycleGenerationCurrent
+        && currentLifecycleActionId !== null
+        && currentLifecycleOwnershipGeneration !== null
+        && lifecycleDashboardBaselineAt !== null
+        ? [lifecycleReceiptQuery.data, lifecycleDashboardReceipt, invokeLifecycleActionMutation.data]
+            .filter((receipt): receipt is BioXpOperatorReceiptV2 => receipt !== undefined
+                && receipt.action_id === currentLifecycleActionId
+                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
+                && receipt.accepted_at >= lifecycleDashboardBaselineAt
+                && (lifecycleCommandId === null || receipt.command_id === lifecycleCommandId))
+            .reduce<BioXpOperatorReceiptV2 | undefined>((selected, receipt) => {
+                if (selected === undefined || receipt.accepted_at > selected.accepted_at) return receipt;
+                if (receipt.accepted_at === selected.accepted_at && receipt.terminal && !selected.terminal) return receipt;
+                return selected;
+            }, undefined)
+        : undefined;
+    const currentLifecycleInvokeError = lifecycleMutationGeneration === generation && lifecycleReceipt?.terminal !== true
+        ? invokeLifecycleActionMutation.error
+        : null;
+    const lifecycleStatusRecoveryPending = isDispatchedOutcomeAmbiguous(currentLifecycleInvokeError)
+        || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
+
     const v2ActionDisabledReason = (actionId: string): string | null => {
         if (!v2AuthorityCoherent) return 'Current robot control state is unavailable.';
-        if (busy) return 'A command is pending; wait for its receipt before another normal action.';
+        // Installed CCI handlers: X absolute and XYZ relative/Home wait inline;
+        // only manual Y absolute is explicitly nonwaiting (ui-inventory UI-01/02).
+        // The manual Y request remains held only while its HTTP submission is pending.
+        // A cached enabled row is not reserved admission or an OEM submission queue.
+        // Keep independent Stop buttons outside this normal-action check.
+        const pendingReadOnly = operatorActionById(invokeOperatorAction.variables?.actionId ?? '')?.safety_class === 'read_only';
+        const conflictingSubmission = interruptAnyPending || componentStop.isPending || xyPending || invokeLifecycleActionMutation.isPending || lifecycleStatusRecoveryPending || lifecycleReceipt?.status === 'ambiguous'
+            || invokeDeckAction.isPending || invokeYAction.isPending
+            || (invokeOperatorAction.isPending && !pendingReadOnly);
+        if (conflictingSubmission) return 'A command is pending; wait for its receipt before another normal action.';
         const action = v2NormalActionById(actionId);
         if (!action) return 'Robot action unavailable.';
         return action.enabled === true ? null : action.disabled_reason ?? 'Robot action unavailable.';
@@ -693,7 +758,8 @@ export function BioXpCockpit() {
         actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all',
         reason: string,
     ) => {
-        if (!linkConnected || generation <= 0) return;
+        if (!linkConnected || generation <= 0 || interruptPending(actionId)) return;
+        if (actionId === 'oem.abort_all' && v2InterruptActionById(actionId)?.enabled !== true) return;
         const idempotencyKey = nextIdempotencyKey('bioxp-stop');
         interruptMutation(actionId).mutate({
             actionId,
@@ -711,9 +777,13 @@ export function BioXpCockpit() {
         ? invokeInterrupt('oem.x.stop', 'BMS operator requested recovered-OEM X STOP')
         : axis === 'z'
             ? invokeInterrupt('oem.z.stop', 'BMS operator requested recovered-OEM Z STOP')
-            : invokeOperatorPath('/motion/diagnostics/stop', { axis });
+            : (() => {
+                const action = operatorActionForPath('/motion/diagnostics/stop');
+                if (!linkConnected || generation <= 0 || componentStop.isPending || action?.enabled !== true || action.safety_class !== 'stop') return;
+                invokeAction(action.action_id, { axis }, componentStop);
+            })();
 
-    const abortXAggregate = () => invokeInterrupt('oem.abort_all', 'BMS operator requested recovered-OEM aggregate abort');
+    const abortXAggregate = () => invokeInterrupt('oem.abort_all', 'BMS operator requested OEM software Abort: cancel waiters only; motors may continue');
 
     const submitV2 = (request: BioXpOperatorActionV2Request) => {
         if (v2ActionDisabledReason(request.action_id) !== null) return;
@@ -856,56 +926,12 @@ export function BioXpCockpit() {
             { onSuccess: acceptXYSubmission, onError: retainXYUncertainty });
     };
     const yMutationDisabled = (actionId: string) =>
-        !v2AuthorityCoherent
-        || busy
-        || v2NormalActionById(actionId)?.enabled !== true
+        v2ActionDisabledReason(actionId) !== null
         || (actionId === 'oem.y.move_steps' && !yStepMagnitudeValid)
         || (actionId === 'oem.y.move_absolute' && !yTargetInputValid);
     const yStopDisabled = !linkConnected || generation <= 0 || interruptPending('oem.y.stop');
 
     const currentYInvokeError = yMutationGeneration === generation ? invokeYAction.error : null;
-    const currentLifecycleOwnershipGeneration = lifecycleMutationGeneration === generation
-        ? lifecycleOwnershipGeneration
-        : null;
-    const lifecycleDashboardReceipt = lifecycleGenerationCurrent
-        && currentLifecycleActionId !== null
-        && currentLifecycleOwnershipGeneration !== null
-        && lifecycleDashboardBaselineAt !== null
-        && currentDashboardV2?.ownership_generation === currentLifecycleOwnershipGeneration
-        ? (currentDashboardV2?.latest_receipts ?? [])
-            .filter((receipt) => receipt.action_id === currentLifecycleActionId
-                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
-                && receipt.accepted_at >= lifecycleDashboardBaselineAt)
-            .reduce<BioXpOperatorReceiptV2 | undefined>(
-                (latest, receipt) => {
-                    if (latest === undefined || receipt.accepted_at > latest.accepted_at) return receipt;
-                    if (receipt.accepted_at === latest.accepted_at && receipt.terminal && !latest.terminal) return receipt;
-                    return latest;
-                },
-                undefined,
-            )
-        : undefined;
-    const lifecycleReceipt = lifecycleGenerationCurrent
-        && currentLifecycleActionId !== null
-        && currentLifecycleOwnershipGeneration !== null
-        && lifecycleDashboardBaselineAt !== null
-        ? [lifecycleReceiptQuery.data, lifecycleDashboardReceipt, invokeLifecycleActionMutation.data]
-            .filter((receipt): receipt is BioXpOperatorReceiptV2 => receipt !== undefined
-                && receipt.action_id === currentLifecycleActionId
-                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
-                && receipt.accepted_at >= lifecycleDashboardBaselineAt
-                && (lifecycleCommandId === null || receipt.command_id === lifecycleCommandId))
-            .reduce<BioXpOperatorReceiptV2 | undefined>((selected, receipt) => {
-                if (selected === undefined || receipt.accepted_at > selected.accepted_at) return receipt;
-                if (receipt.accepted_at === selected.accepted_at && receipt.terminal && !selected.terminal) return receipt;
-                return selected;
-            }, undefined)
-        : undefined;
-    const currentLifecycleInvokeError = lifecycleMutationGeneration === generation && lifecycleReceipt?.terminal !== true
-        ? invokeLifecycleActionMutation.error
-        : null;
-    const lifecycleStatusRecoveryPending = isDispatchedOutcomeAmbiguous(currentLifecycleInvokeError)
-        || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
     useEffect(() => {
         if (lifecycleDashboardReceipt !== undefined && lifecycleCommandId === null) {
             setLifecycleCommandId(lifecycleDashboardReceipt.command_id);
@@ -986,6 +1012,7 @@ export function BioXpCockpit() {
                 isLoading={catalogV2Query.isLoading}
                 error={catalogV2Query.error}
                 motionControlsAvailable={motionControlsAvailable}
+                unavailableReason={telemetryUnavailableReason}
             />
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
@@ -1124,6 +1151,7 @@ export function BioXpCockpit() {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                                 <h3 className="font-semibold">Y Axis</h3>
+                                <p className="mt-1 text-xs text-slate-400">OEM absolute: Y does not wait for stop; X waits. Request return is not physical completion.</p>
                             </div>
                             <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35">Stop</button>
                         </div>
@@ -1160,6 +1188,7 @@ export function BioXpCockpit() {
                         <YOperatorError label="Y STOP" error={interruptYStop.error} />
                         {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
                         {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Command <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
+                        {yReceiptQuery.data && bioXpReceiptFailureText(yReceiptQuery.data) && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpReceiptFailureText(yReceiptQuery.data)}</p>}
                         {yReceiptQuery.data && (
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
@@ -1194,6 +1223,8 @@ export function BioXpCockpit() {
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. Do not retry until the outcome is reconciled.</p>}
                         {xyReceipt && <details className="mt-2 text-xs"><summary>Latest XY command receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyReceipt, null, 2)}</pre></details>}
                     </article>
+                    {linkConnected && componentStop.data && <details data-testid="component-stop-receipt"><summary>Independent component Stop receipt</summary><pre>{JSON.stringify(componentStop.data, null, 2)}</pre></details>}
+                    {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} style={{ order: axis === 'x' ? 3 : axis === 'z' ? 4 : axis === 'g' ? 5 : 6 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
                             <div className="flex items-center justify-between gap-2">
@@ -1203,7 +1234,7 @@ export function BioXpCockpit() {
                                         type="button"
                                         disabled={!linkConnected || ((axis === 'x' || axis === 'z')
                                             ? generation <= 0 || (axis === 'x' ? interruptPending('oem.x.stop') : interruptPending('oem.z.stop'))
-                                            : operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || invokeOperatorAction.isPending)}
+                                            : generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending)}
                                         title={axis === 'x'
                                             ? actionUnavailableReason('oem.x.stop', 'Immediate OEM X motor stop')
                                             : axis === 'z'
@@ -1215,11 +1246,11 @@ export function BioXpCockpit() {
                                     {axis === 'x' && (
                                         <button
                                             type="button"
-                                            disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all')}
-                                            title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Robot-owned aggregate component stops plus abort latch; physical effect unverified'}
+                                            disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
+                                            title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'OEM software Abort cancels waiters only; motors may continue. Use addressed Stops for motors.'}
                                             onClick={abortXAggregate}
                                             className="rounded bg-red-950 px-3 py-1.5 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35"
-                                        >Aggregate Abort (all OEM boards)</button>
+                                        >Software Abort (cancel waiters)</button>
                                     )}
 
                                 </div>
@@ -1264,7 +1295,10 @@ export function BioXpCockpit() {
                                                 step={1}
                                                 value={absoluteTargets[axis]}
                                                 onChange={(event) => {
-                                                    const parsed = Number.parseInt(event.target.value || '0', 10);
+                                                    // Preserve fractional values for integer validation; never dispatch a truncated target.
+                                                    const parsed = axis === 'x'
+                                                        ? Number(event.target.value || '0')
+                                                        : Number.parseInt(event.target.value || '0', 10);
                                                     setAbsoluteTargets((current) => ({
                                                         ...current,
                                                         [axis]: Number.isFinite(parsed) ? parsed : 0,
@@ -1295,7 +1329,7 @@ export function BioXpCockpit() {
                                             <p className="mt-1 text-sky-200/80">Controller/software reference is reported exactly as published by the robot provider; it is not independent evidence of the physical X location.</p>
                                             <div className="mt-2 flex flex-wrap gap-2">
                                                 <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.x.stop')} title="Immediate OEM X stop" onClick={() => stopAxis('x')}>Stop X</button>
-                                                <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all')} title="Aggregate OEM abort" onClick={abortXAggregate}>Aggregate Abort (all OEM boards)</button>
+                                                <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true} title="OEM software Abort cancels waiters only; motors may continue" onClick={abortXAggregate}>Software Abort (cancel waiters)</button>
                                             </div>
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
                                             {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
@@ -1313,8 +1347,8 @@ export function BioXpCockpit() {
                                                 <button
                                                     type="button"
                                                     className={actionClass}
-                                                    disabled={!linkConnected || v2NormalActionById('oem.z.clear')?.enabled !== true}
-                                                    title={v2NormalActionById('oem.z.clear')?.disabled_reason ?? 'Move to the robot-owned clear position selected from tip and gantry state'}
+                                                    disabled={!linkConnected || v2ActionDisabledReason('oem.z.clear') !== null}
+                                                    title={v2ActionDisabledReason('oem.z.clear') ?? 'Move to the robot-owned clear position selected from tip and gantry state'}
                                                     onClick={() => {
                                                         const envelope = v2NormalEnvelope();
                                                         if (envelope) submitV2({ ...envelope, action_id: 'oem.z.clear', inputs: {} });
@@ -1463,20 +1497,20 @@ export function BioXpCockpit() {
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <h2 className="text-lg font-semibold text-red-200">Aggregate Emergency Stop</h2>
+                        <h2 className="text-lg font-semibold text-red-200">OEM Software Abort</h2>
                         <p className="max-w-3xl text-sm text-red-200/70">
-                            Requests robot-owned stops across present motion components and the abort latch. Source completion, controller ACK, and terminal readback are separate evidence; physical stopping remains unverified.
+                            Cancels software waiters, not motor motion. Motors may continue. Use the separate addressed X, Y, Z and Gripper Stops for motor stop requests. This is not a physical emergency stop; physical stopping remains unverified. Source completion, controller ACK, and terminal readback are separate evidence.
                         </p>
                     </div>
                     <button
                         type="button"
-                        disabled={!linkConnected || generation <= 0 || interruptAggregateAbort.isPending}
-                        title="Independent robot-owned aggregate stop; physical effect requires observation"
+                        disabled={!linkConnected || generation <= 0 || interruptAggregateAbort.isPending || v2InterruptActionById('oem.abort_all')?.enabled !== true}
+                        title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Cancels waiters only; motors may continue'}
                         onClick={abortXAggregate}
                         className="rounded bg-red-700 px-5 py-3 font-bold disabled:cursor-not-allowed disabled:opacity-35"
-                    >Emergency Stop</button>
+                    >Software Abort (cancel waiters)</button>
                 </div>
-                <InterruptOutcome label="Aggregate emergency stop" receipt={interruptAggregateAbort.data} error={interruptAggregateAbort.error} pending={interruptAggregateAbort.isPending} generation={generation} connected={linkConnected} />
+                <InterruptOutcome label="Software Abort (motors may continue)" receipt={interruptAggregateAbort.data} error={interruptAggregateAbort.error} pending={interruptAggregateAbort.isPending} generation={generation} connected={linkConnected} />
                 <InterruptOutcome label="X STOP" receipt={interruptXStop.data} error={interruptXStop.error} pending={interruptXStop.isPending} generation={generation} connected={linkConnected} />
                 <InterruptOutcome label="Y STOP" receipt={interruptYStop.data} error={interruptYStop.error} pending={interruptYStop.isPending} generation={generation} connected={linkConnected} />
                 <InterruptOutcome label="Z STOP" receipt={interruptZStop.data} error={interruptZStop.error} pending={interruptZStop.isPending} generation={generation} connected={linkConnected} />
@@ -1500,8 +1534,16 @@ export function BioXpCockpit() {
                         </select>
                     </label>
                 </div>
-                {recentCommands.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-400">No robot action receipts recorded.</p>
+                {!linkConnected ? (
+                    <p className="mt-2 text-sm text-slate-400">Connect to load robot action receipts.</p>
+                ) : historyQuery.isError ? null : historyQuery.isLoading ? (
+                    <p role="status" className="mt-2 text-sm text-slate-400">Loading robot action receipts…</p>
+                ) : historyQuery.data == null ? (
+                    <p className="mt-2 text-sm text-slate-400">Robot action receipts have not been loaded.</p>
+                ) : recentCommands.length === 0 ? (
+                    <p className="mt-2 text-sm text-slate-400">{historyQuery.data.receipts.length === 0
+                        ? 'No robot action receipts recorded.'
+                        : 'History contains non-indexed records; no indexed action receipts in this response.'}</p>
                 ) : (
                     <div className="mt-3 space-y-2">
                         {recentCommands.map((record) => (
@@ -1512,7 +1554,7 @@ export function BioXpCockpit() {
                                         {record.status.replaceAll('_', ' ')}{record.status === 'outcome_unknown' ? '; do not resubmit; reconciliation required' : ''} · {bioXpReceiptTimestampText(record.finished_at)}
                                     </span>
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{'error' in record ? (record.error ?? record.machine_assessment) : 'unverified legacy reconciliation record'}</p>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{bioXpReceiptFailureText(record) ?? ('machine_assessment' in record ? record.machine_assessment : 'unverified legacy reconciliation record')}</p>
                                 <p className="mt-1 text-xs text-slate-400">
                                     {'remote_acknowledged' in record && record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP unverified'} · {'controller_acknowledged' in record && record.controller_acknowledged ? 'Controller ACK' : 'Controller ACK unverified'} · {'controller_terminal_state_verified' in record && record.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {'physical_effect_verified' in record && record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
                                 </p>

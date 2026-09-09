@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
@@ -86,7 +87,10 @@ async def _leased_camera_call(
             method = getattr(client, method_name, None)
             if not callable(method):
                 raise RobotTransportError("Connected BioXP client does not implement the camera contract")
-            return await cast(Callable[[], Awaitable[Any]], method)()
+            payload = await cast(Callable[[], Awaitable[Any]], method)()
+            if runtime.connection.snapshot().generation != expected_generation:
+                raise ConnectionStateError("BioXP connection changed during camera request")
+            return payload
     except ConnectionStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RobotResponseError as exc:
@@ -246,30 +250,63 @@ async def proxy_camera_mjpeg(
         expected_generation=expected_generation,
         require_fresh=False,
     )
+    lease_entered = False
+    stream_context: Any = None
+    stream_entered = False
+    closed = False
+
+    async def cleanup():
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        # Starlette cancels the stream task on browser/proxy detachment. Shield
+        # cleanup from that cancel scope and always release the generation lease,
+        # even if the upstream response's close itself fails.
+        with anyio.CancelScope(shield=True):
+            try:
+                if stream_entered:
+                    await stream_context.__aexit__(None, None, None)
+            finally:
+                if lease_entered:
+                    await lease.__aexit__(None, None, None)
+
     try:
         client = await lease.__aenter__()
+        lease_entered = True
         stream_context_factory = getattr(client, "camera_mjpeg_stream", None)
         if not callable(stream_context_factory):
             raise RobotTransportError("Connected BioXP client does not implement the camera stream contract")
         stream_context = stream_context_factory()
         chunks = await stream_context.__aenter__()
-    except Exception as exc:
-        try:
-            await lease.__aexit__(type(exc), exc, exc.__traceback__)
-        except Exception:
-            pass
+        stream_entered = True
+        if runtime.connection.snapshot().generation != expected_generation:
+            raise ConnectionStateError("BioXP connection changed during camera stream open")
+    except BaseException as exc:
+        await cleanup()
+        if not isinstance(exc, Exception):
+            raise
         _raise_camera_exception(exc)
         raise AssertionError("unreachable")
 
     async def iterator():
         try:
             async for part in _iter_validated_mjpeg(chunks):
+                if runtime.connection.snapshot().generation != expected_generation:
+                    break
                 yield part
         finally:
-            await stream_context.__aexit__(None, None, None)
-            await lease.__aexit__(None, None, None)
+            await cleanup()
 
-    return StreamingResponse(
+    class LeasedStreamingResponse(StreamingResponse):
+        async def __call__(self, scope, receive, send):
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                # Also handles send(start) failure before iterator first entry.
+                await cleanup()
+
+    return LeasedStreamingResponse(
         iterator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={

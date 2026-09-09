@@ -153,6 +153,8 @@ class BioXpConnectionService:
         self._hardware_observed_at: datetime | None = None
         self._hardware_observation_fresh: bool | None = None
         self._hardware_evidence_error: str | None = None
+        self._hardware_fresh_for_seconds: float | None = None
+        self._hardware_snapshot_identity: tuple[object, ...] | None = None
         self._automatic_snapshot_refresh: dict[str, Any] | None = None
         self._capabilities: tuple[str, ...] = ()
         self._startup_lifecycle: dict[str, Any] | None = None
@@ -227,6 +229,7 @@ class BioXpConnectionService:
                     self._last_error = str(exc)
             raise
         candidate = self.client_factory(target)
+        request_started_at = self.clock()
         try:
             payload = await candidate.probe_status_only()
         except Exception as exc:
@@ -259,7 +262,7 @@ class BioXpConnectionService:
                 self._active_target = target
                 self._client = candidate
                 self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
-                self._apply_probe_payload(payload)
+                self._apply_probe_payload(payload, request_started_at=request_started_at)
                 self._start_active_probe_locked()
                 self._start_snapshot_refresh_locked()
                 stale_candidate = False
@@ -306,6 +309,7 @@ class BioXpConnectionService:
 
         if validated != target:
             candidate = self.client_factory(validated)
+            request_started_at = self.clock()
             try:
                 payload = (
                     await candidate.probe_status_only()
@@ -330,7 +334,7 @@ class BioXpConnectionService:
                     self._client = candidate
                     self._active_target = validated
                     self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
-                    self._apply_probe_payload(payload)
+                    self._apply_probe_payload(payload, request_started_at=request_started_at)
                     self._start_active_probe_locked()
                     self._start_snapshot_refresh_locked()
                     close_candidate = False
@@ -342,6 +346,7 @@ class BioXpConnectionService:
             if client is not self._client or generation != self._generation:
                 raise ConnectionStateError("BioXP connection generation changed during probe")
             lease = self._acquire_lease_locked(generation, require_fresh=False)
+        request_started_at = self.clock()
         try:
             payload = await client.probe_status_only() if status_only else await client.probe()
         except Exception as exc:
@@ -353,7 +358,7 @@ class BioXpConnectionService:
             await self._release_lease(lease)
         async with self._transition_lock:
             if client is self._client and generation == self._generation:
-                self._apply_probe_payload(payload)
+                self._apply_probe_payload(payload, request_started_at=request_started_at)
         return self.snapshot()
 
     async def request_active(
@@ -719,7 +724,9 @@ class BioXpConnectionService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=False)
 
-    def _apply_probe_payload(self, payload: dict[str, Any]) -> None:
+    def _apply_probe_payload(
+        self, payload: dict[str, Any], *, request_started_at: datetime | None = None,
+    ) -> None:
         automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
         if isinstance(automatic_snapshot_refresh, dict):
             self._automatic_snapshot_refresh = copy.deepcopy(automatic_snapshot_refresh)
@@ -741,9 +748,28 @@ class BioXpConnectionService:
         self._last_runtime_ready = _optional_bool(payload, "runtime_ready", "runtime_available")
         hardware_observed_at, freshness_error = _robot_evidence_time(
             payload,
-            now=now,
+            now=request_started_at or now,
             local_freshness_budget_seconds=self.freshness_budget_seconds,
         )
+        # Use the request start as a conservative age anchor: response transit
+        # and lock delays must not grant old evidence a new freshness window.
+        # A stable robot snapshot identity also cannot be renewed by polling.
+        snapshot_id = payload.get("snapshot_id")
+        identity = (
+            (payload.get("ownership_epoch"), snapshot_id, tuple(payload.get("requested_domains") or ()))
+            if isinstance(snapshot_id, (str, int)) and not isinstance(snapshot_id, bool)
+            else None
+        )
+        if (identity is not None and identity == self._hardware_snapshot_identity
+                and self._hardware_observed_at is not None and hardware_observed_at is not None):
+            hardware_observed_at = min(hardware_observed_at, self._hardware_observed_at)
+        self._hardware_snapshot_identity = identity
+        freshness = payload.get("freshness")
+        self._hardware_fresh_for_seconds = (
+            _positive_number(freshness.get("fresh_for_s")) if isinstance(freshness, dict) else None
+        )
+        if request_started_at is not None and now < request_started_at:
+            freshness_error = "BioXP local clock reversed during evidence request"
         self._hardware_observed_at = hardware_observed_at
         self._hardware_observation_fresh = freshness_error is None
         self._hardware_evidence_error = freshness_error
@@ -756,6 +782,8 @@ class BioXpConnectionService:
         self._last_error = None
 
     def _record_probe_failure(self, exc: Exception) -> None:
+        self._hardware_observation_fresh = False
+        self._hardware_evidence_error = str(exc) or exc.__class__.__name__
         self._last_reachable = False
         self._last_runtime_ready = None
         self._last_hardware_ready = None
@@ -785,6 +813,7 @@ class BioXpConnectionService:
             lease = self._acquire_lease_locked(generation, require_fresh=False)
         try:
             async with self._probe_lock:
+                request_started_at = self.clock()
                 payload = await client.probe_status_only()
         except Exception as exc:
             async with self._transition_lock:
@@ -795,7 +824,7 @@ class BioXpConnectionService:
             await self._release_lease(lease)
         async with self._transition_lock:
             if client is self._client and generation == self._generation:
-                self._apply_probe_payload(payload)
+                self._apply_probe_payload(payload, request_started_at=request_started_at)
 
     @asynccontextmanager
     async def workflow_lease(self, expected_generation: int):
@@ -902,6 +931,7 @@ class BioXpConnectionService:
             # cannot make an overlapping status request relabel the runtime as
             # unreachable.
             async with self._probe_lock:
+                request_started_at = self.clock()
                 payload = await client.probe()
         except Exception as exc:
             async with self._transition_lock:
@@ -912,7 +942,7 @@ class BioXpConnectionService:
             await self._release_lease(lease)
         async with self._transition_lock:
             if client is self._client and generation == self._generation:
-                self._apply_probe_payload(payload)
+                self._apply_probe_payload(payload, request_started_at=request_started_at)
 
     def _clear_observation(self) -> None:
         self._invalidate_v2_query_cache()
@@ -921,6 +951,8 @@ class BioXpConnectionService:
         self._last_runtime_ready = None
         self._last_hardware_ready = None
         self._hardware_observed_at = None
+        self._hardware_fresh_for_seconds = None
+        self._hardware_snapshot_identity = None
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
         self._automatic_snapshot_refresh = None
@@ -945,6 +977,14 @@ class BioXpConnectionService:
             fresh = self.freshness_budget_seconds is None or age <= self.freshness_budget_seconds
             stale = not fresh
         expose_observation = fresh is True
+        hardware_fresh = self._hardware_observation_fresh
+        hardware_error = self._hardware_evidence_error
+        if hardware_fresh is True and self._hardware_observed_at is not None:
+            hardware_age = (now - self._hardware_observed_at).total_seconds()
+            if (hardware_age < 0 or self._hardware_fresh_for_seconds is None
+                    or hardware_age > self._hardware_fresh_for_seconds):
+                hardware_fresh = False
+                hardware_error = "BioXP hardware evidence expired or local clock reversed"
         return BioXpSnapshot(
             configured=profile is not None or self.profile_store.exists(),
             display_name=profile.display_name if profile else None,
@@ -955,13 +995,13 @@ class BioXpConnectionService:
             runtime_ready=self._last_runtime_ready if expose_observation else None,
             hardware_ready=(
                 self._last_hardware_ready
-                if expose_observation and self._hardware_observation_fresh is True
+                if expose_observation and hardware_fresh is True
                 else None
             ),
             hardware_observed_at=self._hardware_observed_at,
-            hardware_observation_fresh=self._hardware_observation_fresh,
-            hardware_observation_stale=self._hardware_observation_fresh is False,
-            hardware_evidence_error=self._hardware_evidence_error,
+            hardware_observation_fresh=hardware_fresh,
+            hardware_observation_stale=hardware_fresh is False,
+            hardware_evidence_error=hardware_error,
             automatic_snapshot_refresh=copy.deepcopy(self._automatic_snapshot_refresh),
             capabilities=self._capabilities,
             observed_at=self._observed_at,

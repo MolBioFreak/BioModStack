@@ -11,6 +11,11 @@ const lifecycleActionSlice = cockpit.slice(
 );
 
 test('BioXP cockpit is a compact OEM operator surface', () => {
+    // R2/UI-03: displayed composition is not physical proof. Its public
+    // disposition remains blocked in bioxpCockpitSafetySurface, not waived here.
+    assert.match(cockpit, /physical stopping remains unverified/);
+    assert.match(cockpit, /invokeInterrupt\('oem\.x\.stop'/);
+    assert.match(cockpit, /invokeInterrupt\('oem\.abort_all'/);
     for (const marker of [
         'BioXP 3200',
         'Connection',
@@ -19,7 +24,7 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
         'Non-homing Recovery',
         'Manual Controls',
         'Camera',
-        'Physical Aggregate Emergency Stop',
+        'OEM Software Abort',
         'Move −',
         'Move +',
         'Home',

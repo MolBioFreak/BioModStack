@@ -97,18 +97,25 @@ describe('BioXP interrupt identity and reachability', () => {
         expect(source).toContain("v2InterruptActionById('oem.abort_all')");
         expect(source).not.toContain("operatorActionById('oem.abort_all')");
         expect(source).not.toContain("axis === 'y' ? '/motion/diagnostics/stop'");
-        expect(source).toMatch(/useBioXpOperatorControlCatalogV2\(\s*generation,\s*linkConnected,/);
-        expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById/);
+        // Catalog owns the embedded authority snapshot; unrelated dashboard aging
+        // cannot change its query identity. Both 15s mounted authority gates remain.
+        expect(source).toMatch(/useBioXpOperatorControlCatalogV2\(\s*generation,\s*linkConnected\s*\)/);
+        // Software cancellation uses published availability; addressed motor Stops do not.
+        expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById\('oem\.[xyz]\.stop'/);
+        expect(source).toContain("v2InterruptActionById('oem.abort_all')?.enabled !== true");
         for (const hook of [
             'interruptXStop',
             'interruptYStop',
             'interruptZStop',
-            'interruptZAbort',
             'interruptAggregateAbort',
         ]) {
             expect(source).toContain(`const ${hook} = useInterruptBioXpOperatorActionV1();`);
         }
-        for (const actionId of ['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.z.abort', 'oem.abort_all']) {
+        // R2 / ui-inventory UI-03: addressed Z Stop and all-board forceAbort
+        // are distinct; a duplicate standalone Z Abort is not an OEM entrypoint.
+        expect(source).not.toContain('interruptZAbort');
+        expect(source).not.toContain("'oem.z.abort'");
+        for (const actionId of ['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.abort_all']) {
             expect(source).toContain(`interruptPending('${actionId}')`);
         }
         expect(source).not.toContain('interruptYAction');

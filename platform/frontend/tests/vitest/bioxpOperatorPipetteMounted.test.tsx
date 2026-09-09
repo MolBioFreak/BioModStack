@@ -167,8 +167,8 @@ describe('mounted BioXP four-channel pipette panel', () => {
             'Load tip physically',
             'Move to waste physically',
             'Detect fluid physically',
-            'Plunger up physically',
-            'Plunger down physically',
+            'Lift pipette head (Z)',
+            'Lower pipette head (Z)',
         ]);
         expect(state.planCalls).toEqual([]);
         expect(state.readbackCalls).toEqual([]);
@@ -238,14 +238,14 @@ describe('mounted BioXP four-channel pipette panel', () => {
             { label: 'Load tip physically', disabled: false },
             { label: 'Move to waste physically', disabled: false },
             { label: 'Detect fluid physically', disabled: true },
-            { label: 'Plunger up physically', disabled: false },
-            { label: 'Plunger down physically', disabled: false },
+            { label: 'Lift pipette head (Z)', disabled: false },
+            { label: 'Lower pipette head (Z)', disabled: false },
         ]);
         const blocked = buttons.find((button) => button.textContent === 'Detect fluid physically');
         expect(blocked?.title).toBe('Motion arm is not confirmed.');
 
         await act(async () => {
-            buttons.find((button) => button.textContent === 'Plunger up physically')?.click();
+            buttons.find((button) => button.textContent === 'Lift pipette head (Z)')?.click();
             await Promise.resolve();
         });
         expect(invokeCalls).toEqual([

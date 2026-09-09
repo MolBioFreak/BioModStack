@@ -42,11 +42,20 @@ test('action forms and route provenance come only from the robot catalog and adm
     assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
     assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
     assert.match(source, /I confirm this exact governed action and its published machine scope/);
-    assert.match(cockpit, /!configured \|\| !linkConnected \|\| updateFreshness\.isPending/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && invokeOperatorAction\.data/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && emergencyAction\.data/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && recoverMotion\.data/);
-    assert.match(client, /\[\.\.\.operatorHistoryKey, variables\.connectionGeneration, true\]/);
+    // R5: no retired freshness mutation; one upstream-aged V2 snapshot and
+    // a generation-reset receipt union preserve ordinary, interrupt and lifecycle evidence.
+    assert.doesNotMatch(cockpit, /updateFreshness|useBioXpFreshness/);
+    assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/);
+    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && latestOperatorReceipt/);
+    assert.match(cockpit, /const latestOperatorReceipt = interruptAggregateAbort\.data \?\? interruptZStop\.data \?\? interruptYStop\.data \?\? interruptXStop\.data \?\? invokeDeckAction\.data \?\? invokeLifecycleActionMutation\.data \?\? invokeYAction\.data \?\? xyReceipt \?\? invokeOperatorAction\.data/);
+    assert.match(cockpit, /resetInterruptAggregateAbort\(\)/);
+    assert.match(cockpit, /resetInvokeLifecycleAction\(\)/);
+    // R5 history depth is part of identity; updates retain all current-generation
+    // depth caches, deduplicate by command ID, and preserve each exact limit.
+    assert.match(client, /queryKey: \[\.\.\.operatorHistoryKey, connectionGeneration, limit\]/);
+    assert.match(client, /findAll\(\{ queryKey: \[\.\.\.operatorHistoryKey, generation\] \}\)/);
+    assert.match(client, /row\.command_id !== receipt\.command_id\)\]\.slice\(0, limit\)/);
+    assert.match(client, /updateBioXpHistoryCaches\(queryClient, variables.connectionGeneration, receipt\)/);
 });
 
 test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
@@ -63,7 +72,12 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(dashboard, /sensor\.unit/);
     assert.match(dashboard, /error !== null && error !== undefined/);
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
-    assert.match(cockpit, /useBioXpOperatorDashboard\(generation, linkConnected\)/);
+    // R5: current embedded telemetry, not an extra retired dashboard poll.
+    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, linkConnected\)/);
+    assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
+    assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/);
+    assert.match(cockpit, /data=\{dashboard\}/);
+    assert.doesNotMatch(cockpit, /useBioXpOperatorDashboard(?:V2)?\(/);
     assert.doesNotMatch(`${dashboard}\n${cockpit}`, /type="password"|Login required|Authentication required/i);
 });
 
@@ -91,9 +105,9 @@ test('dedicated four-channel pipette surface stays plan-only and renders evidenc
     assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
     for (const label of [
         'Four-channel pipette controls', 'Channel', 'Hardware tip readback', 'Hardware pressure',
-        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Plunger up physically', 'Plunger down physically',
+        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
         'Build no-motion plan', 'Robot-owned blocker', 'Active hardware readback', 'Read live hardware',
-    ]) assert.match(pipettePanel, new RegExp(label, 'i'));
+    ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
     for (const token of [
         'controller_acknowledged', 'completion_verified', 'physical_effect_verified',
         'motion_commanded', 'truth_source', 'live_query_performed',

@@ -41,11 +41,26 @@ test('cockpit keeps bounded status and compact dashboard freshness loops', () =>
     assert.match(dashboard, /queryKey:\s*\[\.\.\.operatorDashboardKey, connectionGeneration, enabled\]/u);
     assert.match(dashboard, /refetchInterval:\s*enabled && connectionGeneration > 0\s*\?\s*15_000\s*:\s*false/u);
     assert.match(dashboard, /refetchIntervalInBackground:\s*false/u);
-    const dashboardConsumers = `${cockpit}\n${quickDashboard}`.match(/useBioXpOperatorDashboardV2\(/gu) ?? [];
-    assert.equal(dashboardConsumers.length, 1);
-    assert.match(cockpit, /useBioXpOperatorDashboardV2\(generation, robotControlReady\)/u);
-    assert.match(cockpit, /!robotControlReady \|\| dashboardQuery\.isError \? undefined/u);
-    assert.match(quickDashboard, /\{connected && data && \(/u);
+    // R5: a single compact V2 catalog owns its embedded dashboard; a second
+    // dashboard request would break coherent admission/observation identity.
+    const snapshot = hookSource('export const useBioXpOperatorControlCatalogV2', 'export const BIOXP_Y_RELATIVE_MIN_STEPS');
+    assert.match(snapshot, /queryKey:\s*\[\.\.\.operatorV2CatalogKey, connectionGeneration, enabled, authorityVersion\]/u);
+    assert.match(snapshot, /refetchInterval:\s*enabled && connectionGeneration > 0\s*\?\s*10_000\s*:\s*false/u);
+    assert.match(snapshot, /refetchIntervalInBackground:\s*false/u);
+    assert.match(snapshot, /staleTime:\s*15_000/u);
+    assert.match(snapshot, /signal, timeout: 12_000/u);
+    assert.match(snapshot, /retry:\s*false/u);
+    const snapshotConsumers = `${cockpit}\n${quickDashboard}`.match(/useBioXpOperatorControlCatalogV2\(/gu) ?? [];
+    assert.equal(snapshotConsumers.length, 1);
+    assert.doesNotMatch(`${cockpit}\n${quickDashboard}`, /useBioXpOperatorDashboard(?:V2)?\(/u);
+    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, linkConnected\)/u);
+    assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/u);
+    assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/u);
+    assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/u);
+    assert.match(cockpit, /!robotControlReady \|\| catalogV2Query\.isError \? undefined : currentTelemetry/u);
+    assert.match(quickDashboard, /\{connected && error == null && data && \(/u);
+    assert.match(quickDashboard, /\{connected && !isLoading && error == null && !data && \(/u);
+    assert.match(quickDashboard, /Robot did not report telemetry; motion availability is unknown/);
     assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit\)/u);
     assert.match(cockpit, /!linkConnected \|\| operatorCatalog\.isError \? undefined/u);
     assert.match(cockpit, /!linkConnected \|\| historyQuery\.isError \? \[\]/u);
@@ -57,7 +72,8 @@ test('user-triggered camera reads refresh status without a network polling timer
     assert.match(cameraPanel, /statusReceivedAtRef/u);
     assert.match(cameraPanel, /lastSequenceAdvanceAtRef/u);
     assert.match(cameraPanel, /window\.setTimeout/u);
-    assert.match(cameraPanel, /await refetchStatus\(\)[\s\S]*owner\.isCurrent\(token\)[\s\S]*setPendingAction\(null\)/u);
+    assert.match(cameraPanel, /const isCurrent = \(\) => sessionRef\.current === session && owner\.isCurrent\(token\) && mountedRef\.current/u);
+    assert.match(cameraPanel, /await refetchStatus\(\)[\s\S]*if \(isCurrent\(\)\)[\s\S]*setPendingAction\(null\)/u);
     assert.doesNotMatch(cameraPanel, /setInterval|refetchInterval/u);
 });
 

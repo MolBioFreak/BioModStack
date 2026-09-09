@@ -39,6 +39,7 @@ def compact_payload(**overrides):
         "finished_at": None,
         "terminal_receipt_id": None,
         "completion_class": None,
+        "interrupt_evidence": None,
         "physical_effect_verified": False,
         "error": None,
     }
@@ -663,7 +664,7 @@ def test_v2_catalog_accepts_exact_y_stop_pair_and_unknown_board_authority():
         "actions": [{
             "action_id": "oem.y.stop",
             "request_schema_version": "bioxp.operator_interrupt_request.v1",
-            "response_schema_version": "bioxp.operator_interrupt_receipt.v1",
+            "response_schema_version": "bioxp.operator_action_receipt.v2",
             "interrupt": True,
             "enabled": True,
             "disabled_reason": None,
@@ -677,7 +678,7 @@ def test_v2_catalog_accepts_exact_y_stop_pair_and_unknown_board_authority():
     ("interrupt", "request_schema", "response_schema"),
     [
         (True, "bioxp.operator_action_request.v2", "bioxp.operator_interrupt_receipt.v1"),
-        (True, "bioxp.operator_interrupt_request.v1", "bioxp.operator_action_receipt.v2"),
+        (True, "bioxp.operator_interrupt_request.v1", "bioxp.operator_interrupt_receipt.v1"),
         (False, "bioxp.operator_interrupt_request.v1", "bioxp.operator_action_receipt.v2"),
     ],
 )

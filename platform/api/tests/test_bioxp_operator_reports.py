@@ -24,6 +24,15 @@ FILTERS = {
     "action": None,
     "channel": None,
     "event_kind": None,
+    "entrypoint": None, "caller_class": None, "control_class": None,
+    "protocol_job_id": None, "protocol_action_id": None,
+    "lifecycle_stage_id": None, "lifecycle_attempt_id": None,
+    "outcome": None, "event_source": None, "pressure_stream_id": None,
+    "delivery_verified": None, "controller_acknowledged": None,
+    "completion_verified": None, "hardware_postcondition_verified": None,
+    "physical_effect_verified": None, "evidence_state": None,
+    "command_id": None, "pipette_operation_id": None,
+    "connection_generation": None, "ownership_generation": None,
     "limit": 25,
 }
 COMMAND = {
@@ -53,6 +62,40 @@ COMMAND = {
     "hardware_postcondition_verified": False,
     "physical_effect_verified": False,
     "evidence_state": "compact",
+}
+
+
+# Offline fixture for operator_reports.py export publication/metadata contract.
+# This is deliberately unverified release identity, never deployed evidence.
+RELEASE = {
+    "schema": "bioxp.runtime.release_identity.v1", "status": "unverified",
+    "verified": False, "reason_code": "canonical_release_packet_absent", "release_id": None,
+    "source": dict(commit=None, tree=None, mode=None, manifest_sha256=None, aggregate_sha256=None),
+    "image": dict(id=None, inspection_receipt_sha256=None),
+    "deployment": dict(receipt_id=None, installed_at=None, receipt_sha256=None),
+    "binding": dict(service_unit=None, unit_sha256=None, launcher_sha256=None,
+        configuration_sha256=None, oem_lock_sha256=None, udocker_sha256=None,
+        udocker_tree_sha256=None, declared_listener=None, observed_listener=None),
+}
+EXPORT_RECEIPT = {
+    "receipt_schema": "bioxp.operator_report_export_receipt.v1",
+    "publisher_identity": "bioxp.operator_reports", "export_id": "export-1",
+    "evidence_artifact_id": "report-export:export-1", "created_at": 1.0,
+    "retention_deadline": 1000.0, "normalized_filters": FILTERS,
+    "filter_sha256": "0" * 64, "row_count": 1,
+    "database_incarnation_id": "offline-test-database",
+    "release_identity": RELEASE,
+    "schema_identity": {"database_identity": "robot_authoritative_sqlite",
+        "schema_version": 5, "identity_version": 2, "release_identity": RELEASE},
+    "source_high_waters": dict(operator_commands=1, operator_transitions=0,
+        pipette_operations=0, pipette_channel_observations=0, pipette_transport_exchanges=0,
+        runtime_events=0, pipette_pressure_streams=0, pipette_pressure_chunks=0,
+        runtime_evidence_objects=1, runtime_evidence_links=1, runtime_evidence_events=1,
+        operator_plane_command_versions=0, operator_plane_pipette_versions=0,
+        operator_plane_pressure_stream_versions=0, operator_plane_evidence_versions=0),
+    "artifact": {"format": "json", "sha256": "1" * 64, "byte_count": 10, "relpath": None},
+    "evidence_state": "active", "legal_hold": False, "evidence_available": True,
+    "public_download_available": True,
 }
 
 
@@ -88,9 +131,13 @@ class FakeConnection:
             return {
                 "export_id": "export-1",
                 "format": "json",
-                "filter": {},
+                "filter": FILTERS,
                 "filter_sha256": "0" * 64,
-                "snapshot": SNAPSHOT,
+                "snapshot": EXPORT_RECEIPT,
+                "receipt": EXPORT_RECEIPT,
+                "release_identity": RELEASE,
+                "publication_state": "published",
+                "evidence_state": "active", "legal_hold": False, "evidence_available": True,
                 "row_count": 1,
                 "sha256": "1" * 64,
                 "byte_count": 10,
@@ -113,6 +160,8 @@ class FakeConnection:
         assert route_name == "operator_report_export_create"
         return {
             "export_id": "export-1",
+            "evidence_artifact_id": "report-export:export-1",
+            "release_identity": RELEASE,
             "status": "completed",
             "format": "json",
             "row_count": 1,
@@ -183,15 +232,35 @@ def test_report_detail_export_metadata_and_download_use_robot_contract() -> None
 
     assert detail.status_code == 200
     assert detail.json()["command_id"] == "cmd-1"
-    assert export.status_code == 200
+    assert export.status_code == 200, export.text
+    assert export.json()["receipt"] == EXPORT_RECEIPT
+    assert export.json()["release_identity"] == RELEASE
+    assert export.json()["download"] == "/api/bioxp/operator-controls/reports/exports/export-1/download"
     assert download.status_code == 200
     assert download.content == b'{"ok":true}\n'
     assert download.headers["x-content-sha256"] == "2" * 64
     assert created.status_code == 200
     assert [call["route_name"] for call in connection.calls] == [
         "operator_report_command_detail",
+        "operator_report_commands",  # legacy detail requires indexed snapshot context
         "operator_report_export_detail",
         "operator_report_export_download",
         "operator_report_export_create",
     ]
     assert all(call["expected_generation"] == 9 for call in connection.calls)
+
+
+def test_export_metadata_rejects_missing_receipt_and_unknown_evidence_fields():
+    class InvalidConnection(FakeConnection):
+        async def request_active_query(self, *args, **kwargs):
+            payload = await super().request_active_query(*args, **kwargs)
+            if self.missing:
+                del payload["receipt"]
+            else:
+                payload["receipt"] = {**payload["receipt"], "invented_authority": True}
+            return payload
+    for missing in (True, False):
+        connection = InvalidConnection()
+        connection.missing = missing
+        response = TestClient(app_for(connection)).get("/operator-controls/reports/exports/export-1")
+        assert response.status_code == 502

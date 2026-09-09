@@ -1,4 +1,4 @@
-import type { BioXpOperatorDashboard } from '../lib/bioxpClient.js';
+import { bioXpErrorText, type BioXpOperatorDashboard } from '../lib/bioxpClient.js';
 
 interface BioXpQuickDashboardProps {
     connected: boolean;
@@ -6,6 +6,7 @@ interface BioXpQuickDashboardProps {
     isLoading: boolean;
     error: unknown;
     motionControlsAvailable: boolean | undefined;
+    unavailableReason?: string | null;
 }
 
 const panelStyle = {
@@ -23,7 +24,7 @@ const yesNoUnknown = (candidate: boolean | null | undefined) => (
     candidate === true ? 'Yes' : candidate === false ? 'No' : 'Not reported'
 );
 
-export function BioXpQuickDashboard({ connected, data, isLoading, error, motionControlsAvailable }: BioXpQuickDashboardProps) {
+export function BioXpQuickDashboard({ connected, data, isLoading, error, motionControlsAvailable, unavailableReason }: BioXpQuickDashboardProps) {
     return (
         <section aria-label="Live Robot Dashboard" style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
@@ -35,9 +36,12 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
             {!connected && <div style={panelStyle}>Connect to view robot state.</div>}
             {connected && isLoading && <div style={panelStyle}>Loading live state…</div>}
             {connected && error !== null && error !== undefined && (
-                <div style={{ ...panelStyle, color: '#fca5a5' }}>Dashboard unavailable: {String(error)}</div>
+                <div style={{ ...panelStyle, color: '#fca5a5' }}>Dashboard unavailable: {bioXpErrorText(error)}</div>
             )}
-            {connected && data && (
+            {connected && !isLoading && error == null && !data && (
+                <div role="status" style={panelStyle}>{unavailableReason ?? 'Robot did not report telemetry; motion availability is unknown.'}</div>
+            )}
+            {connected && error == null && data && (
                 <>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
                         <div style={panelStyle}>
@@ -47,8 +51,9 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                         <div style={panelStyle}>
                             <strong>Motion controls</strong>
                             <div style={{ color: motionControlsAvailable === true ? '#86efac' : motionControlsAvailable === false ? '#fca5a5' : '#cbd5e1' }}>
-                                {motionControlsAvailable === true ? 'Available' : motionControlsAvailable === false ? 'Unavailable' : 'Updating'}
+                                {motionControlsAvailable === true ? 'Available' : motionControlsAvailable === false ? 'Unavailable' : 'Unknown'}
                             </div>
+                            {motionControlsAvailable === undefined && <small>{unavailableReason ?? 'Fresh hardware observation is unavailable.'}</small>}
                             {motionControlsAvailable === false && <small>{value(data.motion.reason, 'Robot control admission is unavailable.')}</small>}
                         </div>
                         <div style={panelStyle}>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import json
 import re
 import time
@@ -253,6 +254,9 @@ class BioXpRobotClient:
         self.target = target
         self.routes = dict(routes or DEFAULT_ROBOT_ROUTES)
         self._monotonic_clock = monotonic_clock or time.monotonic
+        # Per-client (therefore per-connection) evidence anchor. Keep only the
+        # latest identity; source capture timestamps remain source-owned.
+        self._camera_age_anchor: tuple[tuple[int, int, object, object], float] | None = None
         self._snapshot_retry_backoff_seconds = snapshot_retry_backoff_seconds
         self._snapshot_retry_after = 0.0
         pinned_transport = PinnedAddressTransport(target, transport=transport)
@@ -313,6 +317,7 @@ class BioXpRobotClient:
         return payload
 
     async def camera_status(self) -> dict[str, Any]:
+        request_started = self._monotonic_clock()
         try:
             method, path_template, timeout_seconds = self.routes["camera_status"]
         except KeyError as exc:
@@ -369,7 +374,33 @@ class BioXpRobotClient:
             status = _CameraStatusResponse.model_validate(payload)
         except ValidationError as exc:
             raise RobotTransportError("BioXP robot returned a malformed camera status") from exc
-        return status.model_dump(mode="json")
+        result = status.model_dump(mode="json")
+        if status.available:
+            received = self._monotonic_clock()
+            if not (math.isfinite(request_started) and math.isfinite(received)) or received < request_started:
+                raise RobotTransportError("BioXP camera monotonic timing was invalid")
+            assert status.frame_age_seconds is not None
+            assert status.frame_sequence is not None
+            # The producer may observe at any point during the request. Charge
+            # the entire round trip, including body read/validation, as a
+            # conservative upper bound instead of granting transit as freshness.
+            anchor = request_started - status.frame_age_seconds
+            identity = (status.provider_generation, status.frame_sequence,
+                        status.frame_captured_at, status.content_sha256)
+            previous = self._camera_age_anchor
+            if previous is not None and previous[0] == identity:
+                anchor = min(anchor, previous[1])
+            age = status.frame_age_seconds + (received - request_started)
+            if previous is not None and previous[0] == identity:
+                age = max(age, received - previous[1])
+            if not math.isfinite(age):
+                raise RobotTransportError("BioXP camera age exceeded the supported range")
+            # Concurrent status requests can complete out of source order. An
+            # older frame must not evict the newer frame's retained age anchor.
+            if previous is None or identity[:2] >= previous[0][:2]:
+                self._camera_age_anchor = (identity, anchor)
+            result["frame_age_seconds"] = age
+        return result
 
     async def camera_latest(self) -> CameraImage:
         return await self._camera_image("camera_latest")

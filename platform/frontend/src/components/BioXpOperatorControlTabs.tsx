@@ -13,6 +13,7 @@ import {
     useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
+import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
 
 type Pane = 'primitive' | 'meta' | 'logs';
 type ReceiptBoundObservation = {
@@ -153,7 +154,7 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
             </div>
             <p className="mt-1 font-mono text-slate-400">{commandId} · generation {ownershipGeneration}</p>
             <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
-            {'error' in receipt && receipt.error && <p className="mt-1 text-red-300">{receipt.error}</p>}
+            {bioXpReceiptFailureText(receipt) && <p className="mt-1 text-red-300">{bioXpReceiptFailureText(receipt)}</p>}
             {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
             {stageReceipts.length > 0 && (
                 <details className="mt-2"><summary>Stage receipts ({stageReceipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(stageReceipts, null, 2)}</pre></details>
@@ -178,8 +179,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     );
     const historyQuery = useBioXpOperatorActionHistory(generation, connected);
     const invoke = useInvokeBioXpOperatorAction();
+    // Published stop/emergency actions retain their own request and receipt owner.
+    // Same catalog route/admission; no new transport or queue policy.
+    const interrupt = useInvokeBioXpOperatorAction('stop');
     const assess = useAssessBioXpOperatorAction();
     const resetInvoke = invoke.reset;
+    const resetInterrupt = interrupt.reset;
 
     const [pane, setPane] = useState<Pane>('primitive');
     const [confirmation, setConfirmation] = useState<ActionConfirmation | null>(null);
@@ -256,6 +261,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         && (latestReceipt.action_id.startsWith('oem.x.') || latestReceipt.action_id.startsWith('oem.xy.'));
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
+    const selectedSubmissionPending = isSafetyInterrupt ? interrupt.isPending : invoke.isPending || interrupt.isPending;
     const isExactXzAction = selected?.action_id.startsWith('oem.x.') === true
         || selected?.action_id.startsWith('oem.z.') === true;
     const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true
@@ -277,8 +283,9 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
     useEffect(() => {
         resetInvoke();
+        resetInterrupt();
         setOperatorObservation({ receiptCommandId: null, authorityKey: '', note: '' });
-    }, [connected, generation, resetInvoke]);
+    }, [connected, generation, resetInvoke, resetInterrupt]);
     useEffect(() => {
         setOperatorObservation((current) => current.receiptCommandId === latestReceiptCommandId && current.authorityKey === assessmentAuthorityKey
             ? current
@@ -299,7 +306,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     }, [groupedBrowseActions, selected?.action_id]);
 
     const run = () => {
-        if (!selected) return;
+        if (!selected || !connected || !actionEnabled || !sourceAuthorityAllowsAction || selectedSubmissionPending) return;
         setLocalError(null);
         try {
             const normalized = normalizeInput(selected, inputs);
@@ -316,7 +323,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 setLocalError('Explicit confirmation is required for this exact governed action and authority.');
                 return;
             }
-            invoke.mutate({
+            (isSafetyInterrupt ? interrupt : invoke).mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
                 ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
@@ -529,7 +536,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                                     I confirm this exact governed action and its published machine scope.
                                 </label>
                             )}
-                            <button type="button" disabled={!connected || !actionEnabled || invoke.isPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
+                            <button type="button" disabled={!connected || !actionEnabled || selectedSubmissionPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
                             {!actionEnabled && <p className="mt-2 text-sm text-amber-200">Blocked: {disabledReason}</p>}
                         </article>
                     )}
@@ -537,6 +544,10 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             )}
 
             {actionError && <p className="mt-3 text-sm text-red-300">{actionError}</p>}
+            {connected && interrupt.error && <p role="alert" className="mt-3 text-sm text-red-300">Stop request: {bioXpErrorText(interrupt.error)}</p>}
+            {connected && interrupt.data && <div data-testid="advanced-stop-receipt" className="mt-4"><ReceiptCard receipt={interrupt.data} /></div>}
+            {interrupt.error && <p role="alert" className="mt-3 text-sm text-red-300">Stop request: {bioXpErrorText(interrupt.error)}</p>}
+            {connected && interrupt.data && <section data-testid="advanced-stop-receipt" className="mt-4"><h3>Independent Stop receipt</h3><ReceiptCard receipt={interrupt.data} /></section>}
             {awaitingXObservationReceiptId && pane !== 'logs' && (
                 <section className="mt-4 rounded border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100" data-x-provider-observation-required>
                     <h3 className="font-semibold">Provider-owned X observation required</h3>

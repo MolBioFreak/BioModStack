@@ -1,0 +1,252 @@
+{
+  "provenance": {
+    "kind": "actual copied producer with synthetic process/device/provider inputs; no hardware evidence",
+    "sha256": {
+      "src/bioxp/api.py": "65d6aaf3aa987e343289909d867d9fa49eca76e131ebf4c7b1d3cf6f9130f245",
+      "src/bioxp/camera_provider.py": "56b47b0c0cdc914d497dfdcdb9bd14534c820658c76c9eb28c0edcdf152b0917",
+      "src/bioxp/operator_controls.py": "91ef8072a0e0be4d30c27d05e9db864719e8a9e942c7ced407056de11df9fb58",
+      "src/bioxp/hardware_status.py": "f333b163671c549c688d1ae379d962cb6f3b1bc7c542393c10ca25613952d619",
+      "tests/test_camera_stream_producer.py": "5ecd027a8d34ffc4c8a043060df50183ac52e5489b742798af0a662bc55be25e"
+    }
+  },
+  "rows": [
+    {
+      "label": "starting",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable"
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "9809702ff1504c8d883af6fbe18342d4",
+        "camera_ownership_epoch": 1,
+        "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 0,
+        "dropped_frames": 0,
+        "latest_frame_at": null,
+        "last_error": null,
+        "idempotent": false,
+        "session": {
+          "session_id": "9809702ff1504c8d883af6fbe18342d4",
+          "camera_ownership_epoch": 1,
+          "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+          "fps": 8,
+          "quality": 7,
+          "width": 640,
+          "height": 480,
+          "viewers": 0,
+          "started_at": 1788809216.9176812,
+          "frames_emitted": 0,
+          "error": null
+        },
+        "freshness": {
+          "state": "stale",
+          "age_s": null
+        },
+        "provenance": "POST /camera/stream/start"
+      }
+    },
+    {
+      "label": "first",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "available": true,
+        "frame_sequence": 1,
+        "frame_captured_at": "2026-09-07T19:26:56.937444+00:00",
+        "frame_age_seconds": 0.018,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": "4ea47e1662ffd7167e4f94ccd81f1429d3d5e6ae37fbde65e7b419b4dd280625",
+        "detail": "latest_frame_available"
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "9809702ff1504c8d883af6fbe18342d4",
+        "camera_ownership_epoch": 1,
+        "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 1,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T19:26:56.937444Z",
+        "last_error": null,
+        "idempotent": false,
+        "session": {
+          "session_id": "9809702ff1504c8d883af6fbe18342d4",
+          "camera_ownership_epoch": 1,
+          "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+          "fps": 8,
+          "quality": 7,
+          "width": 640,
+          "height": 480,
+          "viewers": 0,
+          "started_at": 1788809216.9176812,
+          "frames_emitted": 1,
+          "error": null
+        },
+        "freshness": {
+          "state": "fresh",
+          "age_s": 0.018
+        },
+        "provenance": "POST /camera/stream/start"
+      }
+    },
+    {
+      "label": "advancing",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "available": true,
+        "frame_sequence": 2,
+        "frame_captured_at": "2026-09-07T19:26:56.956741+00:00",
+        "frame_age_seconds": 0.021,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": "687cb36571d0e1c0f18c3ac90295fe8c0de93daa2468ba1961f72e279e996676",
+        "detail": "latest_frame_available"
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "live",
+        "active": true,
+        "stream_id": "9809702ff1504c8d883af6fbe18342d4",
+        "camera_ownership_epoch": 1,
+        "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T19:26:56.956741Z",
+        "last_error": null,
+        "idempotent": false,
+        "session": {
+          "session_id": "9809702ff1504c8d883af6fbe18342d4",
+          "camera_ownership_epoch": 1,
+          "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+          "fps": 8,
+          "quality": 7,
+          "width": 640,
+          "height": 480,
+          "viewers": 0,
+          "started_at": 1788809216.9176812,
+          "frames_emitted": 2,
+          "error": null
+        },
+        "freshness": {
+          "state": "fresh",
+          "age_s": 0.021
+        },
+        "provenance": "POST /camera/stream/start"
+      }
+    },
+    {
+      "label": "invalid",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 1,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable"
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "9809702ff1504c8d883af6fbe18342d4",
+        "camera_ownership_epoch": 1,
+        "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T19:26:56.956741Z",
+        "last_error": null,
+        "idempotent": false,
+        "session": {
+          "session_id": "9809702ff1504c8d883af6fbe18342d4",
+          "camera_ownership_epoch": 1,
+          "device": "/tmp/pytest-of-dalab/pytest-0/test_export_camera0/dev/video7",
+          "fps": 8,
+          "quality": 7,
+          "width": 640,
+          "height": 480,
+          "viewers": 0,
+          "started_at": 1788809216.9176812,
+          "frames_emitted": 2,
+          "error": null
+        },
+        "freshness": {
+          "state": "stale",
+          "age_s": null
+        },
+        "provenance": "POST /camera/stream/start"
+      }
+    },
+    {
+      "label": "stopped",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 19,
+        "dropped_frames": 1,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable"
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "off",
+        "active": false,
+        "stream_id": null,
+        "camera_ownership_epoch": 2,
+        "device": null,
+        "fps": null,
+        "quality": null,
+        "width": null,
+        "height": null,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": null,
+        "last_error": "fixture cleanup",
+        "idempotent": false,
+        "session": null,
+        "freshness": {
+          "state": "missing",
+          "age_s": null
+        },
+        "provenance": "POST /camera/stream/start"
+      }
+    }
+  ]
+}

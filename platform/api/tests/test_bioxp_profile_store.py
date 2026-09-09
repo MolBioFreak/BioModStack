@@ -25,6 +25,7 @@ def test_profile_store_round_trip_is_canonical_and_private(tmp_path: Path) -> No
         "schema_version": 1,
         "display_name": "Lab robot",
         "api_url": "http://robot:8123",
+        "freshness_budget_seconds": 1800.0,
     }
     assert path.stat().st_mode & 0o777 == 0o600
     assert list(path.parent.glob("*.tmp")) == []

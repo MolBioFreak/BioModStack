@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
+import { bioXpProviderFailure } from './bioxpEvidencePresentation';
+import { bioXpErrorBodyPreview, boundedBioXpText as boundedOperatorText } from './bioxpErrorPreview';
 
 export interface BioXpConnectionSnapshot {
     configured: boolean;
@@ -1337,30 +1339,21 @@ function cameraImageFromResponse(response: {
     }
     return { blob: response.data, etag, sha256, connectionGeneration };
 }
-const OPERATOR_DETAIL_LIMIT = 2_048;
 
-const TRUNCATED_SUFFIX = '…[truncated]';
-
-function boundedOperatorText(value: string, limit = OPERATOR_DETAIL_LIMIT): string {
-    const normalized = value.trim();
-    if (normalized.length <= limit) return normalized;
-    return `${normalized.slice(0, Math.max(0, limit - TRUNCATED_SUFFIX.length))}${TRUNCATED_SUFFIX}`;
-}
-
-function nestedOperatorDetail(value: unknown, depth = 0): string | null {
-    if (depth > 8 || value === null || value === undefined) return null;
+function nestedOperatorDetail(value: unknown, depth = 0, budget = { remaining: 128 }): string | null {
+    if (--budget.remaining < 0 || depth > 8 || value === null || value === undefined) return null;
     if (typeof value === 'string') return boundedOperatorText(value) || null;
     if (Array.isArray(value)) {
-        const normalized = value.map((entry) => {
+        const normalized = value.slice(0, 16).map((entry) => {
             if (entry && typeof entry === 'object' && 'msg' in entry) {
                 const item = entry as { loc?: unknown; msg?: unknown };
-                const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
+                const location = Array.isArray(item.loc) ? item.loc.slice(0, 16).map((part) => typeof part === 'string' ? boundedOperatorText(part, 128) : typeof part === 'number' ? String(part) : '?').join('.') : '';
                 const message = typeof item.msg === 'string'
-                    ? item.msg
-                    : nestedOperatorDetail(item.msg, depth + 1);
+                    ? boundedOperatorText(item.msg)
+                    : nestedOperatorDetail(item.msg, depth + 1, budget);
                 return message ? (location ? `${location}: ${message}` : message) : null;
             }
-            return nestedOperatorDetail(entry, depth + 1);
+            return nestedOperatorDetail(entry, depth + 1, budget);
         }).filter((entry): entry is string => Boolean(entry));
         const joined = normalized.length ? normalized.join('; ') : null;
         return joined ? boundedOperatorText(joined) : null;
@@ -1369,11 +1362,11 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
     const record = value as Record<string, unknown>;
     for (const key of ['detail', 'message', 'reason', 'block_reason', 'startup_error', 'error']) {
         if (key in record) {
-            const found = nestedOperatorDetail(record[key], depth + 1);
+            const found = nestedOperatorDetail(record[key], depth + 1, budget);
             if (found) {
                 const code = typeof record.code === 'string' ? record.code
                     : typeof record.error === 'string' ? record.error : null;
-                return code && code !== found ? boundedOperatorText(`${found} (${code})`) : found;
+                return code && code !== found ? boundedOperatorText(`${found} (${boundedOperatorText(code)})`) : found;
             }
         }
     }
@@ -1384,10 +1377,10 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
 export interface BioXpErrorPresentation {
     status: number | null;
     summary: string;
+    /** Bounded selected-field preview, not a complete JSON evidence export. */
     rawJson: string;
 }
 
-const OPERATOR_ERROR_BODY_LIMIT = 8_192;
 
 export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
     const response = error && typeof error === 'object' && 'response' in error
@@ -1396,25 +1389,20 @@ export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
     const status = typeof response?.status === 'number' && Number.isInteger(response.status)
         ? response.status
         : null;
-    const summary = nestedOperatorDetail(
+    const summary = bioXpProviderFailure(response?.data) ?? nestedOperatorDetail(
         response?.data && typeof response.data === 'object' && 'detail' in response.data
             ? (response.data as { detail?: unknown }).detail
             : response?.data,
     ) ?? (
         error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
             ? boundedOperatorText(error.message)
-            : String(error ?? 'Unknown error')
+            : typeof error === 'string' ? boundedOperatorText(error) : 'Unknown error'
     );
-    let rawJson: string;
-    try {
-        rawJson = JSON.stringify(response?.data ?? null, null, 2);
-    } catch {
-        rawJson = String(response?.data ?? null);
-    }
+    const rawJson = bioXpErrorBodyPreview(response?.data ?? null);
     return {
         status,
         summary,
-        rawJson: boundedOperatorText(rawJson, OPERATOR_ERROR_BODY_LIMIT),
+        rawJson,
     };
 }
 
@@ -1474,7 +1462,12 @@ export const useBioXpOperatorControlCatalogV2 = (
     authorityVersion: string | null = null,
 ) => useQuery({
     queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled, authorityVersion],
-    queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
+    // A stalled read must not leave Loading forever. Cancellation applies only
+    // to this read, never to a dispatched robot action. Keep the existing 15 s
+    // authority expiry and single catalog/dashboard owner.
+    queryFn: async ({ signal }) => (await api.get<BioXpOperatorControlCatalogV2>(
+        '/api/bioxp/operator-controls/v2/catalog', { signal, timeout: 12_000 },
+    )).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     staleTime: 15_000,
@@ -2276,6 +2269,16 @@ export const useBioXpOperatorReportExports = (
     retry: false,
 });
 
+export async function getBioXpCameraStatus(connectionGeneration: number) {
+    const startedAt = performance.now();
+    const data = (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
+        params: { expected_generation: connectionGeneration },
+    })).data;
+    const receivedAtMonotonicMs = performance.now();
+    return { ...data, requestConnectionGeneration: connectionGeneration,
+        requestElapsedMs: Math.max(0, receivedAtMonotonicMs - startedAt), receivedAtMonotonicMs };
+}
+
 export const useBioXpCameraStatus = (
     connectionGeneration: number | null,
     enabled = true,
@@ -2283,9 +2286,7 @@ export const useBioXpCameraStatus = (
     queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
     queryFn: async () => {
         if (connectionGeneration === null) throw new Error('An active BioXP connection generation is required');
-        return (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
-            params: { expected_generation: connectionGeneration },
-        })).data;
+        return getBioXpCameraStatus(connectionGeneration);
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
@@ -2455,9 +2456,10 @@ const updateBioXpHistoryCaches = (queryClient: QueryClient, generation: number, 
     }
 };
 
-export const useInvokeBioXpOperatorAction = () => {
+export const useInvokeBioXpOperatorAction = (lane: 'normal' | 'stop' = 'normal') => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'operator-action', lane],
         mutationFn: async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
             actionId: string;
             connectionGeneration: number;

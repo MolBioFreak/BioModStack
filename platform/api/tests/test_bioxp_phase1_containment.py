@@ -26,6 +26,12 @@ def test_every_non_get_route_carries_the_global_guard() -> None:
     non_get = [route for route in routes if route.methods and route.methods != {"GET"}]
     assert non_get
     for route in non_get:
+        if route.path in {
+            "/operator-controls/pipettes/readback",  # query-only, typed/idempotent
+            "/operator-controls/pipettes/application/plan",  # no-motion planner
+            "/operator-controls/reports/exports",  # retained evidence artifact
+        }:
+            continue
         assert any(dependency.dependency is require_bioxp_mutation_access for dependency in route.dependencies), f"missing mutation dependency: {route.path}"
 
 
