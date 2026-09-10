@@ -3250,10 +3250,28 @@ class OperatorDashboardXLiveStatusFailure(BaseModel):
     failure: str = Field(min_length=1, max_length=1000)
 
 
+class OperatorDashboardXPassiveStatus(BaseModel):
+    """Exact no-readback marker; never terminal controller authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: Literal[False]
+    available: Literal[False]
+    authority: Literal["passive_projection"]
+    failure: Literal["explicit_terminal_readback_required"]
+
+    @field_validator("ok", "available", mode="before")
+    @classmethod
+    def require_unavailable_false(cls, value: object) -> object:
+        if value is not False:
+            raise ValueError("passive X status must retain boolean false authority")
+        return value
+
+
 class OperatorDashboardXLiveStatus(
     RootModel[
         OperatorDashboardXLiveStatusSuccess
         | OperatorDashboardXLiveStatusFailure
+        | OperatorDashboardXPassiveStatus
         | OperatorDashboardXOmissionMarker
     ]
 ):
@@ -4736,6 +4754,19 @@ class OperatorLegacyDurableCommandReceipt(BaseModel):
     terminal_receipt_id: str | None = Field(min_length=1, max_length=240)
     completion_class: str | None = Field(min_length=1, max_length=160)
     transition_sequence: StrictInt | None = Field(ge=0)
+
+    # Compact history explicitly omits raw exchanges. Keep old responses
+    # unchanged when absent, and never accept populated evidence in this marker.
+    transport_exchanges: list[JsonValue] | None = Field(
+        default=None, max_length=0, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("transport_exchanges", mode="before")
+    @classmethod
+    def reject_null_compact_transport_marker(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("present compact transport marker must be an empty array")
+        return value
 
     @field_validator("automatic_retry", mode="before")
     @classmethod
