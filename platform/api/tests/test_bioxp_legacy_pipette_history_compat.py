@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from services.bioxp.operator_models import OperatorActionHistory, PipetteReceipt
+from services.bioxp.operator_models import PipetteReceipt
+from bioxp_recorded_receipts import RecordedReceipts
 
 FIXTURE = Path(__file__).parent / "fixtures/bioxp_legacy_pipette_history.json"
 
@@ -20,9 +21,9 @@ def payload():
 
 def test_legacy_pipette_history_preserves_every_row_and_field():
     raw = payload()
-    result = OperatorActionHistory.model_validate(raw).model_dump(mode="json", by_alias=True)
-    assert result == raw
-    assert all("semantic_query_response_verified" not in row["truth"] for row in result["receipts"])
+    result = RecordedReceipts.model_validate(raw["receipts"]).model_dump(mode="json", by_alias=True)
+    assert result == raw["receipts"]
+    assert all("semantic_query_response_verified" not in row["truth"] for row in result)
 
 
 @pytest.mark.parametrize("value", [False, True])
@@ -30,7 +31,7 @@ def test_current_pipette_history_preserves_explicit_semantic_evidence(value):
     raw = payload()
     for row in raw["receipts"]:
         row["truth"]["semantic_query_response_verified"] = value
-    assert OperatorActionHistory.model_validate(raw).model_dump(mode="json", by_alias=True) == raw
+    assert RecordedReceipts.model_validate(raw["receipts"]).model_dump(mode="json", by_alias=True) == raw["receipts"]
 
 
 @pytest.mark.parametrize("field", [
@@ -42,7 +43,7 @@ def test_legacy_pipette_history_truth_remains_strict(field, bad):
     raw = payload()
     raw["receipts"][0]["truth"][field] = bad
     with pytest.raises(ValidationError):
-        OperatorActionHistory.model_validate(raw)
+        RecordedReceipts.model_validate(raw["receipts"])
 
 
 @pytest.mark.parametrize("change", ["extra_truth", "extra_receipt", "missing_truth",
@@ -68,7 +69,7 @@ def test_legacy_pipette_history_rejects_unknown_or_incomplete_evidence(change):
     else:
         row["source_identity"]["registry_sha256"] = "invalid"
     with pytest.raises(ValidationError):
-        OperatorActionHistory.model_validate(raw)
+        RecordedReceipts.model_validate(raw["receipts"])
 
 
 @pytest.mark.parametrize("index", [0, 1])

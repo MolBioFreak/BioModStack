@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
+import { historyItem } from '../fixtures/bioxpHistory';
 
 const completeDeckReceiptFixture = {
     schema_version: 'bioxp.operator_action_receipt.v2',
@@ -192,7 +193,7 @@ const state = vi.hoisted(() => ({
     connectionGeneration: 1,
     history: {
         data: {
-            receipts: [] as Array<Record<string, unknown>>,
+            items: [] as Array<Record<string, unknown>>,
         },
         error: null as unknown,
         isError: false,
@@ -681,15 +682,15 @@ describe('critical evidence presentation', () => {
         expect(container.textContent).toContain('Robot did not report telemetry');
         expect(container.textContent).not.toContain('Updating');
     });
-    it('puts nested provider failure above collapsed history evidence', async () => {
-        state.history.data.receipts = [{
+    it('puts the bounded failure summary above on-demand evidence', async () => {
+        state.history.data.items = [historyItem({
             command_id: 'failed-y', action_id: 'oem.y.home', status: 'failed',
-            finished_at: null, stage_receipts: [], error: 'robot route returned HTTP 200',
+            finished_at: null, stage_receipts: [], error: 'Controller position wait timed out; inspect retained board/axis/position evidence.',
             response: { http_status: 200, body: { ok: false, failure: 'RuntimeError: Reach GZ position time out! board=4; axis=0; position=10000' } },
-        }];
+        })];
         await act(async () => root.render(<BioXpCockpit />));
         const article = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('failed-y') || node.textContent?.includes('oem.y.home'))!;
-        expect([...article.querySelectorAll('p')].some(p => p.textContent?.includes('RuntimeError: Reach GZ position time out!'))).toBe(true);
+        expect([...article.querySelectorAll('p')].some(p => p.textContent?.includes('Controller position wait timed out'))).toBe(true);
         expect(article.textContent).toContain('Physical effect unverified');
     });
 });
@@ -1047,7 +1048,7 @@ beforeEach(() => {
             { target: 'LOC_OC', label: 'LOC_OC', aliases: ['OC chiller', 'Output Chiller', 'Output Tray'], location_id: 1, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
         ],
     });
-    state.history.data.receipts = [];
+    state.history.data.items = [];
     state.dashboard.data.motion = { enabled: true, reason: null };
     state.dashboard.data.x_axis.latest_receipt = null;
     state.dashboard.data.successive_move_queue = {};
@@ -1860,7 +1861,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.dashboard.data.x_axis.provider.lifecycle.state = 'unprepared';
         state.dashboard.data.x_axis.status.reference = 'desynced';
         state.dashboard.data.motion = { enabled: false, reason: 'stale dashboard blocker' };
-        state.history.data.receipts = [xReceipt('acknowledged')];
+        state.history.data.items = [historyItem(xReceipt('acknowledged'))];
         state.dashboard.data.successive_move_queue = {
             x: { active_command_id: 'cmd_prev', depth: 8, head_action_id: 'oem.x.move_steps', state: 'queued' },
         };
@@ -2013,7 +2014,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('leaves successive X move and Home admission to the robot while an X command is active', async () => {
-        state.history.data.receipts = [xReceipt('acknowledged')];
+        state.history.data.items = [historyItem(xReceipt('acknowledged'))];
         state.dashboard.data.successive_move_queue = {
             x: { active_command_id: 'cmd_prev', depth: 1, head_action_id: 'oem.x.move_steps', state: 'queued' },
         };
@@ -2041,7 +2042,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('leaves X queue admission to the robot when the cached queue projection is full', async () => {
-        state.history.data.receipts = [xReceipt('acknowledged')];
+        state.history.data.items = [historyItem(xReceipt('acknowledged'))];
         state.dashboard.data.successive_move_queue = {
             x: { active_command_id: 'cmd_prev', depth: 8, head_action_id: 'oem.x.move_steps', state: 'queued' },
         };
@@ -2148,7 +2149,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('re-enables X controls from the terminal receipt even when the dashboard snapshot lags (R-A3)', async () => {
-        state.history.data.receipts = [xReceipt('completed')];
+        state.history.data.items = [historyItem(xReceipt('completed'))];
         state.dashboard.data.x_axis.latest_receipt = {
             command_id: 'cmd_x',
             intent: 'x_move_steps',
@@ -2171,7 +2172,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('renders retained live history with numeric timestamps and absent nested stage receipts', async () => {
-        state.history.data.receipts = retainedHistory.receipts;
+        state.history.data.items = retainedHistory.receipts.map(historyItem);
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
@@ -2180,7 +2181,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             .find((node) => node.querySelector('h2')?.textContent === 'Recent Robot Actions') as HTMLElement;
         expect(section.querySelectorAll('article')).toHaveLength(retainedHistory.receipts.length);
         expect(section.textContent).toContain('Terminal proof unverified');
-        expect(section.textContent).toContain('unverified legacy reconciliation record');
+        expect(section.textContent).toContain('Retained legacy record — not current control authority.');
         state.history.isError = true;
         state.history.error = new Error('refresh failed');
         await act(async () => root.render(<BioXpCockpit />));
@@ -2191,7 +2192,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 
     it('passes the selected depth to the history query and renders that many receipts (R-A5)', async () => {
-        state.history.data.receipts = Array.from({ length: 30 }, (_, i) => xReceipt('completed', i));
+        state.history.data.items = Array.from({ length: 30 }, (_, i) => historyItem(xReceipt('completed', i)));
 
         await act(async () => {
             root.render(<BioXpCockpit />);
@@ -2221,7 +2222,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('keeps X controls usable when the connection token differs from the robot ownership generation (regression)', async () => {
         state.connectionGeneration = 3189298922692611;
-        state.history.data.receipts = [];
+        state.history.data.items = [];
 
         await act(async () => {
             root.render(<BioXpCockpit />);

@@ -4789,22 +4789,19 @@ class OperatorLegacyDurableCommandReceipt(BaseModel):
         return self
 
 
-class OperatorActionHistory(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    schema_version: Literal["bioxp.operator_action_history.v1"]
-    receipts: list[
-        OperatorActionReceipt
-        | OperatorRecordedActionReceipt
-        | OperatorLiveSourceActionReceipt
-        | OperatorLiveTimeoutActionReceipt
-        | PipetteReceipt
-        | OperatorHistoryPipetteReceipt
-        | OperatorLegacyHistoryPipetteReceipt
-        | OperatorLegacyReconciliationReceipt
-        | OperatorMigratedOutcomeUnknownReceipt
-        | OperatorLegacyUnindexedPipetteReceipt
-        | OperatorLegacyDurableCommandReceipt
-    ] = Field(max_length=500)
+OperatorRecordedReceipt = (
+    OperatorActionReceipt
+    | OperatorRecordedActionReceipt
+    | OperatorLiveSourceActionReceipt
+    | OperatorLiveTimeoutActionReceipt
+    | PipetteReceipt
+    | OperatorHistoryPipetteReceipt
+    | OperatorLegacyHistoryPipetteReceipt
+    | OperatorLegacyReconciliationReceipt
+    | OperatorMigratedOutcomeUnknownReceipt
+    | OperatorLegacyUnindexedPipetteReceipt
+    | OperatorLegacyDurableCommandReceipt
+)
 
 
 # Serial-206 operator wire contracts. Keep these separate from the strict v1
@@ -5302,6 +5299,10 @@ class OperatorDeckMovementReceiptV1(BaseModel):
 
 
 class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
+    # Verbatim retained JSON is evidence only, never a current command/admission
+    # contract. Applying today's mutation models would reject incomplete older
+    # records or force us to invent missing truth fields.
+    source_receipt: dict[str, JsonValue] | None = None
     canonical_inputs: dict[str, JsonValue]
     requested_values: dict[str, ReceiptScalarV2]
     effective_values: dict[str, ReceiptScalarV2]
@@ -5668,13 +5669,38 @@ class OperatorControlCatalogV2(BaseModel):
         return self
 
 
-class OperatorActionHistoryV2(BaseModel):
+class OperatorHistoryEvidenceSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source: Literal["direct", "retained"]
+    source_schema: str | None
+    recorded_status: str = Field(min_length=1, max_length=80)
+    remote_acknowledged: StrictBool | None
+    controller_acknowledged: StrictBool | None
+    controller_terminal_state_verified: StrictBool | None
+    machine_assessment: ActionAssessment | None
+    operator_assessment: Literal["pass", "fail"] | None
+    operator_note: str | None
+
+
+class OperatorHistoryReceipt(OperatorActionReceiptV2):
+    history: OperatorHistoryEvidenceSummary
+
+
+class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal["bioxp.operator_action_history.v2"]
-    items: list[OperatorActionReceiptV2]
-    next_cursor: str | None
+    items: list[OperatorHistoryReceipt] = Field(max_length=200)
+    next_cursor: str | None = Field(min_length=1, max_length=1024)
     limit: StrictInt = Field(ge=1, le=200)
+
+    @model_validator(mode="after")
+    def bind_page(self):
+        if len(self.items) > self.limit or len({r.command_id for r in self.items}) != len(self.items):
+            raise ValueError("history page must be bounded and deduplicated")
+        if self.next_cursor is not None and len(self.items) != self.limit:
+            raise ValueError("history cursor requires a full preceding page")
+        return self
 
 
 class OperatorMethodV1(BaseModel):

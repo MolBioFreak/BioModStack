@@ -20,7 +20,7 @@ from services.bioxp.operator_models import (
     OperatorActionReceiptDetailV2,
     OperatorControlCatalogV2,
     OperatorDashboardV2,
-    OperatorActionHistoryV2,
+
     OperatorActionRequestV2,
     OperatorEmptyInputsV2,
     OperatorMoveAbsoluteInputsV2,
@@ -647,22 +647,6 @@ async def interrupt_operator_action_v1(
     return receipt
 
 
-@router.get("/operator-controls/v2/history", response_model=OperatorActionHistoryV2)
-async def operator_action_history_v2(
-    limit: int = Query(default=100, ge=1, le=200),
-    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionHistoryV2:
-    snapshot = runtime.connection.snapshot()
-    try:
-        payload = await runtime.connection.request_active_v2_query(
-            "operator_action_history_v2",
-            expected_generation=snapshot.generation,
-            params={"limit": limit, "schema_version": "bioxp.operator_action_history.v2"},
-        )
-    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
-        raise _translate_robot_error(exc) from exc
-    return _validate(OperatorActionHistoryV2, payload)
-
 
 @router.get("/operator-controls/v2/receipts/{command_id}", response_model=None)
 async def operator_action_receipt_v2(
@@ -993,6 +977,7 @@ async def invoke_operator_action(
 @router.get("/operator-controls/history", response_model=OperatorActionHistory)
 async def operator_action_history(
     limit: int = Query(default=100, ge=1, le=200),
+    cursor: str | None = Query(default=None, min_length=1, max_length=1024),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionHistory:
     snapshot = runtime.connection.snapshot()
@@ -1001,11 +986,14 @@ async def operator_action_history(
             "operator_action_history",
             expected_generation=snapshot.generation,
             require_fresh=True,
-            params={"limit": limit},
+            params={"limit": limit, **({"cursor": cursor} if cursor is not None else {})},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorActionHistory, payload)
+    page = _validate(OperatorActionHistory, payload)
+    if page.limit != limit:
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched history page limit")
+    return page
 
 
 @router.get("/operator-controls/receipts/{command_id}", response_model=OperatorLiveActionReceipt)

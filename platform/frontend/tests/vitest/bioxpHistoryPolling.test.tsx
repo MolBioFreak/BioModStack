@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { BioXpHistoryReceiptCard, useBioXpHistoryPagination } from '../../src/components/BioXpHistoryReceiptCard';
+import { historyItem } from '../fixtures/bioxpHistory';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -11,11 +13,12 @@ vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 let client: QueryClient;
 let root: Root;
 let container: HTMLDivElement;
+const flush = async () => act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 let invoke: ReturnType<typeof useInvokeBioXpOperatorAction>;
 let assess: ReturnType<typeof useAssessBioXpOperatorAction>;
 let invokeV2: ReturnType<typeof useInvokeBioXpOperatorActionV2>;
-const historyKey = (generation: number, limit: number) => ['bioxp', 'operator-controls', 'history', generation, limit];
-const history = (status: string, count = 1) => ({ schema_version: 'bioxp.operator_action_history.v1', receipts: Array.from({ length: count }, (_, i) => ({ command_id: `old-${i}`, status })) });
+const historyKey = (generation: number, limit: number) => ['bioxp', 'operator-controls', 'history', generation, limit, null];
+const history = (status: string, count = 1) => ({ schema_version: 'bioxp.operator_action_history.v2', items: Array.from({ length: count }, (_, i) => ({ command_id: `old-${i}`, status, terminal: ['completed', 'failed', 'rejected', 'cleared', 'interrupted', 'ambiguous'].includes(status) })), next_cursor: null, limit: Math.max(1, count) });
 function Harness({ enabled = true }: { enabled?: boolean }) {
     useBioXpOperatorActionHistory(7, enabled, 8);
     useBioXpOperatorMethodV1('xy-one', 7, enabled);
@@ -63,7 +66,8 @@ it('retains independent normal and Stop hook receipts with real mutations and he
     await act(async () => { finishNormal({ data: { action_id: 'gripper-open', command_id: 'normal-one', status: 'interrupted' } }); await normalPromise; });
     await act(async () => { await vi.waitFor(() => expect(normal.data?.command_id).toBe('normal-one')); });
     expect(stop.data?.command_id).toBe('stop-one');
-    expect(client.getQueryData(historyKey(7, 8))).toMatchObject({ receipts: [{ command_id: 'normal-one' }, { command_id: 'stop-one' }] });
+    expect(client.getQueryData(historyKey(7, 8))).toEqual(history('completed', 0));
+    expect(client.getQueryState(historyKey(7, 8))?.isInvalidated).toBe(true);
 });
 
 it('refreshes current-generation history after v2 submission and terminal method reconciliation', async () => {
@@ -145,11 +149,11 @@ it('shows a timed-out catalog read as an explicit error and recovers on a later 
 it('fetches history at the requested depth and keeps enablement out of cache identity', async () => {
     await render();
     await vi.waitFor(() => expect(client.getQueryData(historyKey(7, 8))).toEqual(history('completed')));
-    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/history?limit=8');
+    expect(api.get).toHaveBeenCalledWith('/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: undefined });
     await render(false);
     expect(client.getQueryData(historyKey(7, 8))).toEqual(history('completed'));
 });
-it.each(['invoke', 'assess'])('%s updates every matching generation/depth cache without polluting other generations', async (kind) => {
+it.each(['invoke', 'assess'])('%s invalidates matching pages without synthesizing history rows or polluting other generations', async (kind) => {
     await render(false);
     for (const generation of [7, 8]) for (const limit of [8, 25]) client.setQueryData(historyKey(generation, limit), history('completed', limit));
     vi.mocked(api.post).mockResolvedValue({ data: { command_id: 'new', status: 'queued' } });
@@ -159,8 +163,9 @@ it.each(['invoke', 'assess'])('%s updates every matching generation/depth cache 
     });
     for (const limit of [8, 25]) {
         const data = client.getQueryData<ReturnType<typeof history>>(historyKey(7, limit))!;
-        expect(data.receipts[0].command_id).toBe('new');
-        expect(data.receipts).toHaveLength(limit);
+        expect(data).toEqual(history('completed', limit));
+        expect(client.getQueryState(historyKey(7, limit))?.isInvalidated).toBe(true);
+        expect(client.getQueryState(historyKey(8, limit))?.isInvalidated).toBe(false);
         expect(client.getQueryData(historyKey(8, limit))).toEqual(history('completed', limit));
     }
 });
@@ -197,4 +202,54 @@ it('mounted software Abort issues exactly one HTTP cancellation without addresse
     await act(async () => { finish({ data: { action_id: 'oem.abort_all', command_id: 'old-software-abort', terminal: true, status: 'completed' } }); await pending; });
     expect(abort.data).toBeUndefined();
     expect(api.post).toHaveBeenCalledTimes(1);
+});
+
+it('fetches full retained evidence only on expansion and hides it on disconnect', async () => {
+    const row = historyItem({ command_id: 'retained-proof', action_id: 'oem.z.manual_home', status: 'failed', source: 'legacy_operator_plane' });
+    const source = { command_id: row.command_id, terminal_evidence: { retained_original: 'native-proof-value' } };
+    api.get.mockResolvedValue({ data: { ...row, source_receipt: source } });
+    const render = (connected: boolean) => root.render(<QueryClientProvider client={client}><BioXpHistoryReceiptCard receipt={row} generation={7} connected={connected} /></QueryClientProvider>);
+    await act(async () => { render(true); });
+    expect(api.get).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('native-proof-value');
+    await act(async () => {
+        const disclosure = container.querySelector('details')!;
+        disclosure.open = true;
+        disclosure.dispatchEvent(new Event('toggle'));
+    });
+    await flush();
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(api.get.mock.calls[0]).toEqual(['/api/bioxp/operator-controls/v2/receipts/retained-proof', { params: { detail: true } }]);
+    expect(container.textContent).toContain('native-proof-value');
+    await act(async () => { render(false); });
+    expect(container.textContent).not.toContain('native-proof-value');
+    expect(api.post).not.toHaveBeenCalled();
+});
+
+it('owns history cursors by connection and page size, using the single route for every page', async () => {
+    let pagination!: ReturnType<typeof useBioXpHistoryPagination>;
+    function Paged({ generation, limit }: { generation: number; limit: number }) {
+        pagination = useBioXpHistoryPagination(generation, limit);
+        useBioXpOperatorActionHistory(generation, true, limit, pagination.cursor);
+        return null;
+    }
+    api.get.mockResolvedValue({ data: history('completed', 8) });
+    const render = (generation: number, limit: number) => root.render(<QueryClientProvider client={client}><Paged generation={generation} limit={limit} /></QueryClientProvider>);
+    await act(async () => { render(7, 8); });
+    await flush();
+    await act(async () => { pagination.older('older-one'); });
+    await flush();
+    expect(pagination.cursor).toBe('older-one');
+    expect(api.get.mock.calls.at(-1)).toEqual(['/api/bioxp/operator-controls/history?limit=8', { signal: expect.any(AbortSignal), params: { cursor: 'older-one' } }]);
+    await act(async () => { render(7, 25); });
+    await flush();
+    expect(pagination.cursor).toBeNull();
+    await act(async () => { render(7, 8); });
+    expect(pagination.cursor).toBeNull();
+    await act(async () => { pagination.older('older-two'); });
+    await act(async () => { render(8, 8); });
+    await flush();
+    expect(pagination.cursor).toBeNull();
+    expect(pagination.hasNewer).toBe(false);
+    expect(api.get.mock.calls.every(([url]) => !String(url).includes('/v2/history'))).toBe(true);
 });

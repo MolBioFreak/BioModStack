@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from services.bioxp.operator_models import OperatorActionHistory, OperatorActionReceipt
+from services.bioxp.operator_models import OperatorActionReceipt
+from bioxp_recorded_receipts import RecordedReceipts
 
 FIXTURE = Path(__file__).parent / "fixtures/bioxp_legacy_history_ea848.json"
 FLAGS = ("completion_ambiguous", "completion_verified", "delivery_verified",
@@ -20,8 +21,8 @@ def payload():
 def test_live_legacy_history_preserves_evidence(limit):
     raw = payload()
     raw["receipts"] = raw["receipts"][:limit]
-    result = OperatorActionHistory.model_validate(raw).model_dump(mode="json")
-    for before, after in zip(raw["receipts"][:4], result["receipts"][:4]):
+    result = RecordedReceipts.model_validate(raw["receipts"]).model_dump(mode="json")
+    for before, after in zip(raw["receipts"][:4], result[:4]):
         for key in (*FLAGS, "source_identity", "physical_effect_verified", "status"):
             assert after[key] == before[key]
 
@@ -32,7 +33,7 @@ def test_history_flags_are_strict(flag, bad):
     raw = payload()
     raw["receipts"][0][flag] = bad
     with pytest.raises(ValidationError):
-        OperatorActionHistory.model_validate(raw)
+        RecordedReceipts.model_validate(raw["receipts"])
 
 
 def test_history_identity_and_authority_remain_closed():
@@ -48,7 +49,7 @@ def test_history_identity_and_authority_remain_closed():
         else:
             row["authority_receipt_id"] = "unpaired"
         with pytest.raises(ValidationError):
-            OperatorActionHistory.model_validate(raw)
+            RecordedReceipts.model_validate(raw["receipts"])
 
 
 def test_mutation_receipt_contract_is_not_widened():

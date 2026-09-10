@@ -21,16 +21,17 @@ import {
     useInvokeBioXpDeckActionV2,
     useInvokeBioXpOperatorAction,
     type BioXpOperatorActionV2Request,
-    type BioXpOperatorLiveActionReceipt,
+
     type BioXpOperatorDashboardXAxis,
-    type BioXpOperatorHistoryReceipt,
+
     type BioXpOperatorInputSpec,
-    type BioXpOperatorLegacyReconciliationReceipt,
+
     type BioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
-import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
+
 import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
+import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
@@ -100,11 +101,6 @@ const AXES: readonly AxisControls[] = [
     },
 ];
 
-function isIndexedHistoryReceipt(
-    receipt: BioXpOperatorHistoryReceipt,
-): receipt is BioXpOperatorLiveActionReceipt | BioXpOperatorLegacyReconciliationReceipt {
-    return 'command_id' in receipt && 'action_id' in receipt && 'status' in receipt;
-}
 
 const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35';
 let fallbackIdempotencySequence = 0;
@@ -337,7 +333,8 @@ export function BioXpCockpit() {
         const identity = bioXpPostDispatchCommandIdentity(error);
         if (identity) setXYSubmission({ generation, commandId: identity.commandId, receipt: null });
     };
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
+    const historyPagination = useBioXpHistoryPagination(linkConnected ? generation : 0, historyLimit);
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit, historyPagination.cursor);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
     const operatorCatalog = useBioXpOperatorControlCatalog(
@@ -395,8 +392,8 @@ export function BioXpCockpit() {
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
             : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
     const recentCommands = useMemo(
-        () => (!displayConnected ? [] : (historyQuery.data?.receipts ?? [])).filter(isIndexedHistoryReceipt).slice(0, historyLimit),
-        [historyQuery.data?.receipts, displayConnected, historyLimit],
+        () => (!displayConnected ? [] : (historyQuery.data?.items ?? [])).slice(0, historyLimit),
+        [historyQuery.data?.items, displayConnected, historyLimit],
     );
     useEffect(() => {
         resetInvokeOperatorAction();
@@ -631,9 +628,9 @@ export function BioXpCockpit() {
     const xBoardGeneration = xProvider?.current_board_lifecycle_generation ?? 'unknown';
     const xBoardGenerationFresh = xProvider?.board_generation_fresh;
     const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
-    const xHistoryReceipt = historyQuery.data?.receipts?.find(
-        (receipt) => isIndexedHistoryReceipt(receipt) && receipt.action_id.startsWith('oem.x.'),
-    ) ?? null;
+    const xHistoryReceipt = historyPagination.cursor === null ? historyQuery.data?.items?.find(
+        (receipt) => receipt.action_id.startsWith('oem.x.'),
+    ) ?? null : null;
     const xReceipt = xHistoryReceipt
         ?? xAxisDashboard?.latest_receipt
         ?? xProvider?.lifecycle?.latest_receipt
@@ -1550,28 +1547,15 @@ export function BioXpCockpit() {
                 ) : historyQuery.data == null ? (
                     <p className="mt-2 text-sm text-slate-400">Robot action receipts have not been loaded.</p>
                 ) : recentCommands.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-400">{historyQuery.data.receipts.length === 0
-                        ? 'No robot action receipts recorded.'
-                        : 'History contains non-indexed records; no indexed action receipts in this response.'}</p>
+                    <p className="mt-2 text-sm text-slate-400">{historyPagination.cursor ? 'No robot action receipts recorded on this page.' : 'No robot action receipts recorded.'}</p>
                 ) : (
                     <div className="mt-3 space-y-2">
                         {recentCommands.map((record) => (
-                            <article key={record.command_id} className="rounded border border-slate-800 bg-slate-900/60 p-3 text-sm">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <strong className="font-mono text-slate-100">{record.action_id}</strong>
-                                    <span className={record.status === 'outcome_unknown' ? 'text-amber-300' : record.status === 'failed' || record.status === 'blocked' ? 'text-red-300' : 'text-slate-300'}>
-                                        {record.status.replaceAll('_', ' ')}{record.status === 'outcome_unknown' ? '; do not resubmit; reconciliation required' : ''} · {bioXpReceiptTimestampText(record.finished_at)}
-                                    </span>
-                                </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{bioXpReceiptFailureText(record) ?? ('machine_assessment' in record ? record.machine_assessment : 'unverified legacy reconciliation record')}</p>
-                                <p className="mt-1 text-xs text-slate-400">
-                                    {'remote_acknowledged' in record && record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP unverified'} · {'controller_acknowledged' in record && record.controller_acknowledged ? 'Controller ACK' : 'Controller ACK unverified'} · {'controller_terminal_state_verified' in record && record.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {'physical_effect_verified' in record && record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
-                                </p>
-                                {(record.response != null || (record.stage_receipts?.length ?? 0) > 0) && <details className="mt-2"><summary className="cursor-pointer text-xs text-slate-400">Nested robot evidence</summary><pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify({ response: record.response, stage_receipts: record.stage_receipts }, null, 2)}</pre></details>}
-                            </article>
+                            <BioXpHistoryReceiptCard key={`${generation}:${record.command_id}`} receipt={record} generation={generation} connected={linkConnected} />
                         ))}
                     </div>
                 )}
+                <BioXpHistoryPager pagination={historyPagination} nextCursor={historyQuery.data?.next_cursor ?? null} disabled={!displayConnected || historyQuery.isFetching || historyQuery.isError} />
                 {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
             </section>
 

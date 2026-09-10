@@ -21,6 +21,7 @@ from services.bioxp.operator_models import (
 )
 from services.bioxp.operator_semantic_quarantine import OPERATOR_SEMANTIC_QUARANTINE_BY_PATH
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
+from bioxp_recorded_receipts import RecordedReceipts
 
 REGISTRY = "1" * 64
 LOCK = "2" * 64
@@ -172,6 +173,17 @@ def v2_receipt_detail() -> dict:
         "child_receipts": [],
         "transitions": [],
     }
+
+
+def history_page(*, limit=100, items=None):
+    row = {**v2_receipt(), 'history': {
+        'source': 'direct', 'source_schema': 'bioxp.operator_action_receipt.v1',
+        'recorded_status': 'queued', 'remote_acknowledged': False,
+        'controller_acknowledged': False, 'controller_terminal_state_verified': None,
+        'machine_assessment': 'unverified', 'operator_assessment': None, 'operator_note': None,
+    }}
+    return {'schema_version': 'bioxp.operator_action_history.v2',
+            'items': [row] if items is None else items, 'next_cursor': None, 'limit': limit}
 
 
 def v2_dashboard() -> dict:
@@ -639,12 +651,9 @@ def test_history_accepts_explicit_legacy_authority_status_omission_marker():
     legacy = receipt()
     legacy["authority_receipt_status"] = {"omitted": "item_limit"}
 
-    parsed = OperatorActionHistory.model_validate({
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [legacy],
-    })
+    parsed = RecordedReceipts.model_validate([legacy])
 
-    assert parsed.receipts[0].model_dump(exclude_none=True)["authority_receipt_status"] == {"omitted": "item_limit"}
+    assert parsed.root[0].model_dump(exclude_none=True)["authority_receipt_status"] == {"omitted": "item_limit"}
 
 
 def test_reference_success_derives_trusted_authority_when_field_is_absent():
@@ -756,22 +765,13 @@ class FakeRobotClient:
             },
             "operator_dashboard_v2": v2_dashboard(),
             "invoke_operator_action_v2": v2_receipt(),
-            "operator_action_history_v2": {
-                "schema_version": "bioxp.operator_action_history.v2",
-                "items": [v2_receipt()],
-                "next_cursor": None,
-                "limit": 100,
-            },
             "operator_action_receipt_v2": v2_receipt(),
             "operator_action_receipt_v2_detail": v2_receipt_detail(),
             "submit_operator_method_v1": v2_method(),
             "operator_method_status_v1": v2_method(),
             "operator_command_status_v2": v2_receipt(),
             "operator_command_status_v2_detail": v2_receipt_detail(),
-            "operator_action_history": {
-                "schema_version": "bioxp.operator_action_history.v1",
-                "receipts": [receipt()],
-            },
+            "operator_action_history": history_page(),
             "operator_action_receipt": receipt(),
             "assess_operator_action": {
                 **receipt(),
@@ -1147,7 +1147,7 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         client.get("/api/bioxp/operator-controls/v2/catalog"),
         client.get("/api/bioxp/operator-controls/v2/dashboard"),
         client.post("/api/bioxp/operator-controls/v2/actions/oem.y.move_steps", json=action_request),
-        client.get("/api/bioxp/operator-controls/v2/history?limit=100"),
+        client.get("/api/bioxp/operator-controls/history?limit=100"),
         client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1"),
         client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1?detail=true"),
         client.post("/api/bioxp/operator-controls/v2/methods", json=method_request),
@@ -1166,7 +1166,7 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "operator_control_catalog_v2",
         "operator_dashboard_v2",
         "invoke_operator_action_v2",
-        "operator_action_history_v2",
+        "operator_action_history",
         "operator_action_receipt_v2",
         "operator_action_receipt_v2_detail",
         "submit_operator_method_v1",
@@ -2899,217 +2899,59 @@ def test_history_and_operator_assessment_are_robot_authoritative(monkeypatch):
     ]
 
 
-def test_history_accepts_robot_authority_fingerprint(monkeypatch):
+def test_history_exposes_only_one_format_and_retired_route_is_absent(monkeypatch):
     client, runtime = make_client(monkeypatch)
-    fingerprint = "a" * 64
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [{**receipt(), "authority_fingerprint": fingerprint}],
-    }
-
-    response = client.get("/api/bioxp/operator-controls/history")
-
+    response = client.get('/api/bioxp/operator-controls/history')
     assert response.status_code == 200
-    assert response.json()["receipts"][0]["authority_fingerprint"] == fingerprint
+    assert response.json()['schema_version'] == 'bioxp.operator_action_history.v2'
+    assert set(response.json()) == {'schema_version', 'items', 'next_cursor', 'limit'}
+    assert client.get('/api/bioxp/operator-controls/v2/history').status_code == 404
+    assert 'operator_action_history_v2' not in DEFAULT_ROBOT_ROUTES
+    paths = client.get('/openapi.json').json()['paths']
+    assert '/api/bioxp/operator-controls/v2/history' not in paths
+    assert '/api/bioxp/operator-controls/history' in paths
 
 
-def test_history_returns_200_with_live_legacy_failed_x_rows(monkeypatch):
-    """R-A4 endpoint regression: the three live 2026-08-18 stored rows that
-    502ed the history endpoint must validate and appear in the response."""
-    live_rows = [
-        {
-            **receipt(action_id="oem.x.move_absolute", command_id="operator_1787095402672_8bf5ce277249"),
-            "status": "failed",
-            "controller_acknowledged": True,
-            "controller_terminal_state_verified": False,
-            "authority_receipt_id": None,
-            "authority_receipt_status": None,
-            "response": {
-                "http_status": 409,
-                "body": {
-                    "detail": {
-                        "automatic_prerequisites": [],
-                        "axis": "x",
-                        "failure": "x_observed_commissioning_required_before_automatic_home",
-                        "ok": False,
-                        "requested_motion_dispatched": False,
-                        "state": "prepared_unreferenced",
-                    },
-                },
-            },
-        },
-        {
-            **receipt(action_id="oem.x.move_absolute", command_id="operator_1787095175302_d20e621d98f4"),
-            "status": "failed",
-            "controller_acknowledged": True,
-            "controller_terminal_state_verified": False,
-            "authority_receipt_id": None,
-            "authority_receipt_status": None,
-            "response": {
-                "http_status": 409,
-                "body": {
-                    "detail": {
-                        "automatic_prerequisites": [],
-                        "axis": "x",
-                        "failure": "x_observed_commissioning_required_before_automatic_home",
-                        "ok": False,
-                        "requested_motion_dispatched": False,
-                        "state": "prepared_unreferenced",
-                    },
-                },
-            },
-        },
-        {
-            **receipt(action_id="oem.x.move_steps", command_id="operator_1787021198696_f134f45312b3"),
-            "status": "failed",
-            "controller_acknowledged": True,
-            "controller_terminal_state_verified": False,
-            "authority_receipt_id": None,
-            "authority_receipt_status": None,
-            "response": {
-                "http_status": 409,
-                "body": {
-                    "detail": {
-                        "automatic_prerequisites": [],
-                        "axis": "x",
-                        "failure": "x_observed_commissioning_required_before_automatic_home",
-                        "ok": False,
-                        "requested_motion_dispatched": False,
-                        "state": "prepared_unreferenced",
-                    },
-                },
-            },
-        },
-    ]
+@pytest.mark.parametrize('limit', [8, 25, 50, 100, 200])
+def test_history_passes_limit_and_cursor_without_format_negotiation(monkeypatch, limit):
     client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": live_rows,
-    }
-
-    response = client.get("/api/bioxp/operator-controls/history")
-
+    runtime.connection.client.responses['operator_action_history'] = history_page(limit=limit, items=[])
+    response = client.get('/api/bioxp/operator-controls/history', params={'limit': limit, 'cursor': 'opaque-cursor'})
     assert response.status_code == 200, response.text
-    served = {row["command_id"] for row in response.json()["receipts"]}
-    assert "operator_1787095402672_8bf5ce277249" in served
-    assert "operator_1787095175302_d20e621d98f4" in served
-    assert "operator_1787021198696_f134f45312b3" in served
-
-
-def test_history_accepts_read_only_x_receipt_without_authority(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    read_only = {
-        "schema_version": "bioxp.operator_action_receipt.v1",
-        "command_id": "operator_1787103228184_ca9e71649b36",
-        "action_id": "oem.x.status",
-        "kind": "primitive",
-        "safety_class": "read_only",
-        "status": "completed",
-        "idempotency_key": "readonly-probe-0001",
-        "idempotency_replay_enabled": True,
-        "ownership_generation": 1,
-        "started_at": "2026-08-19T01:33:44.000000Z",
-        "finished_at": "2026-08-19T01:33:44.530000Z",
-        "duration_ms": 530.0,
-        "request_received_at": 1787103228.0,
-        "admission_completed_at": 1787103228.002,
-        "provider_entry_at": 1787103228.002,
-        "provider_returned_at": 1787103228.53,
-        "remote_acknowledged": True,
-        "controller_acknowledged": True,
-        "controller_terminal_state_verified": False,
-        "physical_effect_verified": False,
-        "machine_assessment": "pass",
-        "inputs": {},
-        "response": {"http_status": 200, "body": {"ok": True}},
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-    }
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [read_only],
-    }
-    response = client.get("/api/bioxp/operator-controls/history?limit=100")
-    assert response.status_code == 200, response.text
-    assert response.json()["receipts"][0]["command_id"] == "operator_1787103228184_ca9e71649b36"
-
-
-def test_history_rejects_dispatch_capable_x_receipt_without_authority(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    dispatched = {
-        "schema_version": "bioxp.operator_action_receipt.v1",
-        "command_id": "operator_1787000000000_000000000000",
-        "action_id": "oem.x.move_steps",
-        "kind": "primitive",
-        "safety_class": "motion",
-        "status": "completed",
-        "idempotency_key": "dispatch-probe-0001",
-        "idempotency_replay_enabled": True,
-        "ownership_generation": 1,
-        "started_at": "2026-08-19T01:33:44.000000Z",
-        "finished_at": "2026-08-19T01:33:44.530000Z",
-        "duration_ms": 530.0,
-        "remote_acknowledged": True,
-        "controller_acknowledged": True,
-        "controller_terminal_state_verified": False,
-        "physical_effect_verified": True,
-        "machine_assessment": "pass",
-        "inputs": {"steps": 10},
-        "response": {"http_status": 200, "body": {"ok": True}},
-        "authority_receipt_id": None,
-        "authority_receipt_status": None,
-    }
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [dispatched],
-        "authority_fingerprint": "a" * 64,
-    }
-    response = client.get("/api/bioxp/operator-controls/history?limit=100")
-    assert response.status_code == 502
-
-
-def test_history_passes_limit_to_robot(monkeypatch):
-    client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [],
-    }
-    response = client.get("/api/bioxp/operator-controls/history?limit=50")
-    assert response.status_code == 200, response.text
-    assert runtime.connection.client.calls[-1][1]["params"] == {"limit": 50}
+    assert runtime.connection.client.calls[-1] == ('operator_action_history', {'params': {'limit': limit, 'cursor': 'opaque-cursor'}})
 
 
 def test_history_defaults_limit_to_100_when_omitted(monkeypatch):
     client, runtime = make_client(monkeypatch)
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [],
-    }
-    response = client.get("/api/bioxp/operator-controls/history")
-    assert response.status_code == 200, response.text
-    assert runtime.connection.client.calls[-1][1]["params"] == {"limit": 100}
+    assert client.get('/api/bioxp/operator-controls/history').status_code == 200
+    assert runtime.connection.client.calls[-1][1]['params'] == {'limit': 100}
 
 
-def test_history_accepts_robot_startup_reconciliation_receipts(monkeypatch):
+@pytest.mark.parametrize('invalid', ['old_format', 'wrong_limit', 'missing_summary', 'unknown_authority', 'coerced_truth', 'duplicate', 'partial_cursor'])
+def test_history_rejects_wrong_or_incomplete_contract(monkeypatch, invalid):
     client, runtime = make_client(monkeypatch)
-    reconciled = {
-        **receipt(command_id="crash-queued"),
-        "status": "reconciliation_required",
-        "remote_acknowledged": False,
-        "controller_acknowledged": False,
-        "controller_terminal_state_verified": False,
-        "automatic_retry": False,
-        "physical_outcome": "ambiguous",
-    }
-    runtime.connection.client.responses["operator_action_history"] = {
-        "schema_version": "bioxp.operator_action_history.v1",
-        "receipts": [reconciled],
-    }
+    page = history_page()
+    if invalid == 'old_format': page = {'schema_version': 'bioxp.operator_action_history.v1', 'receipts': [receipt()]}
+    elif invalid == 'wrong_limit': page['limit'] = 50
+    elif invalid == 'missing_summary': del page['items'][0]['history']
+    elif invalid == 'unknown_authority': page['items'][0]['history']['current_motion_authority'] = True
+    elif invalid == 'coerced_truth': page['items'][0]['history']['controller_acknowledged'] = 1
+    elif invalid == 'duplicate': page['items'].append(copy.deepcopy(page['items'][0]))
+    elif invalid == 'partial_cursor': page['next_cursor'] = 'another-page'
+    runtime.connection.client.responses['operator_action_history'] = page
+    assert client.get('/api/bioxp/operator-controls/history').status_code == 502
 
-    response = client.get("/api/bioxp/operator-controls/history")
 
-    assert response.status_code == 200
-    assert response.json()["receipts"][0]["status"] == "reconciliation_required"
+def test_receipt_detail_keeps_incomplete_native_evidence_without_promoting_it(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    native = {'command_id': 'cmd-1', 'authority_fingerprint': 'a' * 64,
+              'outcome': 'in_progress', 'response': {'body': {'retained_layers': [1, None, 'raw']}},
+              'stage_receipts': [{'raw': 'retained proof'}]}
+    runtime.connection.client.responses['operator_action_receipt_v2_detail'] = {**v2_receipt_detail(), 'source_receipt': native}
+    response = client.get('/api/bioxp/operator-controls/v2/receipts/cmd-1?detail=true')
+    assert response.status_code == 200, response.text
+    assert response.json()['source_receipt'] == native
+    assert response.json()['physical_effect_verified'] is False
 
 
 _FIXED_QUARANTINE_CASES = (

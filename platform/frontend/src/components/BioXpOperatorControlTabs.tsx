@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-    type BioXpOperatorLiveActionReceipt,
+
     type BioXpOperatorActionSpec,
     type BioXpOperatorHistoryReceipt,
+    type BioXpOperatorRecordedReceipt,
     bioXpErrorText,
 
     useBioXpOperatorActionHistory,
@@ -14,6 +15,7 @@ import {
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
+import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 
 type Pane = 'primitive' | 'meta' | 'logs';
 type ReceiptBoundObservation = {
@@ -115,7 +117,10 @@ function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprint
     return JSON.stringify(value);
 }
 
-function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
+function ReceiptCard({ receipt, generation = 0, connected = false }: {
+    receipt: BioXpOperatorRecordedReceipt | BioXpOperatorHistoryReceipt; generation?: number; connected?: boolean;
+}) {
+    if ('history' in receipt) return <BioXpHistoryReceiptCard receipt={receipt} generation={generation} connected={connected} />;
     const actionId = 'action_id' in receipt
         ? receipt.action_id
         : 'schema' in receipt
@@ -166,18 +171,20 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
     );
 }
 
-function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): receipt is BioXpOperatorLiveActionReceipt {
-    return 'schema_version' in receipt && receipt.schema_version === 'bioxp.operator_action_receipt.v1';
+function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): boolean {
+    return receipt.history.source === 'direct' && receipt.history.source_schema === 'bioxp.operator_action_receipt.v1';
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
+    const [pane, setPane] = useState<Pane>('primitive');
+    const historyPagination = useBioXpHistoryPagination(connected ? generation : 0, 100);
     const dashboardQuery = useBioXpOperatorDashboard(generation, connected);
     const catalogQuery = useBioXpOperatorControlCatalog(
         generation,
         connected,
         dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
     );
-    const historyQuery = useBioXpOperatorActionHistory(generation, connected);
+    const historyQuery = useBioXpOperatorActionHistory(generation, connected, 100, pane === 'logs' ? historyPagination.cursor : null);
     const invoke = useInvokeBioXpOperatorAction();
     // Published stop/emergency actions retain their own request and receipt owner.
     // Same catalog route/admission; no new transport or queue policy.
@@ -186,7 +193,6 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const resetInvoke = invoke.reset;
     const resetInterrupt = interrupt.reset;
 
-    const [pane, setPane] = useState<Pane>('primitive');
     const [confirmation, setConfirmation] = useState<ActionConfirmation | null>(null);
     const [operatorObservation, setOperatorObservation] = useState<ReceiptBoundObservation>({ receiptCommandId: null, authorityKey: '', note: '' });
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
@@ -250,7 +256,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
     const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
-        ? invoke.data ?? authoritativeHistory.receipts.find(isCurrentActionReceipt)
+        ? invoke.data ?? authoritativeHistory.items.find(isCurrentActionReceipt)
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
     const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
@@ -408,8 +414,9 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(authoritativeHistory?.receipts ?? []).map((receipt, index) => <ReceiptCard key={'command_id' in receipt ? receipt.command_id : 'receipt_id' in receipt ? receipt.receipt_id : `legacy-unindexed-${index}`} receipt={receipt} />)}
-                    {authoritativeHistory?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
+                    {(authoritativeHistory?.items ?? []).map((receipt) => <BioXpHistoryReceiptCard key={`${generation}:${receipt.command_id}`} receipt={receipt} generation={generation} connected={connected} />)}
+                    {authoritativeHistory?.items.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts on this page.</p>}
+                    <BioXpHistoryPager pagination={historyPagination} nextCursor={authoritativeHistory?.next_cursor ?? null} disabled={!connected || historyQuery.isFetching || historyQuery.isError} />
                 </div>
             ) : (
                 <>
@@ -556,11 +563,11 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </section>
             )}
             {latestReceipt && pane !== 'logs' && latestUsesProviderObservation && (
-                <div className="mt-4"><ReceiptCard receipt={latestReceipt} /></div>
+                <div className="mt-4"><ReceiptCard receipt={latestReceipt} generation={generation} connected={connected} /></div>
             )}
             {latestReceipt && pane !== 'logs' && !latestUsesProviderObservation && (
                 <div className="mt-4 space-y-3">
-                    <ReceiptCard receipt={latestReceipt} />
+                    <ReceiptCard receipt={latestReceipt} generation={generation} connected={connected} />
                     <label className="block text-sm text-slate-300">
                         Your physical observation
                         <textarea value={operatorObservation.receiptCommandId === latestReceiptCommandId ? operatorObservation.note : ''} onChange={(event) => setOperatorObservation({ receiptCommandId: latestReceiptCommandId, authorityKey: assessmentAuthorityKey, note: event.target.value })} rows={3} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2" placeholder="Describe the observed machine state. Operator observation must remain attached to the robot-owned receipt." />

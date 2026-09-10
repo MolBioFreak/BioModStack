@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
-from services.bioxp.operator_models import OperatorControlCatalog, OperatorActionHistory
+from services.bioxp.operator_models import OperatorControlCatalog
+from bioxp_recorded_receipts import RecordedReceipts
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -22,10 +23,10 @@ def test_live_software_abort_catalog_retains_nonphysical_scope():
 
 def test_live_history_accepts_authoritative_positive_sql_sequences():
     payload = json.loads((FIXTURES / 'bioxp_live_sql_sequence_history.json').read_text())
-    value = OperatorActionHistory.model_validate(payload)
-    assert [r.sequence for r in value.receipts] == [r['sequence'] for r in payload['receipts']]
+    value = RecordedReceipts.model_validate(payload["receipts"])
+    assert [r.sequence for r in value.root] == [r['sequence'] for r in payload['receipts']]
     for invalid in [0, -1, True, '5']:
         altered = copy.deepcopy(payload)
         altered['receipts'][0]['sequence'] = invalid
         with pytest.raises(ValidationError):
-            OperatorActionHistory.model_validate(altered)
+            RecordedReceipts.model_validate(altered["receipts"])

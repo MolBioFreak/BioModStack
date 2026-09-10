@@ -12,8 +12,10 @@ import pytest
 from pydantic import ValidationError
 
 from services.bioxp.operator_models import (
-    OperatorActionHistory, OperatorActionReceipt, OperatorControlCatalog,
+    OperatorActionReceipt, OperatorControlCatalog,
 )
+
+from bioxp_recorded_receipts import RecordedReceipts
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -28,11 +30,11 @@ def history():
 def test_complete_retained_history_preserves_all_25_records_and_evidence():
     raw = history()
     assert len(raw["receipts"]) == 25
-    result = OperatorActionHistory.model_validate(raw).model_dump(
+    result = RecordedReceipts.model_validate(raw["receipts"]).model_dump(
         mode="json", by_alias=True, exclude_unset=True,
     )
-    assert result == raw
-    assert [r["command_id"] for r in result["receipts"][23:]] == [
+    assert result == raw["receipts"]
+    assert [r["command_id"] for r in result[23:]] == [
         "882ffcef-25f7-4ad9-ab35-c53accd5c89e",
         "867f8a2e-c940-4f0e-9679-3bdb4269e49a",
     ]
@@ -73,9 +75,7 @@ def test_durable_history_rejects_unknown_coerced_or_contradictory_fields(field, 
     row = history()["receipts"][23]
     row[field] = bad
     with pytest.raises(ValidationError):
-        OperatorActionHistory.model_validate({
-            "schema_version": "bioxp.operator_action_history.v1", "receipts": [row],
-        })
+        RecordedReceipts.model_validate([row])
 
 
 def test_durable_projection_requires_every_recorded_field():
@@ -84,9 +84,7 @@ def test_durable_projection_requires_every_recorded_field():
         incomplete = copy.deepcopy(row)
         del incomplete[field]
         with pytest.raises(ValidationError):
-            OperatorActionHistory.model_validate({
-                "schema_version": "bioxp.operator_action_history.v1", "receipts": [incomplete],
-            })
+            RecordedReceipts.model_validate([incomplete])
 
 
 @pytest.mark.parametrize("stored", [
@@ -101,8 +99,8 @@ def test_legacy_reader_terminal_and_restart_projection_branches(stored):
                terminal_evidence=None, terminal_receipt_id=None, completion_class=None,
                dispatched_at=None, finished_at=None, transition_sequence=None)
     raw = {"schema_version": "bioxp.operator_action_history.v1", "receipts": [row]}
-    result = OperatorActionHistory.model_validate(raw)
-    assert result.model_dump(mode="json", exclude_unset=True) == raw
+    result = RecordedReceipts.model_validate(raw["receipts"])
+    assert result.model_dump(mode="json", exclude_unset=True) == raw["receipts"]
     row["status"] = "completed" if nonterminal else "queued"
     with pytest.raises(ValidationError):
-        OperatorActionHistory.model_validate(raw)
+        RecordedReceipts.model_validate(raw["receipts"])

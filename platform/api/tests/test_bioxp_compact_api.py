@@ -46,7 +46,7 @@ EXPECTED = {
     ('GET', '/operator-controls/v2/catalog'),
     ('GET', '/operator-controls/v2/commands/{command_id}'),
     ('GET', '/operator-controls/v2/dashboard'),
-    ('GET', '/operator-controls/v2/history'),
+    ('GET', '/operator-controls/history'),
     ('GET', '/operator-controls/v2/methods/{method_id}'),
     ('GET', '/operator-controls/v2/receipts/{command_id}'),
     ('GET', '/profile'),
@@ -97,7 +97,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 63
+    assert len(_inventory()) == 62
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

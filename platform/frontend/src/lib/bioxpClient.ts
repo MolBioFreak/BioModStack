@@ -379,6 +379,7 @@ export interface BioXpOperatorReceiptV2 {
 export type BioXpReceiptScalarV2 = number | string | boolean | null;
 
 export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
+    source_receipt?: Record<string, unknown> | null;
     canonical_inputs: Record<string, unknown>;
     requested_values: Record<string, BioXpReceiptScalarV2>;
     effective_values: Record<string, BioXpReceiptScalarV2>;
@@ -484,9 +485,9 @@ export interface BioXpOperatorCommandQueueV2 {
     items: BioXpOperatorQueueItemV2[];
 }
 
-export interface BioXpOperatorActionHistoryV2 {
+export interface BioXpOperatorActionHistory {
     schema_version: 'bioxp.operator_action_history.v2';
-    items: BioXpOperatorReceiptV2[];
+    items: BioXpOperatorHistoryReceipt[];
     next_cursor: string | null;
     limit: number;
 }
@@ -954,15 +955,24 @@ export interface BioXpOperatorLegacyUnindexedPipetteReceipt {
     stage_receipts: Record<string, unknown>[];
 }
 
-export type BioXpOperatorHistoryReceipt =
+export type BioXpOperatorRecordedReceipt =
     | BioXpOperatorLiveActionReceipt
     | BioXpPipetteReceipt
     | BioXpOperatorLegacyReconciliationReceipt
     | BioXpOperatorLegacyUnindexedPipetteReceipt;
 
-export interface BioXpOperatorActionHistory {
-    schema_version: 'bioxp.operator_action_history.v1';
-    receipts: BioXpOperatorHistoryReceipt[];
+export interface BioXpOperatorHistoryReceipt extends BioXpOperatorReceiptV2 {
+    history: {
+        source: 'direct' | 'retained';
+        source_schema: string | null;
+        recorded_status: string;
+        remote_acknowledged: boolean | null;
+        controller_acknowledged: boolean | null;
+        controller_terminal_state_verified: boolean | null;
+        machine_assessment: 'pass' | 'fail' | 'unverified' | null;
+        operator_assessment: 'pass' | 'fail' | null;
+        operator_note: string | null;
+    };
 }
 
 export function bioXpOperatorGenerationPayload(
@@ -1693,6 +1703,7 @@ export const useBioXpOperatorReceiptV2 = (
     gcTime: 0,
     retry: false,
     refetchInterval: (query) => {
+        if (query.state.error) return false;
         if (!query.state.data) return 500;
         return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
     },
@@ -2078,15 +2089,18 @@ export const useBioXpOperatorActionHistory = (
     connectionGeneration: number,
     enabled = true,
     limit = 100,
+    cursor: string | null = null,
 ) => useQuery({
-    queryKey: [...operatorHistoryKey, connectionGeneration, limit],
-    queryFn: async () => (
-        await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`)
+    queryKey: [...operatorHistoryKey, connectionGeneration, limit, cursor],
+    queryFn: async ({ signal }) => (
+        await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`, {
+            signal, params: cursor === null ? undefined : { cursor },
+        })
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: (query) => query.state.data?.receipts.some(bioXpReceiptIsNonTerminal) ? 1000 : false,
+    refetchInterval: (query) => query.state.data?.items.some(bioXpReceiptV2IsNonTerminal) ? 1000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -2447,15 +2461,10 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 
-const updateBioXpHistoryCaches = (queryClient: QueryClient, generation: number, receipt: BioXpOperatorLiveActionReceipt) => {
-    for (const query of queryClient.getQueryCache().findAll({ queryKey: [...operatorHistoryKey, generation] })) {
-        const limit = query.queryKey[operatorHistoryKey.length + 1];
-        if (typeof limit !== 'number') continue;
-        queryClient.setQueryData<BioXpOperatorActionHistory>(query.queryKey, (current) => ({
-            schema_version: 'bioxp.operator_action_history.v1',
-            receipts: [receipt, ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id)].slice(0, limit),
-        }));
-    }
+const refreshBioXpHistoryCaches = (queryClient: QueryClient, generation: number) => {
+    // The robot alone creates history rows and cursors. Never splice a native
+    // mutation receipt into a paginated history page or invent its ordering.
+    void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, generation] });
 };
 
 export const useInvokeBioXpOperatorAction = (lane: 'normal' | 'stop' = 'normal') => {
@@ -2483,8 +2492,8 @@ export const useInvokeBioXpOperatorAction = (lane: 'normal' | 'stop' = 'normal')
         onSettled: () => {
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
-        onSuccess: (receipt, variables) => {
-            updateBioXpHistoryCaches(queryClient, variables.connectionGeneration, receipt);
+        onSuccess: (_receipt, variables) => {
+            refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
@@ -2516,8 +2525,8 @@ export const useAssessBioXpOperatorAction = () => {
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
-        onSuccess: (receipt, variables) => {
-            updateBioXpHistoryCaches(queryClient, variables.connectionGeneration, receipt);
+        onSuccess: (_receipt, variables) => {
+            refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
             ]);

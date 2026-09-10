@@ -67,7 +67,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_method_status_v1": ("GET", "/operator/v2/methods/{method_id}", 5.0),
     "operator_command_status_v2": ("GET", "/operator/v2/commands/{command_id}", 5.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),
-    "operator_action_history_v2": ("GET", "/operator/v2/actions/history", 5.0),
+
     "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
     "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 5.0),
     "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
