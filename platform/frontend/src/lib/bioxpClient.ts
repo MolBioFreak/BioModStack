@@ -649,7 +649,6 @@ export interface BioXpPipettes {
     channels: BioXpPipetteChannel[];
     channel_count: 4;
     live_query_performed: false;
-    liquid_mutation_enabled: boolean;
     allow_to_stop: boolean;
     last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
     last_group_transaction: Record<string, unknown> | null;

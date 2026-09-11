@@ -3598,7 +3598,8 @@ class OperatorDashboardPipettes(BaseModel):
     group_status_spacing_ms: Literal[30]
     live_query_performed: Literal[False]
     last_group_transaction: dict[str, JsonValue] | None
-    liquid_mutation_enabled: StrictBool
+    # Decode retained legacy telemetry without publishing or using the retired gate.
+    liquid_mutation_enabled: StrictBool | None = Field(default=None, exclude=True)
     tip_type: StrictInt
     tip_location: StrictInt
     allow_to_stop: StrictBool

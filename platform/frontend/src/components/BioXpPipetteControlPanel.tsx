@@ -238,7 +238,6 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             </div>
 
             <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2 xl:grid-cols-3">
-                <div><dt className="text-slate-500">Liquid mutation gate</dt><dd>{pipettes?.liquid_mutation_enabled === true ? 'enabled by robot' : 'disabled by robot'}</dd></div>
                 <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes ? String(pipettes.allow_to_stop) : 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Group error</dt><dd>{pipettes?.last_error ? `Group error: channel ${pipettes.last_error.channel + 1} · code ${pipettes.last_error.error_code}` : 'Group error: none reported'}</dd></div>
                 <div><dt className="text-slate-500">Group transaction</dt><dd>Last transaction: {transactionOutcome ?? 'unavailable'}</dd></div>
