@@ -16,6 +16,7 @@ ActionStatus = Literal[
     "queued",
     "cleared",
     "completed",
+    "observed",
     "failed",
     "blocked",
     "rejected",

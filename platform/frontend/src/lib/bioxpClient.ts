@@ -829,7 +829,7 @@ export interface BioXpOperatorActionReceipt {
     action_id: string;
     kind: BioXpOperatorActionKind;
     safety_class: BioXpOperatorSafetyClass;
-    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected' | 'reconciliation_required';
+    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'observed' | 'failed' | 'blocked' | 'rejected' | 'reconciliation_required';
     idempotency_key: string;
     idempotency_replay_enabled: boolean;
     ownership_generation: number;
