@@ -44,7 +44,8 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
         raise ValueError("Unsupported bootstrap action")
     mode = runtime or os.environ.get("BMS_RUNTIME_MODE", "container")
     report = {"schema_version": SCHEMA_VERSION, "action": action,
-              "status": "blocked", "ready": False, "read_only": True,
+              "status": "completed", "ready": False, "read_only": True,
+              "installation_readiness": "not_assessed",
               "runtime_mode": mode, "selected_models": sorted(set(models)),
               "observations": {}, "dependencies": [], "blockers": [],
               "effects_scope": "bootstrap application operations; excludes interpreter startup and user site hooks",
@@ -130,34 +131,27 @@ def bootstrap_report(action: str, *, project_root: Path, runtime: str | None = N
                         report["dependencies"].append({
                             "model_id": model, "kind": ref.kind, "relative_path": ref.relative_path,
                             "path": str(Path(str(root)) / ref.relative_path) if root else None,
-                            "acquisition": "unavailable", "qualification": "not_checked"})
+                            "acquisition": "not_checked", "qualification": "not_checked"})
                 except ValueError as exc:
                     block("dependency_closure_unavailable", f"{model}: {exc}")
         except (ImportError, OSError, ValueError) as exc:
             block("dependency_authority_unavailable", str(exc))
-        block("scientific_qualification_not_run", "Existing scientific validators/admission remain authoritative; no runtime was qualified or registered")
-        observations["weight_licensing"] = {
-            "applicability": "unknown", "acceptance": "not_checked",
-            "reason": "Dependency references do not establish license requirements; no reviewed license applicability authority is wired into bootstrap"}
-        block("license_applicability_unknown", "Selected-model license applicability has not been established; this does not assert that every selection needs licensed weights")
+
     observations["provisioning"] = {"plan_command": "provision-plan", "execute_command": "provision",
                                    "resume_command": "resume --expect-plan-sha256 DIGEST",
                                    "qualification": "not_checked"}
-    block("acquisition_unavailable", "Discover/plan do not acquire bytes. Use provision-plan --model MODEL for registry-specific metadata blockers and provision for approved pinned bytes; existing files are not qualification evidence")
-    block("disk_requirement_unknown", "Authoritative acquisition/staging/expansion sizes are unavailable; free space is not a sufficient-disk verdict")
-    block("prerequisite_qualification_not_run", "Tool versions, GPU compatibility, service privileges and locked dependencies have not been qualified")
-    block("installation_readiness_not_verified", "Discover/plan are read-only; configure/recover do not acquire, qualify, register or verify installation readiness")
     if action == "plan":
         report["plan"] = {"executable": False, "steps": [
-            {"action": step, "state": "blocked"} for step in
+            {"action": step, "state": "not_run"} for step in
             ("configure", "acquire_pinned_runtime", "resolve_applicable_weight_licenses",
              "verify_register", "verify_readiness")], "restart_impact": "none: no execution"}
+    report["status"] = "blocked" if blockers else "completed"
     return report
 
 
 def render_report(report: dict) -> str:
     lines = [f"BioModStack bootstrap {report['action']}: {report['status']} ({SCHEMA_VERSION})",
-             "Read-only observations; installation ready: no"]
+             "Read-only system check; installation readiness is not assessed."]
     for tool in report["observations"].get("tools", []):
         lines.append(f"Tool {tool['name']}: {tool['path'] or 'missing'} (not qualified)")
     for storage in report["observations"].get("storage", []):

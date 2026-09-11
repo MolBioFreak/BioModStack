@@ -160,7 +160,7 @@ def main() -> int:
         report = bootstrap_report(args.action, project_root=REPO_ROOT,
                                   runtime=args.runtime, models=tuple(args.model))
         print(json.dumps(report, indent=2, sort_keys=True) if args.json_output else render_report(report))
-        return 0 if report["ready"] else BLOCKED_EXIT
+        return 0 if report["status"] == "completed" else BLOCKED_EXIT
     if __name__ == "__main__":
         _load_lifecycle()
 
