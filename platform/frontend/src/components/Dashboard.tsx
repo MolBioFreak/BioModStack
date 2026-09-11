@@ -502,7 +502,6 @@ export function Dashboard() {
             </section>
 
             <section className="relative mb-8">
-                <div className="pointer-events-none absolute inset-x-3 bottom-0 top-4 rounded-[2rem] border border-slate-800/80 bg-slate-900/70 shadow-[0_30px_90px_rgba(2,6,23,0.45)]" />
                 <div className="relative rounded-[2rem] border border-[var(--border-primary)] bg-[var(--bg-secondary)]/74 p-3 shadow-2xl shadow-black/10 md:p-4">
                     <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
                         <div className="order-2 xl:order-1">
