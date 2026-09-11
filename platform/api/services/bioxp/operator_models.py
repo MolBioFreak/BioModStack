@@ -3441,6 +3441,7 @@ class OperatorDashboardPipetteHardwareEvidence(BaseModel):
     tx_ok: StrictBool | None = None
     immediate_ack_received: StrictBool | None = None
     semantic_query_response_verified: StrictBool | None = None
+    query_response_correlated: StrictBool | None = None
     completion_deferred: StrictBool | None = None
     completion_owner_token: str | None = Field(default=None, max_length=240)
     ack: dict[str, JsonValue] | None = None
