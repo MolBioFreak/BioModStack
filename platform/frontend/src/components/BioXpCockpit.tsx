@@ -564,7 +564,8 @@ export function BioXpCockpit() {
         || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
 
     const v2ActionDisabledReason = (actionId: string): string | null => {
-        if (!v2AuthorityCoherent) return 'Current robot control state is unavailable.';
+        if (!linkConnected) return 'Connect to control the robot.';
+        if (!v2AuthorityCoherent) return 'Updating robot controls…';
         // Installed CCI handlers: X absolute and XYZ relative/Home wait inline;
         // only manual Y absolute is explicitly nonwaiting (ui-inventory UI-01/02).
         // The manual Y request remains held only while its HTTP submission is pending.
@@ -1043,7 +1044,7 @@ export function BioXpCockpit() {
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Non-homing Recovery</button>
                 </div>
-                {v2ActionDisabledReason('meta.activate_motion') !== null && (
+                {v2AuthorityCoherent && v2ActionDisabledReason('meta.activate_motion') !== null && (
                     <p className="mt-2 text-sm text-amber-100">
                         Activate: {v2ActionDisabledReason('meta.activate_motion')}
                     </p>
