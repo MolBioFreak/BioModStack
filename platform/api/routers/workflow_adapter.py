@@ -1063,11 +1063,6 @@ async def workflow_adapter_launch(
                     detail="live scheduler GPU authority is unavailable",
                 ) from exc
             canonical_fastq = _requires_ont_fastq_resource_authority(job, params)
-            if canonical_fastq and resource_handoff is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="canonical FASTQ-QC launch requires resource admission authority",
-                )
             if canonical_fastq and resource_handoff is not None and (
                 resource_handoff["gpu_index"] is not None
                 or resource_handoff["gpu_uuid"] is not None
