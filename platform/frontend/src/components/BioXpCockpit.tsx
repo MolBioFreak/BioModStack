@@ -235,10 +235,10 @@ export function BioXpCockpit() {
     useEffect(() => {
         currentGenerationRef.current = generation;
     }, [generation]);
-    const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
+    const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [reportsOpen, setReportsOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [cameraOpen, setCameraOpen] = useState(false);
+    const [cameraOpen, setCameraOpen] = useState(true);
     const [pipettesOpen, setPipettesOpen] = useState(false);
     const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, linkConnected);
     // One catalog snapshot owns admission and its embedded dashboard. Cache
@@ -432,6 +432,10 @@ export function BioXpCockpit() {
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptAggregateAbort.isPending || componentStop.isPending;
     const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyPending || interruptAnyPending || componentStop.isPending;
     const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyReceipt ?? invokeOperatorAction.data;
+    const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected);
+    const displayedLatestReceipt = latestReceiptQuery.data?.command_id === latestOperatorReceipt?.command_id
+        ? latestReceiptQuery.data : latestOperatorReceipt;
+    const latestReceiptFailure = latestReceiptQuery.data ? bioXpReceiptFailureText(latestReceiptQuery.data) : null;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -1125,6 +1129,8 @@ export function BioXpCockpit() {
                         receipt unavailable / outcome uncertain. Do not resubmit. Reconcile by command ID until a terminal receipt is available.
                     </p>
                 )}
+                <details className="mt-3 text-xs">
+                <summary className="cursor-pointer text-slate-400">Deck command details</summary>
                 <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="font-mono">{effectiveDeckCommandId ?? '—'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{deckReceipt?.status ?? (deckReceiptUnavailable ? 'unavailable' : '—')}</dd></div>
@@ -1138,11 +1144,14 @@ export function BioXpCockpit() {
                     <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical observation</dt><dd>{truthLabel(deckReceipt?.deck_movement?.physical_observation_verified, 'observed', 'not observed')}</dd></div>
                     <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><dt className="text-slate-400">Physical effect receipt</dt><dd>{deckReceipt ? (deckReceipt.physical_effect_verified ? 'verified' : 'not verified') : 'unknown'}</dd></div>
                 </dl>
+                </details>
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+                <div className="min-w-0">
                 <h2 className="text-lg font-semibold">Exact OEM Manual Controls</h2>
                 <p className="mt-1 text-sm text-slate-400">Relative moves use the literal OEM <code>moveSteps(axis, steps)</code> route. Home/Open/Close use the axis-specific OEM mechanisms.</p>
                 {operatorCatalog.isError && (
@@ -1203,9 +1212,11 @@ export function BioXpCockpit() {
                         <YOperatorError label="Y enqueue" error={currentYInvokeError} />
                         <YOperatorError label="Y STOP" error={interruptYStop.error} />
                         {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
-                        {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Command <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
+                        {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Y request <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
                         {yReceiptQuery.data && bioXpReceiptFailureText(yReceiptQuery.data) && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpReceiptFailureText(yReceiptQuery.data)}</p>}
                         {yReceiptQuery.data && (
+                            <details className="mt-2 text-xs">
+                                <summary className="cursor-pointer text-slate-400">Y command details{yReceiptQuery.data.physical_effect_verified ? ' · physically observed' : ' · physical arrival not verified'}</summary>
                             <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
@@ -1216,6 +1227,7 @@ export function BioXpCockpit() {
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
                                 <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
                             </div>
+                            </details>
                         )}
                         {interruptYStop.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYStop.data, null, 2)}</pre></details>}
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
@@ -1492,22 +1504,24 @@ export function BioXpCockpit() {
                 {(invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || interruptAnyPending) && (
                     <p role="status" className="mt-3 rounded border border-cyan-800 bg-cyan-950/30 p-2 text-sm text-cyan-100">Command accepted by BMS; waiting for the robot-owned terminal receipt. Stop and Abort remain available.</p>
                 )}
-                {linkConnected && catalog && !historyQuery.isError && latestOperatorReceipt && (
-                    <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3" open>
-                        <summary className="cursor-pointer text-sm font-semibold">Latest exact-OEM action receipt</summary>
-                        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(latestOperatorReceipt, null, 2)}</pre>
+                {linkConnected && latestReceiptFailure && <p role="alert" className="mt-2 text-sm text-red-300">{latestReceiptFailure}</p>}
+                {linkConnected && displayedLatestReceipt && (
+                    <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3">
+                        <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {displayedLatestReceipt.status}</summary>
+                        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(displayedLatestReceipt, null, 2)}</pre>
                     </details>
                 )}
+                </div>
+                <details className="order-first w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
+                    <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
+                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={linkConnected} connectionGeneration={linkConnected ? generation : null} mutationEnabled={status?.mutation_access?.enabled === true} /></div>}
+                </details>
+                </div>
             </section>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
                 {advancedOpen && <><p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
-            </details>
-
-            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
-                <summary className="cursor-pointer text-lg font-semibold">Camera</summary>
-                {cameraOpen && <div className="mt-4"><BioXpCameraPanel connected={linkConnected} connectionGeneration={linkConnected ? generation : null} mutationEnabled={status?.mutation_access?.enabled === true} /></div>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
@@ -1532,9 +1546,9 @@ export function BioXpCockpit() {
                 <InterruptOutcome label="Z STOP" receipt={interruptZStop.data} error={interruptZStop.error} pending={interruptZStop.isPending} generation={generation} connected={linkConnected} />
             </section>
 
-            <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-lg font-semibold">Recent Robot Actions</h2>
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                <summary className="cursor-pointer font-semibold">Recent Robot Actions</summary>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <label className="flex items-center gap-2 text-xs text-slate-400">
                         Entries
                         <select
@@ -1569,7 +1583,7 @@ export function BioXpCockpit() {
                 )}
                 <BioXpHistoryPager pagination={historyPagination} nextCursor={historyQuery.data?.next_cursor ?? null} disabled={!displayConnected || historyQuery.isFetching || historyQuery.isError} />
                 {historyQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">Robot action history unavailable: {bioXpErrorText(historyQuery.error)}</p>}
-            </section>
+            </details>
 
             {error && <p role="alert" className="rounded border border-red-800 p-3 text-sm text-red-300">{bioXpErrorText(error)}</p>}
             {statusQuery.isError && <p role="alert" className="text-sm text-red-300">BioXP status unavailable.</p>}

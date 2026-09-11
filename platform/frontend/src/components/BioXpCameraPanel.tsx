@@ -246,7 +246,7 @@ export function BioXpCameraPanel({
                 <span className="text-sm text-slate-400">{cameraState}</span>
             </div>
 
-            <div className="mt-2 flex aspect-video w-full max-w-md items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-black">
+            <div className="mt-2 flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-black">
                 {mediaUrl
                     ? <img src={mediaUrl} alt={effectiveStreamActive ? 'BioXP live camera' : 'BioXP camera'} className="h-full w-full object-contain" onError={() => setImageError('Camera stream or frame could not be displayed')} />
                     : <span className="text-sm text-slate-500">No frame loaded</span>}
@@ -273,9 +273,9 @@ export function BioXpCameraPanel({
                 >{pendingAction === 'snapshot' ? 'Capturing…' : 'Capture'}</button>
             </div>
 
-            {cameraStatus?.detail && <p className="mt-2 text-sm text-amber-300">{cameraStatus.detail}</p>}
+            {effectiveStreamActive && presentation.label === 'STALE' && <p className="mt-2 text-xs text-amber-300">Video frames are stale.</p>}
             {streamQuery.data?.last_error && <p className="mt-2 text-sm text-amber-300">{streamQuery.data.last_error}</p>}
-            {statusQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(statusQuery.error)}</p>}
+            {statusQuery.isError && pendingAction !== 'snapshot' && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(statusQuery.error)}</p>}
             {streamQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(streamQuery.error)}</p>}
             {imageError && <p role="alert" className="mt-2 text-sm text-red-300">{imageError}</p>}
         </section>

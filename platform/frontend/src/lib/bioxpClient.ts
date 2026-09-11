@@ -2309,6 +2309,7 @@ export const useBioXpCameraStatus = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
+    refetchInterval: enabled ? 2_000 : false,
 });
 
 export const useBioXpCameraStreamState = (
@@ -2324,6 +2325,7 @@ export const useBioXpCameraStreamState = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
+    refetchInterval: enabled ? 2_000 : false,
 });
 
 export async function startBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {
