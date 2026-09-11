@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "9fbb31cbc3dd3d69f6657eddbf1d39e243cdfc009fc38224eb7487b4c5a3dae4",
+  "content_sha256": "504ecfefccf1a1ac89146e3073cdd0197abb097b861480eb3c24f53baf49fec8",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -534,8 +534,8 @@
     },
     {
       "path": "platform/api/routers/workflow_adapter.py",
-      "sha256": "6f6b76a00d7771ccc8d69bdbe9523ed4e26d9850b76f0dc833dff57c1480e87d",
-      "size_bytes": 55170
+      "sha256": "dbce471dc041d96bfc609e34384b29dc1c3d6ad3fd039bdfdd5f33c2cd116039",
+      "size_bytes": 54923
     },
     {
       "path": "platform/api/runtime_policy.py",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "b779460eebe4412323a3845dc64504ee204be233",
-  "successor_source_tree": "ea0c6c359598b8739915043a90578aee39d04393",
+  "successor_source_commit": "66db816e95920c717bb19a044724a8c216f40113",
+  "successor_source_tree": "2c8f1ad42fb9c23fdb741aef15ff4b2cb7f3c4b8",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
