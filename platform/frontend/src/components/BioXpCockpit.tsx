@@ -1176,7 +1176,7 @@ export function BioXpCockpit() {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                                 <h3 className="font-semibold">Y Axis</h3>
-                                <p className="mt-1 text-xs text-slate-400">OEM absolute: Y does not wait for stop; X waits. Request return is not physical completion.</p>
+                                <p className="mt-1 text-xs text-slate-400">Y absolute requests return before motion stops.</p>
                             </div>
                             <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35">Stop</button>
                         </div>
@@ -1212,7 +1212,7 @@ export function BioXpCockpit() {
                         <YOperatorError label="Y enqueue" error={currentYInvokeError} />
                         <YOperatorError label="Y STOP" error={interruptYStop.error} />
                         {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
-                        {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Y request <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
+                        {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Y request: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
                         {yReceiptQuery.data && bioXpReceiptFailureText(yReceiptQuery.data) && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpReceiptFailureText(yReceiptQuery.data)}</p>}
                         {yReceiptQuery.data && (
                             <details className="mt-2 text-xs">

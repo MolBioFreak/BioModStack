@@ -274,7 +274,7 @@ export function BioXpCameraPanel({
             </div>
 
             {effectiveStreamActive && presentation.label === 'STALE' && <p className="mt-2 text-xs text-amber-300">Video frames are stale.</p>}
-            {streamQuery.data?.last_error && <p className="mt-2 text-sm text-amber-300">{streamQuery.data.last_error}</p>}
+            {streamQuery.data?.state === 'error' && streamQuery.data.last_error && <p role="alert" className="mt-2 text-sm text-red-300">{streamQuery.data.last_error}</p>}
             {statusQuery.isError && pendingAction !== 'snapshot' && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(statusQuery.error)}</p>}
             {streamQuery.isError && <p role="alert" className="mt-2 text-sm text-red-300">{bioXpErrorText(streamQuery.error)}</p>}
             {imageError && <p role="alert" className="mt-2 text-sm text-red-300">{imageError}</p>}
