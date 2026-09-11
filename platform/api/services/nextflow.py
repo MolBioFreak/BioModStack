@@ -1991,9 +1991,12 @@ async def _validate_ont_fastq_qc_terminal_completion(
 
     from services.ont_ngs_completion import validate_and_prepare_ont_fastq_qc_completion
 
-    if terminal_resource_receipt_factory is None:
-        raise RuntimeError("ONT FASTQ-QC completion requires producer resource evidence")
-    resource_usage_receipt = terminal_resource_receipt_factory()
+    resource_usage_receipt = None
+    if terminal_resource_receipt_factory is not None:
+        try:
+            resource_usage_receipt = terminal_resource_receipt_factory()
+        except Exception:
+            logger.warning("ONT resource observations are unavailable; preserving scientific completion", exc_info=True)
     return await validate_and_prepare_ont_fastq_qc_completion(
         job,
         resource_usage_receipt=resource_usage_receipt,

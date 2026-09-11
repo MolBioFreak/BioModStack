@@ -41,15 +41,10 @@ from services.ont_ngs_completion import (
 )
 from services.ont_ngs_results import (
     OntNgsResultError,
-    _build_file_projection_from_pinned_root,
     build_ont_fastq_qc_result,
 )
 from services.ont_ngs_hierarchy import (
     PROVENANCE_HIERARCHY_KEY,
-    OntNgsHierarchyError,
-    capability_hierarchy_matches,
-    hierarchy_authority_record,
-    resolve_ont_ngs_hierarchy_authority,
 )
 from services.job_result_roots import JobResultRootError, resolve_persisted_job_result_root
 from services.sequence_qc_manifest import (
@@ -162,7 +157,7 @@ class OntUnavailableAlignmentSessionV1(BaseModel):
     schema_version: Literal["bms.ngs.alignment-session.v1"] = Field(alias="schema")
     session_id: str
     job_id: str
-    mode: Literal["dimer_candidates"]
+    mode: Literal["primary", "dimer_candidates"]
     ready: Literal[False]
     unavailable_reason: str
     reads_url: None
@@ -182,35 +177,13 @@ class OntAlignmentSessionListV1(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     schema_version: Literal["bms.ngs.alignment-session-list.v1"] = Field(alias="schema")
     job_id: str = Field(json_schema_extra={"format": "uuid"})
-    sessions: list[OntAlignmentSessionV1] = Field(
-        min_length=1,
-        max_length=2,
-        json_schema_extra={
-            "items": False,
-            "prefixItems": [
-                {
-                    "allOf": [
-                        {"$ref": "#/components/schemas/OntReadyAlignmentSessionV1"},
-                        {"properties": {"mode": {"const": "primary"}, "ready": {"const": True}}, "required": ["mode", "ready"]},
-                    ],
-                },
-                {
-                    "allOf": [
-                        {"$ref": "#/components/schemas/OntAlignmentSessionV1"},
-                        {"properties": {"mode": {"const": "dimer_candidates"}}, "required": ["mode"]},
-                    ],
-                },
-            ],
-        },
-    )
+    sessions: list[OntAlignmentSessionV1] = Field(max_length=2)
 
     @model_validator(mode="after")
-    def _closed_session_order(self):
-        first = self.sessions[0].root
-        if first.mode != "primary" or first.ready is not True:
-            raise ValueError("the first alignment session must be a ready primary session")
-        if len(self.sessions) == 2 and self.sessions[1].root.mode != "dimer_candidates":
-            raise ValueError("the optional second alignment session must be dimer candidates")
+    def _unique_sessions(self):
+        modes = [session.root.mode for session in self.sessions]
+        if len(modes) != len(set(modes)):
+            raise ValueError("duplicate alignment session mode")
         return self
 
 
@@ -605,7 +578,30 @@ async def _require_governed_project_principal(
         ) from exc
 
 
-def _requires_governed_ont_hierarchy(job: Job) -> bool:
+async def _require_ngs_job_principal(request: Request, experiment_session: AsyncSession, job: Job) -> str:
+    """Authorize the persisted Job/project without rebuilding experiment lineage."""
+    try:
+        actor, roles = _authenticated_principal(request)
+        if roles.intersection({"operator", "admin"}):
+            return actor
+    except HTTPException as exc:
+        raise OntNgsRouteError(status_code=403, code="NGS_PRINCIPAL_DENIED",
+                               message="NGS operator authority is required.",
+                               job_id=str(job.id), resource="result") from exc
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    record = provenance.get(PROVENANCE_HIERARCHY_KEY)
+    document = record.get("document") if isinstance(record, dict) else None
+    project = document.get("project") if isinstance(document, dict) else None
+    params = job.params if isinstance(job.params, dict) else {}
+    project_id = project.get("id") if isinstance(project, dict) else params.get("global_project_id")
+    if not isinstance(project_id, str) or not project_id:
+        raise OntNgsRouteError(status_code=403, code="NGS_PRINCIPAL_DENIED",
+                               message="Standalone NGS access requires an authenticated operator.",
+                               job_id=str(job.id), resource="result")
+    return await _require_governed_project_principal(request, experiment_session, project_id, str(job.id))
+
+
+def _is_canonical_fastq(job: Job) -> bool:
     try:
         return is_ont_fastq_qc_job(job)
     except OntNgsCompletionError as exc:
@@ -628,7 +624,7 @@ async def require_alignment_job(
     domain_session: AsyncSession = Depends(get_molbio_ngs_session),
     experiment_session: AsyncSession = Depends(get_experiment_session),
 ) -> Job:
-    """Require capability, hierarchy, principal, and persisted package authority."""
+    """Authorize the exact Job without validating unrelated result sections."""
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -652,47 +648,8 @@ async def require_alignment_job(
             job_id=job_id,
             resource="result",
         )
-    canonical_fastq = _requires_governed_ont_hierarchy(job)
-    if canonical_fastq:
-        try:
-            hierarchy = await resolve_ont_ngs_hierarchy_authority(
-                job,
-                domain_session,
-                experiment_session,
-            )
-        except OntNgsHierarchyError as exc:
-            raise OntNgsRouteError(
-                status_code=403,
-                code="NGS_HIERARCHY_DENIED",
-                message="The frozen NGS hierarchy is unavailable.",
-                job_id=job_id,
-                resource="result",
-            ) from exc
-        if not capability_hierarchy_matches(job, hierarchy):
-            raise OntNgsRouteError(
-                status_code=403,
-                code="NGS_HIERARCHY_DENIED",
-                message="The NGS capability does not match the frozen hierarchy.",
-                job_id=job_id,
-                resource="result",
-            )
-        await _require_governed_project_principal(
-            request,
-            experiment_session,
-            hierarchy.project_id,
-            job_id,
-        )
-        try:
-            result_projection = await build_ont_fastq_qc_result(job)
-        except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
-            raise OntNgsRouteError(
-                status_code=409,
-                code="NGS_PACKAGE_INTEGRITY_CONFLICT",
-                message="The current NGS package differs from persisted authority.",
-                job_id=job_id,
-                resource="result",
-            ) from exc
-        request.state.ont_fastq_qc_result = result_projection
+    if _is_canonical_fastq(job):
+        await _require_ngs_job_principal(request, experiment_session, job)
     return job
 
 
@@ -753,36 +710,6 @@ async def _validated_pinned_result_root(job: Job):
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
             raise service.AlignmentSessionError("persisted result root is not a directory")
         pinned_root = Path(f"/proc/self/fd/{descriptor}")
-        if isinstance(job, Job):
-            try:
-                if is_ont_signal_alignment_job(job):
-                    package_authority = _job_package_authority(job)
-                    descriptors = await run_in_threadpool(
-                        service.build_ngs_package_artifacts,
-                        str(job.id),
-                        **package_authority,
-                        job_output_dir=pinned_root,
-                        pinned_root_descriptor=True,
-                    )
-                    observed_authority = canonical_ngs_package_authority(descriptors)
-                    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-                    integrity = provenance.get("result_integrity")
-                    if not isinstance(integrity, dict) or any(
-                        integrity.get(field) != observed_authority[field]
-                        for field in (
-                            "artifact_set_sha256",
-                            "declared_artifact_count",
-                            "present_artifact_count",
-                            "unavailable_artifact_count",
-                        )
-                    ):
-                        raise service.AlignmentSessionError(
-                            "current signal-alignment package differs from persisted authority"
-                        )
-                else:
-                    await run_in_threadpool(_build_file_projection_from_pinned_root, job, pinned_root)
-            except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
-                raise service.AlignmentSessionError("current NGS package differs from persisted authority") from exc
         yield pinned_root
     finally:
         os.close(descriptor)
@@ -801,6 +728,16 @@ def _job_authority(job: Job) -> dict[str, str]:
         "workflow_id": str(workflow_id),
         "input_mode": str(input_mode),
     }
+
+
+def _job_manifest_digests(job: Job) -> dict[str, str]:
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    record = provenance.get("result_integrity") or provenance.get("ont_fastq_qc_reconciliation_v1") or {}
+    paths = {"fastq_qc/qc_manifest.json": record.get("sequence_qc_manifest_sha256"),
+             "verification/qc_manifest.json": record.get("construct_verification_manifest_sha256") or record.get("verification_manifest_sha256")}
+    if is_ont_signal_alignment_job(job):
+        paths["qc_manifest.json"] = record.get("sequence_qc_manifest_sha256")
+    return {path: digest for path, digest in paths.items() if isinstance(digest, str)}
 
 
 def _job_session_authority(job: Job) -> dict[str, Any]:
@@ -822,10 +759,10 @@ def _job_session_authority(job: Job) -> dict[str, Any]:
         package_digest = reconciliation.get("artifact_set_sha256")
     if not isinstance(package_digest, str) or re.fullmatch(r"[0-9a-f]{64}", package_digest) is None:
         raise service.AlignmentSessionError("persisted package artifact-set authority is required")
-    return {**authority, "package_artifact_set_sha256": package_digest}
+    return {**authority, "package_artifact_set_sha256": package_digest, "manifest_digests": _job_manifest_digests(job)}
 
 
-def _job_package_authority(job: Job) -> dict[str, str]:
+def _job_package_authority(job: Job) -> dict[str, Any]:
     authority = _job_authority(job)
     params = getattr(job, "params", None)
     params = params if isinstance(params, dict) else {}
@@ -833,14 +770,17 @@ def _job_package_authority(job: Job) -> dict[str, str]:
     source_path = params.get(source_key) if source_key is not None else None
     if not isinstance(source_path, str) or not source_path.strip():
         raise service.AlignmentSessionError("authorized source input path is required")
-    return {**authority, "source_input_path": source_path}
+    provenance = getattr(job, "provenance", None) or {}
+    integrity = provenance.get("result_integrity")
+    inventory = integrity.get("artifacts") if isinstance(integrity, dict) else None
+    if isinstance(inventory, list):
+        observed = canonical_ngs_package_authority(inventory)
+        if observed["artifact_set_sha256"] != integrity.get("artifact_set_sha256"):
+            raise service.AlignmentSessionError("persisted artifact inventory identity disagrees")
+    return {**authority, "source_input_path": source_path, "published_artifacts": inventory}
 
 
-async def _validate_rotation_package_authority(job: Job) -> None:
-    if is_ont_signal_alignment_job(job):
-        async with _validated_pinned_result_root(job):
-            return
-    await build_ont_fastq_qc_result(job)
+
 
 
 def _require_local_development_browser(request: Request, job_id: str) -> None:
@@ -915,45 +855,7 @@ async def rotate_alignment_access(
             message="Capability rotation requires a completed Nanopore Job.",
             job_id=job_id, resource="rotation",
         )
-    hierarchy = None
-    if _requires_governed_ont_hierarchy(job):
-        try:
-            hierarchy = await resolve_ont_ngs_hierarchy_authority(
-                job,
-                domain_session,
-                experiment_session,
-            )
-        except OntNgsHierarchyError as exc:
-            raise OntNgsRouteError(
-                status_code=403, code="NGS_HIERARCHY_DENIED",
-                message="The frozen NGS hierarchy is unavailable.",
-                job_id=job_id, resource="rotation",
-            ) from exc
-        existing_hierarchy_record = (
-            job.provenance.get(PROVENANCE_HIERARCHY_KEY)
-            if isinstance(job.provenance, dict)
-            else None
-        )
-        if existing_hierarchy_record is not None and not capability_hierarchy_matches(job, hierarchy):
-            raise OntNgsRouteError(
-                status_code=403, code="NGS_HIERARCHY_DENIED",
-                message="The capability hierarchy is stale.",
-                job_id=job_id, resource="rotation",
-            )
-        await _require_governed_project_principal(
-            request,
-            experiment_session,
-            hierarchy.project_id,
-            job_id,
-        )
-    try:
-        await _validate_rotation_package_authority(job)
-    except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
-        raise OntNgsRouteError(
-            status_code=409, code="NGS_PACKAGE_INTEGRITY_CONFLICT",
-            message="The persisted NGS package authority is unavailable.",
-            job_id=job_id, resource="rotation",
-        ) from exc
+    await _require_ngs_job_principal(request, experiment_session, job)
     previous = job.provenance if isinstance(job.provenance, dict) else {}
     previous_digest = previous.get(alignment_access.PROVENANCE_DIGEST_KEY)
     revoked_authority = (
@@ -983,8 +885,6 @@ async def rotate_alignment_access(
         "alignment_access_rotation_count": rotation_count,
     }
     updated.pop("alignment_access_revoked", None)
-    if hierarchy is not None:
-        updated[PROVENANCE_HIERARCHY_KEY] = hierarchy_authority_record(hierarchy)
     changed = await alignment_access.rotate_alignment_authority_cas(
         session,
         job_id=job_id,
@@ -1031,16 +931,7 @@ async def revoke_alignment_access(
             status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed NGS Job was not found.",
             job_id=job_id, resource="rotation",
         )
-    try:
-        hierarchy = await resolve_ont_ngs_hierarchy_authority(job, domain_session, experiment_session)
-    except OntNgsHierarchyError as exc:
-        raise OntNgsRouteError(
-            status_code=403, code="NGS_HIERARCHY_DENIED", message="The frozen NGS hierarchy is unavailable.",
-            job_id=job_id, resource="rotation",
-        ) from exc
-    await _require_governed_project_principal(
-        request, experiment_session, hierarchy.project_id, job_id,
-    )
+    await _require_ngs_job_principal(request, experiment_session, job)
     previous = job.provenance if isinstance(job.provenance, dict) else {}
     token = alignment_access.request_alignment_token(request, job_id)
     previous_digest = previous.get(alignment_access.PROVENANCE_DIGEST_KEY)
@@ -1053,23 +944,6 @@ async def revoke_alignment_access(
             job_id=job_id, resource="rotation",
             headers={"Set-Cookie": alignment_access.alignment_access_cookie_expiration_header(job_id, request)},
         )
-    if token is not None and not capability_hierarchy_matches(job, hierarchy):
-        alignment_access.expire_alignment_access_cookie(job_id, response, request)
-        raise OntNgsRouteError(
-            status_code=403, code="NGS_HIERARCHY_DENIED", message="The capability hierarchy is stale.",
-            job_id=job_id, resource="rotation",
-            headers={"Set-Cookie": alignment_access.alignment_access_cookie_expiration_header(job_id, request)},
-        )
-    try:
-        await build_ont_fastq_qc_result(job)
-    except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
-        alignment_access.expire_alignment_access_cookie(job_id, response, request)
-        raise OntNgsRouteError(
-            status_code=409, code="NGS_PACKAGE_INTEGRITY_CONFLICT",
-            message="The persisted NGS package authority is unavailable.",
-            job_id=job_id, resource="rotation",
-            headers={"Set-Cookie": alignment_access.alignment_access_cookie_expiration_header(job_id, request)},
-        ) from exc
     updated = dict(previous)
     updated.pop(alignment_access.PROVENANCE_DIGEST_KEY, None)
     updated[alignment_access.PROVENANCE_SCHEME_KEY] = alignment_access.SCHEME
@@ -1300,7 +1174,7 @@ async def get_job_scoped_sequence_qc_manifest(
         async with _validated_pinned_result_root(authorized_job) as result_root:
             manifest_path = (
                 find_canonical_fastq_manifest(result_root)
-                if _requires_governed_ont_hierarchy(authorized_job)
+                if _is_canonical_fastq(authorized_job)
                 else find_generic_manifest_in_result_root(result_root)
             )
             _manifest_document, manifest_bytes, _manifest_digest, _manifest_size = service._read_bounded_json_nofollow(
@@ -1437,6 +1311,7 @@ async def get_alignment_artifact(
                 job_id,
                 artifact_id,
                 **_job_authority(authorized_job),
+                manifest_digests=_job_manifest_digests(authorized_job),
                 job_output_dir=pinned_root,
                 pinned_root_descriptor=True,
             )
@@ -1464,6 +1339,7 @@ async def get_alignment_session_artifact(
                 role,
                 sha256,
                 **_job_authority(authorized_job),
+                manifest_digests=_job_manifest_digests(authorized_job),
                 job_output_dir=pinned_root,
                 pinned_root_descriptor=True,
             )
@@ -1484,41 +1360,35 @@ def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
             "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
 
 
-def _presentation_authority(job: Job, session_id: str) -> tuple[str, str]:
-    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-    integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
-    presentations = integrity.get("alignment_presentations") if isinstance(integrity, dict) else None
-    matches = [
-        item for item in presentations or []
-        if isinstance(item, dict) and item.get("session_id") == session_id
-    ]
-    if len(matches) != 1:
-        raise service.AlignmentSessionError("alignment presentation authority is unavailable")
-    authority_sha256 = matches[0].get("authority_sha256")
-    manifest_sha256 = matches[0].get("manifest_sha256")
-    if (
-        not isinstance(authority_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None
-        or not isinstance(manifest_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
-    ):
-        raise service.AlignmentSessionError("alignment presentation authority is invalid")
-    return authority_sha256, manifest_sha256
+
 
 
 @asynccontextmanager
 async def _prepared_presentation(job_id: str, session_id: str, job: Job):
-    authority_sha256, manifest_sha256 = _presentation_authority(job, session_id)
-    async with _validated_pinned_result_root(job) as pinned_result_root:
-        package = await run_in_threadpool(
-            service.resolve_cached_alignment_presentation,
-            job_id,
-            session_id,
-            cache_root=pinned_result_root / ".alignment-presentations",
-            expected_authority_sha256=authority_sha256,
-            expected_manifest_sha256=manifest_sha256,
+    async with _validated_pinned_result_root(job) as root:
+        session = await run_in_threadpool(
+            service.resolve_alignment_session, job_id, session_id,
+            **_job_session_authority(job), job_output_dir=root, pinned_root_descriptor=True,
         )
-        yield package, pinned_result_root
+        if not session.get("ready"):
+            raise service.AlignmentSessionError(session.get("unavailable_reason") or "alignment session unavailable")
+        bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+            service.resolve_session_alignment_bundle, job_id, session_id,
+            **_job_authority(job), job_output_dir=root, pinned_root_descriptor=True,
+        )
+        package = await run_in_threadpool(
+            service.build_alignment_presentation, bam,
+            bam_sha256=bam_metadata["sha256"], bam_size_bytes=bam_metadata["size_bytes"],
+            index=index, index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
+            source_manifest_sha256=bam_metadata["source_manifest_sha256"],
+            source_alignment_relative_path=bam_metadata.get("relative_path"),
+            source_index_relative_path=index_metadata.get("relative_path"),
+            job_id=job_id, session_id=session_id, mode=session["mode"],
+            cache_root=root / ".alignment-presentations",
+            artifact_set_sha256=session["artifact_set_sha256"],
+            alignment_pair_sha256=session["alignment_pair_sha256"],
+        )
+        yield package, root
 
 
 async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:

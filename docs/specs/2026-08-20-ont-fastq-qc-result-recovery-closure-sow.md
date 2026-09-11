@@ -1,5 +1,17 @@
 # ONT FASTQ-QC Result Recovery and Browser Closure SOW
 
+> **2026-09-10 operator-authorized contract correction:** Scientific completion is
+> independent of resource telemetry, experiment-bookkeeping completeness and
+> derived viewer readiness. Package inventories are role/identity based, not fixed
+> 36/34/2 templates. Artifact requests authorize the Job/project and validate the
+> requested bytes without rebuilding the whole result. Original FASTQ identity
+> is captured at publication; its later availability is not a derived-result
+> access gate. Supported aliases normalize before identity comparison. Stage
+> output membership is order-independent. Cache and display budgets do not cap
+> valid scientific file sizes or raw table row counts. Historical acceptance
+> examples below remain descriptive evidence, not new-run admission rules.
+
+
 **Status:** Controlling implementation and acceptance specification
 **Date:** 2026-08-20
 **Parent specification:** `docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md`
@@ -211,7 +223,7 @@ Before publication, the backend must verify scientific and hierarchy authority:
 
 Caller-supplied Project, Experiment, sample, reference, or principal identifiers are selectors only. They cannot establish authority. A Job that is separately readable but foreign to the displayed Project/Experiment chain must be rejected or shown only after all foreign context is cleared.
 
-Capability issuance and rotation must bind an immutable digest of this hierarchy. Every governed result, manifest, session, artifact, report, and read request must validate both the exact Job capability and its hierarchy-binding digest. A stale, foreign, degraded, deleted, or mismatched hierarchy fails closed with a typed denial.
+Experiment-associated results retain their frozen lineage as provenance. Reads require the exact Job capability and authenticated operator or owning-project authority; standalone Jobs do not require experiment/state/sample membership records. Reading or rotating credentials must not rebuild the experiment graph or result projection. An invalid capability or unauthorized principal still fails closed.
 
 Required negatives cover non-owner, non-operator, cross-Project, cross-Global-Experiment, cross-Domain-Experiment, wrong state revision, wrong member receipt, wrong sample revision, wrong reference revision, guessed Job ID, and rotation against each foreign binding.
 
@@ -255,7 +267,7 @@ The construction and wire validators must reject every applicable one of these c
 17. a result session summary that differs from the governed list, lacks a ready primary first, or places anything except one optional dimer-candidates session second;
 18. a threshold-profile digest that differs from SHA-256 over UTF-8 canonical JSON using sorted keys, comma/colon separators, and `allow_nan=false` for the exact `values` object, or outer version/calibration/public-accuracy metadata that differs from those values;
 19. a PASS verdict unless every check passes, all aggregate and row reason-code arrays are empty, every threshold is satisfied, `automatic_pass_eligible=true`, and `public_accuracy_validated=true`; any review/fail check or nonempty reason array requires REVIEW or FAIL as producer-defined;
-20. an artifact denominator other than the exact 36 positional rows, count other than 36/34/2, or an `artifact_set_sha256` that does not recompute through AUTH-8.
+20. artifact counts inconsistent with the declared descriptor states, or an `artifact_set_sha256` that does not recompute through AUTH-8. The historical 36/34/2 inventory is not a fixed cardinality requirement.
 
 Backend construction must pass the canonical complete-source fixture. Backend serialization and frontend parsing must pass the same canonical bounded wire fixture and one adversarial fixture per wire invariant. A construction-only adversarial case is tested only at construction boundaries and must carry no fabricated browser-side proof.
 
@@ -282,7 +294,7 @@ Fresh terminalization and normal result reopen use `bms.ngs.package-authority.v1
 
 This algorithm produces retry3 digest `e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650`. The denominator is 36 semantic descriptors, with 34 present and 2 unavailable. It is distinct from the 25 terminal stage-output paths.
 
-The persisted authority also binds workflow, input mode, normalized reference digest, source FASTQ digest, both manifest digests, and the three artifact counts. Fresh Jobs carry this authority in specialized `result_integrity`. Retry3 carries the same fields in the additive reconciliation receipt while preserving its historical generic `result_integrity`. Reopen and every governed route fail before disclosure if persisted authority and observed package bytes differ.
+The persisted authority also binds workflow, input mode, normalized reference digest, source FASTQ digest, both manifest digests, and the three artifact counts. Fresh Jobs carry this authority in specialized `result_integrity`. Retry3 carries the same fields in the additive reconciliation receipt while preserving its historical generic `result_integrity`. Scientific publication verifies the package once and records its descriptor inventory. Artifact delivery validates the requested identity/bytes and Job/project authorization; unrelated missing files, telemetry, preview state or chart construction do not deny otherwise valid requested artifacts.
 
 For FASTQ mode, `fastq_qc/qc_manifest.json` is the only sequence-QC manifest authority. `qc_manifest.json` at the result root is not a fallback because it can carry another contract.
 
@@ -317,7 +329,7 @@ Each stage owns one exact ordered suffix list below the Job result root:
 | `fastq_qc` | `fastq_qc/read_lengths.tsv`, `fastq_qc/fastq_qc_summary.tsv`, `fastq_qc/fastq_alignment_stats.tsv`, `fastq_qc/fastq_coverage.tsv`, `fastq_qc/per_base_support.tsv`, `fastq_qc/qc_manifest.json`, `fastq_qc/igv_report.html`, `fastq_qc/fastq_consensus.fasta` | 8 |
 | `construct_verification` | `verification/qc_manifest.json`, `verification/verification_summary.tsv`, `verification/variants.vcf`, `verification/per_base_metrics.tsv`, `verification/evidence.html`, `verification/topology_evidence.json` | 6 |
 
-The output order, stage ownership, suffix, and cardinality are normative. No path may occur under two stages. Missing, extra, swapped-stage, duplicate, wrong-prefix, or reordered outputs fail completion and reconciliation.
+Stage ownership, required output membership and suffixes are normative. No path may occur under two stages. Missing required, swapped-stage, duplicate or wrong-prefix outputs fail validation. A permutation of the same correct stage-owned outputs is accepted; array order is presentation, not scientific authority.
 
 ### LIFE-3: Persisted stage mirrors
 
@@ -351,7 +363,7 @@ Canonical FASTQ-QC completion must not call generic design ingestion, create des
 
 ### LIFE-9: Producer resource evidence before fresh success
 
-For a fresh `ont_fastq_qc` execution, the transient execution owner must finish a complete `bms.workflow-resource-usage.v1` receipt after the process exits. Nextflow validates and attaches that receipt to Job params before ONT completion preparation. The resource receipt, package authority, lifecycle mirrors, and terminal Job state publish in the same guarded terminal CAS. Missing, incomplete, malformed, or uncommitted resource evidence prevents `completed` publication.
+For a fresh `ont_fastq_qc` execution, validate and attach resource observations when a complete producer receipt is available. Missing or unusable observations are explicitly `unavailable`, with null observed metrics, and do not prevent scientific completion or result access. Available receipts, scientific package authority, lifecycle mirrors and terminal state still publish through the guarded terminal CAS. Preview generation is demand-driven and cannot block scientific completion.
 
 `execution_resources` is a closed state-discriminated result object:
 
@@ -608,7 +620,7 @@ Group descriptors in ascending `display_order`. Each descriptor carries closed `
 | 35 | `construct_verification_input` | `source_reads_fastq` | `source_input` | `application/octet-stream` | `attachment` |
 | 36 | `input_mode` | `signal_data` | `optional_evidence` | `null` | `none` |
 
-The result schema closes every enum and requires unique contiguous `display_order` values 1 through 36. Repeated `kind=log` rows remain distinct by order and digest. Frontend grouping preserves first role occurrence and ascending display order within each role. Present artifacts show kind, size, abbreviated digest, and source. The package-authority digest excludes these presentation fields as defined by AUTH-8.
+The result schema closes the semantic enums and reports display ordering independently of artifact validity; the inventory cardinality follows the selected workflow output, not a fixed 36-row template. Repeated `kind=log` rows remain distinct by order and digest. Frontend grouping preserves first role occurrence and ascending display order within each role. Present artifacts show kind, size, abbreviated digest, and source. The package-authority digest excludes these presentation fields as defined by AUTH-8.
 
 The exact filename-extension map is: `json` for both manifests, track config, and source-read provenance; `fasta` for reference, consensus, and observed consensus; `fai` for reference and consensus indexes; `tsv` for summary, read lengths, alignment stats, coverage, per-base support, report-sites TSV, verification summary, and per-base metrics; `log` for consensus log and both log rows; `bam`; `bai`; `bedgraph` for coverage depth, position gradient, GC content, GC z-score, split-read density, and soft-clip density; `bed` for junction hotspots and report-sites BED; `html` for both reports; `vcf` for normalized variants; and `fastq.gz` for source reads. Modified bases and signal data are unavailable and use null extension.
 

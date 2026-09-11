@@ -167,7 +167,7 @@ export interface OntFastqQcResult {
         dorado_invoked: false;
         scheduler_gpu_assignment: string | number | null;
         configured_dorado_device_ignored: string | null;
-        evidence_status: 'accepted' | 'historical_unavailable';
+        evidence_status: 'accepted' | 'historical_unavailable' | 'unavailable';
         receipt_schema: string | null;
         receipt_id: string | null;
         receipt_sha256: string | null;
@@ -1077,7 +1077,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
             resources.configured_dorado_device_ignored,
             'configured Dorado device',
         ),
-        evidence_status: string(resources.evidence_status, 'resource evidence status') as 'accepted' | 'historical_unavailable',
+        evidence_status: string(resources.evidence_status, 'resource evidence status') as 'accepted' | 'historical_unavailable' | 'unavailable',
         receipt_schema: nullableString(resources.receipt_schema, 'resource receipt schema'),
         receipt_id: nullableString(resources.receipt_id, 'resource receipt id'),
         receipt_sha256: nullableSha256(resources.receipt_sha256, 'resource receipt digest'),

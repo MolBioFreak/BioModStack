@@ -56,7 +56,7 @@ export interface ReadyAlignmentSession extends AlignmentSessionBase {
 }
 
 export interface UnavailableAlignmentSession extends AlignmentSessionBase {
-    mode: 'dimer_candidates';
+    mode: AlignmentSessionMode;
     ready: false;
     unavailable_reason: string;
     reads_url: null;
@@ -720,9 +720,8 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         || payload.job_id !== expectedJobId || !Array.isArray(payload.sessions)) {
         throw new Error('Alignment session job mismatch.');
     }
-    if (payload.sessions.length < 1 || payload.sessions.length > 2
-        || payload.sessions[0]?.mode !== 'primary' || payload.sessions[0]?.ready !== true
-        || (payload.sessions.length === 2 && payload.sessions[1]?.mode !== 'dimer_candidates')) {
+    if (payload.sessions.length > 2
+        || new Set(payload.sessions.map((session) => session.mode)).size !== payload.sessions.length) {
         throw new Error('Invalid alignment session list authority.');
     }
     const artifactPrefix = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-artifacts/`;
@@ -739,7 +738,7 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
             throw new Error('Alignment session job mismatch.');
         }
         if (!session.ready) {
-            if (session.mode !== 'dimer_candidates' || !session.unavailable_reason
+            if (!session.unavailable_reason
                 || session.reads_url !== null || session.reference !== null
                 || session.sequence_qc_manifest_sha256 !== null
                 || session.verification_manifest_sha256 !== null
@@ -826,9 +825,9 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         }
         return session;
     }));
-    const primary = sessions[0];
+    const primary = sessions.find((candidate) => candidate.ready);
     for (const session of sessions.filter((candidate) => candidate.ready)) {
-        if (!primary.ready || !session.reference || !primary.reference
+        if (!primary || !session.reference || !primary.reference
             || session.sequence_qc_manifest_sha256 !== primary.sequence_qc_manifest_sha256
             || session.verification_manifest_sha256 !== primary.verification_manifest_sha256
             || session.artifact_set_sha256 !== primary.artifact_set_sha256) {

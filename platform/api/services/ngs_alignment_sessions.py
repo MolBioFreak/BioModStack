@@ -394,6 +394,46 @@ def verify_current_artifact_bytes(
         source.close()
 
 
+def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
+    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
+    source = _open_regular_file_no_symlinks(path)
+    snapshot = tempfile.TemporaryFile(mode="w+b")
+    try:
+        before = os.fstat(source.fileno())
+        if before.st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
+        try:
+            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
+        except OSError:
+            copied = 0
+            while copied <= expected_size:
+                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+                if not chunk:
+                    break
+                snapshot.write(chunk)
+                copied += len(chunk)
+        snapshot.seek(0)
+        if os.fstat(snapshot.fileno()).st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
+            digest.update(chunk)
+            size += len(chunk)
+        if size != expected_size or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+        snapshot.flush()
+        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
+        snapshot.close()
+        return readonly
+    except BaseException:
+        snapshot.close()
+        raise
+    finally:
+        source.close()
+
+
 def open_verified_artifact_snapshot(
     path: Path,
     *,
@@ -404,8 +444,11 @@ def open_verified_artifact_snapshot(
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
     if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
-        raise AlignmentSessionError("artifact exceeds snapshot limit")
-    cached = _reserve_snapshot(expected_sha256, expected_size)
+        return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
+    try:
+        cached = _reserve_snapshot(expected_sha256, expected_size)
+    except AlignmentSessionError:
+        return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
     if cached is not None:
         return cached
 
@@ -1251,11 +1294,16 @@ def _session_records(
     source_reference_sha256: str,
     workflow_id: str,
     input_mode: str,
+    manifest_digests: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     records = _manifest_records(job_id, job_root)
     for record in records:
+        expected_manifest = (manifest_digests or {}).get(record.get("manifest"))
+        if expected_manifest is not None and record.get("source_manifest_sha256") != expected_manifest:
+            record["error"] = "source manifest differs from published identity"
+            record["manifest_error"] = record["error"]
         if record.get("kind") == "__manifest_authority__":
             continue
         if record.get("manifest_error"):
@@ -1405,7 +1453,7 @@ def _session_records(
 def _public_session(session: dict[str, Any], package_artifact_set_sha256: str | None) -> dict[str, Any]:
     production_package_authority = package_artifact_set_sha256 is not None
     if production_package_authority and session.get("_complete_manifest_authority") is not True:
-        raise AlignmentSessionError("complete session manifest authority is required")
+        session = {**session, "ready": False, "unavailable_reason": "Session manifest evidence is unavailable"}
     if package_artifact_set_sha256 is None:
         package_artifact_set_sha256 = hashlib.sha256(rfc8785.dumps([
             {"role": role, "sha256": artifact["sha256"], "size_bytes": artifact["size_bytes"]}
@@ -1449,6 +1497,7 @@ def build_alignment_sessions(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    manifest_digests: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     safe_job_id, job_root = _safe_job_root(
         job_id,
@@ -1458,7 +1507,7 @@ def build_alignment_sessions(
     )
     return [
         _public_session(session, package_artifact_set_sha256)
-        for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode)
+        for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests)
     ]
 
 
@@ -1473,38 +1522,51 @@ def resolve_alignment_session(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    manifest_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     safe_job_id, job_root = _safe_job_root(
         job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
     )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests):
         if session["session_id"] == session_id:
             return _public_session(session, package_artifact_set_sha256)
     raise AlignmentSessionError(f"alignment session not found for job_id: {safe_job_id}")
 
 
-def _resolve_internal_artifact(
-    job_id: str,
-    artifact_id: str,
-    *,
-    source_reference_sha256: str,
-    workflow_id: str = "ont_fastq_qc",
-    input_mode: str = "fastq",
-    results_dir: str | Path | None = None,
-    job_output_dir: str | Path | None = None,
-    pinned_root_descriptor: bool = False,
-) -> tuple[Path, dict[str, Any]]:
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
-        raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(
-        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
-    )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
-        if session["ready"] is not True:
+def _delivery_artifact_records(job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests=None):
+    for record in _manifest_records(job_id, job_root):
+        if record.get("path") is None or record.get("error") or record.get("manifest_error"):
             continue
-        for artifact in session["artifacts"].values():
-            if artifact["artifact_id"] == artifact_id and artifact["integrity_valid"] is True:
-                return artifact["_path"], artifact
+        if record.get("workflow_id") != workflow_id or record.get("input_mode") != input_mode:
+            continue
+        reference = record.get("source_reference_sequence_sha256") if _is_dimer(record) else record.get("reference_sequence_sha256")
+        if reference != source_reference_sha256 or _dimer_mode_conflict(record):
+            continue
+        expected = (manifest_digests or {}).get(record["manifest"])
+        if expected is not None and record.get("source_manifest_sha256") != expected:
+            continue
+        yield record
+
+
+def _resolve_internal_artifact(
+    job_id: str, artifact_id: str, *, source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc", input_mode: str = "fastq",
+    results_dir: str | Path | None = None, job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False, manifest_digests: dict[str, str] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor)
+    for record in _delivery_artifact_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests):
+        role = _artifact_role(record["kind"])
+        digest = record.get("declared_sha256")
+        if role is None or not isinstance(digest, str):
+            continue
+        expected_id = hashlib.sha256(f"{safe_job_id}\0{record['manifest']}\0{role}\0{record['declared_path']}\0{digest}".encode()).hexdigest()
+        if expected_id != artifact_id:
+            continue
+        artifact = _artifact_descriptor(safe_job_id, record, role)
+        if artifact["integrity_valid"]:
+            return artifact["_path"], artifact
+        raise AlignmentSessionError("requested alignment artifact integrity mismatch")
     raise AlignmentSessionError("alignment artifact not found")
 
 
@@ -1608,10 +1670,11 @@ def _package_artifact_descriptor(
     owner_scope: str = "result_root",
     managed_input_path: Path | None = None,
     display_order_override: int | None = None,
+    verify_bytes: bool = True,
 ) -> dict[str, Any]:
-    resolved_path = path.resolve(strict=True)
+    resolved_path = path.resolve(strict=verify_bytes)
     if owner_scope == "managed_input_snapshot":
-        if managed_input_path is None or resolved_path != managed_input_path.resolve(strict=True):
+        if managed_input_path is None or resolved_path != managed_input_path.resolve(strict=verify_bytes):
             raise AlignmentSessionError("managed source input is not the exact persisted snapshot")
         relative = None
     else:
@@ -1827,6 +1890,8 @@ def build_ngs_package_artifacts(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    published_artifacts: list[dict[str, Any]] | None = None,
+    verify_source_input: bool = False,
 ) -> list[dict[str, Any]]:
     """Build a digest-bound inventory from canonical persisted NGS manifests."""
     from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
@@ -1839,9 +1904,11 @@ def build_ngs_package_artifacts(
     )
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
+    if published_artifacts is not None:
+        return [dict(artifact) for artifact in published_artifacts]
     source_input_identity = (
         _stable_file_identity(source_input_path, label="persisted canonical source input")
-        if input_mode in {"fastq", "bam"}
+        if verify_source_input and input_mode in {"fastq", "bam"}
         else None
     )
     sequence_candidates = _sequence_manifest_candidates(job_root, input_mode)
@@ -1918,6 +1985,8 @@ def build_ngs_package_artifacts(
             or verification_reference.get("normalized_sequence_sha256") != source_reference_sha256
         ):
             raise AlignmentSessionError("construct-verification reference identity does not match persisted Job")
+        if input_mode == "fastq" and not verify_source_input:
+            source_input_identity = _verification_input_identity(verification_manifest, "source_reads")
         if input_mode == "fastq" and (
             source_input_identity is None
             or _verification_input_identity(verification_manifest, "source_reads") != source_input_identity
@@ -1982,6 +2051,9 @@ def build_ngs_package_artifacts(
                 role="source_reads",
                 owner_scope="managed_input_snapshot",
                 managed_input_path=Path(source_input_path),
+                observed_sha256=source_input_identity[0],
+                observed_size_bytes=source_input_identity[1],
+                verify_bytes=verify_source_input,
             )
             if descriptor.get("size_bytes") != source_input_identity[1]:
                 raise AlignmentSessionError("retained FASTQ size does not match persisted source input")
@@ -2051,8 +2123,9 @@ def resolve_ngs_package_artifact(
                 pinned_root_descriptor=authority.get("pinned_root_descriptor") is True,
             )
             relative = artifact.get("relative_path")
-            if not isinstance(relative, str):
-                break
+            if (not isinstance(relative, str) or Path(relative).is_absolute()
+                    or any(part in {"", ".", ".."} for part in Path(relative).parts)):
+                raise AlignmentSessionError("unsafe NGS artifact path")
             path = job_root / relative
         observed_digest, observed_size = _sha256_file_and_size(path)
         if observed_digest != artifact.get("sha256") or observed_size != artifact.get("size_bytes"):
@@ -2062,39 +2135,23 @@ def resolve_ngs_package_artifact(
 
 
 def resolve_alignment_artifact_by_role(
-    job_id: str,
-    mode: str,
-    role: str,
-    sha256: str,
-    *,
-    source_reference_sha256: str,
-    workflow_id: str = "ont_fastq_qc",
-    input_mode: str = "fastq",
-    results_dir: str | Path | None = None,
-    job_output_dir: str | Path | None = None,
-    pinned_root_descriptor: bool = False,
+    job_id: str, mode: str, role: str, sha256: str, *, source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc", input_mode: str = "fastq",
+    results_dir: str | Path | None = None, job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False, manifest_digests: dict[str, str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """Resolve one digest-bound artifact from an exact ready session."""
-    if (
-        mode not in SESSION_MODES
-        or role not in LINKED_REPORT_ROLES
-        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
-    ):
+    if mode not in SESSION_MODES or role not in LINKED_REPORT_ROLES or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
         raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(
-        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
-    )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
-        if session["mode"] != mode or session["ready"] is not True:
-            continue
-        artifact = session["artifacts"].get(role)
-        if (
-            artifact is not None
-            and artifact["integrity_valid"] is True
-            and artifact["sha256"] == sha256
-        ):
-            return artifact["_path"], artifact
-    raise AlignmentSessionError("alignment artifact not found")
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor)
+    matches = [record for record in _delivery_artifact_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests)
+               if _is_dimer(record) == (mode == "dimer_candidates") and _artifact_role(record["kind"]) == role
+               and record.get("declared_sha256") == sha256]
+    if len(matches) != 1:
+        raise AlignmentSessionError("alignment artifact not found")
+    artifact = _artifact_descriptor(safe_job_id, matches[0], role)
+    if not artifact["integrity_valid"]:
+        raise AlignmentSessionError("requested alignment artifact integrity mismatch")
+    return artifact["_path"], artifact
 
 
 def resolve_session_alignment_bundle(
