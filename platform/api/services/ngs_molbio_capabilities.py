@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
+from functools import lru_cache
 import hashlib
 import importlib
 import json
@@ -18,25 +20,6 @@ from referencing.jsonschema import DRAFT202012
 _API_ROOT = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _API_ROOT.parents[1]
 _CONFIG_ROOT = _API_ROOT / "config/ngs_molbio"
-_SCHEMA_ROOT = _REPO_ROOT / "schemas/ngs_molbio"
-_VERIFICATION_RECEIPT = _REPO_ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
-_RUNTIME_RECORD = _API_ROOT / "config/ngs_molbio_runtime/runtime_implementation_v2.json"
-_VERIFICATION_SCHEMA_ID = "bms.ngs-molbio.phase-n0-verification-receipt.v1"
-_SHA256 = frozenset("0123456789abcdef")
-_GATES = frozenset(
-    {
-        "installed_inventory",
-        "global_schema",
-        "browser_controls",
-        "agent_parity",
-        "persistence",
-        "execution",
-        "receipt",
-        "global_result_experience",
-        "workflow_reuse",
-        "live_agreement",
-    }
-)
 _REGISTRY_FILES = {
     "schema": "schema_registry_v2.json",
     "adapter": "adapter_registry_v1.json",
@@ -184,7 +167,8 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
-def _read(path: Path) -> tuple[dict[str, Any], bytes]:
+@lru_cache(maxsize=128)
+def _read_version(path: Path, mtime_ns: int, size: int) -> tuple[dict[str, Any], bytes]:
     try:
         raw = path.read_bytes()
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs)
@@ -195,6 +179,16 @@ def _read(path: Path) -> tuple[dict[str, Any], bytes]:
     if type(value) is not dict:
         raise NgsMolBioCapabilityError(f"contract must be an object: {path}")
     return value, raw
+
+
+
+def _read(path: Path) -> tuple[dict[str, Any], bytes]:
+    try:
+        version = path.stat()
+    except OSError as exc:
+        raise NgsMolBioCapabilityError(f"contract unreadable: {path}") from exc
+    document, raw = _read_version(path, version.st_mtime_ns, version.st_size)
+    return copy.deepcopy(document), raw
 
 
 def _canonical_digest(value: dict[str, Any], field: str = "content_sha256") -> str:
@@ -244,98 +238,62 @@ def _validate(
         raise NgsMolBioCapabilityError(f"{label} invalid at {location}: {errors[0].message}")
 
 
-def _registry(schemas: dict[str, dict[str, Any]]) -> Registry:
-    registry = Registry()
-    try:
-        for schema_id, schema in schemas.items():
-            resource = (
-                Resource.from_contents(schema)
-                if "$schema" in schema
-                else Resource(contents=schema, specification=DRAFT202012)
-            )
-            registry = registry.with_resource(schema_id, resource)
-    except Exception as exc:
-        raise NgsMolBioCapabilityError("schema registry cannot resolve installed resources") from exc
-    return registry
+class _ScopedSchemas(Mapping[str, dict[str, Any]]):
+    """Open only a requested schema and the references actually used by it."""
 
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.rows = _unique(entries, "schema_id", "schema ID")
+        self.loaded = {}
 
-def _schema_closure(
-    entries: list[dict[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], Registry]:
-    schemas: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        path = _path(entry["path"])
-        schema, raw = _read(path)
-        schema_id = entry["schema_id"]
-        if schema.get("$id", schema.get("schema")) != schema_id:
-            raise NgsMolBioCapabilityError(f"schema ID mismatch: {schema_id}")
-        if _raw_digest(raw) != entry["schema_sha256"]:
-            raise NgsMolBioCapabilityError(f"schema byte digest mismatch: {schema_id}")
-        canonical_raw = (
-            rfc8785.dumps(schema)
-            if "$id" in schema
-            else json.dumps(
-                schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, schema_id: str) -> dict[str, Any]:
+        if schema_id not in self.loaded:
+            entry = self.rows[schema_id]
+            schema, raw = _read(_path(entry["path"]))
+            if schema.get("$id", schema.get("schema")) != schema_id:
+                raise NgsMolBioCapabilityError(f"schema ID mismatch: {schema_id}")
+            if _raw_digest(raw) != entry["schema_sha256"]:
+                raise NgsMolBioCapabilityError(f"schema byte digest mismatch: {schema_id}")
+            canonical = rfc8785.dumps(schema) if "$id" in schema else json.dumps(
+                schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
             ).encode("utf-8")
-        )
-        if hashlib.sha256(canonical_raw).hexdigest() != entry["schema_canonical_sha256"]:
-            raise NgsMolBioCapabilityError(f"schema canonical digest mismatch: {schema_id}")
-        Draft202012Validator.check_schema(schema)
-        if schema_id in schemas:
-            raise NgsMolBioCapabilityError(f"duplicate schema ID: {schema_id}")
-        schemas[schema_id] = schema
-    registry = _registry(schemas)
-    for schema_id, schema in schemas.items():
-        reference = "<schema>"
+            if _raw_digest(canonical) != entry["schema_canonical_sha256"]:
+                raise NgsMolBioCapabilityError(f"schema canonical digest mismatch: {schema_id}")
+            Draft202012Validator.check_schema(schema)
+            self.loaded[schema_id] = schema
+        return self.loaded[schema_id]
+
+
+def _schema_closure(entries: list[dict[str, Any]]) -> tuple[_ScopedSchemas, Registry]:
+    schemas = _ScopedSchemas(entries)
+    def retrieve(uri):
         try:
-            Draft202012Validator(schema, registry=registry).evolve(schema=schema)
-            for reference in _references(schema):
-                registry.resolver().lookup(reference)
-        except Exception as exc:
-            raise NgsMolBioCapabilityError(
-                f"unresolved schema reference in {schema_id}: {reference}"
-            ) from exc
-    return schemas, registry
+            schema = schemas[uri]
+        except KeyError as exc:
+            from referencing.exceptions import NoSuchResource
+            raise NoSuchResource(ref=uri) from exc
+        return Resource(contents=schema, specification=DRAFT202012)
+    return schemas, Registry(retrieve=retrieve)
 
 
-def _references(value: Any) -> tuple[str, ...]:
-    found: list[str] = []
-    if isinstance(value, dict):
-        reference = value.get("$ref")
-        if isinstance(reference, str):
-            found.append(reference)
-        for item in value.values():
-            found.extend(_references(item))
-    elif isinstance(value, list):
-        for item in value:
-            found.extend(_references(item))
-    return tuple(found)
+def _contract_document(name: str) -> dict[str, Any]:
+    if name not in _REGISTRY_FILES:
+        raise NgsMolBioCapabilityError(f"unknown contract registry: {name}")
+    document, _raw = _read(_CONFIG_ROOT / _REGISTRY_FILES[name])
+    if document.get("schema") != _REGISTRY_SCHEMA_IDS[name]:
+        raise NgsMolBioCapabilityError(f"{name} registry identity mismatch")
+    if document.get("content_sha256") != _canonical_digest(document):
+        raise NgsMolBioCapabilityError(f"{name} registry content digest mismatch")
+    return document
 
 
-def _verify_source_pin(document: dict[str, Any]) -> None:
-    observed: set[str] = set()
-    runtime_authorities: dict[str, dict[str, Any]] | None = None
-    for row in document["authorities"]:
-        relative = row["path"]
-        if relative in observed:
-            raise NgsMolBioCapabilityError(f"duplicate source authority path: {relative}")
-        observed.add(relative)
-        installed_path = _path(relative)
-        try:
-            installed_raw = installed_path.read_bytes()
-        except OSError as exc:
-            raise NgsMolBioCapabilityError(f"installed source authority is unavailable: {relative}") from exc
-        installed_sha256 = _raw_digest(installed_raw)
-        if installed_sha256 != row["sha256"]:
-            if runtime_authorities is None:
-                runtime_authorities = _runtime_overlay_authorities()
-            runtime_row = runtime_authorities.get(relative)
-            if (
-                runtime_row is None
-                or runtime_row["size_bytes"] != len(installed_raw)
-                or runtime_row["sha256"] != installed_sha256
-            ):
-                raise NgsMolBioCapabilityError(f"installed source authority digest mismatch: {relative}")
+def _schema_context() -> tuple[_ScopedSchemas, Registry]:
+    return _schema_closure(_contract_document("schema")["entries"])
 
 
 def _verify_parameter_partition(record: dict[str, Any]) -> None:
@@ -383,318 +341,14 @@ def _verify_capability_owners(record: dict[str, Any]) -> None:
             _resolve_owner(owner, label=f"capability {field}")
 
 
-def _verify_adapter_identity_contract(row: dict[str, Any]) -> None:
-    identity = row["identity_contract"]
-    reopen_fields = set(row["reopen_contract"]["parameter_fields"])
-    aliases = {"reference_revision_id": "revision_id"}
-    missing = {
-        field
-        for field in identity["key_fields"]
-        if field not in reopen_fields and aliases.get(field) not in reopen_fields
-    }
-    if missing:
-        raise NgsMolBioCapabilityError(
-            f"adapter reopen contract omits native identity {sorted(missing)}: {row['adapter_id']}"
-        )
-    has_revision_authority = bool(
-        identity["revision_fields"]
-        or identity["generation_fields"]
-        or identity["fixed_revision_marker"]
-    )
-    if row["contract_class"] == "local_member_adapter" and not has_revision_authority:
-        raise NgsMolBioCapabilityError(f"adapter omits revision or generation authority: {row['adapter_id']}")
-    is_current_head_compatibility = row["adapter_id"] == "bms.ngs.ont-run-reference.adapter.v1"
-    if is_current_head_compatibility:
-        if row["allowed_dataset_roles"]:
-            raise NgsMolBioCapabilityError("current-head ONT run adapter cannot be a Dataset member")
-        if row["reopen_contract"]["head_resolution_forbidden"] is not False:
-            raise NgsMolBioCapabilityError("current-head ONT run adapter must declare current-head reopening")
-    elif row["reopen_contract"]["head_resolution_forbidden"] is not True:
-        raise NgsMolBioCapabilityError(f"adapter reopen contract permits current-head substitution: {row['adapter_id']}")
-
-
-def _verify_adapter_owner(row: dict[str, Any]) -> None:
-    owner = row["implementation_owner"]
-    state = row["baseline_state"]
-    if owner is None:
-        if state == "present":
-            raise NgsMolBioCapabilityError(f"present adapter has no owner: {row['adapter_id']}")
-        return
-    if state == "missing":
-        raise NgsMolBioCapabilityError(f"missing adapter claims an owner: {row['adapter_id']}")
-    implementation = _resolve_owner(owner, label="adapter")
-    expected = {
-        "adapter_id": row["adapter_id"],
-        "adapter_version": row["adapter_version"],
-        "entity_kind": row["entity_kind"],
-    }
-    for field, value in expected.items():
-        if getattr(implementation, field, None) != value:
-            raise NgsMolBioCapabilityError(f"adapter owner {field} mismatch: {row['adapter_id']}")
-    if state == "present":
-        try:
-            from services.global_experiments.adapters import registry as active_registry
-
-            registered = active_registry.get(row["adapter_id"])
-        except Exception as exc:
-            raise NgsMolBioCapabilityError(
-                f"present adapter is absent from active registry: {row['adapter_id']}"
-            ) from exc
-        if registered.__class__ is not implementation:
-            raise NgsMolBioCapabilityError(f"active adapter class mismatch: {row['adapter_id']}")
-
-
-def _runtime_overlay_authorities(receipt: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    if not _RUNTIME_RECORD.is_file():
-        return {}
-    record, _raw = _read(_RUNTIME_RECORD)
-    if record.get("schema") != "bms.ngs-molbio.runtime-implementation.v1":
-        raise NgsMolBioCapabilityError("runtime overlay identity mismatch")
-    if record.get("content_sha256") != _canonical_digest(record):
-        raise NgsMolBioCapabilityError("runtime overlay content digest mismatch")
-    if record.get("capability_exposure_state") != "fail_closed" or record.get("dataset_exposure_state") != "fail_closed":
-        raise NgsMolBioCapabilityError("unaccepted runtime overlay must remain fail closed")
-    if receipt is not None:
-        if record.get("n0_receipt_content_sha256") != receipt.get("content_sha256"):
-            raise NgsMolBioCapabilityError("runtime overlay N0 receipt binding mismatch")
-        if record.get("n0_package_fingerprint") != receipt.get("payload_fingerprint_sha256"):
-            raise NgsMolBioCapabilityError("runtime overlay N0 package binding mismatch")
-    authorities = _unique(record.get("source_authorities", []), "path", "runtime source path")
-    for relative, row in authorities.items():
-        if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
-            raise NgsMolBioCapabilityError("runtime source path is invalid")
-        if not isinstance(row.get("sha256"), str) or len(row["sha256"]) != 64 or set(row["sha256"]) - _SHA256:
-            raise NgsMolBioCapabilityError(f"runtime source digest is invalid: {relative}")
-        if not isinstance(row.get("size_bytes"), int) or row["size_bytes"] < 1:
-            raise NgsMolBioCapabilityError(f"runtime source size is invalid: {relative}")
-    return authorities
-
-
-def _verify_phase_n0_receipt(
-    schemas: dict[str, dict[str, Any]],
-    reference_registry: Registry,
-    source_pin: dict[str, Any],
-) -> None:
-    receipt, _raw = _read(_VERIFICATION_RECEIPT)
-    schema = schemas.get(_VERIFICATION_SCHEMA_ID)
-    if schema is None:
-        raise NgsMolBioCapabilityError("Phase N0 verification receipt schema is absent")
-    _validate(receipt, schema, "Phase N0 verification receipt", reference_registry)
-    if receipt["content_sha256"] != _canonical_digest(receipt):
-        raise NgsMolBioCapabilityError("Phase N0 verification receipt digest mismatch")
-    if receipt["baseline_commit"] != source_pin["baseline_commit"] or receipt["baseline_tree"] != source_pin["baseline_tree"]:
-        raise NgsMolBioCapabilityError("Phase N0 verification receipt baseline mismatch")
-    receipt_relative = str(_VERIFICATION_RECEIPT.relative_to(_REPO_ROOT))
-    expected_paths = {
-        "docs/reports/ngs-molbio-phase-n0-contract-freeze.md",
-        "platform/api/services/ngs_molbio_capabilities.py",
-        "scripts/verify_ngs_molbio_phase_n0.py",
-        *(str(path.relative_to(_REPO_ROOT)) for path in _CONFIG_ROOT.glob("*.json")),
-        *(str(path.relative_to(_REPO_ROOT)) for path in _SCHEMA_ROOT.glob("*.json")),
-    }
-    expected_paths.discard(receipt_relative)
-    expected_paths.difference_update(
-        {
-            "platform/api/config/ngs_molbio/capability_inventory_v2.json",
-            "platform/api/config/ngs_molbio/schema_registry_v2.json",
-            "schemas/ngs_molbio/capability-inventory-v2.schema.json",
-            "schemas/ngs_molbio/schema-registry-v2.schema.json",
-        }
-    )
-    rows = _unique(receipt["payload_files"], "path", "verification payload path")
-    if set(rows) != expected_paths:
-        raise NgsMolBioCapabilityError("Phase N0 verification payload manifest is incomplete")
-    runtime_authorities: dict[str, dict[str, Any]] | None = None
-    fingerprint = hashlib.sha256()
-    for relative in sorted(rows):
-        path = _path(relative)
-        raw = path.read_bytes()
-        row = rows[relative]
-        current_sha256 = _raw_digest(raw)
-        if row["size_bytes"] != len(raw) or row["sha256"] != current_sha256:
-            if runtime_authorities is None:
-                runtime_authorities = _runtime_overlay_authorities(receipt)
-            runtime_row = runtime_authorities.get(relative)
-            if (
-                runtime_row is None
-                or runtime_row["size_bytes"] != len(raw)
-                or runtime_row["sha256"] != current_sha256
-            ):
-                raise NgsMolBioCapabilityError(f"Phase N0 verification payload drift: {relative}")
-        fingerprint.update(f"{relative}\0{row['sha256']}\n".encode("utf-8"))
-    if fingerprint.hexdigest() != receipt["payload_fingerprint_sha256"]:
-        raise NgsMolBioCapabilityError("Phase N0 verification fingerprint mismatch")
-
-
-def _loaded_documents() -> tuple[
-    dict[str, Any],
-    dict[str, dict[str, Any]],
-    Registry,
-    dict[str, dict[str, Any]],
-]:
-    documents: dict[str, dict[str, Any]] = {}
-    raw_documents: dict[str, bytes] = {}
-    for name, filename in _REGISTRY_FILES.items():
-        document, raw = _read(_CONFIG_ROOT / filename)
-        if document.get("content_sha256") != _canonical_digest(document):
-            raise NgsMolBioCapabilityError(f"registry content digest mismatch: {filename}")
-        documents[name] = document
-        raw_documents[name] = raw
-
-    schema_registry = documents["schema"]
-    if schema_registry.get("schema") != _REGISTRY_SCHEMA_IDS["schema"]:
-        raise NgsMolBioCapabilityError("schema registry identity mismatch")
-    schemas, reference_registry = _schema_closure(schema_registry["entries"])
-
-    for name in _REGISTRY_FILES:
-        schema_id = _REGISTRY_SCHEMA_IDS[name]
-        schema = schemas.get(schema_id)
-        if schema is None:
-            raise NgsMolBioCapabilityError(f"registry schema is absent: {schema_id}")
-        _validate(documents[name], schema, f"{name} registry", reference_registry)
-
-    for name in ("adapter", "event", "dataset", "protein_constraint", "branch_closure"):
-        if documents[name]["baseline_source_commit"] != documents["source_pin"]["baseline_commit"]:
-            raise NgsMolBioCapabilityError(f"{name} registry baseline commit disagrees with source pin")
-    _verify_source_pin(documents["source_pin"])
-
-    inventory, inventory_raw = _read(_CONFIG_ROOT / "capability_inventory_v2.json")
-    inventory_schema = schemas.get("bms.ngs-molbio.capability-inventory.v2")
-    if inventory_schema is None:
-        raise NgsMolBioCapabilityError("capability inventory schema is absent")
-    _validate(inventory, inventory_schema, "capability inventory", reference_registry)
-    if inventory["content_sha256"] != _canonical_digest(inventory):
+def capability_inventory() -> dict[str, Any]:
+    """Read the operational catalog, not historical release acceptance evidence."""
+    inventory, _raw = _read(_CONFIG_ROOT / "capability_inventory_v2.json")
+    if inventory.get("schema") != "bms.ngs-molbio.capability-inventory.v2":
+        raise NgsMolBioCapabilityError("capability inventory identity mismatch")
+    if inventory.get("content_sha256") != _canonical_digest(inventory):
         raise NgsMolBioCapabilityError("capability inventory digest mismatch")
-    if inventory["baseline_source_commit"] != schema_registry["baseline_source_commit"]:
-        raise NgsMolBioCapabilityError("capability baseline commit disagrees with schema registry")
-    if inventory["baseline_source_tree"] != schema_registry["baseline_source_tree"]:
-        raise NgsMolBioCapabilityError("capability baseline tree disagrees with schema registry")
-    byte_bindings = {
-        "source_pin_sha256": "source_pin",
-        "schema_registry_sha256": "schema",
-        "adapter_registry_sha256": "adapter",
-        "event_registry_sha256": "event",
-        "dataset_registry_sha256": "dataset",
-        "constraint_payload_registry_sha256": "protein_constraint",
-        "branch_closure_sha256": "branch_closure",
-        "payload_ownership_manifest_sha256": "payload_ownership",
-    }
-    for field, name in byte_bindings.items():
-        if inventory[field] != _raw_digest(raw_documents[name]):
-            raise NgsMolBioCapabilityError(f"capability inventory binds different {name} bytes")
-
-    schema_rows = _unique(schema_registry["entries"], "schema_id", "schema ID")
-    capabilities = _unique(inventory["capabilities"], "capability_id", "capability ID")
-    if len(capabilities) != 22:
-        raise NgsMolBioCapabilityError("capability denominator must contain exactly 22 IDs")
-    for capability_id, record in capabilities.items():
-        if record["inventory_sha256"] != _canonical_digest(record, "inventory_sha256"):
-            raise NgsMolBioCapabilityError(f"capability digest mismatch: {capability_id}")
-        schema_row = schema_rows.get(record["parameter_schema_id"])
-        if schema_row is None:
-            raise NgsMolBioCapabilityError(f"unregistered capability schema: {capability_id}")
-        if schema_row["schema_sha256"] != record["parameter_schema_sha256"]:
-            raise NgsMolBioCapabilityError(f"capability schema digest mismatch: {capability_id}")
-        if {row["gate"] for row in record["parity_ledger"]} != _GATES:
-            raise NgsMolBioCapabilityError(f"incomplete parity ledger: {capability_id}")
-        _verify_parameter_partition(record)
-        _verify_capability_owners(record)
-        passed = all(row["state"] in {"pass", "not_applicable"} for row in record["parity_ledger"])
-        if record["unsupported_parameter_keys"] or record["unclassified_parameter_keys"]:
-            passed = False
-        if record["plannable"] != (record["exposure_state"] == "accepted" and passed):
-            raise NgsMolBioCapabilityError(f"unsafe exposure state: {capability_id}")
-
-    adapters = _unique(documents["adapter"]["entries"], "adapter_id", "adapter ID")
-    if len(adapters) != 27:
-        raise NgsMolBioCapabilityError("adapter denominator must contain exactly 27 IDs")
-    binding_adapter = documents["adapter"]["binding_adapter"]
-    if binding_adapter["adapter_id"] != inventory["contract_ids"]["binding_adapter"]:
-        raise NgsMolBioCapabilityError("binding adapter ID disagrees with capability inventory")
-    binding_schema = schemas.get(binding_adapter["binding_receipt_schema_id"])
-    if binding_schema is None:
-        raise NgsMolBioCapabilityError("binding receipt schema is absent")
-    if binding_schema["properties"]["adapter_id"]["const"] != binding_adapter["adapter_id"]:
-        raise NgsMolBioCapabilityError("binding receipt adapter ID mismatch")
-    if binding_schema["properties"]["adapter_version"]["const"] != binding_adapter["adapter_version"]:
-        raise NgsMolBioCapabilityError("binding receipt adapter version mismatch")
-    for adapter in adapters.values():
-        _verify_adapter_identity_contract(adapter)
-        _verify_adapter_owner(adapter)
-    protein_dataset_rows = [
-        row for row in documents["dataset"]["entries"] if row["dataset_kind"].startswith("protein.")
-    ]
-    if len(protein_dataset_rows) != 10:
-        raise NgsMolBioCapabilityError("Protein Dataset denominator must contain exactly 10 IDs")
-    if sum(row["owner_contract_state"] == "closed" for row in protein_dataset_rows) != 7:
-        raise NgsMolBioCapabilityError("Protein Dataset denominator must contain exactly 7 closed IDs")
-    if sum(row["owner_contract_state"] == "unavailable" for row in protein_dataset_rows) != 3:
-        raise NgsMolBioCapabilityError("Protein Dataset denominator must contain exactly 3 unavailable IDs")
-    protein_common_rules = {
-        "same_project_domain_authority",
-        "exact_immutable_revision_only",
-        "adapter_role_intersection",
-        "no_current_head_resolution_during_preparation",
-        "exact_historical_reopen",
-    }
-    for row in documents["dataset"]["entries"]:
-        state = row["owner_contract_state"]
-        if state == "unavailable" and (row["enabled"] or row["allowed_members"]):
-            raise NgsMolBioCapabilityError(
-                f"unavailable Dataset kind exposes member authority: {row['dataset_kind']}"
-            )
-        if state == "closed" and not row["allowed_members"]:
-            raise NgsMolBioCapabilityError(
-                f"closed Dataset kind has no member contract: {row['dataset_kind']}"
-            )
-        if row["dataset_kind"].startswith("protein."):
-            if row["enabled"]:
-                raise NgsMolBioCapabilityError(
-                    f"Phase N0 Protein Dataset kind must remain disabled: {row['dataset_kind']}"
-                )
-            if state == "closed" and not protein_common_rules <= set(row["compatibility_rules"]):
-                raise NgsMolBioCapabilityError(
-                    f"closed Protein Dataset kind omits common compatibility rules: {row['dataset_kind']}"
-                )
-            if state == "unavailable" and row["compatibility_rules"] != [
-                "no_immutable_producer_native_member_contract"
-            ]:
-                raise NgsMolBioCapabilityError(
-                    f"unavailable Protein Dataset kind has an invalid reason: {row['dataset_kind']}"
-                )
-        for member in row["allowed_members"]:
-            adapter = adapters.get(member["adapter_id"])
-            if adapter is None or adapter["entity_kind"] != member["receipt_kind"]:
-                raise NgsMolBioCapabilityError(
-                    f"Dataset kind binds unknown receipt adapter: {row['dataset_kind']}"
-                )
-            if not set(member["allowed_roles"]) <= set(adapter["allowed_dataset_roles"]):
-                raise NgsMolBioCapabilityError(
-                    f"Dataset kind broadens adapter roles: {row['dataset_kind']}"
-                )
-            if member["compatibility_rule"] not in row["compatibility_rules"]:
-                raise NgsMolBioCapabilityError(
-                    f"Dataset kind omits member compatibility rule: {row['dataset_kind']}"
-                )
-
-    constraint_registry = documents["protein_constraint"]
-    if constraint_registry["entries"]:
-        raise NgsMolBioCapabilityError("Protein constraint payload denominator must remain empty")
-    constraint_wrapper = schemas.get("bms.protein-constraint.v1")
-    if constraint_wrapper is None or constraint_wrapper.get("x-bms-payload-registry-state") != "closed_empty":
-        raise NgsMolBioCapabilityError("Protein constraint wrapper is not closed empty")
-
-    _unique(documents["dataset"]["entries"], "dataset_kind", "Dataset kind")
-    for row in documents["event"]["entries"]:
-        schema_row = schema_rows.get(row["payload_schema_id"])
-        if schema_row is None or schema_row["schema_sha256"] != row["payload_schema_sha256"]:
-            raise NgsMolBioCapabilityError(f"event payload schema binding mismatch: {row['event_type']}")
-    _unique(documents["event"]["entries"], "event_type", "event type")
-    _unique(documents["branch_closure"]["entries"], "candidate_id", "branch candidate")
-    _verify_phase_n0_receipt(schemas, reference_registry, documents["source_pin"])
-
-    runtime_record, _runtime_raw = _read(_RUNTIME_RECORD)
-    runtime_revision = runtime_record["successor_source_commit"]
+    _unique(inventory["capabilities"], "capability_id", "capability ID")
     for record in inventory["capabilities"]:
         mapping = _PROJECT_SCHEDULED_CAPABILITIES.get(record["capability_id"])
         if mapping is None:
@@ -709,72 +363,56 @@ def _loaded_documents() -> tuple[
         record["source_receipt_contracts"] = list(_PROJECT_SOURCE_RECEIPT_CONTRACTS)
         record["result_contract"] = "bms.global.ngs-molbio-job-result.v1"
         record["native_mapping"]["native_request_compatibility"] = "exact_native_mapping"
+        # Engineering acceptance is a release concern, not live admission.
         for gate in record["parity_ledger"]:
-            gate["state"] = "pass"
-            gate["evidence"] = f"package-local-runtime:{runtime_revision}:{gate['gate']}"
+            gate["state"] = "not_applicable"
+            gate["evidence"] = f"operational-discovery:{destination}; release acceptance is separate"
         record["inventory_sha256"] = _canonical_digest(record, "inventory_sha256")
         record["capability_sha256"] = record["inventory_sha256"]
-
-    return inventory, schemas, reference_registry, documents
-
-
-def _loaded() -> tuple[
-    dict[str, Any],
-    dict[str, dict[str, Any]],
-    Registry,
-    dict[str, dict[str, Any]],
-]:
-    return _loaded_documents()
-
-
-def capability_inventory() -> dict[str, Any]:
-    return copy.deepcopy(_loaded()[0])
+    return inventory
 
 
 def capability_record(capability_id: str) -> dict[str, Any]:
-    for record in _loaded()[0]["capabilities"]:
-        if record["capability_id"] == capability_id:
-            return copy.deepcopy(record)
-    raise NgsMolBioCapabilityError(f"unknown capability: {capability_id}")
+    record = next((row for row in capability_inventory()["capabilities"] if row["capability_id"] == capability_id), None)
+    if record is None:
+        raise NgsMolBioCapabilityError(f"unknown capability: {capability_id}")
+    _verify_parameter_partition(record)
+    _verify_capability_owners(record)
+    # Only the selected operation's parameter contract is required here.
+    unsigned = {key: value for key, value in record.items() if key != "capability_sha256"}
+    if record["inventory_sha256"] != _canonical_digest(unsigned, "inventory_sha256"):
+        raise NgsMolBioCapabilityError(f"capability digest mismatch: {capability_id}")
+    schemas, _registry = _schema_context()
+    try:
+        schemas[record["parameter_schema_id"]]
+        if schemas.rows[record["parameter_schema_id"]]["schema_sha256"] != record["parameter_schema_sha256"]:
+            raise NgsMolBioCapabilityError(f"capability schema digest mismatch: {capability_id}")
+    except KeyError as exc:
+        raise NgsMolBioCapabilityError(f"unregistered capability schema: {capability_id}") from exc
+    return record
 
 
 def capability_parameter_schema(capability_id: str) -> dict[str, Any]:
-    inventory, schemas, _registry_value, _documents = _loaded()
-    record = next(
-        (item for item in inventory["capabilities"] if item["capability_id"] == capability_id),
-        None,
-    )
-    if record is None:
-        raise NgsMolBioCapabilityError(f"unknown capability: {capability_id}")
-    return copy.deepcopy(schemas[record["parameter_schema_id"]])
+    record = capability_record(capability_id)
+    return registered_schema(record["parameter_schema_id"])
 
 
 def registered_schema(schema_id: str) -> dict[str, Any]:
-    schema = _loaded()[1].get(schema_id)
-    if schema is None:
-        raise NgsMolBioCapabilityError(f"unknown schema: {schema_id}")
-    return copy.deepcopy(schema)
+    schemas, _registry_value = _schema_context()
+    try:
+        return copy.deepcopy(schemas[schema_id])
+    except KeyError as exc:
+        raise NgsMolBioCapabilityError(f"unknown schema: {schema_id}") from exc
 
 
 def contract_registry(name: str) -> dict[str, Any]:
-    if name not in {
-        "adapter",
-        "event",
-        "dataset",
-        "protein_constraint",
-        "branch_closure",
-        "source_pin",
-        "schema",
-        "payload_ownership",
-    }:
-        raise NgsMolBioCapabilityError(f"unknown contract registry: {name}")
-    document = copy.deepcopy(_loaded()[3][name])
-    if name == "dataset" and _runtime_overlay_authorities():
+    document = _contract_document(name)
+    if name != "schema":
+        schemas, registry = _schema_context()
+        _validate(document, schemas[_REGISTRY_SCHEMA_IDS[name]], f"{name} registry", registry)
+    if name == "dataset":
         for record in document.get("entries", []):
-            if (
-                isinstance(record, dict)
-                and record.get("dataset_kind") in _PROJECT_GOVERNED_DATASET_KINDS
-            ):
+            if record.get("dataset_kind") in _PROJECT_GOVERNED_DATASET_KINDS:
                 record["enabled"] = True
     return document
 
@@ -816,7 +454,7 @@ def _event_stream(payload: dict[str, Any], template: str) -> str:
 
 
 def validate_connector_event(value: dict[str, Any]) -> dict[str, Any]:
-    _inventory, schemas, reference_registry, documents = _loaded()
+    schemas, reference_registry = _schema_context()
     _validate(
         value,
         schemas["bms.ngs-molbio.connector-event.v1"],
@@ -824,7 +462,7 @@ def validate_connector_event(value: dict[str, Any]) -> dict[str, Any]:
         reference_registry,
     )
     event = next(
-        (row for row in documents["event"]["entries"] if row["event_type"] == value["event_type"]),
+        (row for row in contract_registry("event")["entries"] if row["event_type"] == value["event_type"]),
         None,
     )
     if event is None:
@@ -1073,7 +711,7 @@ def _verify_protein_domain_semantics(
 
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
-    _inventory, schemas, reference_registry, documents = _loaded()
+    schemas, reference_registry = _schema_context()
     schema_id = value.get("schema")
     if schema_id not in {"bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}:
         raise NgsMolBioCapabilityError("unsupported Domain Experiment schema")
@@ -1084,7 +722,7 @@ def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
         reference_registry,
     )
     _verify_ngs_molbio_domain_semantics(value)
-    schema_entries = _unique(documents["schema"]["entries"], "schema_id", "schema ID")
+    schema_entries = _unique(_contract_document("schema")["entries"], "schema_id", "schema ID")
     _verify_protein_domain_semantics(value, schema_entries)
     return copy.deepcopy(value)
 
@@ -1092,7 +730,7 @@ def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
 def accepted_capability_ids() -> tuple[str, ...]:
     return tuple(
         record["capability_id"]
-        for record in _loaded()[0]["capabilities"]
+        for record in capability_inventory()["capabilities"]
         if record["plannable"]
     )
 

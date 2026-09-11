@@ -171,12 +171,14 @@ async def _validate_signal_alignment_from_pinned_root(
     if not is_ont_signal_alignment_job(job):
         raise OntNgsCompletionError("job is not a bounded external signal alignment owner")
     if resource_usage_receipt is not None:
-        if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
-            raise OntNgsCompletionError("provided producer resource evidence is incomplete")
         try:
+            if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
+                raise ResourceUsageEvidenceError("producer resource observations are incomplete")
             job.params = attach_resource_usage_receipt(job.params, resource_usage_receipt)
-        except ResourceUsageEvidenceError as exc:
-            raise OntNgsCompletionError("producer resource evidence is invalid") from exc
+        except (ResourceUsageEvidenceError, TypeError, ValueError):
+            # Invalid observations are not accepted as evidence, but neither are
+            # they authority to reject otherwise valid native alignment outputs.
+            resource_usage_receipt = None
 
     params = job.params if isinstance(job.params, dict) else {}
     reference_sha256 = params.get("reference_sequence_sha256")
@@ -266,6 +268,7 @@ async def _validate_signal_alignment_from_pinned_root(
         "artifacts": descriptors,
         **package_authority,
     }
+    result_integrity["resource_evidence_status"] = "unavailable"
     if resource_usage_receipt is not None:
         result_integrity["resource_evidence_status"] = "accepted"
         result_integrity["resource_usage_receipt_sha256"] = resource_usage_receipt.get("receipt_sha256")

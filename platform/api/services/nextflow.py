@@ -1983,6 +1983,17 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
 
 
 
+def _optional_terminal_resource_receipt(factory):
+    """Observations never decide whether native scientific work succeeded."""
+    if factory is None:
+        return None
+    try:
+        return factory()
+    except Exception:
+        logger.warning("ONT resource observations are unavailable; preserving scientific completion", exc_info=True)
+        return None
+
+
 async def _validate_ont_fastq_qc_terminal_completion(
     job: Any,
     terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]],
@@ -1991,12 +2002,7 @@ async def _validate_ont_fastq_qc_terminal_completion(
 
     from services.ont_ngs_completion import validate_and_prepare_ont_fastq_qc_completion
 
-    resource_usage_receipt = None
-    if terminal_resource_receipt_factory is not None:
-        try:
-            resource_usage_receipt = terminal_resource_receipt_factory()
-        except Exception:
-            logger.warning("ONT resource observations are unavailable; preserving scientific completion", exc_info=True)
+    resource_usage_receipt = _optional_terminal_resource_receipt(terminal_resource_receipt_factory)
     return await validate_and_prepare_ont_fastq_qc_completion(
         job,
         resource_usage_receipt=resource_usage_receipt,
@@ -2925,10 +2931,8 @@ async def launch_nextflow_job(
                             elif is_ont_signal_alignment_job(job):
                                 integrity = await validate_and_prepare_ont_signal_alignment_completion(
                                     job,
-                                    resource_usage_receipt=(
-                                        terminal_resource_receipt_factory()
-                                        if terminal_resource_receipt_factory is not None
-                                        else None
+                                    resource_usage_receipt=_optional_terminal_resource_receipt(
+                                        terminal_resource_receipt_factory
                                     ),
                                 )
                                 logger.info(

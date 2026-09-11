@@ -1,4 +1,6 @@
 import Plot from 'react-plotly.js';
+import { useEffect, useRef, useState } from 'react';
+import { fetchOntFastqQcResult, type OntResultCollection } from '../../lib/ontFastqQcResult';
 
 import type {
     OntFastqQcCheck,
@@ -135,6 +137,46 @@ export function OntFastqQcResultPanel({
     onRecoverAccess,
     recoveryPending = false,
 }: OntFastqQcResultPanelProps) {
+    const [pages, setPages] = useState<Partial<Record<OntResultCollection, { result: OntFastqQcResult; previousOffsets: number[] }>>>({});
+    const [pageLoading, setPageLoading] = useState<Partial<Record<OntResultCollection, boolean>>>({});
+    const [pageErrors, setPageErrors] = useState<Partial<Record<OntResultCollection, string>>>({});
+    const identity = result ? JSON.stringify([result.job.id, result.authority.sequence_qc_manifest_sha256, result.authority.construct_verification_manifest_sha256, result.authority.artifact_set_sha256]) : '';
+    const identityRef = useRef(identity);
+    identityRef.current = identity;
+    useEffect(() => {
+        setPages({});
+        setPageErrors({});
+        setPageLoading({});
+    }, [identity]);
+
+    const loadPage = async (collection: OntResultCollection, offset: number, previousOffsets: number[]) => {
+        if (!result) return;
+        const sourceIdentity = identity;
+        setPageLoading((current) => ({ ...current, [collection]: true }));
+        setPageErrors((current) => ({ ...current, [collection]: '' }));
+        try {
+            const next = await fetchOntFastqQcResult(result.job.id, { collection, page_size: 64, [collection === 'variants' ? 'variant_offset' : 'artifact_offset']: offset });
+            if (identityRef.current !== sourceIdentity) return;
+            if (next.authority.artifact_set_sha256 !== result.authority.artifact_set_sha256 || next.authority.construct_verification_manifest_sha256 !== result.authority.construct_verification_manifest_sha256 || next.authority.sequence_qc_manifest_sha256 !== result.authority.sequence_qc_manifest_sha256) throw new Error('The scientific result changed; reload its summary before paging.');
+            setPages((current) => ({ ...current, [collection]: { result: next, previousOffsets } }));
+        } catch (reason) {
+            if (identityRef.current === sourceIdentity) setPageErrors((current) => ({ ...current, [collection]: reason instanceof Error ? reason.message : 'This result page is unavailable.' }));
+        } finally {
+            if (identityRef.current === sourceIdentity) setPageLoading((current) => ({ ...current, [collection]: false }));
+        }
+    };
+    const pageControls = (collection: OntResultCollection) => {
+        const current = pages[collection];
+        const page = (current?.result ?? result)?.pagination?.[collection];
+        if (!page) return null;
+        const history = current?.previousOffsets ?? [];
+        return <div className="my-2 flex flex-wrap items-center gap-2 text-xs" data-result-pagination={collection}>
+            <span>{page.count ? `${page.offset + 1}–${page.offset + page.count}` : '0'} of {page.total.toLocaleString()} {collection}</span>
+            {history.length > 0 && <button type="button" disabled={pageLoading[collection]} onClick={() => void loadPage(collection, history[history.length - 1], history.slice(0, -1))} className="rounded border px-2 py-1 disabled:opacity-50">Previous {collection}</button>}
+            {page.next_offset !== null && <button type="button" disabled={pageLoading[collection]} onClick={() => void loadPage(collection, page.next_offset!, page.count ? [...history, page.offset] : history)} className="rounded border px-2 py-1 disabled:opacity-50">{pageLoading[collection] ? 'Loading…' : page.count ? `Next ${collection}` : `Load ${collection}`}</button>}
+            {pageErrors[collection] && <span role="alert" className="text-rose-300">{pageErrors[collection]}</span>}
+        </div>;
+    };
     if (loading) return <p className="text-sm text-[var(--text-secondary)]">Loading validated FASTQ-QC result…</p>;
     if (error) {
         return (
@@ -155,7 +197,7 @@ export function OntFastqQcResultPanel({
     }
     if (!result) return <p className="text-sm text-[var(--text-secondary)]">Validated FASTQ-QC result is unavailable.</p>;
 
-    const verification = result.verification;
+    const verification = { ...result.verification, variants: (pages.variants?.result ?? result).verification.variants };
     const verdictClass = verification.verdict === 'PASS'
         ? 'text-emerald-300 border-emerald-500/40'
         : verification.verdict === 'FAIL'
@@ -200,7 +242,7 @@ export function OntFastqQcResultPanel({
             detail: 'observed consensus versus bound reference',
         },
     ];
-    const orderedArtifacts = [...result.artifacts].sort((left, right) => left.display_order - right.display_order);
+    const orderedArtifacts = [...(pages.artifacts?.result ?? result).artifacts].sort((left, right) => left.display_order - right.display_order);
     const artifactRoleGroups = orderedArtifacts.reduce<Array<{
         role: string;
         artifacts: typeof orderedArtifacts;
@@ -336,8 +378,9 @@ export function OntFastqQcResultPanel({
 
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                 <h4 className="mb-2 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Normalized variants</h4>
+                {pageControls('variants')}
                 {verification.variants.length === 0 ? (
-                    <p className="text-sm text-[var(--text-secondary)]">No normalized variants.</p>
+                    <p className="text-sm text-[var(--text-secondary)]">{result.pagination?.variants.total ? 'Variant details are available on demand; the scientific summary includes the full result.' : 'No normalized variants.'}</p>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-xs">
@@ -390,6 +433,7 @@ export function OntFastqQcResultPanel({
 
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                 <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Governed downloads</h4>
+                {pageControls('artifacts')}
                 <div className="mt-2 space-y-3">
                     {artifactRoleGroups.map((group) => (
                         <section key={group.role} data-artifact-role={group.role}>

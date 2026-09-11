@@ -3043,6 +3043,7 @@ export interface DnaWeaverPlanRequest {
 }
 
 export interface DnaWeaverPlanSaveRequest extends DnaWeaverPlanRequest {
+    computation_id?: string | null;
     selected_plan_checksum: string;
     new_name?: string;
     save_description?: string;
@@ -3056,6 +3057,7 @@ export interface DnaWeaverQualityCheck {
 }
 
 export interface DnaWeaverPlanResponse {
+    computation_id?: string | null;
     planner_engine: string;
     planner_version: string;
     validator_engine: string;
@@ -3084,6 +3086,7 @@ export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
 }
 
 export interface GibsonDesignRequest {
+    computation_id?: string | null;
     fragments: GibsonDesignFragmentInput[];
     circular?: boolean;
     overlap?: number;
@@ -3122,6 +3125,7 @@ export interface GibsonDesignCandidate {
 }
 
 export interface GibsonDesignResponse {
+    computation_id?: string | null;
     engine: string;
     engine_version: string;
     circular: boolean;

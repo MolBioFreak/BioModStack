@@ -16,6 +16,9 @@ export interface RestrictionEnzymeSummary { enzyme_id: string; canonical_name: s
 export interface RestrictionAnalysisResponse { schema: 'bms.molbio.restriction-analysis-response.v1'; source: { kind: 'inline_dna' | 'molecular_revision'; name: string | null; sequence_id: string | null; revision_id: string | null; revision_number: number | null; content_sha256: string; content_length: number; topology: Topology }; catalog: RestrictionCatalogReceipt; request_sha256: string; result_sha256: string; analysis: { algorithm_id: 'bms-restriction-analysis'; algorithm_version: '2.1.0'; source_sha256: string; topology: Topology; sequence_length: number; catalog_sha256: string; counts: { recognition_site_count_definite: number; recognition_site_count_possible: number; double_strand_break_count: number; nick_count: number }; enzyme_summaries: RestrictionEnzymeSummary[]; occurrences: RestrictionOccurrence[]; grouped_cleavages: unknown[]; warnings: string[]; limitations: unknown[]; result_sha256: string; [key: string]: unknown } }
 export interface RestrictionAnalysisChunkAuthority { enzyme_ids: string[]; request_sha256: string; result_sha256: string; analysis_result_sha256: string; response: RestrictionAnalysisResponse }
 export interface RestrictionAnalysisBatch {
+    requested_enzyme_count?: number;
+    failed_enzyme_ids?: string[];
+    complete?: boolean;
     schema: 'bms.molbio.restriction-analysis-batch-view.v1';
     source: RestrictionAnalysisResponse['source'];
     catalog: RestrictionCatalogReceipt;
@@ -123,7 +126,7 @@ const RESTRICTION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 };
 function statusErrorMessage(status: number): string { if (status === 413) return 'Restriction request exceeds the supported limits.'; if (status === 422) return 'Restriction request is invalid.'; if (status === 503) return 'Restriction service is unavailable.'; if (status === 504) return 'Restriction service request timed out.'; return 'Restriction service request failed.'; }
 async function json(response: Response): Promise<unknown> { if (!response.ok) { let code: string | null = null; try { const body = await response.json() as { detail?: { code?: unknown } }; if (typeof body.detail?.code === 'string') code = body.detail.code; } catch { /* fixed fallback */ } throw new Error((code && RESTRICTION_ERROR_MESSAGES[code]) || statusErrorMessage(response.status)); } try { return await response.json(); } catch { throw new Error('Restriction API returned malformed JSON.'); } }
-export async function fetchRestrictionCatalog({ transport = fetch, signal }: { transport?: Transport; signal?: AbortSignal } = {}): Promise<{ catalog: RestrictionCatalogReceipt; items: RestrictionRecord[] }> { let cursor: string | null = null; let authority: RestrictionCatalogReceipt | null = null; const items: RestrictionRecord[] = []; do { const url = `/api/molbio/restriction/catalog?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`; const page = parseRestrictionCatalogPage(await json(await transport(url, { signal, credentials: 'same-origin' }))); if (authority && (authority.catalog_id !== page.catalog.catalog_id || authority.catalog_sha256 !== page.catalog.catalog_sha256)) throw new Error('Restriction catalog authority changed during pagination.'); authority = page.catalog; items.push(...page.items); cursor = page.next_cursor; } while (cursor); if (!authority || items.length !== authority.counts.total) throw new Error('Restriction catalog page count is incomplete.'); unique(items.map((item) => item.enzyme_id), 'catalog'); return { catalog: authority, items }; }
+export async function fetchRestrictionCatalog({ transport = fetch, signal, onPage }: { transport?: Transport; signal?: AbortSignal; onPage?: (page: { catalog: RestrictionCatalogReceipt; items: RestrictionRecord[] }) => void } = {}): Promise<{ catalog: RestrictionCatalogReceipt; items: RestrictionRecord[] }> { let cursor: string | null = null; let authority: RestrictionCatalogReceipt | null = null; const items: RestrictionRecord[] = []; do { const url = `/api/molbio/restriction/catalog?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`; const page = parseRestrictionCatalogPage(await json(await transport(url, { signal, credentials: 'same-origin' }))); if (authority && (authority.catalog_id !== page.catalog.catalog_id || authority.catalog_sha256 !== page.catalog.catalog_sha256)) throw new Error('Restriction catalog authority changed during pagination.'); authority = page.catalog; items.push(...page.items); onPage?.({ catalog: authority, items: [...items] }); cursor = page.next_cursor; } while (cursor); if (!authority || items.length !== authority.counts.total) throw new Error('Restriction catalog page count is incomplete.'); unique(items.map((item) => item.enzyme_id), 'catalog'); return { catalog: authority, items }; }
 export async function fetchRestrictionProducts({ transport = fetch, signal }: { transport?: Transport; signal?: AbortSignal } = {}): Promise<RestrictionProductsResponse> { let cursor: string | null = null; let authority: RestrictionProductReleaseReceipt | null = null; let authorityBytes: string | null = null; const seenCursors = new Set<string>(); const items: RestrictionProductRecord[] = []; do { const url = `/api/molbio/restriction/products?limit=250${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`; const page = parseRestrictionProducts(await json(await transport(url, { signal, credentials: 'same-origin' }))); const receiptBytes = JSON.stringify(page.product_release); if (authorityBytes !== null && receiptBytes !== authorityBytes) throw new Error('Restriction product authority changed during pagination.'); authority = page.product_release; authorityBytes = receiptBytes; items.push(...page.items); cursor = page.next_cursor; if (cursor !== null) { if (seenCursors.has(cursor)) throw new Error('Restriction product cursor repeated during pagination.'); seenCursors.add(cursor); } } while (cursor); if (!authority || items.length !== authority.record_count) throw new Error('Restriction product page count is incomplete.'); unique(items.map((item) => item.product_id), 'products.product_id'); unique(items.map((item) => `${normalizeProductIdentity(item.supplier.supplier_id)}\u0000${normalizeProductIdentity(item.catalog_number)}`), 'products.product_identity'); if (authority.redistribution_permission_state === 'approved' && authority.permission_receipt) { const active = items.reduce((sum, item, index) => sum + parseProductRecord(item, `products[${index}]`, authority!.permission_receipt!).active, 0); if (active !== authority.active_claim_count) throw new Error('Restriction product active claim count is inconsistent.'); } return { schema: 'bms.molbio.restriction-products-page.v1', product_release: authority, items, next_cursor: null }; }
 function requestBody(source: RestrictionSource, catalog: RestrictionCatalogBinding): { source: RestrictionSource; catalog: RestrictionCatalogBinding } { return { source, catalog }; }
 async function sourceIdentityMatches(source: RestrictionSource, receipt: RestrictionAnalysisResponse['source']): Promise<boolean> {
@@ -152,13 +155,11 @@ export async function fetchRestrictionAnalysis({ source, catalog, enzymeIds, tra
     return response;
 }
 
-export async function fetchRestrictionAnalysisBatch({ source, catalog, records, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogReceipt; records: RestrictionRecord[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionAnalysisBatch> {
-    if (records.length !== catalog.counts.total) throw new Error('Restriction catalog record count is incomplete.');
-    const enzymeIds = records
+export async function fetchRestrictionAnalysisBatch({ source, catalog, records, transport = fetch, signal, enzymeIds: selectedIds, onProgress }: { source: RestrictionSource; catalog: RestrictionCatalogReceipt; records: RestrictionRecord[]; transport?: Transport; signal?: AbortSignal; enzymeIds?: string[]; onProgress?: (batch: RestrictionAnalysisBatch) => void }): Promise<RestrictionAnalysisBatch> {
+    const enzymeIds = selectedIds ? [...new Set(selectedIds)].sort() : records
         .filter((record) => record.analysis_capability === 'digest_simulation' || record.analysis_capability === 'nicking_analysis')
-        .map((record) => record.enzyme_id);
-    unique(enzymeIds, 'analysis-capable catalog enzyme IDs');
-    if (enzymeIds.length !== catalog.counts.geometry_ready + catalog.counts.nicking) throw new Error('Restriction analysis-capable catalog count is incomplete.');
+        .map((record) => record.enzyme_id)
+        .sort();
     if (enzymeIds.length === 0) throw new Error('Restriction catalog has no analysis-capable enzyme authority.');
     const maximum = Math.min(256, catalog.bounds.analysis_explicit_enzyme_maximum);
     if (!Number.isInteger(maximum) || maximum < 1) throw new Error('Restriction catalog explicit-analysis bound is invalid.');
@@ -173,10 +174,29 @@ export async function fetchRestrictionAnalysisBatch({ source, catalog, records, 
     let sourceBytes: string | null = null;
     const seenSummaryIds = new Set<string>();
     const seenOccurrenceIds = new Set<string>();
+    const failedEnzymeIds: string[] = [];
+    const snapshot = (): RestrictionAnalysisBatch => ({
+        schema: 'bms.molbio.restriction-analysis-batch-view.v1',
+        source: chunks[0].response.source, catalog, chunks: [...chunks],
+        authority_key: JSON.stringify(chunks.map((chunk) => ({ enzyme_ids: chunk.enzyme_ids, request_sha256: chunk.request_sha256, result_sha256: chunk.result_sha256, analysis_result_sha256: chunk.analysis_result_sha256 }))),
+        requested_enzyme_count: enzymeIds.length,
+        failed_enzyme_ids: [...failedEnzymeIds],
+        complete: seenSummaryIds.size === enzymeIds.length,
+        analysis: { counts: { ...counts }, enzyme_summaries: [...summaries], occurrences: [...occurrences], grouped_cleavages: [...groupedCleavages], warnings: [...warnings], limitations: [...limitations] },
+    });
 
     for (let start = 0; start < enzymeIds.length; start += maximum) {
         const chunkIds = enzymeIds.slice(start, start + maximum);
-        const response = await fetchRestrictionAnalysis({ source, catalog: binding, enzymeIds: chunkIds, transport, signal });
+        let response: RestrictionAnalysisResponse;
+        try {
+            response = await fetchRestrictionAnalysis({ source, catalog: binding, enzymeIds: chunkIds, transport, signal });
+        } catch (error) {
+            if (signal?.aborted) throw error;
+            failedEnzymeIds.push(...chunkIds);
+            warnings.push(error instanceof Error ? error.message : 'An enzyme-analysis batch is unavailable.');
+            if (chunks.length > 0) onProgress?.(snapshot());
+            continue;
+        }
         const currentSourceBytes = JSON.stringify(response.source);
         if (sourceBytes !== null && sourceBytes !== currentSourceBytes) throw new Error('Restriction analysis chunk source authority mismatch.');
         sourceBytes = currentSourceBytes;
@@ -198,16 +218,9 @@ export async function fetchRestrictionAnalysisBatch({ source, catalog, records, 
         warnings.push(...response.analysis.warnings);
         limitations.push(...response.analysis.limitations);
         chunks.push({ enzyme_ids: chunkIds, request_sha256: response.request_sha256, result_sha256: response.result_sha256, analysis_result_sha256: response.analysis.result_sha256, response });
+        onProgress?.(snapshot());
     }
-    if (seenSummaryIds.size !== enzymeIds.length || enzymeIds.some((enzymeId) => !seenSummaryIds.has(enzymeId))) throw new Error('Restriction analysis batch is incomplete.');
-    const authorityKey = JSON.stringify(chunks.map((chunk) => ({ enzyme_ids: chunk.enzyme_ids, request_sha256: chunk.request_sha256, result_sha256: chunk.result_sha256, analysis_result_sha256: chunk.analysis_result_sha256 })));
-    return {
-        schema: 'bms.molbio.restriction-analysis-batch-view.v1',
-        source: chunks[0].response.source,
-        catalog,
-        chunks,
-        authority_key: authorityKey,
-        analysis: { counts, enzyme_summaries: summaries, occurrences, grouped_cleavages: groupedCleavages, warnings, limitations },
-    };
+    if (chunks.length === 0) throw new Error(warnings[0] || 'No requested enzyme-analysis batch is available.');
+    return snapshot();
 }
 export async function simulateRestrictionDigest({ source, catalog, enzymeIds, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogBinding; enzymeIds: string[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionDigestSimulation> { unique(enzymeIds, 'enzymeIds'); const response = parseRestrictionDigestSimulation(await json(await transport('/api/molbio/restriction/digests/simulate', { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schema: 'bms.molbio.restriction-digest-simulation-request.v1', ...requestBody(source, catalog), enzyme_ids: enzymeIds }) }))); if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.expected_catalog_sha256 || response.selected_enzyme_ids.length !== enzymeIds.length || response.selected_enzyme_ids.some((idValue,i) => idValue !== enzymeIds[i]) || !await sourceIdentityMatches(source, response.source)) throw new Error('Restriction digest authority mismatch.'); return response; }

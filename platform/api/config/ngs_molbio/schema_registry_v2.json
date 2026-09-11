@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "20e00971122a297f8701c6577476bbe4d094b7dc22c323530236a63cb347f6f2",
+  "content_sha256": "26712f6cb4619b990bc89e9efdedb33e8ba557bcc76564a14cc86a9b8f01d960",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -133,7 +133,7 @@
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
       "schema_canonical_sha256": "3172df0f5d83061c4b6d13e271f396027089fb8db2eca857a5e255fcb2f16386",
       "schema_id": "bms.ngs-molbio.adapter-registry.v1",
-      "schema_sha256": "38f43d898a7f472a2950fd726caf5d5d0a67acba7d22b1447064b2383ab6f6de"
+      "schema_sha256": "02a50037423b5b18e8df4748835575a1ce70363898f9e839cb7653a947141064"
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
@@ -157,7 +157,7 @@
       "path": "schemas/ngs_molbio/capability-inventory-v2.schema.json",
       "schema_canonical_sha256": "e477e5c0c52a2a26ad74785a867360b9a5eae9f78be62d3d4b87695e32e456e5",
       "schema_id": "bms.ngs-molbio.capability-inventory.v2",
-      "schema_sha256": "3a6f1c128a169edf157860876e8d4fb1fb7507e6169e27e8d95979653704057b"
+      "schema_sha256": "227e087b89b2e51dc7e7e734e57c74e1f8367e3346c0f62579eb9a1e471aeab6"
     },
     {
       "path": "schemas/ngs_molbio/connector-acknowledgement-v1.schema.json",
@@ -181,7 +181,7 @@
       "path": "schemas/ngs_molbio/dataset-kind-registry-v1.schema.json",
       "schema_canonical_sha256": "5979953a324d80aff3608322883bd2f0fac9419f576aa93b7cdf13cfe7adacb6",
       "schema_id": "bms.ngs-molbio.dataset-kind-registry.v1",
-      "schema_sha256": "c2495f26361862ce172867bf8c9a0340760ce3c3d2d8be729710f0d384655b02"
+      "schema_sha256": "717dabbf5c49f2e94fb4a5c332e22752285ec8ce59e4ab05805a116ad4fcfdbd"
     },
     {
       "path": "schemas/ngs_molbio/deep-link-v1.schema.json",

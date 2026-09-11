@@ -882,6 +882,9 @@ export function MolBioToolkitV2() {
     const [restrictionDigestLoading, setRestrictionDigestLoading] = useState(false);
     const [restrictionDigestError, setRestrictionDigestError] = useState<string | null>(null);
 
+    const restrictionCatalogRecordsRef = useRef<RestrictionRecord[]>([]);
+    const restrictionAnalysisAbortRef = useRef<AbortController | null>(null);
+    const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionDigestControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionSource = useMemo<RestrictionSource | null>(() => {
@@ -904,59 +907,91 @@ export function MolBioToolkitV2() {
     }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
 
     useEffect(() => {
-        const authorityController = restrictionAuthorityControllerRef.current;
-        const digestController = restrictionDigestControllerRef.current;
-        const token = authorityController.begin();
-        digestController.begin();
+        const controller = restrictionAuthorityControllerRef.current;
+        const token = controller.begin();
+        restrictionDigestControllerRef.current.begin();
+        restrictionAnalysisControllerRef.current.begin();
+        restrictionAnalysisAbortRef.current?.abort();
+        restrictionCatalogRecordsRef.current = [];
         setRestrictionCatalog(null);
         setRestrictionCatalogRecords([]);
-        setRestrictionProductEvidence(null);
         setRestrictionAnalysis(null);
         setRestrictionDigest(null);
-
+        setRestrictionDigestLoading(false);
         setRestrictionDigestError(null);
         setRestrictionAuthorityError(null);
-        if (!restrictionSource) {
-            setRestrictionAuthorityLoading(false);
-            return;
-        }
+        setRestrictionAuthorityLoading(false);
+        if (!restrictionSource) return;
         const abort = new AbortController();
-        setRestrictionAuthorityLoading(true);
-        void (async () => {
-            try {
-                const [catalogResult, productsResult] = await Promise.all([
-                    fetchRestrictionCatalog({ signal: abort.signal }),
-                    fetchRestrictionProducts({ signal: abort.signal }),
-                ]);
-                if (!authorityController.isCurrent(token)) return;
-                const analysisResult = await fetchRestrictionAnalysisBatch({
-                    source: restrictionSource,
-                    catalog: catalogResult.catalog,
-                    records: catalogResult.items,
-                    signal: abort.signal,
-                });
-                if (!authorityController.isCurrent(token)) return;
-                setRestrictionCatalog(catalogResult.catalog);
-                setRestrictionCatalogRecords(catalogResult.items);
-                setRestrictionProductEvidence(productsResult.product_release);
-                setRestrictionAnalysis(analysisResult);
-                setRestrictionAuthorityError(null);
-            } catch (error) {
-                if (!authorityController.isCurrent(token)) return;
-                setRestrictionCatalog(null);
-                setRestrictionCatalogRecords([]);
-                setRestrictionProductEvidence(null);
-                setRestrictionAnalysis(null);
-                setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
-            } finally {
-                if (authorityController.isCurrent(token)) setRestrictionAuthorityLoading(false);
+        void fetchRestrictionCatalog({
+            signal: abort.signal,
+            onPage: (page) => {
+                if (!controller.isCurrent(token)) return;
+                restrictionCatalogRecordsRef.current = page.items;
+                setRestrictionCatalog((current) => current?.catalog_sha256 === page.catalog.catalog_sha256 ? current : page.catalog);
+                setRestrictionCatalogRecords(page.items);
+            },
+        }).catch((error) => {
+            if (controller.isCurrent(token) && !abort.signal.aborted) {
+                setRestrictionAuthorityError(error instanceof Error ? error.message : 'Part of the restriction catalog is unavailable.');
             }
-        })();
+        });
         return () => abort.abort();
     }, [restrictionSource]);
 
+    // Supplier products do not own recognition-site or cleavage geometry.
+    useEffect(() => {
+        const abort = new AbortController();
+        setRestrictionProductEvidence(null);
+        if (restrictionSource) {
+            void fetchRestrictionProducts({ signal: abort.signal }).then((products) => {
+                if (!abort.signal.aborted) setRestrictionProductEvidence(products.product_release);
+            }).catch(() => {
+                if (!abort.signal.aborted) setRestrictionProductEvidence(null);
+            });
+        }
+        return () => abort.abort();
+    }, [restrictionSource]);
+
+    const runRestrictionAnalysis = useCallback((enzymeIds?: string[]) => {
+        if (!restrictionSource || !restrictionCatalog || enzymeIds?.length === 0) return;
+        restrictionAnalysisAbortRef.current?.abort();
+        const abort = new AbortController();
+        restrictionAnalysisAbortRef.current = abort;
+        const controller = restrictionAnalysisControllerRef.current;
+        const token = controller.begin();
+        setRestrictionAuthorityLoading(true);
+        setRestrictionAuthorityError(null);
+        void fetchRestrictionAnalysisBatch({
+            source: restrictionSource,
+            catalog: restrictionCatalog,
+            records: restrictionCatalogRecordsRef.current,
+            enzymeIds,
+            signal: abort.signal,
+            onProgress: (batch) => {
+                if (controller.isCurrent(token) && !abort.signal.aborted) setRestrictionAnalysis(batch);
+            },
+        }).then((batch) => {
+            if (!controller.isCurrent(token) || abort.signal.aborted) return;
+            setRestrictionAnalysis(batch);
+            if (batch.failed_enzyme_ids?.length) setRestrictionAuthorityError(`${batch.failed_enzyme_ids.length} enzymes unavailable; successful analysis is retained.`);
+        }).catch((error) => {
+            if (controller.isCurrent(token) && !abort.signal.aborted) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
+        }).finally(() => {
+            if (controller.isCurrent(token)) setRestrictionAuthorityLoading(false);
+        });
+    }, [restrictionCatalog, restrictionSource]);
+
+    const selectedRestrictionIds = JSON.stringify(selectedEnzymes);
+    useEffect(() => {
+        const ids: string[] = JSON.parse(selectedRestrictionIds);
+        if (ids.length > 0) runRestrictionAnalysis(ids);
+    }, [selectedRestrictionIds, runRestrictionAnalysis]);
+
     useEffect(() => () => {
         restrictionAuthorityControllerRef.current.dispose();
+        restrictionAnalysisControllerRef.current.dispose();
+        restrictionAnalysisAbortRef.current?.abort();
         restrictionDigestControllerRef.current.dispose();
     }, []);
 
@@ -3040,6 +3075,7 @@ export function MolBioToolkitV2() {
                         digestError={restrictionDigestError}
                         onDigestSelectionChange={handleRestrictionDigestSelection}
                         onSimulateDigest={runRestrictionDigest}
+                        onAnalyzeAll={() => runRestrictionAnalysis()}
                     />
                 )}
                 qc={(
@@ -3558,6 +3594,7 @@ export function MolBioToolkitV2() {
                         digestError={restrictionDigestError}
                         onDigestSelectionChange={handleRestrictionDigestSelection}
                         onSimulateDigest={runRestrictionDigest}
+                        onAnalyzeAll={() => runRestrictionAnalysis()}
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'pcr' && (

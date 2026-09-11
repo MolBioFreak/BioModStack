@@ -6,13 +6,14 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator, TypeAdapter
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 import asyncio
 import hashlib
 import json
@@ -932,6 +933,7 @@ class DnaWeaverPlanRequest(BaseModel):
 
 
 class DnaWeaverPlanSaveRequest(DnaWeaverPlanRequest):
+    computation_id: Optional[str] = None
     selected_plan_checksum: str = Field(min_length=64, max_length=64)
     new_name: Optional[str] = None
     save_description: Optional[str] = None
@@ -946,6 +948,7 @@ class DnaWeaverQualityCheckResponse(BaseModel):
 
 
 class DnaWeaverPlanResponse(BaseModel):
+    computation_id: Optional[str] = None
     planner_engine: str
     planner_version: str
     validator_engine: str
@@ -974,6 +977,7 @@ class GibsonDesignFragmentSchema(AssemblyFragmentSchema):
 
 
 class GibsonDesignRequest(BaseModel):
+    computation_id: Optional[str] = None
     fragments: List[GibsonDesignFragmentSchema]
     circular: bool = True
     overlap: int = Field(default=30, ge=15, le=80)
@@ -1012,6 +1016,7 @@ class GibsonCandidateResponse(BaseModel):
 
 
 class GibsonDesignResponse(BaseModel):
+    computation_id: Optional[str] = None
     engine: str
     engine_version: str
     circular: bool
@@ -1425,6 +1430,26 @@ def gibson_design_to_response(
     )
 
 
+async def _assembly_source_revision(session: AsyncSession, sequence_id: str, revision_number: int | None):
+    if revision_number is None:
+        revision = await current_molecular_revision(session, sequence_id)
+    else:
+        revision = (await session.execute(select(MolecularRevision).where(
+            MolecularRevision.document_id == sequence_id,
+            MolecularRevision.revision_number == revision_number,
+        ))).scalar_one_or_none()
+    if revision is None:
+        raise HTTPException(status_code=409, detail="Assembly source immutable revision is unavailable")
+    snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+    sequence = snapshot.get("sequence")
+    if not isinstance(sequence, str) or hashlib.sha256(sequence.encode("utf-8")).hexdigest() != revision.content_sha256:
+        raise HTTPException(status_code=409, detail="Assembly source immutable sequence is invalid")
+    return revision, SimpleNamespace(
+        sequence=sequence, length=len(sequence), name=snapshot.get("name", ""),
+        is_circular=bool(snapshot.get("is_circular")), sequence_type=snapshot.get("sequence_type") or "dna",
+    )
+
+
 async def persist_assembly_product(
     session: AsyncSession,
     *,
@@ -1476,7 +1501,9 @@ async def persist_assembly_product(
             }
         }
         if fragment.source_sequence_id:
-            source = source_rows[fragment.source_sequence_id]
+            source_revision, source = await _assembly_source_revision(
+                session, fragment.source_sequence_id, fragment.source_revision
+            )
             start = fragment.source_start
             end = fragment.source_end
             if (start is None) != (end is None):
@@ -1530,48 +1557,8 @@ async def persist_assembly_product(
                         f"Assembly fragment '{fragment.name}' does not match the attested source slice"
                     ),
                 )
-            if fragment.source_name is not None and fragment.source_name != source.name:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Assembly fragment '{fragment.name}' source name does not match its source ID",
-                )
+            # Display labels can change independently of the selected DNA.
             fragment.source_name = source.name
-
-            source_revision = await current_molecular_revision(
-                session, fragment.source_sequence_id
-            )
-            current_hash = hashlib.sha256(source.sequence.encode("utf-8")).hexdigest()
-            if (
-                source_revision is not None
-                and source_revision.content_sha256 != current_hash
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Assembly source projection does not match its immutable head revision: "
-                        f"{fragment.source_sequence_id}"
-                    ),
-                )
-            if source_revision is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Assembly source has no immutable molecular revision: "
-                        f"{fragment.source_sequence_id}"
-                    ),
-                )
-            if (
-                fragment.source_revision is not None
-                and fragment.source_revision != source_revision.revision_number
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"Assembly fragment '{fragment.name}' source revision "
-                        f"{fragment.source_revision} does not match current immutable revision "
-                        f"{source_revision.revision_number}"
-                    ),
-                )
             fragment.source_revision = source_revision.revision_number
             fragment_snapshot["fragment"].update(
                 {
@@ -2371,6 +2358,65 @@ async def mutagenesis(
     return MolbioOperationResponse(sequence=seq_obj, message="Mutagenesis complete")
 
 
+def _assembly_request_fingerprint(request: BaseModel) -> str:
+    values = request.model_dump(mode="json", exclude={
+        "computation_id", "selected_candidate_checksum", "selected_plan_checksum", "new_name", "save_description",
+    })
+    for fragment in values.get("fragments", []):
+        fragment.pop("source_name", None)
+        fragment.pop("name", None)
+    return canonical_request_fingerprint(values)
+
+
+async def _retain_assembly_result(session: AsyncSession, kind: str, request: BaseModel, result, input_revision_ids=()) -> str:
+    payload = TypeAdapter(type(result)).dump_python(result, mode="json")
+    operation = await create_operation(
+        session, operation_kind=kind, implementation={"gibson_design": "services.assembly.pydna_gibson.design_gibson", "dnaweaver_plan": "services.assembly.dnaweaver_gibson.plan_vendor_gibson"}[kind],
+        parameters={"result": payload, "result_sha256": canonical_request_fingerprint(payload)},
+        request_fingerprint=_assembly_request_fingerprint(request),
+        provenance={"input_revision_ids": list(input_revision_ids), "result_owner": "server_computation"},
+    )
+    inputs = [await session.get(MolecularRevision, revision_id) for revision_id in dict.fromkeys(input_revision_ids)]
+    await add_operation_edges(session, operation, input_revisions=[
+        (revision, "source", {"content_sha256": revision.content_sha256}) for revision in inputs if revision is not None
+    ])
+    computation_id = operation.id
+    await session.commit()
+    return computation_id
+
+
+async def _load_assembly_result(session: AsyncSession, kind: str, request: GibsonDesignRequest | DnaWeaverPlanSaveRequest, result_type):
+    fingerprint = _assembly_request_fingerprint(request)
+    if request.computation_id:
+        operation = await session.get(MolecularOperation, request.computation_id)
+    else:
+        # Older clients can identify an already computed result by its inputs.
+        query = select(MolecularOperation).where(
+            MolecularOperation.operation_kind == kind,
+            MolecularOperation.request_fingerprint == fingerprint,
+        )
+        if isinstance(request, DnaWeaverPlanSaveRequest):
+            query = query.where(MolecularOperation.parameters["result"]["plan_checksum"].as_string() == request.selected_plan_checksum)
+        else:
+            candidates = func.json_each(MolecularOperation.parameters, "$.result.candidates").table_valued("value")
+            query = query.where(select(1).select_from(candidates).where(
+                func.json_extract(candidates.c.value, "$.checksum") == request.selected_candidate_checksum
+            ).exists())
+        operation = (await session.execute(query.order_by(MolecularOperation.created_at.desc()).limit(1))).scalar_one_or_none()
+    if operation is None:
+        raise AssemblyError("No server-generated result matches these inputs and selected checksum; compute the design before saving")
+    if operation.operation_kind != kind or operation.request_fingerprint != fingerprint:
+        raise AssemblyError("The selected computation belongs to different inputs or settings")
+    parameters = operation.parameters
+    payload = parameters.get("result")
+    if not isinstance(payload, dict) or canonical_request_fingerprint(payload) != parameters.get("result_sha256"):
+        raise AssemblyError("The saved scientific computation is invalid")
+    result = TypeAdapter(result_type).validate_python(payload)
+    computation_id = operation.id
+    await session.rollback()
+    return result, computation_id
+
+
 def _execute_gibson_design(request: GibsonDesignRequest) -> GibsonDesignResult:
     return design_gibson(
         [build_assembly_fragment(fragment) for fragment in request.fragments],
@@ -2575,9 +2621,14 @@ async def plan_dnaweaver_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        target, _ = await _resolve_dnaweaver_target(request, session)
-        plan = _execute_dnaweaver_plan(request, target)
-        return _dnaweaver_plan_to_response(plan, vendor_name=request.vendor_name)
+        target, source = await _resolve_dnaweaver_target(request, session)
+        revision = await current_molecular_revision(session, source.id) if source is not None else None
+        revision_ids = [revision.id] if revision is not None else []
+        await session.rollback()
+        plan = await asyncio.to_thread(_execute_dnaweaver_plan, request, target)
+        response = _dnaweaver_plan_to_response(plan, vendor_name=request.vendor_name)
+        response.computation_id = await _retain_assembly_result(session, "dnaweaver_plan", request, plan, revision_ids)
+        return response
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2588,8 +2639,7 @@ async def save_dnaweaver_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        target, _source = await _resolve_dnaweaver_target(request, session)
-        plan = _execute_dnaweaver_plan(request, target)
+        plan, computation_id = await _load_assembly_result(session, "dnaweaver_plan", request, DnaWeaverGibsonPlan)
         if request.selected_plan_checksum != plan.plan_checksum:
             raise AssemblyError(
                 "Selected DNA Weaver plan checksum is stale or invalid; plan again before saving"
@@ -2603,23 +2653,38 @@ async def save_dnaweaver_gibson_assembly(
             product=plan.product,
             name=request.new_name,
             save_description=request.save_description,
-            extra_operation_params=_dnaweaver_operation_params(plan, request),
+            extra_operation_params={"computation_id": computation_id, **_dnaweaver_operation_params(plan, request)},
         )
-        return _dnaweaver_plan_to_response(
+        response = _dnaweaver_plan_to_response(
             plan,
             vendor_name=request.vendor_name,
             saved_sequence=saved,
-            message="Regenerated, checksum-verified, pydna-validated, and saved the DNA Weaver purchase plan",
+            message="Saved the computed and pydna-validated DNA Weaver purchase plan without replanning",
         )
+        response.computation_id = computation_id
+        return response
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/assembly/gibson/design", response_model=GibsonDesignResponse)
-async def design_gibson_assembly(request: GibsonDesignRequest):
+async def design_gibson_assembly(
+    request: GibsonDesignRequest,
+    session: AsyncSession = Depends(get_molbio_session),
+):
     try:
-        result = _execute_gibson_design(request)
-        return gibson_design_to_response(result)
+        bound_request = request.model_copy(deep=True)
+        revision_ids = []
+        for fragment in bound_request.fragments:
+            if fragment.source_sequence_id:
+                revision, _source = await _assembly_source_revision(session, fragment.source_sequence_id, fragment.source_revision)
+                fragment.source_revision = revision.revision_number
+                revision_ids.append(revision.id)
+        await session.rollback()
+        result = await asyncio.to_thread(_execute_gibson_design, bound_request)
+        response = gibson_design_to_response(result)
+        response.computation_id = await _retain_assembly_result(session, "gibson_design", request, result, revision_ids)
+        return response
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2634,7 +2699,7 @@ async def save_designed_gibson_assembly(
             status_code=400, detail="A selected candidate checksum is required"
         )
     try:
-        result = _execute_gibson_design(request)
+        result, computation_id = await _load_assembly_result(session, "gibson_design", request, GibsonDesignResult)
         selected = next(
             (
                 candidate
@@ -2647,15 +2712,16 @@ async def save_designed_gibson_assembly(
             raise AssemblyError(
                 "Selected candidate checksum is not a valid exact design candidate"
             )
+        result.selected_candidate_checksum = request.selected_candidate_checksum
         saved = await persist_assembly_product(
             session,
             product=selected.product,
             name=request.new_name,
             save_description=request.save_description,
-            extra_operation_params=_gibson_design_operation_params(
+            extra_operation_params={"computation_id": computation_id, **_gibson_design_operation_params(
                 result,
                 request.selected_candidate_checksum,
-            ),
+            )},
             product_primers=[
                 {
                     "id": primer.id,
@@ -2676,11 +2742,13 @@ async def save_designed_gibson_assembly(
                 for primer in result.primers
             ],
         )
-        return gibson_design_to_response(
+        response = gibson_design_to_response(
             result,
             saved_sequence=saved,
-            message="Designed and saved Gibson assembly",
+            message="Saved the computed Gibson assembly without replanning",
         )
+        response.computation_id = computation_id
+        return response
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2921,7 +2989,6 @@ async def save_molecular_alignment(
 ) -> SavedSequenceAlignmentResponse:
     """Persist an alignment summary and exact immutable input lineage only on explicit save."""
     fingerprint = canonical_request_fingerprint(request.model_dump(mode="json"))
-    await begin_immediate_molbio_write(session)
     existing = (
         await session.execute(
             select(MolecularOperation).where(
@@ -2950,6 +3017,9 @@ async def save_molecular_alignment(
     if not isinstance(reference_sequence, str) or not isinstance(query_sequence, str):
         await session.rollback()
         raise HTTPException(status_code=409, detail="exact molecular revision snapshot is invalid")
+    # Immutable inputs can be computed without reserving SQLite's writer (or
+    # retaining a read snapshot) while unrelated edits are being saved.
+    await session.rollback()
     try:
         result = await asyncio.to_thread(
             align_sequences,
@@ -2957,6 +3027,23 @@ async def save_molecular_alignment(
             query_sequence,
             AlignmentSettings(**request.settings.model_dump()),
         )
+        await begin_immediate_molbio_write(session)
+        # A concurrent identical save may have published while we computed.
+        existing = (await session.execute(select(MolecularOperation).where(
+            MolecularOperation.idempotency_key == request.idempotency_key
+        ))).scalar_one_or_none()
+        if existing is not None:
+            if existing.request_fingerprint != fingerprint:
+                await session.rollback()
+                raise HTTPException(status_code=409, detail="idempotency key conflicts with another saved alignment")
+            response = _saved_alignment_response(existing)
+            await session.rollback()
+            return response
+        reference = await session.get(MolecularRevision, request.reference_revision_id)
+        query = await session.get(MolecularRevision, request.query_revision_id)
+        if reference is None or query is None:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="immutable alignment inputs are unavailable")
         summary = {
             "title": request.title,
             "reference_sequence_id": request.reference_sequence_id,

@@ -344,8 +344,6 @@
         ],
         "type": "object"
       },
-      "maxItems": 22,
-      "minItems": 22,
       "type": "array"
     },
     "constraint_payload_registry_sha256": {

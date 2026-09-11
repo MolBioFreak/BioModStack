@@ -1207,12 +1207,13 @@ async def get_job_scoped_ngs_result(
     job_id: str,
     request: Request,
     authorized_job: Job = Depends(require_alignment_job),
+    variant_offset: int = Query(default=0, ge=0),
+    artifact_offset: int = Query(default=0, ge=0),
+    page_size: int = Query(default=64, ge=0, le=256, description="Rows per collection; zero returns the scientific summary independently."),
+    collection: Literal["all", "variants", "artifacts"] = Query(default="all"),
 ):
-    cached = getattr(request.state, "ont_fastq_qc_result", None)
-    if cached is not None:
-        return cached
     try:
-        return await build_ont_fastq_qc_result(authorized_job)
+        return await build_ont_fastq_qc_result(authorized_job, variant_offset=variant_offset, artifact_offset=artifact_offset, page_size=page_size, collection=collection)
     except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
         raise _http_error(
             service.AlignmentSessionError(str(exc)), job_id=job_id, resource="result"

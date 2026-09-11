@@ -345,10 +345,22 @@ def validate_ont_fastq_qc_result_contract(value: dict[str, Any]) -> None:
     artifacts = value["artifacts"]
     present_count = sum(item["state"] == "present" for item in artifacts)
     unavailable_count = len(artifacts) - present_count
+    pagination = value.get("pagination", {})
+    for name, rows in (("artifacts", artifacts), ("variants", value["verification"]["variants"])):
+        page = pagination.get(name)
+        if page is not None:
+            end = page["offset"] + page["count"]
+            if (page["count"] != len(rows) or end > page["total"]
+                    or page["next_offset"] != (end if end < page["total"] else None)):
+                raise OntNgsResultError(f"{name} pagination is inconsistent")
+    artifact_total = pagination.get("artifacts", {}).get("total", len(artifacts))
+    complete_inventory = len(artifacts) == artifact_total
     if (
-        authority["declared_artifact_count"] != len(artifacts)
-        or authority["present_artifact_count"] != present_count
-        or authority["unavailable_artifact_count"] != unavailable_count
+        authority["declared_artifact_count"] != artifact_total
+        or authority["declared_artifact_count"] != authority["present_artifact_count"] + authority["unavailable_artifact_count"]
+        or present_count > authority["present_artifact_count"]
+        or unavailable_count > authority["unavailable_artifact_count"]
+        or (complete_inventory and (authority["present_artifact_count"] != present_count or authority["unavailable_artifact_count"] != unavailable_count))
     ):
         raise OntNgsResultError("artifact counts are inconsistent")
 
@@ -422,7 +434,7 @@ def validate_ont_fastq_qc_result_contract(value: dict[str, Any]) -> None:
         raise OntNgsResultError("reference identity is inconsistent across the result")
 
     variants = value["verification"]["variants"]
-    if verification_summary["variant_count"] != len(variants):
+    if verification_summary["variant_count"] != pagination.get("variants", {}).get("total", len(variants)):
         raise OntNgsResultError("variant count is inconsistent")
     if any(not _variant_interval_is_valid(variant, reference_length) for variant in variants):
         raise OntNgsResultError("variant interval is invalid")
@@ -712,7 +724,7 @@ def _verification_projection(verification_manifest: dict[str, Any]) -> dict[str,
         raise OntNgsResultError("construct-verification decision projection is invalid") from exc
 
 
-def _build_file_projection(job: Job) -> dict[str, Any]:
+def _build_file_projection(job: Job, **pagination) -> dict[str, Any]:
     """Pin one result-root inode across the complete reopen projection."""
 
     root = resolve_persisted_job_result_root(job)
@@ -730,12 +742,42 @@ def _build_file_projection(job: Job) -> dict[str, Any]:
         identity = os.fstat(descriptor)
         if not stat.S_ISDIR(identity.st_mode):
             raise OntNgsResultError("persisted result root is not a directory")
-        return _build_file_projection_from_pinned_root(job, Path(f"/proc/self/fd/{descriptor}"))
+        return _build_file_projection_from_pinned_root(job, Path(f"/proc/self/fd/{descriptor}"), **pagination)
     finally:
         os.close(descriptor)
 
 
-def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, Any]:
+def _page_result_collections(projection: dict[str, Any], *, variant_offset: int = 0, artifact_offset: int = 0, page_size: int = 64, collection: str = "all") -> dict[str, Any]:
+    """Response limits bound a page, never the underlying scientific result."""
+    if not 0 <= page_size <= 256 or min(variant_offset, artifact_offset) < 0 or collection not in {"all", "variants", "artifacts"}:
+        raise OntNgsResultError("invalid result pagination")
+    collections = {"variants": projection["verification"]["variants"], "artifacts": projection["artifacts"]}
+    offsets = {"variants": variant_offset, "artifacts": artifact_offset}
+    if any(offsets[name] > len(rows) for name, rows in collections.items()):
+        raise OntNgsResultError("result page offset exceeds its collection")
+    result = {**projection, "verification": dict(projection["verification"])}
+    counts = {name: min(page_size, len(rows) - offsets[name]) if collection in ("all", name) else 0 for name, rows in collections.items()}
+    while True:
+        result["pagination"] = {}
+        for name, rows in collections.items():
+            start, count = offsets[name], counts[name]
+            end = start + count
+            page = rows[start:end]
+            if name == "variants":
+                result["verification"]["variants"] = page
+            else:
+                result[name] = page
+            result["pagination"][name] = {"offset": start, "count": count, "total": len(rows), "next_offset": end if end < len(rows) else None}
+        if len(json.dumps(result, separators=(",", ":"), allow_nan=False).encode("utf-8")) <= 256 * 1024:
+            return result
+        reducible = [name for name, count in counts.items() if count > 1]
+        if not reducible:
+            raise OntNgsResultError("result detail exceeds a response page; request page_size=0 for the summary and download native artifacts")
+        name = max(reducible, key=lambda item: len(json.dumps(result["verification"]["variants"] if item == "variants" else result[item])))
+        counts[name] = max(1, counts[name] // 2)
+
+
+def _build_file_projection_from_pinned_root(job: Job, root: Path, **pagination) -> dict[str, Any]:
     try:
         canonical_fastq = is_ont_fastq_qc_job(job)
     except OntNgsCompletionError as exc:
@@ -815,8 +857,6 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
         job_output_dir=root,
         pinned_root_descriptor=True,
     )
-    if len(package_internal) > 256:
-        raise OntNgsResultError("NGS package artifact inventory exceeds its bound")
     package_artifacts = [
         {key: value for key, value in descriptor.items() if key not in {"_path", "relative_path"}}
         for descriptor in package_internal
@@ -903,11 +943,12 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
         "stages": _stages(job),
         "execution_resources": _execution_resources(job, persisted_package_authority),
     }
+    projection = _page_result_collections(projection, **pagination)
     validate_ont_fastq_qc_result_contract(projection)
     return projection
 
 
-async def build_ont_fastq_qc_result(job: Job) -> dict[str, Any]:
+async def build_ont_fastq_qc_result(job: Job, *, variant_offset: int = 0, artifact_offset: int = 0, page_size: int = 64, collection: str = "all") -> dict[str, Any]:
     from starlette.concurrency import run_in_threadpool
 
-    return await run_in_threadpool(_build_file_projection, job)
+    return await run_in_threadpool(_build_file_projection, job, variant_offset=variant_offset, artifact_offset=artifact_offset, page_size=page_size, collection=collection)

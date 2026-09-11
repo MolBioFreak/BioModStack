@@ -301,7 +301,6 @@
               ]
             },
             "display_order": {
-              "maximum": 256,
               "minimum": 1,
               "type": "integer"
             },
@@ -453,7 +452,6 @@
               "const": "none"
             },
             "display_order": {
-              "maximum": 256,
               "minimum": 1,
               "type": "integer"
             },
@@ -1596,18 +1594,18 @@
       "$ref": "#/$defs/alignmentSummary"
     },
     "alignment_sessions": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/alignmentSession"
       },
-      "maxItems": 2
+      "maxItems": 2,
+      "type": "array"
     },
     "artifacts": {
-      "type": "array",
       "items": {
         "$ref": "#/$defs/artifact"
       },
-      "maxItems": 256
+      "maxItems": 256,
+      "type": "array"
     },
     "authority": {
       "additionalProperties": false,
@@ -1625,17 +1623,15 @@
           "$ref": "#/$defs/sha256"
         },
         "declared_artifact_count": {
-          "type": "integer",
           "minimum": 0,
-          "maximum": 256
+          "type": "integer"
         },
         "manifest_readiness": {
           "const": "ready"
         },
         "present_artifact_count": {
-          "type": "integer",
           "minimum": 0,
-          "maximum": 256
+          "type": "integer"
         },
         "reference_sequence_sha256": {
           "$ref": "#/$defs/sha256"
@@ -1644,9 +1640,8 @@
           "$ref": "#/$defs/sha256"
         },
         "unavailable_artifact_count": {
-          "type": "integer",
           "minimum": 0,
-          "maximum": 256
+          "type": "integer"
         }
       },
       "required": [
@@ -2084,6 +2079,80 @@
         "started_at",
         "completed_at",
         "error_message"
+      ],
+      "type": "object"
+    },
+    "pagination": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_offset": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset",
+            "count",
+            "total",
+            "next_offset"
+          ],
+          "type": "object"
+        },
+        "variants": {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "next_offset": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset",
+            "count",
+            "total",
+            "next_offset"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "variants",
+        "artifacts"
       ],
       "type": "object"
     },

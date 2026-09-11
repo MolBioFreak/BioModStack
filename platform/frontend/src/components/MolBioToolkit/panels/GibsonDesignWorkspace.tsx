@@ -62,7 +62,7 @@ export function GibsonDesignWorkspace({
         target_tm: targetTm,
         min_anneal: minAnneal,
     }), [circular, fragments, minAnneal, overlap, preparations, targetTm]);
-    const requestScope = JSON.stringify(payload);
+    const requestScope = JSON.stringify({ ...payload, fragments: payload.fragments.map((fragment) => ({ ...fragment, name: undefined, source_name: undefined })) });
     requestScopeRef.current = requestScope;
 
     useEffect(() => {
@@ -72,7 +72,7 @@ export function GibsonDesignWorkspace({
     useEffect(() => {
         setResult(null);
         setError(null);
-    }, [payload]);
+    }, [requestScope]);
 
     const runDesign = async () => {
         if (fragments.length < 2) {
@@ -101,6 +101,7 @@ export function GibsonDesignWorkspace({
             const response = await saveDesignedGibsonAssembly({
                 ...payload,
                 selected_candidate_checksum: result.selected_candidate_checksum,
+                computation_id: result.computation_id,
                 new_name: saveName.trim() || `${sequenceName} Gibson product`,
                 save_description: saveDescription.trim() || undefined,
             });

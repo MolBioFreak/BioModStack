@@ -585,6 +585,7 @@ export function AssemblyPanel({
                 const response = await saveDnaWeaverGibsonAssembly({
                     ...dnaWeaverRequest(),
                     selected_plan_checksum: dnaWeaverPlan.plan_checksum,
+                    computation_id: dnaWeaverPlan.computation_id,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                 });
@@ -995,7 +996,7 @@ export function AssemblyPanel({
                         disabled={loading !== null || (mode === 'gibson' && gibsonWorkflow === 'plan' && !dnaWeaverPlan?.order_ready)}
                         className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
                     >
-                        {loading === 'save' ? 'Saving…' : mode === 'gibson' && gibsonWorkflow === 'plan' ? 'Regenerate + Verify + Save' : 'Validate + Save'}
+                        {loading === 'save' ? 'Saving…' : mode === 'gibson' && gibsonWorkflow === 'plan' ? 'Save computed plan' : 'Validate + Save'}
                     </button>
                     </div>
                 )}
