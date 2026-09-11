@@ -22,6 +22,7 @@ import sqlite3
 import shutil
 import webbrowser
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -120,6 +121,71 @@ SETUP_ACTIONS = {
     "provision-plan": "Preview model requirements",
     "verify": "Check models",
 }
+SETUP_GROUPS = {
+    "System": ("discover", "plan"),
+    "Python": ("python-plan", "python-bootstrap", "python-verify"),
+    "Web interface": ("frontend-plan", "frontend-bootstrap", "frontend-verify"),
+    "Models": ("provision-plan", "verify"),
+    "Settings and recovery": ("configure-preview", "configure", "recover"),
+}
+
+
+def setup_result_summary(action: str, report: dict, returncode: int) -> tuple[str, str]:
+    """Human presentation only; the CLI owns success and admission."""
+    label = SETUP_ACTIONS.get(action, "Setup")
+    if returncode:
+        issues = list(report.get("blockers") or report.get("errors") or [])
+        for model in report.get("models", []):
+            issues.extend(dict(issue, model_id=model.get("model_id", "Model")) for issue in model.get("blockers", []))
+        messages = []
+        for issue in issues:
+            message = str(issue.get("message") or issue.get("code", "") if isinstance(issue, dict) else issue)
+            if isinstance(issue, dict) and issue.get("code") == "bootstrap_incomplete":
+                package = "Python" if action.startswith("python-") else "web interface"
+                message = f"The managed {package} dependencies are not installed for this checkout. Choose Install {package} dependencies."
+            elif isinstance(issue, dict) and issue.get("code") == "approved_acquisition_metadata_missing":
+                message = f"{issue.get('model_id', 'Model')}: download information is missing for {issue.get('relative_path', 'a required file')}. This model cannot be installed through Setup yet."
+            for command, title in SETUP_ACTIONS.items():
+                message = re.sub(r"(?<![\w-])" + re.escape(command) + r"(?![\w-])", title, message)
+            if message:
+                messages.append(message.replace("_", " "))
+        return label + " needs attention", "\n".join(dict.fromkeys(messages)) or "The action could not finish. Open Technical details for the error."
+    titles = {
+        "discover": "System check passed", "plan": "System overview ready",
+        "python-plan": "Python installation preview ready", "frontend-plan": "Web interface preview ready",
+        "python-verify": "Python dependencies checked", "frontend-verify": "Web interface dependencies checked",
+        "python-bootstrap": "Python dependencies installed", "frontend-bootstrap": "Web interface dependencies installed",
+        "configure-preview": "Settings preview ready", "configure": "Settings saved",
+        "recover": "Settings recovery completed", "provision-plan": "Model requirements ready",
+        "verify": "Model check completed",
+    }
+    lines = []
+    if action in {"discover", "plan"}:
+        observations = report.get("observations", {})
+        tools = observations.get("tools", [])
+        if tools:
+            lines.append("Tools found: " + ", ".join(tool["name"] for tool in tools))
+        capacity = observations.get("capacity", {})
+        if capacity.get("cpu_threads") and capacity.get("memory_bytes"):
+            lines.append(f"Hardware: {capacity['cpu_threads']} CPU threads · {capacity['memory_bytes'] / 1024**3:.1f} GiB RAM")
+        lines.append("No system changes made. Model readiness is checked separately.")
+    elif action.endswith("-plan"):
+        lines.append("Preview only. Nothing has been installed.")
+        if report.get("root"):
+            lines.append("Installation folder: " + str(report["root"]))
+        if action == "python-plan":
+            lines.append("Next: choose Install Python dependencies.")
+        elif action == "frontend-plan":
+            lines.append("Next: choose Install web interface dependencies.")
+    elif action == "configure-preview":
+        lines.append("No settings changed. Choose Apply settings to save this file.")
+    elif action in {"python-bootstrap", "frontend-bootstrap"}:
+        lines.append("Installation finished. No services were started.")
+    else:
+        lines.append("The requested action finished successfully.")
+    return titles.get(action, label + " completed"), "\n".join(lines)
+
+
 SETUP_HELP = {
     "discover": "Check tools, storage and available hardware. No changes are made. Model IDs are optional.",
     "plan": "Show what Development needs before setup. No packages are installed or services started. Model IDs are optional.",
@@ -133,12 +199,12 @@ SETUP_HELP = {
     "configure": "Save first-install settings from a settings JSON file. Existing installations cannot be replaced here; use Storage and compute for supported edits. Preview settings first. No services start.",
     "recover": "Finish an interrupted settings update using the recovery ID from its report. Do not use this for package installation.",
     "provision-plan": "List the files and tools required by the selected models. Enter model IDs below. Nothing is downloaded.",
-    "verify": "Check a previous model installation. First run Preview model requirements for the same models. Enter the model installation ID from the earlier installation report (not the preview). No downloads or jobs are started.",
+    "verify": "Check an existing model installation. Enter its installation ID and model names. Requirements are refreshed automatically. Nothing is downloaded or started.",
 }
 SETUP_INPUTS = {
     "discover": ("models",), "plan": ("models",),
     "configure-preview": ("document",), "configure": ("document",),
-    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models", "model_operation", "plan_digest"),
+    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models", "model_operation"),
 }
 SETUP_MUTATIONS = {
     "python-bootstrap": "Install the required Python packages? An internet connection may be needed. This does not download models or start services.",
@@ -170,11 +236,13 @@ def build_setup_command(action: str, *, document: str = "", operation: str = "",
         for model in selected:
             command += ["--model", model]
     if action == "verify":
-        if len(plan_digest) != 64 or any(c not in "0123456789abcdef" for c in plan_digest):
+        if plan_digest and (len(plan_digest) != 64 or any(c not in "0123456789abcdef" for c in plan_digest)):
             raise ValueError("Run Preview model requirements first. It fills in the model check ID for the same model selection.")
         if not operation:
             raise ValueError("Enter the model installation ID (operation_id) from its installation report. If models have not been installed, use Preview model requirements instead.")
-        command += ["--expect-plan-sha256", plan_digest, "--operation-id", operation]
+        if plan_digest:
+            command += ["--expect-plan-sha256", plan_digest]
+        command += ["--operation-id", operation]
     return command
 
 
@@ -803,11 +871,15 @@ class BioModStackPanel(Adw.Application):
     def _build_setup_section(self) -> Gtk.Widget:
         """Expose the supported installer, never a second installation authority."""
         group = Adw.PreferencesGroup(title="Setup")
+        self.setup_group_combo = Gtk.ComboBoxText()
+        for title in SETUP_GROUPS:
+            self.setup_group_combo.append(title, title)
+        self.setup_group_combo.set_active_id("System")
+        category = Adw.ActionRow(title="Set up")
+        category.add_suffix(self.setup_group_combo)
+        group.add(category)
         self.setup_action_combo = Gtk.ComboBoxText()
-        for action, label in SETUP_ACTIONS.items():
-            self.setup_action_combo.append(action, label)
-        self.setup_action_combo.set_active_id("discover")
-        row = Adw.ActionRow(title="Setup action")
+        row = Adw.ActionRow(title="Action")
         row.add_suffix(self.setup_action_combo)
         run = Gtk.Button(label="Run")
         self.setup_run_button = run
@@ -826,7 +898,7 @@ class BioModStackPanel(Adw.Application):
             ("operation", "Recovery ID", "Copy operation_id from the interrupted settings report"),
             ("models", "Model IDs (comma-separated)", "For example: protenix, boltz2"),
             ("model_operation", "Model installation ID", "Copy operation_id from the model installation report, not a settings report"),
-            ("plan_digest", "Model check ID", "Filled by Preview model requirements; or copy its plan_digest"),
+
         ):
             entry = Gtk.Entry(hexpand=True)
             entry.set_placeholder_text(hint)
@@ -839,9 +911,13 @@ class BioModStackPanel(Adw.Application):
         group.add(options)
         self.setup_status_row = Adw.ActionRow(title="Setup result")
         group.add(self.setup_status_row)
-        output_row = Adw.ExpanderRow(title="Details")
+        self.setup_summary = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self.setup_summary.set_margin_top(8)
+        self.setup_summary.set_margin_bottom(8)
+        group.add(self.setup_summary)
+        output_row = Adw.ExpanderRow(title="Technical details")
         self.setup_details_row = output_row
-        output_row.set_expanded(True)
+        output_row.set_expanded(False)
         self.setup_output = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                          wrap_mode=Gtk.WrapMode.WORD_CHAR)
         output_scroll = Gtk.ScrolledWindow(min_content_height=180, max_content_height=300)
@@ -849,16 +925,26 @@ class BioModStackPanel(Adw.Application):
         output_row.add_row(output_scroll)
         group.add(output_row)
         self.setup_action_combo.connect("changed", self._on_setup_selection)
-        self._on_setup_selection(self.setup_action_combo)
+        self.setup_group_combo.connect("changed", self._on_setup_group)
+        self._on_setup_group(self.setup_group_combo)
         return group
+
+    def _on_setup_group(self, combo):
+        self.setup_action_combo.remove_all()
+        actions = SETUP_GROUPS[combo.get_active_id()]
+        for action in actions:
+            self.setup_action_combo.append(action, SETUP_ACTIONS[action])
+        self.setup_action_combo.set_active_id(actions[0])
 
     def _setup_feedback(self, status: str, detail: str) -> None:
         self.setup_status_row.set_subtitle(status)
         self.setup_output.get_buffer().set_text(detail or "No diagnostic output was returned.")
-        self.setup_details_row.set_expanded(True)
+        self.setup_details_row.set_expanded(False)
 
     def _on_setup_selection(self, combo):
         action = combo.get_active_id()
+        if action is None:
+            return
         help_text = SETUP_HELP[action]
         self.setup_help.set_text(help_text)
         inputs = SETUP_INPUTS.get(action, ())
@@ -868,8 +954,9 @@ class BioModStackPanel(Adw.Application):
         required = action not in {"discover", "plan"}
         self.setup_options.set_subtitle("Required for this action" if required else "Optional: limit the check to model IDs")
         self.setup_options.set_expanded(bool(inputs) and required)
-        self._setup_feedback("Not run yet. Review the action, then click Run.",
-                             SETUP_ACTIONS[action] + "\n\n" + help_text + "\n\nNo action has been run for this selection.")
+        self.setup_run_button.set_label(SETUP_ACTIONS[action].split()[0])
+        self.setup_summary.set_text("")
+        self._setup_feedback("Ready", "No action has been run for this selection.")
 
     def _on_setup_action(self, button):
         action = self.setup_action_combo.get_active_id()
@@ -878,15 +965,18 @@ class BioModStackPanel(Adw.Application):
             model_operation = values.pop("model_operation")
             if action == "verify":
                 values["operation"] = model_operation
+                values["plan_digest"] = ""
             command = build_setup_command(action, **values)
         except ValueError as exc:
             self._setup_feedback("Not started. Check the required input.", str(exc))
+            self.setup_summary.set_text(str(exc))
             return
         if getattr(self, "_service_action_active", False):
             self.setup_status_row.set_subtitle("Wait for the current action to finish.")
             return
         if action in SETUP_MUTATIONS:
             self._setup_feedback("Waiting for confirmation. Nothing changed yet.", SETUP_MUTATIONS[action])
+            self.setup_summary.set_text(SETUP_MUTATIONS[action])
             dialog = Gtk.MessageDialog(transient_for=self.window, modal=True,
                 message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
                 text=SETUP_ACTIONS[action], secondary_text=SETUP_MUTATIONS[action])
@@ -900,6 +990,7 @@ class BioModStackPanel(Adw.Application):
                     self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
                 else:
                     self._setup_feedback("Cancelled. Nothing changed.", SETUP_ACTIONS[action] + " was not run.")
+                    self.setup_summary.set_text("Nothing changed.")
 
             dialog.connect("response", respond)
             dialog.present()
@@ -1002,6 +1093,8 @@ class BioModStackPanel(Adw.Application):
                                  label + "\n\nWorking… The report will appear here when the command finishes. Package installation may take several minutes.")
             self.setup_run_button.set_sensitive(False)
             self.setup_action_combo.set_sensitive(False)
+            self.setup_group_combo.set_sensitive(False)
+            self.setup_summary.set_text("Please wait. The result will appear here.")
             self.setup_options.set_sensitive(False)
         show_notification(label, "BioModStack action started.")
 
@@ -1009,6 +1102,21 @@ class BioModStackPanel(Adw.Application):
             result = None
             error = None
             try:
+                if label == "Setup: " + SETUP_ACTIONS["verify"] and "--expect-plan-sha256" not in command:
+                    preview = ["bash", str(START_SCRIPT), "provision-plan", "--json"]
+                    for index, value in enumerate(command):
+                        if value == "--model":
+                            preview += [value, command[index + 1]]
+                    result = subprocess.run(preview, env=self._script_env(), capture_output=True,
+                                            text=True, errors="replace", stdin=subprocess.DEVNULL,
+                                            cwd=PROJECT_ROOT, check=False)
+                    if result.returncode:
+                        GLib.idle_add(self._finish_service_action, label, result, None)
+                        return
+                    digest = json.loads(result.stdout).get("plan_digest", "")
+                    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                        raise ValueError("Model requirements did not return a valid check identity.")
+                    command.extend(["--expect-plan-sha256", digest])
                 result = subprocess.run(
                     command,
                     env=self._script_env(),
@@ -1020,7 +1128,7 @@ class BioModStackPanel(Adw.Application):
                     cwd=PROJECT_ROOT,
                     check=False,
                 )
-            except (OSError, subprocess.SubprocessError) as exc:
+            except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError) as exc:
                 error = exc
             GLib.idle_add(self._finish_service_action, label, result, error)
 
@@ -1052,16 +1160,23 @@ class BioModStackPanel(Adw.Application):
             if error is None:
                 try:
                     report = json.loads(result.stdout)
-                    detail = str(report.get("status", "Report available"))
-                    if report.get("action") == "provision-plan" and report.get("plan_digest"):
-                        self.setup_entries["plan_digest"].set_text(str(report["plan_digest"]))
+                    if not isinstance(report, dict):
+                        raise ValueError("Setup response is not an object")
+                    action = report.get("action") or self.setup_action_combo.get_active_id()
+                    subtitle, detail = setup_result_summary(action, report, result.returncode)
+
                 except (ValueError, AttributeError):
-                    detail = "See Details"
-                outcome = "Completed" if result.returncode == 0 else "Needs attention"
-                subtitle = f"{label}: {outcome} — {detail} (exit {result.returncode})"
+                    subtitle = "Setup response could not be read"
+                    detail = "Open Technical details for the command output."
+            else:
+                subtitle = "Setup could not start"
+                detail = str(error)
+            self.setup_summary.set_text(detail)
+            notification_title = subtitle
             self._setup_feedback(subtitle, output)
             self.setup_run_button.set_sensitive(True)
             self.setup_action_combo.set_sensitive(True)
+            self.setup_group_combo.set_sensitive(True)
             self.setup_options.set_sensitive(True)
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(subtitle)
