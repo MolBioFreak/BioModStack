@@ -346,6 +346,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,
     "oem.xy.move_absolute": OperatorMoveXYInputsV2,
     "oem.xy.home": OperatorEmptyInputsV2,
+    "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
 }
 

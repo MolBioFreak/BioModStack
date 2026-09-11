@@ -275,7 +275,7 @@ export interface BioXpOperatorDashboard {
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
-    x_axis: BioXpOperatorDashboardXAxis;
+    x_axis: BioXpOperatorDashboardXAxis | null;
     z_axis: {
         status: BioXpOperatorDashboardAxis | null;
         provider: {
@@ -300,9 +300,9 @@ export interface BioXpOperatorDashboard {
         snapshot_freshness: Record<string, unknown>;
         last_failure: unknown;
         authority: string;
-    };
+    } | null;
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
-    pipettes: BioXpPipettes;
+    pipettes: BioXpPipettes | null;
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
     successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
@@ -1484,7 +1484,11 @@ export const useBioXpOperatorControlCatalogV2 = (
     gcTime: 0,
     staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 10_000 : false,
+    // The robot serves the preceding cached projection while refreshing it.
+    // Poll inside its 15 s expiry instead of consuming 10 s on each side.
+    refetchInterval: (query) => enabled && connectionGeneration > 0
+        ? Date.now() - (query.state.data?.dashboard.generated_at ?? 0) * 1000 >= 10_000 ? 1_000 : 5_000
+        : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1555,7 +1559,7 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })

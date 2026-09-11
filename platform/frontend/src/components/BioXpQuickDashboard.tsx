@@ -50,7 +50,7 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
                         <div style={panelStyle}>
                             <strong>Connection</strong>
-                            <div>{stale ? 'Last-known connection state' : data.connection.live ? 'Live / owned' : 'Not live'}</div>
+                            <div>{stale ? 'Last-known connection state' : data.connection.live === true ? 'Live / owned' : data.connection.live === false ? 'Not live' : 'Not reported'}</div>
                         </div>
                         <div style={panelStyle}>
                             <strong>Motion controls</strong>
@@ -67,8 +67,8 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                         </div>
                         <div style={panelStyle}>
                             <strong>Snapshot</strong>
-                            <div>{value(data.snapshot.freshness.state, 'missing')}</div>
-                            <small>Age: {value(data.snapshot.freshness.age_s)} s</small>
+                            <div>{value(data.snapshot.freshness?.state, 'missing')}</div>
+                            <small>Age: {value(data.snapshot.freshness?.age_s)} s</small>
                         </div>
                     </div>
 
@@ -108,7 +108,7 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
 
                     <h4 style={{ marginBottom: 6 }}>Pipettes</h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-                        {(data.pipettes.channels ?? []).map((channel, index) => {
+                        {(data.pipettes?.channels ?? []).map((channel, index) => {
                             const hardwareTip = channel.hardware_tip_status?.ok === true
                                 && channel.hardware_tip_status.hardware_truth_level === 'hardware_query'
                                 && typeof channel.hardware_tip_status.tip_loaded === 'boolean'
@@ -129,7 +129,7 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error, motionC
                                 </div>
                             );
                         })}
-                        {(data.pipettes.channels ?? []).length === 0 && <div style={panelStyle}>Pipette status not reported.</div>}
+                        {(data.pipettes?.channels ?? []).length === 0 && <div style={panelStyle}>Pipette status not reported.</div>}
                     </div>
                 </>
             )}

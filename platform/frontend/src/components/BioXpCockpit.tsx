@@ -252,7 +252,7 @@ export function BioXpCockpit() {
     const upstreamAgeMs = typeof upstreamGeneratedAt === 'number'
         ? Math.max(0, authorityNow - upstreamGeneratedAt * 1000) : Infinity;
     const localAgeMs = Math.max(0, authorityNow - catalogV2Query.dataUpdatedAt);
-    const currentCatalogV2 = linkConnected && catalogV2Query.error == null && !catalogV2Query.isStale
+    const currentCatalogV2 = linkConnected
         && localAgeMs < 15_000 && upstreamAgeMs < 15_000
         ? catalogV2Query.data : undefined;
     const currentDashboardV2 = currentCatalogV2?.dashboard;
@@ -367,16 +367,16 @@ export function BioXpCockpit() {
     });
 
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
-    const dashboard = !robotControlReady || catalogV2Query.isError ? undefined : currentTelemetry;
+    const dashboard = displayTelemetry;
     const ownershipGeneration = currentDashboardV2?.ownership_generation ?? 0;
 
     const ownership = connection?.ownership;
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = dashboard === undefined || connection?.hardware_fresh !== true
+    const motionControlsAvailable = currentTelemetry === undefined || connection?.hardware_fresh !== true
         ? undefined
-        : dashboard.motion.enabled === true;
+        : typeof currentTelemetry.motion.enabled === 'boolean' ? currentTelemetry.motion.enabled : undefined;
     const telemetryUnavailableReason = !linkConnected ? 'Connect to view robot state.'
         : !robotControlReady ? 'Robot runtime is not ready; telemetry is unavailable.'
             : catalogV2Query.error != null ? `Robot state request failed: ${bioXpErrorText(catalogV2Query.error)}`
@@ -606,7 +606,7 @@ export function BioXpCockpit() {
     const zPositiveEnabled = zPositiveDisabledReason === null;
     const zAbsoluteEnabled = zAbsoluteDisabledReason === null;
     const zHomeEnabled = zHomeDisabledReason === null;
-    const xAxisDashboard: BioXpOperatorDashboardXAxis | undefined = dashboard?.x_axis;
+    const xAxisDashboard: BioXpOperatorDashboardXAxis | undefined = dashboard?.x_axis ?? undefined;
     const xStatus = xAxisDashboard?.status;
     const xProvider = xAxisDashboard?.provider;
     const xLiveStatus = xProvider?.live_status;
@@ -1108,6 +1108,17 @@ export function BioXpCockpit() {
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
                 >Move to destination</button>
+                <button
+                    type="button"
+                    disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
+                    title={v2ActionDisabledReason('oem.deck.collect_authority') ?? 'Read current axes and latch; no activation, homing or movement.'}
+                    onClick={() => {
+                        const envelope = v2NormalEnvelope();
+                        if (envelope) submitV2({ ...envelope, action_id: 'oem.deck.collect_authority', inputs: {} });
+                    }}
+                    className="ml-3 mt-3 rounded bg-slate-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
+                >Refresh deck readiness (no motion)</button>
+                {invokeYAction.variables?.request.action_id === 'oem.deck.collect_authority' && <YOperatorError label="Deck readiness" error={invokeYAction.error} />}
                 {deckReceiptUnavailable && (
                     <p role="status" className="mt-3 rounded border border-amber-700 bg-amber-950/30 p-2 text-sm text-amber-100">
                         receipt unavailable / outcome uncertain. Do not resubmit. Reconcile by command ID until a terminal receipt is available.
@@ -1344,9 +1355,9 @@ export function BioXpCockpit() {
                                             <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
                                             <p className="mt-2"><strong>Dynamic OEM pseudo-home floor:</strong> OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
                                             <p className="mt-1"><strong>Clear and Home:</strong> Z Clear returns to the selected pseudo-home. Manual Home follows the OEM homing sequence and establishes controller coordinate 0.</p>
-                                            <p className="mt-1"><strong>Position:</strong> {dashboard?.z_axis.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboard?.z_axis.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboard?.z_axis.provider.state ?? 'unknown'}</p>
-                                            <p className="mt-1"><strong>GAP9/10:</strong> {dashboard?.z_axis.status?.left_switch_state ?? 'unknown'} / {dashboard?.z_axis.status?.right_switch_state ?? 'unknown'} · <strong>GAP13/12 disabled:</strong> {String(dashboard?.z_axis.status?.left_switch_disabled ?? 'unknown')} / {String(dashboard?.z_axis.status?.right_switch_disabled ?? 'unknown')}</p>
-                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(dashboard?.z_axis.provider.switch_mask_tuple?.['12'] ?? 'unknown')} / {String(dashboard?.z_axis.provider.switch_mask_tuple?.['13'] ?? 'unknown')}. Recovered OEM Z initialization writes neither register.</p>
+                                            <p className="mt-1"><strong>Position:</strong> {dashboard?.z_axis?.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboard?.z_axis?.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboard?.z_axis?.provider.state ?? 'unknown'}</p>
+                                            <p className="mt-1"><strong>GAP9/10:</strong> {dashboard?.z_axis?.status?.left_switch_state ?? 'unknown'} / {dashboard?.z_axis?.status?.right_switch_state ?? 'unknown'} · <strong>GAP13/12 disabled:</strong> {String(dashboard?.z_axis?.status?.left_switch_disabled ?? 'unknown')} / {String(dashboard?.z_axis?.status?.right_switch_disabled ?? 'unknown')}</p>
+                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['12'] ?? 'unknown')} / {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['13'] ?? 'unknown')}. Recovered OEM Z initialization writes neither register.</p>
                                             <div className="mt-2 flex flex-wrap gap-2">
                                                 <button
                                                     type="button"
@@ -1359,7 +1370,7 @@ export function BioXpCockpit() {
                                                     }}
                                                 >Z Clear (automatic OEM position)</button>
                                             </div>
-                                            {dashboard?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
+                                            {dashboard?.z_axis?.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
                                         </details>
                                     )}
                                 </div>
@@ -1466,7 +1477,7 @@ export function BioXpCockpit() {
                     {pipettesOpen && <BioXpPipetteControlPanel
                         generation={generation}
                         connected={robotControlReady && operatorCatalog.data !== undefined}
-                        pipettes={operatorCatalog.data?.dashboard.pipettes}
+                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
                         freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
                         actions={catalog?.actions}
                         catalogLoading={operatorCatalog.isLoading}

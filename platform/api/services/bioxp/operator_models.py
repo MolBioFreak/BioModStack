@@ -5,7 +5,7 @@ import math
 import re
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, StrictBool, StrictFloat, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, OnErrorOmit, RootModel, StrictBool, StrictFloat, StrictInt, ValidationError, field_validator, model_validator
 
 ActionKind = Literal["primitive", "meta"]
 ActionSafety = Literal["read_only", "service", "motion", "stop", "emergency"]
@@ -69,7 +69,7 @@ class OperatorDashboardAxis(BaseModel):
     min_steps: StrictInt | None = None
     max_steps: StrictInt | None = None
     motor_temperature_c: StrictFloat | StrictInt | None = None
-    motor_temperature_available: StrictBool
+    motor_temperature_available: StrictBool = False
     telemetry_authority: str | None = Field(default=None, max_length=120)
     physical_position_verified: StrictBool | None = None
 
@@ -4093,23 +4093,33 @@ class OperatorDashboardQueueAxis(BaseModel):
 
 
 class OperatorDashboard(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
     schema_version: Literal["bioxp.operator_dashboard.v1"]
     ownership_generation: StrictInt = Field(ge=0)
-    connection: dict[str, Any]
-    motion: dict[str, Any]
-    operation: dict[str, Any]
-    enclosure: dict[str, Any]
-    axes: list[OperatorDashboardAxis] = Field(max_length=16)
-    x_axis: OperatorDashboardXAxis
-    z_axis: OperatorDashboardZAxis
-    temperatures: list[OperatorDashboardTemperature] = Field(max_length=32)
-    pipettes: OperatorDashboardPipettes
-    snapshot: dict[str, Any]
+    connection: dict[str, Any] = Field(default_factory=dict)
+    motion: dict[str, Any] = Field(default_factory=dict)
+    operation: dict[str, Any] = Field(default_factory=dict)
+    enclosure: dict[str, Any] = Field(default_factory=dict)
+    axes: list[OnErrorOmit[OperatorDashboardAxis]] = Field(default_factory=list, max_length=16)
+    x_axis: OperatorDashboardXAxis | None = None
+    z_axis: OperatorDashboardZAxis | None = None
+    temperatures: list[OnErrorOmit[OperatorDashboardTemperature]] = Field(default_factory=list, max_length=32)
+    pipettes: OperatorDashboardPipettes | None = None
+    snapshot: dict[str, Any] = Field(default_factory=dict)
     successive_move_queue: dict[str, OperatorDashboardQueueAxis] = Field(
         default_factory=dict, max_length=8
     )
     command_queue: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("connection", "motion", "operation", "enclosure", "axes", "x_axis", "z_axis", "temperatures", "pipettes", "snapshot", "successive_move_queue", "command_queue", mode="wrap")
+    @classmethod
+    def isolate_display_section(cls, value, handler, info):
+        # Display observations are not admission authority. A malformed section
+        # is unreported; command, ownership and receipt validation stays strict.
+        try:
+            return handler(value)
+        except ValidationError:
+            return cls.model_fields[info.field_name].get_default(call_default_factory=True)
 
 
 class OperatorActionSpec(BaseModel):
@@ -5529,6 +5539,14 @@ class OperatorDashboardV2(BaseModel):
     latest_receipts: list[OperatorActionReceiptV2]
     telemetry: OperatorDashboard | None = None
     deck: OperatorDeckDashboardV1 | None = None
+
+    @field_validator("telemetry", mode="wrap")
+    @classmethod
+    def isolate_display_telemetry(cls, value, handler):
+        try:
+            return handler(value)
+        except ValidationError:
+            return None
 
     @field_validator("generated_at")
     @classmethod
