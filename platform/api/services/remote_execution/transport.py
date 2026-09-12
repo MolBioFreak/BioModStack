@@ -119,7 +119,7 @@ def _ssh_base(connection: RemoteConnection) -> list[str]:
 
 
 async def _run_owned(argv: Sequence[str], destination: Path, *, timeout: float) -> CommandResult:
-    """Only result downloads use this durable, API-death-aware lifecycle."""
+    """Artifact transfers with a durable, API-death-aware lifecycle."""
     marker = transfer_marker(destination)
     # Only the collector's freshly prepared legacy boot fence may launch. Do
     # not overwrite an active or ambiguous supervisor record on a direct retry.
@@ -383,6 +383,7 @@ async def rsync_to_remote(
     *,
     delete: bool = True,
     timeout: float = 3600,
+    ownership_directory: Path | None = None,
 ) -> None:
     source = source.resolve()
     ssh_command = " ".join(
@@ -400,16 +401,11 @@ async def rsync_to_remote(
     if connection.provision_operation_id is not None:
         receiver = _provision_argv(connection, connection.provision_operation_id, "run", ["rsync"])
         rsync_options.append("--rsync-path=" + shlex.join(receiver))
-    result = await _run(
-        [
-            *rsync_options,
-            "--rsh",
-            ssh_command,
-            str(source) + ("/" if source.is_dir() else ""),
-            f"{connection.username}@{connection.host}:{destination}",
-        ],
-        timeout=timeout,
-    )
+    argv = [*rsync_options, '--rsh', ssh_command,
+            str(source) + ('/' if source.is_dir() else ''),
+            f'{connection.username}@{connection.host}:{destination}']
+    result = (await _run_owned(argv, ownership_directory, timeout=timeout)
+              if ownership_directory is not None else await _run(argv, timeout=timeout))
     if result.returncode != 0:
         raise RemoteTransportError((result.stderr.strip() or "rsync upload failed")[-500:])
 

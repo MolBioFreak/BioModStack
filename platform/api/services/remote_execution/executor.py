@@ -324,6 +324,7 @@ def _remote_receipt(
             context_identity = {key: context[key] for key in (
                 'root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity',
                 'plan_sha256', 'artifact_root')}
+            context_identity['external_services'] = context['execution_plan']['metadata']['external_services']
     local_roots = [local for local, remote in bundle.envelope.path_map.items()
                    if remote == bundle.envelope.output_directory]
     if len(local_roots) != 1:
@@ -1653,6 +1654,92 @@ async def reconcile_remote_job(session: AsyncSession, job: Job, *, background_ta
     return changed or bool(admitted)
 
 
+async def _service_remote_external_inputs(session, job, status) -> None:
+    """Deliver declared external-stage data; scientific execution stays on worker."""
+    from .result_generation import checked, prepare_transfer, begin_transfer
+    from component_runtime import canonical_bytes
+    from services.model_msa_handoff import (prepare_generated_msa_on_controller,
+        await_controller_service_operation, generated_msa_service_supported)
+    receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+    authority = receipt.get('component_context_identity') or {}
+    selected = [row for row in authority.get('external_services', []) if generated_msa_service_supported(row)]
+    if not selected or status.state != 'running':
+        return
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    if target is None:
+        raise RemoteExecutionError('External service target is unavailable')
+    connection, attempt_dir = _connection_for_attempt(target, job)
+    snapshot = canonical_bytes({key: getattr(job, key) for key in
+        ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
+         'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
+    lease_epoch = receipt.get('lease_acquired_at')
+
+    async def check_fence():
+        await session.refresh(job)
+        current_target = (await session.execute(select(ExecutionTarget).where(
+            ExecutionTarget.id == str(job.execution_target_id), ExecutionTarget.leased_job_id == str(job.id),
+            *_attempt_lease_predicates(job)))).scalar_one_or_none()
+        current = canonical_bytes({key: getattr(job, key) for key in
+            ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
+             'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
+        current_receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+        if (current != snapshot or (job.status, job.queue_status) != ('running', 'running')
+                or current_receipt.get('component_context_identity') != authority
+                or current_target is None or not lease_epoch
+                or current_receipt.get('lease_acquired_at') != lease_epoch):
+            raise asyncio.CancelledError('External service owner changed')
+
+    await check_fence()
+    args = ['--attempt-id', authority['attempt_id'], '--expected-boot-id', status.boot_id,
+            '--lease-id', authority['lease_id'], '--plan-sha256', authority['plan_sha256']]
+    response = await run_remote(connection, _worker_argv(connection, 'external-service-status', attempt_dir, *args), timeout=60)
+    observed = json.loads(response.stdout.strip().splitlines()[-1])
+    await check_fence()
+    if observed.get('artifact_root') != authority['artifact_root']:
+        raise RemoteExecutionError('External service artifact custody conflicts')
+    for request in observed['requests']:
+        if request.get('service') not in selected:
+            raise RemoteExecutionError('External service provider/settings differ from selected plan')
+        if any(request.get(key) != authority.get(key) for key in
+               ('attempt_id', 'root_job_id', 'target_id', 'lease_id', 'source_identity', 'plan_sha256')):
+            raise RemoteExecutionError('External service request belongs to a foreign attempt')
+        # Use the existing attempt staging/transfer fence across controller death.
+        # No old source tree is reclaimed until its transport proves quiescence.
+        from component_runtime import digest
+        if request.get('request_id') != digest({k: v for k, v in request.items() if k != 'request_id'}):
+            raise RemoteExecutionError('External service request digest conflicts')
+        staging = checked(get_data_root() / 'remote-execution' / 'staging' / ('msa-' + request['request_id']))
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        prepare_transfer(staging)
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir()
+        package = staging / 'prepared'
+        try:
+            sha = await prepare_generated_msa_on_controller(request, package, check_fence)
+        except Exception:
+            await check_fence()
+            await run_remote(connection, _worker_argv(connection, 'external-service-deliver', attempt_dir,
+                *args, '--request-id', request['request_id'], '--failed'), timeout=60)
+            raise
+        if sha is None:
+            return
+        await check_fence()
+        destination = str(PurePosixPath(authority['artifact_root']) / 'external-services' / request['request_id'] / sha)
+        await run_remote(connection, ['mkdir', '-p', destination])
+        begin_transfer(staging)
+        transfer = asyncio.create_task(rsync_to_remote(connection, package, destination, delete=False,
+                                                       ownership_directory=staging))
+        await await_controller_service_operation(transfer, check_fence)
+        await check_fence()
+        # Worker rechecks cancellation, request/settings/native identities and
+        # every alignment digest before publishing its sole ledger receipt.
+        await run_remote(connection, _worker_argv(connection, 'external-service-deliver', attempt_dir,
+            *args, '--request-id', request['request_id'], '--manifest-sha256', sha), timeout=60)
+        prepare_transfer(staging)
+        shutil.rmtree(staging)
+
+
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
@@ -1804,6 +1891,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             return False
         return await _publish_started_receipt(session, job, status)
     if status.state not in TERMINAL_REMOTE_STATES:
+        await _service_remote_external_inputs(session, job, status)
         if status.activity is not None:
             from .progress import publish_job_progress
 

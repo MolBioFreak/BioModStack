@@ -432,6 +432,30 @@ def _component_checkpoint_runtime(envelope: dict):
     return runtime_from_environment(path)
 
 
+def external_service_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
+                             lease_id: str, plan_sha256: str, request_id: str | None = None,
+                             manifest_sha256: str | None = None) -> dict:
+    """Read/accept declared service data under the original running owner fence."""
+    with (attempt_dir / 'start.lock').open('a+b') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        current = status(attempt_dir)
+        if (current.get('attempt_id') != attempt_id or current.get('boot_id') != expected_boot_id
+                or expected_boot_id != boot_id() or current.get('state') != 'running'
+                or (attempt_dir / CANCEL_REQUEST_FILE).exists()):
+            raise RuntimeError('External service attempt/boot/running authority conflicts')
+        runtime = _component_checkpoint_runtime(load_json(envelope_path(attempt_dir)))
+        if runtime is None or runtime.lease_id != lease_id or runtime.plan_sha256 != plan_sha256:
+            raise RuntimeError('External service lease/plan authority conflicts')
+        if request_id is not None:
+            if manifest_sha256 is None:
+                runtime.fail_external_service(request_id)
+                return dict(request_id=request_id, result=runtime.external_service(request_id)['result'])
+            from services.model_msa_handoff import accept_generated_msa
+            result = accept_generated_msa(runtime, request_id, manifest_sha256)
+            return dict(request_id=request_id, result=result)
+        return dict(requests=runtime.pending_external_services(), artifact_root=str(runtime.artifact_root))
+
+
 def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: str,
                        lease_id: str, checkpoint_id: str, checkpoint_sha256: str,
                        decision: dict, continuation_lease_id: str, resource_admission: dict | None = None,
@@ -1087,6 +1111,15 @@ def parser() -> argparse.ArgumentParser:
         if name == "component-retry":
             for field in ("failure-code", "continuation-lease-id", "resource-admission-json"):
                 retry.add_argument("--" + field, required=True)
+    for name in ('external-service-status', 'external-service-deliver'):
+        service = sub.add_parser(name)
+        for field in ('attempt-dir', 'attempt-id', 'expected-boot-id', 'lease-id', 'plan-sha256'):
+            service.add_argument('--' + field, required=True)
+        if name == 'external-service-deliver':
+            service.add_argument('--request-id', required=True)
+            outcome = service.add_mutually_exclusive_group(required=True)
+            outcome.add_argument('--manifest-sha256')
+            outcome.add_argument('--failed', action='store_true')
     return value
 
 
@@ -1118,6 +1151,10 @@ def main() -> int:
             observe_only=observe, failure_code=None if observe else args.failure_code,
             continuation_lease_id=None if observe else args.continuation_lease_id,
             resource_admission=None if observe else json.loads(args.resource_admission_json))
+    elif args.command in {'external-service-status', 'external-service-deliver'}:
+        result = external_service_control(attempt_dir, attempt_id=args.attempt_id,
+            expected_boot_id=args.expected_boot_id, lease_id=args.lease_id, plan_sha256=args.plan_sha256,
+            request_id=getattr(args, 'request_id', None), manifest_sha256=getattr(args, 'manifest_sha256', None))
     elif args.command == "collect":
         result = load_json(Path(load_json(envelope_path(attempt_dir))["output_directory"]) / RESULT_MANIFEST_FILE)
     elif args.command == "supervise":

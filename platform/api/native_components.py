@@ -556,16 +556,22 @@ class _NativeAnnotations:
     def callback(self, owner, authority):
         self.asset('support_tool', 'scripts/lib/component_adapter.py', authority)
 
-    def msa(self, predictor, after):
+    def msa(self, predictor, after, *, consumer=None):
         from component_runtime import ExternalServiceIntent, NativeArtifactRole, canonical_bytes
         key = predictor + ':generated_msa'
+        if consumer == 'modules/antibody_batch.nf:BatchProtenixValidation':
+            self.asset('support_tool', 'scripts/lib/component_adapter.py', consumer)
         enabled = self.p.get('protenix_use_msa', True) is not False if predictor == 'protenix' else self.p.get('boltz_use_msa') is True
         self.roles.append(NativeArtifactRole(key, predictor, 'input', 'native_chain_alignments',
             'platform/api/services/model_msa_handoff.py', requiredness='required' if enabled else 'optional',
             format='native_msa_handoff', identity_authority='biomodstack_msa_handoff.py'))
         self.services.append(ExternalServiceIntent(key, self.p.get('msa_provider'),
-            'platform/api/services/model_msa_handoff.py; platform/api/services/msa_preparation.py',
-            canonical_bytes({k: v for k, v in self.p.items() if k.startswith(('msa_', 'boltz_', 'protenix_'))}),
+            'platform/api/services/model_msa_handoff.py; platform/api/services/msa_preparation.py'
+                + ('; ' + consumer if consumer else ''),
+            canonical_bytes({k: v for k, v in self.p.items()
+                             if k.startswith(('msa_', 'boltz_', 'protenix_', 'colabfold_'))
+                             and k not in {'msa_cache_dir', 'msa_local_db', 'protenix_container_path',
+                                           'protenix_model_dir', 'protenix_download_cache_dir'}}),
             tuple(role.role_id for role in self.roles if role.component_key in after and role.direction == 'output'),
             (key,), 'planned_from_generated_candidates' if enabled else 'disabled'))
 
@@ -641,7 +647,8 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if predictor == 'boltz2':
             result = a.chain(['AlignBoltzValidation'], result)
         if predictor in {'boltz2', 'protenix_v2'}:
-            a.msa('protenix' if predictor == 'protenix_v2' else 'boltz2', after)
+            a.msa('protenix' if predictor == 'protenix_v2' else 'boltz2', after,
+                  consumer='modules/antibody_batch.nf:' + name)
         return result
 
     if workflow == 'protein_sequence_design':

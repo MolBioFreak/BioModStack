@@ -786,6 +786,7 @@ class ComponentRuntime(GroupingLedger):
             db.execute("CREATE TABLE IF NOT EXISTS component_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, component TEXT, phase TEXT NOT NULL, detail BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS root_execution (singleton INTEGER PRIMARY KEY CHECK(singleton=1), state TEXT NOT NULL, owner TEXT NOT NULL, boot TEXT NOT NULL, detail BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS component_groups (group_id TEXT PRIMARY KEY, children BLOB NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS external_services (request_id TEXT PRIMARY KEY, request BLOB NOT NULL, result BLOB)")
             db.execute("CREATE TABLE IF NOT EXISTS checkpoints (checkpoint TEXT PRIMARY KEY, payload BLOB NOT NULL, decision BLOB)")
             db.execute("CREATE TABLE IF NOT EXISTS checkpoint_operations (operation TEXT PRIMARY KEY, detail BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS component_replacements (original TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL, operation TEXT UNIQUE NOT NULL, detail BLOB NOT NULL)")
@@ -799,6 +800,64 @@ class ComponentRuntime(GroupingLedger):
     def _event(db, component: str | None, phase: str, detail: Mapping[str, Any]) -> None:
         db.execute("INSERT INTO component_events(component,phase,detail) VALUES(?,?,?)",
                    (component, phase, canonical_bytes(dict(detail))))
+
+    def submit_external_service(self, service_id: str, native_input: Any) -> str:
+        """Journal data for a compiler-declared external stage, not a child launch."""
+        services = (self.execution_plan or {}).get('metadata', {}).get('external_services', [])
+        selected = [row for row in services if row['logical_id'] == service_id
+                    and row['state'] == 'planned_from_generated_candidates']
+        if len(selected) != 1 or not self.plan_sha256 or not self.source_identity:
+            raise ValueError('external service requires its selected plan/source authority')
+        request = dict(attempt_id=self.attempt_id, root_job_id=self.root_job_id,
+            target_id=self.target_id, lease_id=self.lease_id, plan_sha256=self.plan_sha256,
+            source_identity=self.source_identity, service=selected[0], native_input=native_input)
+        payload = canonical_bytes(request)
+        if len(payload) > 4 * 1024 * 1024:
+            raise ValueError('external service native input exceeds transport bound')
+        identity = digest(request)
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            db.execute('INSERT OR IGNORE INTO external_services VALUES(?,?,NULL)', (identity, payload))
+        return identity
+
+    def pending_external_services(self) -> tuple[dict[str, Any], ...]:
+        with self._connect() as db:
+            self._active(db)
+            # One bounded operation per controller reconciliation; no new scheduler.
+            rows = db.execute('SELECT request_id,request FROM external_services WHERE result IS NULL ORDER BY rowid LIMIT 1')
+            return tuple(dict(request_id=row[0], **json.loads(row[1])) for row in rows)
+
+    def external_service(self, request_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            self._active(db)
+            row = db.execute('SELECT request,result FROM external_services WHERE request_id=?', (request_id,)).fetchone()
+        if row is None:
+            raise ValueError('foreign external service request')
+        return dict(request_id=request_id, **json.loads(row[0]), result=json.loads(row[1]) if row[1] else None)
+
+    def fail_external_service(self, request_id: str) -> None:
+        """Definitive controller failure; never overwrite delivered input custody."""
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            if not db.execute('SELECT 1 FROM external_services WHERE request_id=?', (request_id,)).fetchone():
+                raise ValueError('foreign external service request')
+            db.execute('UPDATE external_services SET result=? WHERE request_id=? AND result IS NULL',
+                       (canonical_bytes({'error': 'controller MSA preparation failed'}), request_id))
+
+    def complete_external_service(self, request_id: str, reference: ResultReference) -> None:
+        if reference.component_id != request_id:
+            raise ValueError('foreign external service artifact')
+        reference.resolve(self.artifact_root)
+        payload = canonical_bytes(asdict(reference))
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            row = db.execute('SELECT result FROM external_services WHERE request_id=?', (request_id,)).fetchone()
+            if row is None or (row[0] is not None and row[0] != payload):
+                raise ValueError('immutable external service result conflicts')
+            db.execute('UPDATE external_services SET result=? WHERE request_id=?', (payload, request_id))
 
     def submit(self, request: ComponentRequest) -> str:
         if not isinstance(request, ComponentRequest):

@@ -789,6 +789,8 @@ def prepare_with_local_msa(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare Protenix-compatible MSA inputs")
+    parser.add_argument('--generated-service', default='', choices=['', 'protenix:generated_msa'],
+                        help='Await the selected controller service for this native generated roster')
     parser.add_argument('--prepared-inputs', default='', help='Controller-owned portable MSA input directory')
     parser.add_argument('--prepared-sha256', default='', help='Envelope-bound MSA manifest digest')
     parser.add_argument("--input_json", required=True, help="Input Protenix JSON")
@@ -850,6 +852,15 @@ def main() -> None:
         return
 
     hydrated_from_cache = 0
+    if getattr(args, 'generated_service', '') and os.environ.get('BMS_COMPONENT_CONTEXT'):
+        if args.prepared_inputs:
+            raise ValueError('Generated service and direct prepared inputs are distinct authorities')
+        from component_adapter import await_external_service, runtime_from_environment
+        from services.model_msa_handoff import generated_protenix_request
+        runtime = runtime_from_environment()
+        if runtime.target_id != 'local':
+            source, sha = await_external_service(args.generated_service, generated_protenix_request(payload))
+            args.prepared_inputs, args.prepared_sha256 = str(source), sha
     if getattr(args, 'prepared_inputs', ''):
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

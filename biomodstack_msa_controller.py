@@ -85,7 +85,7 @@ def prepare(config_path: Path, request: dict, operation, *, resume_same_request=
     identity). Shared-client replays execute its verified cache read, not a stale
     controller receipt. This internal primitive is not a worker RPC.
     """
-    from biomodstack_msa_api import PendingMSA, ReconciliationRequired
+    from biomodstack_msa_api import PendingMSA, ReconciliationRequired, _check_preparation_stop
 
     if type(resume_same_request) is not bool:
         raise ValueError('resume_same_request must be boolean')
@@ -97,7 +97,16 @@ def prepare(config_path: Path, request: dict, operation, *, resume_same_request=
         raise RuntimeError('Nested MSA controller preparation is forbidden')
     # One lock for the entire controller, not per sequence/cache/job/worker.
     with (root / 'submission.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        # A queued caller must join on stop without waiting for another job's
+        # provider operation, or touching that owner's active ticket/receipt.
+        while True:
+            _check_preparation_stop()
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(0.1)
+        _check_preparation_stop()
         active_path = root / 'active.json'
         state = None
         if active_path.exists():

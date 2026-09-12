@@ -401,6 +401,7 @@ PY
             echo "[BatchProtenixValidation] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            --generated-service protenix:generated_msa \\
             --input_json input.json \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
