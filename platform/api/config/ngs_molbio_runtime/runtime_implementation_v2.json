@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "db15307811e265e6416b9ba505dfbee3ff68eba89d87b6044dbb5bb53180b5ff",
+  "content_sha256": "eb0d54c451205f225543c8198f8223f9af86bf7ac482c14921e26eef434408fc",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -659,8 +659,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "50c99b697adc12329dfb3c4436ced6229857c9049e035c5eb4d2fce2e97c685d",
-      "size_bytes": 190388
+      "sha256": "8144d6cd5d691092ff1164134871f5fd6453efd1f93903a3beb6df8c8f3b328a",
+      "size_bytes": 192653
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -869,8 +869,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "8f1da76adb430a8fda2751643ac20dcaf055825ab7d5c1bc4af7ce2d14df27df",
-      "size_bytes": 176491
+      "sha256": "1f39c754aaebd61e4331fc09de2de3eab8e2b390cefcdd5a6ab0548ef4e156e9",
+      "size_bytes": 181704
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -944,8 +944,8 @@
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
-      "sha256": "cf2fe86ad1a414b4f71b3170bf4145a92ef6b6bc7bb921665e1fb1388ecc9dc4",
-      "size_bytes": 191673
+      "sha256": "79f2ba72f62f6ec570738fe542df62c056d3bf660c5c2e85e675fec9285f03dd",
+      "size_bytes": 192742
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
@@ -1014,8 +1014,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "ec1eca5a5b43bfb111df202f30c882f938169b4a2ac71e736746291bbcbb486a",
-      "size_bytes": 328697
+      "sha256": "428341756fdf9f9732f9c4535257bd6d9af52193f00908d9272bc52e505fbed4",
+      "size_bytes": 328785
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -1074,8 +1074,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/RawReadInspector.tsx",
-      "sha256": "9ffefd0fa3edea75e91b2d1a4369692856f115b408707086ed3d626f63abd606",
-      "size_bytes": 28583
+      "sha256": "f0e304f72c1d0b91d21ebbb02060cec58a6efb60d5cd5283ceb923a3ff26ae97",
+      "size_bytes": 28744
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
@@ -1139,8 +1139,8 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
-      "sha256": "abad65c9eff2d34423c7e4f177100237636ab76b2140be5fe321c90750b6b019",
-      "size_bytes": 18233
+      "sha256": "f909a9bc9dc045e82780add733ba2a186ff13c12bd0132e1453b2454fe1db9bf",
+      "size_bytes": 20857
     },
     {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
@@ -1169,8 +1169,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "ae7b9a00b4d94c33a75bf6d4b1814be21ef5269b157ce1ebf7899bde293f9bf8",
-      "size_bytes": 37002
+      "sha256": "b64205a644a886665d39c57d080e7f18f32d527e0315bd0640f3a88af2a3bdce",
+      "size_bytes": 39431
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -1189,8 +1189,8 @@
     },
     {
       "path": "platform/frontend/tests/vitest/rawReadSortableWorkbench.test.tsx",
-      "sha256": "47db15f5de7bd1a055eb7ad36b21bbe40d732a5083dbee0347bdc141a333c06e",
-      "size_bytes": 18206
+      "sha256": "00bb26e6c90bb7f46762c59aef975111625a9e9f778b9743bb0a94d3acec777c",
+      "size_bytes": 19782
     },
     {
       "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
@@ -1432,8 +1432,8 @@
     "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "100fa9deb8ba0f880e663bb1373f12ca8de3d4bd",
-  "successor_source_tree": "13fc0448f815642cacc99c617523f0b09e8182df",
+  "successor_source_commit": "051d97145746b3b60f3cc45b40d667bb2bf09f7a",
+  "successor_source_tree": "8a98d44f1aeb8c46b9a8a9723e574766758444fd",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
