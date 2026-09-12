@@ -85,6 +85,7 @@ RESULT_SURFACE_VALIDATOR = Draft202012Validator(RESULT_SURFACE_SCHEMA)
 @pytest_asyncio.fixture
 async def adapter_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BMS_BUILD_SHA", "adapter-domain-test-build")
+    monkeypatch.setenv("BMS_DATA", str(tmp_path))
     monkeypatch.setattr(
         adapter_module,
         "source_build_revision",
@@ -145,92 +146,9 @@ async def test_core_rfd3_cm_and_frustrampnn_verify_native_authorities(adapter_st
         "roles": {"result_role": "structure"},
     }
 
-    rfd3_request = {
-        "schema": "bms.rfd3.local-redesign.request.v1",
-        "request_id": "rfd3-request-1",
-        "profile_id": "default",
-        "profile_registry_sha256": "2" * 64,
-        "profile": {"name": "default"},
-        "input": {"path": str(structure), "sha256": structure_sha},
-    }
-    rfd3_digest = request_sha256(rfd3_request)
-    rfd3_root = tmp_path / "results" / "rfd3-job-1"
-    rfd3_collected = rfd3_root / "collected" / "protein_local_redesign"
-    rfd3_candidate_root = rfd3_collected / "candidates" / "candidate-1"
-    rfd3_candidate_root.mkdir(parents=True)
-    rfd3_native_request = rfd3_collected / "native_request.json"
-    rfd3_candidate_structure = rfd3_candidate_root / "candidate.pdb"
-    rfd3_candidate_metadata = rfd3_candidate_root / "prediction.json"
-    rfd3_native_request.write_text(json.dumps(rfd3_request), encoding="utf-8")
-    rfd3_candidate_structure.write_bytes(b"ATOM      1  CA  GLY A   1\n")
-    rfd3_candidate_metadata.write_text('{"confidence":0.9}', encoding="utf-8")
-
-    def rfd3_descriptor(role: str, path: Path, relative_path: str) -> dict:
-        return {
-            "role": role,
-            "relative_path": relative_path,
-            "storage_path": str(path.resolve()),
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "bytes": path.stat().st_size,
-            "media_type": "application/octet-stream",
-        }
-
-    rfd3_candidate_descriptors = [
-        rfd3_descriptor(
-            "structure",
-            rfd3_candidate_structure,
-            "collected/protein_local_redesign/candidates/candidate-1/candidate.pdb",
-        ),
-        rfd3_descriptor(
-            "native_prediction_metadata",
-            rfd3_candidate_metadata,
-            "collected/protein_local_redesign/candidates/candidate-1/prediction.json",
-        ),
-    ]
-    rfd3_unsigned_manifest = {
-        "schema": "bms.rfd3.local-redesign.result.v1",
-        "request_sha256": rfd3_digest,
-        "result_contract_id": "rfd3_local_redesign_v1",
-        "profile_id": "default",
-        "profile_registry_sha256": "2" * 64,
-        "profile": {"name": "default"},
-        "artifacts": [
-            rfd3_descriptor("source_structure", structure, "source.pdb"),
-            rfd3_descriptor(
-                "native_request",
-                rfd3_native_request,
-                "collected/protein_local_redesign/native_request.json",
-            ),
-            *rfd3_candidate_descriptors,
-        ],
-        "candidates": [
-            {
-                "candidate_id": "candidate-1",
-                "artifacts": rfd3_candidate_descriptors,
-                "artifact_manifest_sha256": hashlib.sha256(
-                    json.dumps(
-                        rfd3_candidate_descriptors,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=True,
-                        allow_nan=False,
-                    ).encode()
-                ).hexdigest(),
-            }
-        ],
-    }
-    rfd3_manifest_sha = hashlib.sha256(
-        json.dumps(
-            rfd3_unsigned_manifest,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode()
-    ).hexdigest()
-    (rfd3_collected / "rfd3_result_manifest.json").write_text(
-        json.dumps({**rfd3_unsigned_manifest, "manifest_sha256": rfd3_manifest_sha}), encoding="utf-8"
-    )
+    from tests.rfd3_native_fixture import write_native_result
+    rfd3_request, rfd3_digest, rfd3_manifest_sha, rfd3_root = write_native_result(
+        tmp_path, job_id="rfd3-job-1", request_id="rfd3-request-1")
 
     cm_request_without_hash = {
         "schema_name": "cm_request",
@@ -334,7 +252,7 @@ async def test_core_rfd3_cm_and_frustrampnn_verify_native_authorities(adapter_st
                     job_id="rfd3-job-1",
                     request_sha256=rfd3_digest,
                     profile_id="default",
-                    profile_registry_sha256="2" * 64,
+                    profile_registry_sha256=rfd3_request["profile_registry_sha256"],
                     redesign_mode="local_redesign",
                     sequence_policy="fixed",
                     status="completed",

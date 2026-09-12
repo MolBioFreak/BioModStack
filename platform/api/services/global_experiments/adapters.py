@@ -458,43 +458,30 @@ class CoreProteinResultAdapter:
             raise AdapterError("source_contract_unavailable", "design review contract cannot be resolved")
         manifest = design.review_artifact_manifest
         if design.review_contract_source not in {"producer", "review"} or not isinstance(manifest, dict):
-            raise AdapterError("source_contract_unavailable", "design has no authoritative review/producer manifest")
-        artifacts = manifest.get("artifacts")
-        if not isinstance(artifacts, dict) or len(artifacts) > 128:
-            raise AdapterError("source_contract_unavailable", "design has no bounded authoritative artifact manifest")
-        role_map = design.review_role_map if isinstance(design.review_role_map, dict) else {}
-        preferred = role_map.get("result_role") or (manifest.get("roles") or {}).get("result_role")
-        candidates: list[dict[str, Any]] = []
-        if isinstance(preferred, str) and isinstance(artifacts.get(preferred), dict):
-            candidates.append(artifacts[preferred])
-        candidates.extend(
-            value
-            for key, value in artifacts.items()
-            if key != preferred and isinstance(value, dict)
-        )
-        authoritative = next(
-            (
-                item
-                for item in candidates
-                if item.get("state") in {None, "ready"}
-                and _SHA256_RE.fullmatch(str(item.get("sha256") or ""))
-                and isinstance(item.get("path"), str)
-                and Path(item["path"]).resolve() == Path(design.pdb_path).resolve()
-            ),
-            None,
-        )
-        if authoritative is None:
-            raise AdapterError("source_contract_unavailable", "design manifest has no authoritative result digest")
+            publication = (job.provenance or {}).get("core_protein_candidate_publication")
+            if not isinstance(publication, dict) or design.source_stage is not None:
+                raise AdapterError("source_contract_unavailable", "design has no authoritative review/producer manifest")
+            # Native-only ingested Designs have no legacy review receipt. Bind
+            # their existing native candidate evidence, not a fabricated review.
+            manifest = (design.confidence_metrics or {}).get("core_protein_candidate_artifacts")
+            if not isinstance(manifest, dict):
+                raise AdapterError("source_contract_unavailable", "design has no native candidate artifacts")
+        from services.core_protein_result_contract import verify_addressed_design_artifacts, CandidateIntegrityError
         try:
             artifact_root = resolve_persisted_job_result_root(job)
-        except (OSError, ValueError) as exc:
-            raise AdapterError("source_contract_unavailable", "design result root is unavailable") from exc
-        _verify_file(
-            authoritative.get("path"),
-            authoritative.get("sha256"),
-            authoritative.get("bytes"),
-            canonical_root=artifact_root,
-        )
+            from services.core_protein_scientific_contract import revision_for_job
+            if job.model_id in {"boltz", "boltz2"} and revision_for_job(job) == 1 and design.source_stage is None:
+                from services.boltz_scientific_consumer import verified_boltz_design
+                native = await verified_boltz_design(design, core_session)
+                authoritative = native["artifacts"]["structure"]
+            else:
+                authoritative = verify_addressed_design_artifacts(
+                    job, design, artifact_root, verify_file=_verify_file,
+                )
+        except AdapterError:
+            raise
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise AdapterError("source_contract_unavailable", str(exc)) from exc
         content_digest = _sha256(authoritative.get("sha256"), "design result digest")
         return _receipt(
             self,
@@ -515,168 +502,32 @@ class CoreProteinResultAdapter:
         )
 
 
-def _rfd3_job_artifact(output_root: Path, relative_path: object) -> Path:
-    if not isinstance(relative_path, str):
-        raise AdapterError("source_contract_invalid", "RFD3 artifact path is missing")
-    relative = Path(relative_path)
-    if (
-        relative.is_absolute()
-        or relative.as_posix() != relative_path
-        or any(part in {"", ".", ".."} for part in relative.parts)
-        or "\\" in relative_path
-    ):
-        raise AdapterError("source_contract_invalid", "RFD3 artifact path is unsafe")
-    current = output_root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            raise AdapterError("source_contract_invalid", "RFD3 artifact path contains a symlink")
-    resolved = current.resolve()
-    if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
-        raise AdapterError("source_contract_unavailable", "RFD3 required artifact is missing")
-    if resolved.stat().st_nlink != 1:
-        raise AdapterError("source_contract_invalid", "RFD3 artifact must not be hard-linked")
-    return resolved
-
-
 def _verify_rfd3_result_manifest(
-    job: Job,
-    record: RFD3LocalRedesignRequest,
-    expected_request_digest: str,
+    job: Job, record: RFD3LocalRedesignRequest, expected_request_digest: str,
 ) -> tuple[str, int]:
+    from services.result_ingester import validate_rfd3_local_redesign_manifest, RFD3ResultIntegrityError
+
     try:
-        output_root = resolve_persisted_job_result_root(job)
-    except (OSError, ValueError) as exc:
-        raise AdapterError("source_contract_unavailable", "RFD3 job result root is unavailable") from exc
-    manifest_path = output_root / "collected" / "protein_local_redesign" / "rfd3_result_manifest.json"
-    try:
-        _manifest_path, manifest_bytes = _read_verified_file(
-            str(manifest_path),
-            canonical_root=output_root,
-        )
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except AdapterError as exc:
-        if exc.code == "source_artifact_unavailable":
-            raise AdapterError(
-                "source_contract_unavailable",
-                "RFD3 native result manifest is unavailable",
-            ) from exc
+        root = resolve_persisted_job_result_root(job)
+        request_input = record.request_json.get("input") if isinstance(record.request_json, dict) else None
+        source = request_input.get("path") if isinstance(request_input, dict) else None
+        if isinstance(source, str):
+            source_path = resolve_runtime_data_path(source)
+            if not any(source_path.is_relative_to(base.resolve()) for base in (get_inputs_dir(), get_results_dir())):
+                raise AdapterError("source_contract_invalid", "RFD3 source structure is outside canonical roots")
+        proof = validate_rfd3_local_redesign_manifest(root, record)
+    except AdapterError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise AdapterError("source_contract_invalid", "RFD3 native result manifest is malformed") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema") != "bms.rfd3.local-redesign.result.v1":
-        raise AdapterError("source_contract_invalid", "RFD3 native result manifest schema is invalid")
-    unsigned = dict(manifest)
-    claimed_digest = unsigned.pop("manifest_sha256", None)
-    observed_digest = _canonical_json_sha256(unsigned)
-    if (
-        claimed_digest != observed_digest
-        or record.result_manifest_sha256 != observed_digest
-        or manifest.get("request_sha256") != expected_request_digest
-    ):
-        raise AdapterError("source_digest_mismatch", "RFD3 native result manifest digest or request binding is invalid")
-    if manifest.get("result_contract_id") != "rfd3_local_redesign_v1":
-        raise AdapterError("source_contract_invalid", "RFD3 native result contract is unsupported")
-
-    request_input = record.request_json.get("input") if isinstance(record.request_json, dict) else None
-    source_value = request_input.get("path") if isinstance(request_input, dict) else None
-    if not isinstance(request_input, dict) or not isinstance(source_value, str):
-        raise AdapterError("source_contract_invalid", "RFD3 immutable request has no source input")
-    try:
-        source_path = resolve_runtime_data_path(source_value).resolve()
-    except (OSError, ValueError) as exc:
-        raise AdapterError("source_contract_unavailable", "RFD3 source structure is unavailable") from exc
-    source_root = next(
-        (
-            root
-            for root in (get_inputs_dir().resolve(), get_results_dir().resolve())
-            if source_path.is_relative_to(root)
-        ),
-        None,
-    )
-    if source_root is None:
-        raise AdapterError("source_contract_invalid", "RFD3 source structure is outside canonical roots")
-    _source_path, _source_bytes = _read_verified_file(
-        str(source_path),
-        request_input.get("sha256"),
-        canonical_root=source_root,
-    )
-
-    artifacts = manifest.get("artifacts")
-    candidates = manifest.get("candidates")
-    if not isinstance(artifacts, list) or not isinstance(candidates, list) or not candidates:
-        raise AdapterError("source_contract_unavailable", "RFD3 result lacks required artifacts or candidates")
-    descriptor_by_path: dict[str, dict[str, Any]] = {}
-    for descriptor in artifacts:
-        if not isinstance(descriptor, dict):
-            raise AdapterError("source_contract_invalid", "RFD3 artifact descriptor is malformed")
-        role = descriptor.get("role")
-        relative_path = descriptor.get("relative_path")
-        storage_path = descriptor.get("storage_path")
-        expected_sha = descriptor.get("sha256")
-        expected_bytes = descriptor.get("bytes")
-        if (
-            not isinstance(role, str)
-            or not role
-            or not isinstance(relative_path, str)
-            or relative_path in descriptor_by_path
-            or not isinstance(storage_path, str)
-            or not isinstance(expected_sha, str)
-            or not _SHA256_RE.fullmatch(expected_sha)
-            or not isinstance(expected_bytes, int)
-            or expected_bytes < 0
-        ):
-            raise AdapterError("source_contract_invalid", "RFD3 artifact descriptor is incomplete")
-        if role == "source_structure":
-            try:
-                resolved = resolve_runtime_data_path(storage_path).resolve()
-            except (OSError, ValueError) as exc:
-                raise AdapterError("source_contract_unavailable", "RFD3 source artifact is unavailable") from exc
-            if resolved != _source_path:
-                raise AdapterError("source_contract_invalid", "RFD3 source artifact does not match the request")
-            if len(_source_bytes) != expected_bytes or hashlib.sha256(_source_bytes).hexdigest() != expected_sha:
-                raise AdapterError("source_digest_mismatch", "RFD3 source artifact descriptor disagrees with bound bytes")
-        else:
-            relative = Path(relative_path)
-            expected_storage_path = output_root / relative
-            if Path(storage_path).expanduser() != expected_storage_path:
-                raise AdapterError("source_contract_invalid", "RFD3 artifact storage path is invalid")
-            _verify_file(
-                relative_path,
-                expected_sha,
-                expected_bytes,
-                canonical_root=output_root,
-            )
-        descriptor_by_path[relative_path] = descriptor
-
-    roles = {str(item.get("role") or "") for item in descriptor_by_path.values()}
-    if not {"source_structure", "native_request"}.issubset(roles):
-        raise AdapterError("source_contract_unavailable", "RFD3 result lacks source or native-request artifacts")
-    seen_candidates: set[str] = set()
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            raise AdapterError("source_contract_invalid", "RFD3 candidate descriptor is malformed")
-        candidate_id = candidate.get("candidate_id")
-        candidate_artifacts = candidate.get("artifacts")
-        if not isinstance(candidate_id, str) or not candidate_id or candidate_id in seen_candidates:
-            raise AdapterError("source_contract_invalid", "RFD3 candidate identities are invalid")
-        if not isinstance(candidate_artifacts, list) or not candidate_artifacts:
-            raise AdapterError("source_contract_unavailable", "RFD3 candidate lacks required artifacts")
-        if candidate.get("artifact_manifest_sha256") != _canonical_json_sha256(candidate_artifacts):
-            raise AdapterError("source_digest_mismatch", "RFD3 candidate artifact manifest digest is invalid")
-        candidate_roles = {
-            str(item.get("role") or "") for item in candidate_artifacts if isinstance(item, dict)
-        }
-        if not {"structure", "native_prediction_metadata"}.issubset(candidate_roles):
-            raise AdapterError("source_contract_unavailable", "RFD3 candidate lacks native structure metadata")
-        for descriptor in candidate_artifacts:
-            if not isinstance(descriptor, dict):
-                raise AdapterError("source_contract_invalid", "RFD3 candidate artifact is malformed")
-            relative_path = descriptor.get("relative_path")
-            if relative_path not in descriptor_by_path or descriptor_by_path[relative_path] != descriptor:
-                raise AdapterError("source_contract_invalid", "RFD3 candidate artifact is undeclared")
-        seen_candidates.add(candidate_id)
-    return observed_digest, len(candidates)
+    except RFD3ResultIntegrityError as exc:
+        code = {"manifest_unavailable": "source_contract_unavailable",
+                "artifact_unavailable": "source_artifact_unavailable",
+                "digest_mismatch": "source_digest_mismatch"}[exc.kind]
+        raise AdapterError(code, str(exc)) from exc
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
+        raise AdapterError("source_contract_invalid", str(exc)) from exc
+    if proof["digest"] != record.result_manifest_sha256 or record.request_sha256 != expected_request_digest:
+        raise AdapterError("source_digest_mismatch", "RFD3 retained result identity changed")
+    return proof["digest"], len(proof["candidates"])
 
 
 class Rfd3LocalRedesignAdapter:
@@ -3324,7 +3175,7 @@ class TypedCoreJobResultAdapter:
             metadata={"model_id": row.model_id, "mode": row.mode},
         ) for row in rows]
 
-    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+    async def verify(self, core_session: AsyncSession, entity_id: str, *, legacy_all_designs: bool = False) -> dict[str, Any]:
         job = await core_session.get(Job, entity_id)
         if job is None or job.model_id != self.model_id:
             raise AdapterError("entity_not_found", "typed core Job does not exist for this adapter")
@@ -3333,43 +3184,58 @@ class TypedCoreJobResultAdapter:
                 "source_contract_unavailable",
                 "typed core Job has no successful producer-native result authority",
             )
-        designs = list(
-            (
-                await core_session.scalars(
-                    select(Design)
-                    .where(Design.job_id == job.id)
-                    .order_by(Design.id)
-                    .limit(1001)
-                )
-            ).all()
-        )
-        if not designs or len(designs) > 1000:
-            raise AdapterError(
-                "source_contract_unavailable",
-                "typed core Job has no bounded producer-native Design result set",
-            )
+        publication = (job.provenance or {}).get("core_protein_candidate_publication")
+        expected = None
+        if publication is not None and not legacy_all_designs:
+            if not isinstance(publication, dict) or not isinstance(publication.get("candidates"), dict):
+                raise AdapterError("source_contract_invalid", "typed Job candidate declaration is invalid")
+            expected = publication["candidates"]
+        # Final-row scope is native-declared, not guessed from an unattachable row.
+        # Legacy jobs keep their historical all-row scope and receipt identity.
+        conditions = [Design.job_id == job.id]
+        if expected is not None:
+            conditions.append(Design.source_stage.is_(None))
+            from sqlalchemy import func
+            count, distinct = (await core_session.execute(
+                select(func.count(Design.id), func.count(func.distinct(Design.name))).where(*conditions)
+            )).one()
+            if count != len(expected) or distinct != count:
+                raise AdapterError("source_contract_invalid", "typed Job persisted candidate set differs from declaration")
+        encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        digest = hashlib.sha256()
+        digest.update(b'{"artifacts":[')
         design_adapter = CoreProteinResultAdapter()
-        verified_designs = [
-            await design_adapter.verify(core_session, design.id)
-            for design in designs
-        ]
-        artifact_authority = [
-            {
-                "design_id": receipt["entity_id"],
-                "entity_revision_id": receipt["entity_revision_id"],
-                "content_digest": receipt["content_digest"],
-                "contract_digest": receipt["contract_digest"],
-            }
-            for receipt in verified_designs
-        ]
-        authority = {
-            "job_id": job.id,
-            "model_id": job.model_id,
-            "mode": job.mode,
-            "status": job.status,
-            "artifacts": artifact_authority,
-        }
-        content_digest = _canonical_json_sha256(authority)
+        last_id = None
+        artifact_count = 0
+        while True:
+            statement = select(Design).where(*conditions).order_by(Design.id).limit(128)
+            if last_id is not None:
+                statement = statement.where(Design.id > last_id)
+            page = list((await core_session.scalars(statement)).all())
+            if not page:
+                break
+            for design in page:
+                if expected is not None and design.name not in expected:
+                    raise AdapterError("source_contract_invalid", "typed Job contains an undeclared candidate")
+                receipt = await design_adapter.verify(core_session, design.id)
+                item = {"design_id": receipt["entity_id"],
+                        "entity_revision_id": receipt["entity_revision_id"],
+                        "content_digest": receipt["content_digest"],
+                        "contract_digest": receipt["contract_digest"]}
+                if artifact_count:
+                    digest.update(b',')
+                for chunk in encoder.iterencode(item):
+                    digest.update(chunk.encode("utf-8"))
+                artifact_count += 1
+            last_id = page[-1].id
+        if not artifact_count or (expected is not None and artifact_count != len(expected)):
+            raise AdapterError("source_contract_unavailable", "typed core Job has no complete producer-native Design result set")
+        # Byte-for-byte historical canonical JSON identity, without materializing
+        # every Design/receipt or imposing a scientific cardinality ceiling.
+        suffix = encoder.encode({"job_id": job.id, "model_id": job.model_id,
+                                 "mode": job.mode, "status": job.status})
+        digest.update(('],' + suffix[1:]).encode("utf-8"))
+        content_digest = digest.hexdigest()
         return _receipt(
             self,
             entity_id=job.id,
@@ -3381,8 +3247,9 @@ class TypedCoreJobResultAdapter:
                 "job_status": str(job.status),
                 "model_id": job.model_id,
                 "mode": job.mode,
-                "artifact_count": len(artifact_authority),
+                "artifact_count": artifact_count,
                 "artifact_authority": "verified_producer_design_receipts",
+                "result_scope": "declared_native_final_candidates" if expected is not None else "all_design_rows",
                 "result_contract_id": "typed_core_job_result_v1",
             },
         )
