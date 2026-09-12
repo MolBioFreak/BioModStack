@@ -2096,6 +2096,10 @@ def _design_to_response(
     if strict_rank or not isinstance(data.get("metric_completeness"), dict):
         data["metric_completeness"] = build_design_metric_completeness(data, job=job)
     data.update(_compute_import_metadata(design))
+    from services.plr_workflow_results import design_producer_model_id
+    producer_model_id = design_producer_model_id(job, design)
+    if producer_model_id:
+        data["provenance"] = {**(data.get("provenance") or {}), "producer_model_id": producer_model_id}
     return DesignResponse.model_validate(data)
 
 
@@ -2503,7 +2507,8 @@ async def list_designs(
     elif not job_id:
         conditions.append(Design.source_stage.is_(None))
     # Lineage-wide model summary deliberately precedes display filters/pagination.
-    model_identity = func.lower(func.trim(Design.provenance["model_id"].as_string()))
+    from services.plr_workflow_results import design_model_identity_expression
+    model_identity = design_model_identity_expression()
     model_query = select(model_identity, func.count(Design.id)).group_by(model_identity)
     if conditions:
         model_query = model_query.where(and_(*conditions))
