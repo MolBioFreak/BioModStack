@@ -23,13 +23,13 @@ let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
-const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job) => {
+const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;
     api.defaults.adapter = async config => {
         const url = String(config.url); const params = config.params ?? {};
         calls.push({ url, params });
         let data: unknown;
-        const jobs = children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob];
+        const jobs = (children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob]).concat(extraJobs);
         if (url === '/api/jobs') data = { jobs, total: jobs.length };
         else if (url.endsWith('/workflow-results')) data = { job: selectedJob, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: { artifacts: [] }, artifacts: [], counts: { persisted_design_rows: suppliedRows.length } };
         else if (url.startsWith('/api/jobs/') && !url.includes('/backbones')) data = jobs.find(item => item.id === url.split('/').pop()) ?? job;
@@ -37,6 +37,7 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
         else if (url === '/api/launch-contexts/context') data = { schema: 'bms.launch-context.v1', launch_context_id: 'context', project_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', workflow_id: null, workflow_revision_id: null, pinned_gpu: null, return_uri: returnUri, source_receipt_id: 'r', state: 'issued', issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z' };
         else if (url === '/api/designs') {
             let selected = params.model_id ? suppliedRows.filter(row => row.provenance.model_id === params.model_id) : suppliedRows;
+            if (extraJobs.length) selected = selected.filter(row => row.job_id === params.job_id);
             if (params.q) selected = selected.filter(row => row.name.includes(params.q));
             data = { designs: selected.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 100)), total: selected.length, model_counts: { boltz2: 501, protenix: 3 } };
         } else if (/^\/api\/designs\/[^/]+$/.test(url)) {
@@ -103,6 +104,44 @@ test('mounted validator names never collapse distinct candidates or retries', as
     const rowText = renderer!.root.findAllByType('tr').map(text);
     expect(rowText.filter(value => value.includes('1_shared'))).toHaveLength(1);
     expect(rowText.filter(value => value.includes('2_shared'))).toHaveLength(1);
+});
+
+test('explicit model switching releases a previously exact Design but preserves Project context', async () => {
+    await setup('/designs/parent?design_id=z-2&result_model=protenix&launch_context_id=context');
+    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesignId).toBe('z-2');
+    const nav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
+    const primary = nav.findAllByType('button').find(button => text(button) === 'Structure Prediction')!;
+    await act(async () => primary.props.onClick()); await flush();
+    const location = renderer!.root.findAllByType('span').find(item => item.props['data-location'])?.props['data-location'];
+    expect(location).not.toContain('design_id=');
+    expect(location).toContain('launch_context_id=context');
+    const structureTab = renderer!.root.findAllByType('button').find(button => text(button).endsWith('Structure'))!;
+    await act(async () => structureTab.props.onClick()); await flush();
+    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesign.provenance.model_id).toBe('boltz2');
+    expect(text(renderer!.root)).not.toContain('No other candidate has been selected');
+});
+
+test('explicit candidate selection replaces a previously exact Design in the reopen URL', async () => {
+    await setup('/designs/parent?design_id=z-2&result_model=protenix&launch_context_id=context');
+    const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'))!;
+    await act(async () => tableTab.props.onClick()); await flush();
+    const target = renderer!.root.findAllByType('tr').find(row => text(row).includes('z-0'))!;
+    await act(async () => target.props.onClick()); await flush();
+    const location = renderer!.root.findAllByType('span').find(item => item.props['data-location'])?.props['data-location'];
+    expect(location).toContain('design_id=z-0');
+    expect(location).toContain('launch_context_id=context');
+});
+
+test('explicit Job switching clears only Job-local selection and keeps the Project return context', async () => {
+    const other = { ...job, id: 'other', name: 'TEST other result', status: 'failed', design_count: 0 };
+    await setup('/designs/parent?design_id=z-2&result_model=protenix&candidate_id=old-candidate&invocation_id=old-invocation&launch_context_id=context', false, rows, job, [other]);
+    const menu = renderer!.root.findAllByType('button').find(button => text(button).includes(job.name))!;
+    await act(async () => menu.props.onClick()); await flush();
+    const option = renderer!.root.findAllByType('button').find(button => text(button).includes(other.name))!;
+    await act(async () => option.props.onClick()); await flush();
+    const location = renderer!.root.findAllByType('span').find(item => item.props['data-location'])?.props['data-location'];
+    expect(location).toBe('/designs/other?launch_context_id=context');
+    expect(text(renderer!.root)).not.toContain('Requested Design');
 });
 
 test('PLR workflow context composes with the exact shared Design structure workbench', async () => {

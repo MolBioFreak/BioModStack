@@ -2280,11 +2280,16 @@ export function ResultsViewer() {
         setShowJobSelectorMenu(false);
         setJobSelectorSearch('');
         if (newId) {
-            navigate(`/designs/${newId}${location.search}`, replace ? { replace: true } : undefined);
+            const params = new URLSearchParams(location.search);
+            if (newId !== selectedJobId) {
+                ['design_id', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
+            }
+            const query = params.toString();
+            navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
         } else {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
-    }, [navigate, location.search]);
+    }, [navigate, location.search, selectedJobId]);
     const handleSelectLineageGroup = useCallback((family: string) => {
         if (!activeLineageRootJob?.id) return;
         const sourceFilter = isScopedOutputSourceFilter(family) ? family : 'all';
@@ -2295,7 +2300,11 @@ export function ResultsViewer() {
         setSelectedBackboneId(null);
         setSelectedDesignId('');
         setCurrentPage(1);
-        navigate(`/designs/${activeLineageRootJob.id}${location.search}`, { replace: true });
+        const params = new URLSearchParams(location.search);
+        params.delete('design_id');
+        params.delete('result_model');
+        const query = params.toString();
+        navigate(`/designs/${activeLineageRootJob.id}${query ? `?${query}` : ''}`, { replace: true });
     }, [activeLineageRootJob, navigate, location.search]);
     const toggleExpandedLineageGroup = useCallback((groupKey: string) => {
         setExpandedLineageGroups((current) => {
@@ -2456,8 +2465,12 @@ export function ResultsViewer() {
     const setResultSurface = useCallback((model: WorkflowResultModel) => {
         setCurrentPage(1);
         const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
-        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
-    }, [frustraMpnnScope, location.pathname, location.search, navigate]);
+        const params = new URLSearchParams(location.search);
+        // An explicit model choice supersedes the previous model's exact Design.
+        // Unavailable bookmarked IDs remain pinned until such an operator action.
+        if (model !== resultSurface) params.delete('design_id');
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(params.toString(), { model, scope })}`, { replace: true });
+    }, [frustraMpnnScope, location.pathname, location.search, navigate, resultSurface]);
     const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
         navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, {
             model: 'frustrampnn',
