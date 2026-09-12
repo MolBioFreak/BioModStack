@@ -1187,7 +1187,7 @@ export function BioXpCockpit() {
                                     <button key={steps} type="button" onClick={() => setYStepInput(steps)} className={`rounded px-2 py-1 text-xs ${yStepInput === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>{steps.toLocaleString()}</button>
                                 ))}
                             </div>
-                            <label className="block text-xs text-slate-300">OEM absolute target (steps)<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                            <label className="block text-xs text-slate-300">OEM absolute target (steps)<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                             <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
@@ -1235,10 +1235,24 @@ export function BioXpCockpit() {
                     <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
                         <h3 className="font-semibold">Combined XY Capability</h3>
                         <p className="mt-1 text-xs text-slate-300">Submits one backend OEM <code>moveXY</code> transaction so X and Y execute the robot-owned combined move. Use this for named XY destinations such as tip waste rather than issuing two independent axis commands.</p>
-                        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">X target</dt><dd className="font-mono">{absoluteTargets.x}</dd></div>
-                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Y target</dt><dd className="font-mono">{yTargetInput}</dd></div>
-                        </dl>
+                        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                            <label className="rounded bg-slate-950/60 p-2 text-slate-300">
+                                X target (steps)
+                                <input aria-label="Combined X target (steps)" type="number" step={1}
+                                    min={xAbsoluteMinimum} max={xAbsoluteMaximum}
+                                    value={Number.isFinite(absoluteTargets.x) ? absoluteTargets.x : ''}
+                                    onChange={(event) => { const x = event.target.valueAsNumber; setAbsoluteTargets((current) => ({ ...current, x })); }}
+                                    className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" />
+                            </label>
+                            <label className="rounded bg-slate-950/60 p-2 text-slate-300">
+                                Y target (steps)
+                                <input aria-label="Combined Y target (steps)" type="number" step={1}
+                                    min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS}
+                                    value={Number.isFinite(yTargetInput) ? yTargetInput : ''}
+                                    onChange={(event) => setYTargetInput(event.target.valueAsNumber)}
+                                    className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" />
+                            </label>
+                        </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                             <button type="button" disabled={xyMoveDisabled} onClick={invokeXYMove} className={actionClass}>Move X + Y together</button>
                             <button type="button" disabled={xyHomeDisabled} onClick={invokeXYHome} className={actionClass}>Home X + Y</button>
@@ -1321,7 +1335,7 @@ export function BioXpCockpit() {
                                                 min={axis === 'x' ? xAbsoluteMinimum : axis === 'z' ? zAbsoluteMinimum : undefined}
                                                 max={axis === 'x' ? xAbsoluteMaximum : axis === 'z' ? zAbsoluteMaximum : undefined}
                                                 step={1}
-                                                value={absoluteTargets[axis]}
+                                                value={Number.isFinite(absoluteTargets[axis]) ? absoluteTargets[axis] : ''}
                                                 onChange={(event) => {
                                                     // Preserve fractional values for integer validation; never dispatch a truncated target.
                                                     const parsed = axis === 'x'

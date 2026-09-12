@@ -2519,6 +2519,65 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"status": 100');
     });
 
+    it('edits both combined targets directly, retains drafts across polls, and submits one exact XY request', async () => {
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
+        const x = panel.querySelector('[aria-label="Combined X target (steps)"]') as HTMLInputElement;
+        const y = panel.querySelector('[aria-label="Combined Y target (steps)"]') as HTMLInputElement;
+        expect(x).not.toBeNull();
+        expect(y).not.toBeNull();
+        const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
+        const home = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Home X + Y')!;
+        const edit = async (input: HTMLInputElement, value: string) => act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await edit(x, '');
+        expect(x.value).toBe('');
+        expect(move.disabled).toBe(true);
+        expect(home.disabled).toBe(false);
+        await edit(x, '12345');
+        await edit(y, '');
+        expect(y.value).toBe('');
+        expect(move.disabled).toBe(true);
+        await edit(y, '23456');
+        state.v2Catalog.data = { ...state.v2Catalog.data };
+        Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(x.value).toBe('12345');
+        expect(y.value).toBe('23456');
+        expect(state.xyCalls).toHaveLength(0);
+        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(move.disabled).toBe(false);
+        await act(async () => move.click());
+        expect(state.xyCalls).toHaveLength(1);
+        expect(state.xyCalls[0]).toMatchObject({ request: {
+            action_id: 'oem.xy.move_absolute', inputs: { x: 12345, y: 23456 },
+        } });
+        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(state.methodCalls).toHaveLength(0);
+    });
+
+    it.each([['X', ''], ['Y', ''], ['X', '1.5'], ['Y', '1.5'], ['X', '2147483648'], ['Y', '2147483648']])(
+        'does not coerce or submit invalid combined %s target %j', async (axis, value) => {
+            await act(async () => root.render(<BioXpCockpit />));
+            const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
+            const input = panel.querySelector(`[aria-label="Combined ${axis} target (steps)"]`) as HTMLInputElement;
+            expect(input).not.toBeNull();
+            await act(async () => {
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+            expect(input.value).toBe(value);
+            const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
+            expect(move.disabled).toBe(true);
+            await act(async () => move.click());
+            expect(state.xyCalls).toHaveLength(0);
+        },
+    );
+
     it('submits recovered OEM moveXY and HomeXY through the canonical V2 action route', async () => {
         await act(async () => {
             root.render(<BioXpCockpit />);
