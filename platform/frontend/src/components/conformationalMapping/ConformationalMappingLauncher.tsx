@@ -39,6 +39,8 @@ import {
     type FrustraMpnnRequestedSettings,
 } from '../frustrampnn/frustraMpnnSettingsState';
 import MolstarViewer from '../MolstarViewer';
+import { HostedMsaControls } from '../HostedMsaControls';
+import { hydrateHostedMsaSettings, type HostedMsaSettings } from '../../lib/msaPolicy';
 
 interface Props {
     onBack?: () => void;
@@ -74,6 +76,7 @@ interface LauncherState {
     proteinMsa: boolean;
     templates: boolean;
     rnaMsa: boolean;
+    msaSettings: HostedMsaSettings;
     defaultRuntime: boolean;
     nCycle: number;
     nStep: number;
@@ -114,6 +117,7 @@ const DEFAULT_STATE: LauncherState = {
     sequenceId: '', checkpointId: '', configId: '', transferId: '', referenceIds: [], importIds: [],
     seeds: '101', samples: 5,
     featureMode: 'regenerate_mutated_protein_v1', proteinMsa: true, templates: false, rnaMsa: false,
+    msaSettings: hydrateHostedMsaSettings(),
     defaultRuntime: true, nCycle: 10, nStep: 200,
     task: 'diversity',
     runs: 2, networks: 2, outputCount: DEFAULT_OUTPUT_COUNT, savedSteps: '5,10,15,20', maxSteps: 20,
@@ -208,6 +212,7 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         proteinMsa: typeof feature.protein_msa_enabled === 'boolean' ? feature.protein_msa_enabled : Boolean(merged.proteinMsa ?? DEFAULT_STATE.proteinMsa),
         templates: typeof feature.templates_enabled === 'boolean' ? feature.templates_enabled : Boolean(merged.templates ?? DEFAULT_STATE.templates),
         rnaMsa: typeof feature.rna_msa_enabled === 'boolean' ? feature.rna_msa_enabled : Boolean(merged.rnaMsa ?? DEFAULT_STATE.rnaMsa),
+        msaSettings: hydrateHostedMsaSettings((asObject(merged.msaSettings) || asObject(feature.msa_settings) || {}) as Partial<HostedMsaSettings>),
         defaultRuntime: typeof runtime.use_default_params === 'boolean' ? runtime.use_default_params : Boolean(merged.defaultRuntime ?? true),
         nCycle: finite(runtime.n_cycle ?? merged.nCycle, DEFAULT_STATE.nCycle),
         nStep: finite(runtime.n_step ?? merged.nStep, DEFAULT_STATE.nStep),
@@ -420,12 +425,6 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
     const update = <K extends keyof LauncherState>(key: K, value: LauncherState[K]) =>
         setForm((current) => ({ ...current, [key]: value }));
     useEffect(() => { sessionStorage.setItem(STATE_KEY, JSON.stringify(form)); }, [form]);
-    useEffect(() => {
-        if (form.featureMode === 'features_disabled_control_v1'
-            && (form.proteinMsa || form.templates || form.rnaMsa)) {
-            setForm((current) => ({ ...current, proteinMsa: false, templates: false, rnaMsa: false }));
-        }
-    }, [form.featureMode, form.proteinMsa, form.rnaMsa, form.templates]);
 
     const sources = useQuery({ queryKey: ['cm-sources'], queryFn: services?.listSources || listCmSources });
     const sourceRegistry = useMemo(() => {
@@ -822,8 +821,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
     const buildPayload = (requireValid = true): CmSubmitRequest => {
         if (requireValid && validationErrors.length) throw new Error(validationErrors.join(' '));
         const featurePolicy: CmFeaturePolicy = form.backend === 'protenix_v2_ensemble'
-            ? { mode: form.featureMode, protein_msa_enabled: form.proteinMsa, templates_enabled: form.templates, rna_msa_enabled: form.rnaMsa }
-            : { mode: form.featureMode };
+            ? { mode: form.featureMode, protein_msa_enabled: form.proteinMsa, templates_enabled: form.templates, rna_msa_enabled: form.rnaMsa, msa_settings: form.msaSettings }
+            : { mode: form.featureMode, ...(form.backend === 'confornets' ? { msa_settings: form.msaSettings } : {}) };
         const payload: CmSubmitRequest = {
             name: form.name.trim(), notes: form.notes.trim(), idempotency_key: idempotencyKey, backend: form.backend,
 
@@ -1161,10 +1160,13 @@ export function ConformationalMappingLauncher({ onBack, initialValues, onDraftCh
                         </div>
                         {form.backend === 'protenix_v2_ensemble' && <div className="mt-4 space-y-4">
                             <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Ordered seeds<input value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} inputMode="numeric" /></label><label className="space-y-1 text-sm">Samples per seed<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label><label className="space-y-1 text-sm md:col-span-2">Feature policy<select value={form.featureMode} onChange={(event) => update('featureMode', event.target.value as CmFeaturePolicy['mode'])} className={inputClass}><option value="regenerate_mutated_protein_v1">Regenerate changed protein</option><option value="paired_regenerate_changed_protein_v1">Regenerate matched WT and mutant</option><option value="features_disabled_control_v1">Feature-disabled control</option></select></label></div>
-                            <div className="grid gap-2 sm:grid-cols-3">{([['proteinMsa', 'Protein MSA'], ['templates', 'Templates'], ['rnaMsa', 'RNA MSA']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-800 p-3 text-sm"><input type="checkbox" checked={form[key]} disabled={form.featureMode === 'features_disabled_control_v1'} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
+                            <div className="grid gap-2 sm:grid-cols-3">{([['proteinMsa', 'Protein MSA'], ['templates', 'Templates'], ['rnaMsa', 'RNA MSA']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-800 p-3 text-sm"><input type="checkbox" checked={form[key]} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
+                            <HostedMsaControls value={form.msaSettings} onChange={value => update('msaSettings', value)} />
+                            {form.rnaMsa && <p role="alert">RNA MSA is selected and preserved, but is not supported by the hosted protein-MSA consumer. Execution will reject this selection; it is never silently disabled.</p>}
                             {comparisonControls}
                         </div>}
                         {form.backend === 'confornets' && <div className="mt-4 space-y-4">
+                            <HostedMsaControls value={form.msaSettings} onChange={value => update('msaSettings', value)} />
                             <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm">Diffusion samples per network checkpoint<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Returned outputs<input type="number" min={1} max={candidatePoolCount} value={form.outputCount ?? ''} placeholder="Full pool" onChange={(event) => update('outputCount', event.target.value === '' ? null : Number(event.target.value))} className={inputClass} /><span className="block text-xs text-slate-500">{form.outputCount === null ? 'Legacy full-pool behavior is preserved.' : `Selected from ${candidatePoolCount.toLocaleString()} configured run/checkpoint/network/sample candidates.`}</span></label>}</div>
                             {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Scientific ConforNet count (k)<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum step index<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
                             {form.task === 'mse' && <label className="block space-y-1 text-sm">One or two registered references<select multiple value={form.referenceIds} onChange={(event) => update('referenceIds', Array.from(event.target.selectedOptions, (option) => option.value).slice(0, 2))} className={`${inputClass} min-h-24`}>{structureSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}

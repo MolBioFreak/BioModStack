@@ -32,7 +32,7 @@ from lib.shared_runtime_images import verify_image
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 from sqlalchemy import Text, cast as sql_cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +50,7 @@ from paths import (
     get_container_dir,
     get_weights_root,
 )
-from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
+from services.conformational_mapping.contracts import FeaturePolicy, candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
     ImportStagingError,
     RegisteredArtifact,
@@ -301,7 +301,7 @@ class HandoffRequest(BaseModel):
     source_row_key: str
     substitution: str = Field(min_length=1, max_length=1)
     structure_map_key: str
-    feature_policy: dict[str, Any]
+    feature_policy: Annotated[dict[str, Any], WithJsonSchema(FeaturePolicy.model_json_schema())]
     resampling_settings: dict[str, Any]
     expected_source_hashes: dict[str, str]
 

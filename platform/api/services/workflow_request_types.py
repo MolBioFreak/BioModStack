@@ -5,10 +5,11 @@ Dependency projections are metadata, not executable requests or staged inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator
 from schemas import ExecutionPolicy
+from services.conformational_mapping.contracts import FeaturePolicy, validate_feature_policy
 from services.frustrampnn.settings import (
     FrustraMPNNRequestedSettings,
     default_settings as default_frustrampnn_settings,
@@ -27,7 +28,7 @@ class SubmitRequest(BaseModel):
     backend: Literal["protenix_v2_ensemble", "confornets", "external_import"]
     ordered_seeds: list[int] = Field(min_length=1)
     samples_per_seed: int = Field(ge=1, le=100)
-    feature_policy: dict[str, Any]
+    feature_policy: Annotated[dict[str, Any], WithJsonSchema(FeaturePolicy.model_json_schema())]
     runtime_policy: dict[str, Any]
     analysis_policy: dict[str, Any]
     registered_snapshot_id: str | None = None
@@ -45,6 +46,12 @@ class SubmitRequest(BaseModel):
     frustrampnn_settings: FrustraMPNNRequestedSettings = Field(
         default_factory=default_frustrampnn_settings
     )
+
+    @field_validator("feature_policy")
+    @classmethod
+    def _feature_policy(cls, value: dict[str, Any]) -> dict[str, Any]:
+        validate_feature_policy(value)
+        return value  # Validation/discovery must not rewrite immutable request bytes.
 
     @field_validator("frustrampnn_settings", mode="before")
     @classmethod

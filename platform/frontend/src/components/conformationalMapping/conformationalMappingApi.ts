@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { HostedMsaSettings } from '../../lib/msaPolicy';
 
 import { api, prepareExecutionPlacement, type ExecutionPlacement, type JobLogs } from '../../lib/api';
 import { parseFrustraMpnnSourceInspection } from '../../lib/frustraMpnnApi';
@@ -47,6 +48,7 @@ export interface CmFeaturePolicy {
     protein_msa_enabled?: boolean;
     templates_enabled?: boolean;
     rna_msa_enabled?: boolean;
+    msa_settings?: Partial<HostedMsaSettings>;
 }
 
 export type CmRuntimePolicy =

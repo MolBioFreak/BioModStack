@@ -6,6 +6,7 @@ export default defineConfig({
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
             './tests/vitest/remoteAdmissionMounted.test.tsx',
+            './tests/vitest/remoteCloseCmMsaMounted.test.tsx',
             ...(process.env.BMS_BOLTZGEN_ANALYTICS_WIRES ? ['./tests/vitest/boltzgenAnalyticsMounted.test.tsx'] : []),
             ...(process.env.BMS_ESM_ANALYTICS_WIRE ? ['./tests/vitest/esmAnalyticsMounted.test.tsx'] : []),
             ...(process.env.BMS_ANALYTICS_WIRE ? ['./tests/vitest/canonicalAnalyticsMounted.test.tsx'] : []),
