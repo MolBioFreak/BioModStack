@@ -166,6 +166,67 @@ def request(model='boltz2', msa=False):
                 ('protenix_use_msa' if model == 'protenix' else 'boltz_use_msa'): msa})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('action', ['custom', 'manual', 'interactive'])
+async def test_custom_actions_prepare_once_before_review(admission, tmp_path, monkeypatch, action):
+    from pathlib import Path
+    from database import Design
+    client, factory = admission
+    inputs = tmp_path / 'inputs'
+    inputs.mkdir()
+    pdb = inputs / 'source.pdb'
+    pdb.write_bytes((Path(__file__).parent / 'fixtures/md/1AKI.pdb').read_bytes())
+    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda value: Path(value))
+    async with factory() as session:
+        session.add(Job(id='source', name='antibody source', model_id='boltzgen', mode='antibody',
+            status='awaiting_input', queue_status='awaiting_input', awaiting_input=True,
+            awaiting_stage='post_boltzgen', execution_target_id='vast:one',
+            execution_source_revision='a' * 40, execution_source_tree='b' * 40,
+            params={'workflow_type': 'antibody', 'boltz_use_msa': False}, output_dir=str(tmp_path)))
+        session.add(Design(id='design', job_id='source', name='selected', pdb_path=str(pdb),
+            source_stage='post_boltzgen'))
+        await session.commit()
+    if action == 'manual':
+        response = await client.post('/jobs/mutagenesis/from-designs', json={
+            'source_job_id': 'source', 'design_ids': ['design'],
+            'config': {'chain_id': 'A', 'mutation_sets': ['K1A'], 'predictor': 'boltz2'}})
+    elif action == 'custom':
+        response = await client.post('/jobs/antibody-iteration/from-designs', json={
+            'source_job_id': 'source', 'design_ids': ['design'], 'action': 'validate_boltz2'})
+    else:
+        response = await client.post('/jobs/source/resume', json={})
+    assert response.status_code == 409, response.text
+    detail = response.json()['detail']
+    assert detail['code'] == 'remote_prepared_job_review_required', detail
+    prepared = detail['job_request']
+    assert prepared['execution_target_id'] == 'vast:one'
+    assert prepared['execution_plan_approval'] is None
+    before = {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()}
+    preview = await client.post('/jobs/execution-plan/preview', json=prepared)
+    if action == 'manual':
+        assert preview.status_code == 200, preview.text
+        assert preview.json()['admissible'], preview.text
+    else:
+        # Existing builder selects a template root absent from the shared typed
+        # provision catalog. Do not manufacture compiler/approval authority.
+        assert preview.status_code == 422, preview.text
+        assert preview.json()['detail'] == 'Workflow provision requires a supported typed model and mode'
+    assert {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()} == before
+    async with factory() as session:
+        assert [j.id for j in (await session.scalars(select(Job))).all()] == ['source']
+        assert not (await session.get(Job, 'source')).decision_history
+    if action == 'manual':
+        submitted = await client.post('/jobs', json={**prepared,
+            'execution_plan_approval': preview.json()['approval_digest']})
+        assert submitted.status_code == 201, submitted.text
+        async with factory() as session:
+            child = await session.get(Job, submitted.json()['id'])
+            assert child.execution_target_id == 'vast:one'
+            assert child.provenance['execution_plan_approval']['approval_digest'] == preview.json()['approval_digest']
+        assert {str(p): p.read_bytes() for p in inputs.rglob('*') if p.is_file()} == before
+
+
 async def empty(factory):
     async with factory() as session:
         assert list((await session.scalars(select(Job))).all()) == []

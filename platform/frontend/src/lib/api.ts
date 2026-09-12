@@ -1547,8 +1547,27 @@ export interface LaunchAntibodyIterationResponse {
     fanout_id?: string | null;
 }
 
+/** Prepared selections are an operator action, not execution approval. */
+async function submitPreparedJobAction<T>(action: () => Promise<import('axios').AxiosResponse<T>>) {
+    try {
+        return await action();
+    } catch (error) {
+        if (!axios.isAxiosError(error) || error.response?.status !== 409) throw error;
+        const detail = error.response.data?.detail;
+        if (detail?.code !== 'remote_prepared_job_review_required'
+                || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
+        // Never repeat the mutation endpoint: review and submit the exact
+        // once-prepared request through the ordinary shared canonical path.
+        const submitted = await submitJob(detail.job_request, { launchContext: false });
+        return { ...submitted, data: { ...detail.response_context,
+            launched_job: submitted.data, launched_jobs: [submitted.data],
+            new_job_id: submitted.data.id, new_job_name: submitted.data.name,
+        } as T };
+    }
+}
+
 export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
-    api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request);
+    submitPreparedJobAction(() => api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request));
 
 export interface ManualMutagenesisConfig {
     chain_id?: string;
@@ -1575,7 +1594,7 @@ export interface LaunchManualMutagenesisResponse {
 }
 
 export const launchManualMutagenesis = (request: LaunchManualMutagenesisRequest) =>
-    api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request);
+    submitPreparedJobAction(() => api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request));
 
 export interface SavedReviewFilterSet {
     id: string;
@@ -1805,7 +1824,7 @@ export const resumeJob = (
         }
         : null;
 
-    return api.post<{
+    return submitPreparedJobAction(() => api.post<{
         message: string;
         original_job_id: string;
         new_job_id: string;
@@ -1815,7 +1834,7 @@ export const resumeJob = (
         resume_stage_note?: string;
         preserved_stages: string[];
         applied_overrides?: string[];
-    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
+    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } }));
 };
 
 export const continueProteinLocalReview = (

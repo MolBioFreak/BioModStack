@@ -174,7 +174,8 @@ async def test_reorchestrate_is_versioned_idempotent_and_preserves_lineage(sessi
     )
     parent.lineage_root_job_id = "lineage-root"; parent.stage_family = "md"; parent.stage_mode = "simulate"
     captured = {}
-    async def fake_create_job(job_data, _background, db, *, _preallocated_job_id, _commit, _md_output_creation, _md_input_resolver):
+    async def fake_create_job(job_data, _background, db, *, _preallocated_job_id, _commit, _md_output_creation, _md_input_resolver, _approved_execution_plan):
+        assert _approved_execution_plan is None  # Local producer has no remote handoff.
         captured["params"] = job_data.params
         assert _md_input_resolver(str(snapshot)) == str(snapshot.resolve())
         output = tmp_path / _preallocated_job_id; output.mkdir()
