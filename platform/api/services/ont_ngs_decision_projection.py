@@ -86,7 +86,7 @@ _CHECKS: dict[str, tuple[str, str, dict[str, str]]] = {
 
 
 def _project_check(raw: Any, *, purpose: str, units: dict[str, str]) -> dict[str, Any]:
-    if not isinstance(raw, Mapping) or set(raw) != {"status", "reason_codes", "metrics"}:
+    if not isinstance(raw, Mapping):
         raise OntNgsDecisionProjectionError("decision check shape is invalid")
     status = raw.get("status")
     reasons = raw.get("reason_codes")
@@ -95,14 +95,16 @@ def _project_check(raw: Any, *, purpose: str, units: dict[str, str]) -> dict[str
         raise OntNgsDecisionProjectionError("decision check status is invalid")
     if not isinstance(reasons, list) or not all(isinstance(item, str) and item for item in reasons):
         raise OntNgsDecisionProjectionError("decision check reasons are invalid")
-    if not isinstance(metrics, Mapping) or set(metrics) != set(units):
+    if not isinstance(metrics, Mapping):
         raise OntNgsDecisionProjectionError("decision check metrics are invalid")
     return {
         "status": status,
         "purpose": purpose,
         "reason_codes": list(reasons),
         "metrics": dict(metrics),
-        "units": dict(units),
+        # Failed/unevaluated checks legitimately omit success-only measurements.
+        # Preserve the producer evidence, not an invented full metric inventory.
+        "units": {key: units[key] for key in metrics if key in units},
     }
 
 
@@ -173,31 +175,28 @@ def _project_variant(raw: Any) -> dict[str, Any]:
 
 
 def _project_topology_source(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, Mapping) or set(raw) != {"status", "reason_codes", "metrics"}:
+    if not isinstance(raw, Mapping):
         raise OntNgsDecisionProjectionError("topology check shape is invalid")
     metrics = raw.get("metrics")
-    if not isinstance(metrics, Mapping) or "provenance" not in metrics:
+    if not isinstance(metrics, Mapping):
         raise OntNgsDecisionProjectionError("topology evidence is invalid")
     provenance = metrics.get("provenance")
-    expected_provenance = {
-        "alignment_bam_sha256",
-        "breakpoint_call_sha256",
-        "reference_sha256",
-        "samtools_command",
-        "samtools_returncode",
-        "samtools_stderr",
-        "secondary_summary_sha256",
-    }
-    if not isinstance(provenance, Mapping) or set(provenance) != expected_provenance:
+    if provenance is not None and not isinstance(provenance, Mapping):
         raise OntNgsDecisionProjectionError("topology evidence is invalid")
     projected_metrics = {key: value for key, value in metrics.items() if key != "provenance"}
-    projected_metrics["evidence_sha256"] = {
-        "alignment_bam": provenance.get("alignment_bam_sha256"),
-        "breakpoint_call": provenance.get("breakpoint_call_sha256"),
-        "reference": provenance.get("reference_sha256"),
-        "secondary_summary": provenance.get("secondary_summary_sha256"),
-    }
-    projected_metrics["samtools_returncode"] = provenance.get("samtools_returncode")
+    if provenance is not None:
+        projected_metrics["evidence_sha256"] = {
+            name: provenance[source]
+            for name, source in (
+                ("alignment_bam", "alignment_bam_sha256"),
+                ("breakpoint_call", "breakpoint_call_sha256"),
+                ("reference", "reference_sha256"),
+                ("secondary_summary", "secondary_summary_sha256"),
+            )
+            if source in provenance
+        }
+        if "samtools_returncode" in provenance:
+            projected_metrics["samtools_returncode"] = provenance["samtools_returncode"]
     return {
         "status": raw.get("status"),
         "reason_codes": raw.get("reason_codes"),

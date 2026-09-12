@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { withAlignmentAccessRecovery } from './ngsAlignmentSession.js';
 
-export type OntFastqQcScalar = string | number | boolean;
+export type OntFastqQcScalar = string | number | boolean | null;
 export type OntFastqQcJsonValue = string | number | boolean | null | OntFastqQcJsonValue[] | { [key: string]: OntFastqQcJsonValue };
 
 export interface OntFastqQcCheck {
@@ -212,30 +212,6 @@ const RESOURCE_KEYS = [
     'execution_invocation_id', 'outcome', 'admitted_cpu_threads', 'observed_memory_peak_bytes',
     'observed_pids_peak',
 ] as const;
-const SUMMARY_KEYS = new Set([
-    'reference_name', 'reference_length', 'reads_considered', 'mapped_reads', 'mapping_rate_pct',
-    'fastq_minimap2_preset', 'fastq_minimap2_allow_secondary', 'mean_read_length_bp',
-    'n50_read_length_bp', 'estimated_copy_number_mean', 'dimer_like_reads', 'trimer_plus_reads',
-    'mean_coverage_depth', 'covered_fraction_pct', 'consensus_status', 'consensus_length',
-    'igv_report_status',
-]);
-const VERIFICATION_SUMMARY_KEYS = new Set([
-    'coverage_fraction', 'observed_length', 'reference_length', 'reference_name',
-    'reference_topology', 'sequence_identity_fraction', 'unmapped_fraction', 'variant_count',
-]);
-const ALIGNMENT_KEYS = new Set([
-    'reference_name', 'reference_length', 'expected_plasmid_size', 'min_fastq_read_length',
-    'fastq_minimap2_preset', 'fastq_minimap2_allow_secondary', 'total_reads',
-    'reads_passing_length_filter', 'total_bases', 'mean_read_length_bp', 'median_read_length_bp',
-    'n50_read_length_bp', 'estimated_copy_number_mean', 'dimer_like_reads', 'trimer_plus_reads',
-    'mapped_reads', 'unmapped_reads', 'logical_read_records', 'mapped_alignment_records',
-    'unmapped_alignment_records', 'total_alignment_records', 'mapping_rate_pct',
-    'primary_mapped_reads', 'primary_mapping_rate_pct', 'secondary_alignments',
-    'supplementary_alignments', 'coverage_positions', 'covered_positions', 'covered_fraction_pct',
-    'mean_coverage_depth', 'median_coverage_depth', 'consensus_status', 'consensus_name',
-    'consensus_length', 'igv_track_window_bp', 'igv_report_max_sites', 'igv_report_flanking_bp',
-    'igv_report_cli_available', 'igv_report_status',
-]);
 const ARTIFACT_KINDS = new Set([
     'alignment_bai', 'alignment_bam', 'alignment_stats', 'consensus', 'consensus_index', 'consensus_log',
     'construct_verification_manifest', 'coverage', 'human_evidence_report', 'igv_coverage_depth',
@@ -304,11 +280,10 @@ function sha256(value: unknown, label: string): string {
     return parsed;
 }
 
-function scalarMap(value: unknown, expected: Set<string>, label: string): Record<string, OntFastqQcScalar> {
+function scalarMap(value: unknown, label: string): Record<string, OntFastqQcScalar> {
     const parsed = object(value, label);
-    exactKeys(parsed, [...expected], label);
     for (const [key, item] of Object.entries(parsed)) {
-        if (!['string', 'number', 'boolean'].includes(typeof item)) throw new Error(`${label}.${key} is invalid`);
+        if (item !== null && !['string', 'number', 'boolean'].includes(typeof item)) throw new Error(`${label}.${key} is invalid`);
         if (typeof item === 'number' && !Number.isFinite(item)) throw new Error(`${label}.${key} is not finite`);
     }
     return parsed as Record<string, OntFastqQcScalar>;
@@ -354,185 +329,34 @@ function fraction(value: unknown, label: string): number {
     return parsed;
 }
 
-type CheckMetricValidator = (metrics: Record<string, unknown>, label: string) => void;
-
-function parseClosedCheck(
-    value: unknown,
-    label: string,
-    purpose: string,
-    units: Record<string, string>,
-    validateMetrics: CheckMetricValidator,
-): OntFastqQcCheck {
+function parseCheck(value: unknown, label: string): OntFastqQcCheck {
     const parsed = object(value, label);
     exactKeys(parsed, ['status', 'purpose', 'reason_codes', 'metrics', 'units'], label);
     if (!['pass', 'fail', 'review', 'not_evaluated'].includes(String(parsed.status))) {
         throw new Error(`${label}.status is invalid`);
     }
-    if (parsed.purpose !== purpose) throw new Error(`${label}.purpose is invalid`);
     const metrics = object(parsed.metrics, `${label}.metrics`);
-    const parsedUnits = object(parsed.units, `${label}.units`);
-    exactKeys(parsedUnits, Object.keys(units), `${label}.units`);
-    for (const [key, expected] of Object.entries(units)) {
-        if (parsedUnits[key] !== expected) throw new Error(`${label}.units.${key} is invalid`);
-    }
-    validateMetrics(metrics, `${label}.metrics`);
     validateJsonValue(metrics, `${label}.metrics`);
+    const units = object(parsed.units, `${label}.units`);
+    for (const [key, unit] of Object.entries(units)) string(unit, `${label}.units.${key}`);
     return {
         status: parsed.status as OntFastqQcCheck['status'],
-        purpose,
+        purpose: string(parsed.purpose, `${label}.purpose`),
         reason_codes: reasonCodes(parsed.reason_codes, `${label}.reason_codes`),
         metrics: metrics as Record<string, OntFastqQcJsonValue>,
-        units: parsedUnits as Record<string, string>,
+        units: units as Record<string, string>,
     };
-}
-
-const EXPECTED_REFERENCE_SCREEN_UNITS = {
-    screen_basis: 'categorical',
-    organism_identity_claimed: 'boolean',
-    total_reads: 'reads',
-    mapped_reads: 'reads',
-    unmapped_reads: 'reads',
-    unmapped_fraction: 'fraction',
-} as const;
-const COVERAGE_CHECK_UNITS = {
-    row_count: 'reference_positions',
-    coverage_fraction: 'fraction',
-    low_depth_fraction: 'fraction',
-    low_depth_positions: 'reference_positions',
-    minimum_depth: 'alignment_observations',
-    mixed_allele_positions: 'reference_positions',
-    strand_imbalanced_positions: 'reference_positions',
-} as const;
-const SEQUENCE_IDENTITY_UNITS = {
-    canonicalization: 'categorical',
-    consensus_support_validation: 'evidence',
-    edit_cost: 'edits',
-    identity_fraction: 'fraction',
-    observed_length: 'base_pairs',
-    orientation: 'categorical',
-    reference_length: 'base_pairs',
-    rotation_offset: 'base_pairs',
-} as const;
-const TOPOLOGY_UNITS = {
-    aligned_dimer_reads: 'reads',
-    alignment_records: 'alignment_records',
-    contradictory_breakpoint_evidence: 'boolean',
-    edge_window_bp: 'base_pairs',
-    evidence_basis: 'categorical',
-    expected_topology: 'categorical',
-    mapped_unique_reads: 'reads',
-    non_boundary_split_reads: 'reads',
-    origin_spanning_reads: 'reads',
-    evidence_sha256: 'sha256_digests',
-    reason: 'categorical_or_null',
-    schema: 'schema_id',
-    secondary_anomaly_fraction: 'fraction',
-    samtools_returncode: 'exit_code',
-    state: 'categorical',
-} as const;
-
-function validateExpectedReferenceScreen(metrics: Record<string, unknown>, label: string): void {
-    exactKeys(metrics, Object.keys(EXPECTED_REFERENCE_SCREEN_UNITS), label);
-    if (metrics.screen_basis !== 'expected_reference_mapping_only' || metrics.organism_identity_claimed !== false) {
-        throw new Error('expected-reference screen overclaims scientific authority');
-    }
-    integer(metrics.total_reads, `${label}.total_reads`);
-    integer(metrics.mapped_reads, `${label}.mapped_reads`);
-    integer(metrics.unmapped_reads, `${label}.unmapped_reads`);
-    fraction(metrics.unmapped_fraction, `${label}.unmapped_fraction`);
-}
-
-function validateCoverageCheck(metrics: Record<string, unknown>, label: string): void {
-    exactKeys(metrics, Object.keys(COVERAGE_CHECK_UNITS), label);
-    integer(metrics.row_count, `${label}.row_count`, 1);
-    fraction(metrics.coverage_fraction, `${label}.coverage_fraction`);
-    fraction(metrics.low_depth_fraction, `${label}.low_depth_fraction`);
-    integer(metrics.low_depth_positions, `${label}.low_depth_positions`);
-    integer(metrics.minimum_depth, `${label}.minimum_depth`);
-    integer(metrics.mixed_allele_positions, `${label}.mixed_allele_positions`);
-    integer(metrics.strand_imbalanced_positions, `${label}.strand_imbalanced_positions`);
-}
-
-function validateSequenceIdentity(metrics: Record<string, unknown>, label: string): void {
-    exactKeys(metrics, Object.keys(SEQUENCE_IDENTITY_UNITS), label);
-    string(metrics.canonicalization, `${label}.canonicalization`);
-    const support = object(metrics.consensus_support_validation, `${label}.consensus_support_validation`);
-    exactKeys(support, ['reason', 'status', 'validator'], `${label}.consensus_support_validation`);
-    nullableString(support.reason, `${label}.consensus_support_validation.reason`);
-    if (!['valid', 'invalid', 'unavailable', 'not_applicable'].includes(String(support.status))) {
-        throw new Error(`${label}.consensus_support_validation.status is invalid`);
-    }
-    string(support.validator, `${label}.consensus_support_validation.validator`);
-    integer(metrics.edit_cost, `${label}.edit_cost`);
-    fraction(metrics.identity_fraction, `${label}.identity_fraction`);
-    integer(metrics.observed_length, `${label}.observed_length`);
-    if (!['forward', 'reverse_complement'].includes(String(metrics.orientation))) {
-        throw new Error(`${label}.orientation is invalid`);
-    }
-    integer(metrics.reference_length, `${label}.reference_length`, 1);
-    integer(metrics.rotation_offset, `${label}.rotation_offset`);
-}
-
-function validateTopology(metrics: Record<string, unknown>, label: string): void {
-    exactKeys(metrics, Object.keys(TOPOLOGY_UNITS), label);
-    integer(metrics.aligned_dimer_reads, `${label}.aligned_dimer_reads`);
-    integer(metrics.alignment_records, `${label}.alignment_records`);
-    bool(metrics.contradictory_breakpoint_evidence, `${label}.contradictory_breakpoint_evidence`);
-    integer(metrics.edge_window_bp, `${label}.edge_window_bp`);
-    string(metrics.evidence_basis, `${label}.evidence_basis`);
-    if (!['linear', 'circular'].includes(String(metrics.expected_topology))) throw new Error(`${label}.expected_topology is invalid`);
-    integer(metrics.mapped_unique_reads, `${label}.mapped_unique_reads`);
-    integer(metrics.non_boundary_split_reads, `${label}.non_boundary_split_reads`);
-    integer(metrics.origin_spanning_reads, `${label}.origin_spanning_reads`);
-    const evidence = object(metrics.evidence_sha256, `${label}.evidence_sha256`);
-    exactKeys(evidence, ['alignment_bam', 'breakpoint_call', 'reference', 'secondary_summary'], `${label}.evidence_sha256`);
-    for (const [key, digest] of Object.entries(evidence)) sha256(digest, `${label}.evidence_sha256.${key}`);
-    nullableString(metrics.reason, `${label}.reason`);
-    if (metrics.schema !== 'biomodstack.construct_topology_evidence.v1') throw new Error(`${label}.schema is invalid`);
-    fraction(metrics.secondary_anomaly_fraction, `${label}.secondary_anomaly_fraction`);
-    integer(metrics.samtools_returncode, `${label}.samtools_returncode`);
-    if (!['present', 'absent', 'unavailable', 'not_applicable'].includes(String(metrics.state))) throw new Error(`${label}.state is invalid`);
 }
 
 function parseChecks(value: unknown): OntFastqQcResult['verification']['checks'] {
     const parsed = object(value, 'verification checks');
     exactKeys(parsed, CHECK_KEYS, 'verification checks');
     return {
-        expected_reference_screen: parseClosedCheck(
-            parsed.expected_reference_screen,
-            'verification checks.expected_reference_screen',
-            'Expected-reference mapping and unmapped-fraction screen only.',
-            EXPECTED_REFERENCE_SCREEN_UNITS,
-            validateExpectedReferenceScreen,
-        ),
-        coverage: parseClosedCheck(
-            parsed.coverage,
-            'verification checks.coverage',
-            'Coverage completeness and low-depth exclusion across the bound reference.',
-            COVERAGE_CHECK_UNITS,
-            validateCoverageCheck,
-        ),
-        read_support: parseClosedCheck(
-            parsed.read_support,
-            'verification checks.read_support',
-            'Per-position depth, allele-mixture, and strand-balance evidence.',
-            COVERAGE_CHECK_UNITS,
-            validateCoverageCheck,
-        ),
-        sequence_identity: parseClosedCheck(
-            parsed.sequence_identity,
-            'verification checks.sequence_identity',
-            'Observed consensus identity and edit evidence against the bound reference.',
-            SEQUENCE_IDENTITY_UNITS,
-            validateSequenceIdentity,
-        ),
-        topology: parseClosedCheck(
-            parsed.topology,
-            'verification checks.topology',
-            'Circular-boundary support and contradictory breakpoint evidence.',
-            TOPOLOGY_UNITS,
-            validateTopology,
-        ),
+        expected_reference_screen: parseCheck(parsed.expected_reference_screen, 'verification checks.expected_reference_screen'),
+        coverage: parseCheck(parsed.coverage, 'verification checks.coverage'),
+        read_support: parseCheck(parsed.read_support, 'verification checks.read_support'),
+        sequence_identity: parseCheck(parsed.sequence_identity, 'verification checks.sequence_identity'),
+        topology: parseCheck(parsed.topology, 'verification checks.topology'),
     };
 }
 
@@ -800,7 +624,8 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         const unavailableReason = string(artifact.unavailable_reason, 'artifact.unavailable_reason');
         const ownerScope = string(artifact.owner_scope, 'artifact.owner_scope') as 'result_root' | 'managed_input_snapshot';
         const scientificRole = string(artifact.scientific_role, 'artifact.scientific_role');
-        const contentDisposition = string(artifact.content_disposition, 'artifact.content_disposition');
+        const contentDisposition = string(artifact.content_disposition, 'artifact.content_disposition') as 'inline' | 'attachment' | 'none';
+        const filenameExtension = nullableString(artifact.filename_extension, 'artifact.filename_extension');
         if (
             artifact.artifact_id !== null
             || !['result_root', 'managed_input_snapshot'].includes(ownerScope)
@@ -812,8 +637,8 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
             || artifact.url !== null
             || artifact.range_capable !== false
             || !SCIENTIFIC_ROLES.has(scientificRole)
-            || contentDisposition !== 'none'
-            || artifact.filename_extension !== null
+            || !CONTENT_DISPOSITIONS.has(contentDisposition)
+            || (filenameExtension !== null && !FILENAME_EXTENSIONS.has(filenameExtension))
             || unavailableReason.length > 2048
         ) {
             throw new Error('unavailable artifact descriptor is invalid');
@@ -831,8 +656,8 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
             range_capable: false,
             scientific_role: scientificRole,
             display_order: integer(artifact.display_order, 'artifact.display_order', 1),
-            content_disposition: 'none',
-            filename_extension: null,
+            content_disposition: contentDisposition,
+            filename_extension: filenameExtension,
             unavailable_reason: unavailableReason,
         };
     });
@@ -843,9 +668,6 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         || (artifacts.length === declaredArtifactCount && (actualPresentArtifactCount !== presentArtifactCount || artifacts.length - actualPresentArtifactCount !== unavailableArtifactCount))
     ) {
         throw new Error('artifact counts are inconsistent');
-    }
-    if (parsedJob.status === 'completed' && artifacts.some((artifact) => artifact.state === 'missing_required')) {
-        throw new Error('completed result contains a missing required artifact');
     }
 
     if (!Array.isArray(root.alignment_sessions) || root.alignment_sessions.length > 2) {
@@ -885,7 +707,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     const histogram = object(root.read_length_histogram, 'read length histogram');
     exactKeys(histogram, ['method', 'source_row_count', 'bin_width_bp', 'bins'], 'read length histogram');
     if (histogram.method !== 'fixed_width_v1' || !Array.isArray(histogram.bins)) throw new Error('read length histogram is invalid');
-    const histogramSourceRowCount = integer(histogram.source_row_count, 'histogram.source_row_count', 1);
+    const histogramSourceRowCount = integer(histogram.source_row_count, 'histogram.source_row_count');
     const histogramBinWidth = integer(histogram.bin_width_bp, 'histogram.bin_width_bp', 1);
     const bins = histogram.bins.map((entry) => {
         const bin = object(entry, 'read length bin');
@@ -1004,11 +826,10 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     if (!['PASS', 'FAIL', 'REVIEW'].includes(String(verification.verdict))) throw new Error('verification verdict is invalid');
     const verificationReasonCodes = reasonCodes(verification.reason_codes, 'verification reason codes');
     if (!Array.isArray(verification.variants)) throw new Error('verification variants are invalid');
-    const parsedSummary = scalarMap(root.summary, SUMMARY_KEYS, 'summary');
-    const parsedAlignment = scalarMap(root.alignment, ALIGNMENT_KEYS, 'alignment');
+    const parsedSummary = scalarMap(root.summary, 'summary');
+    const parsedAlignment = scalarMap(root.alignment, 'alignment');
     const parsedVerificationSummary = scalarMap(
         verification.summary,
-        VERIFICATION_SUMMARY_KEYS,
         'verification summary',
     );
     const parsedChecks = parseChecks(verification.checks);
@@ -1046,14 +867,6 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     ) {
         throw new Error('variant count or variant interval is inconsistent');
     }
-    if (
-        parsedChecks.coverage.metrics.row_count !== referenceLength
-        || parsedChecks.read_support.metrics.row_count !== referenceLength
-        || parsedChecks.coverage.metrics.minimum_depth !== parsedChecks.read_support.metrics.minimum_depth
-        || histogramSourceRowCount !== parsedAlignment.total_reads
-    ) {
-        throw new Error('scientific source row counts are inconsistent');
-    }
 
     if (!Array.isArray(root.stages)) throw new Error('stages must be an array');
     const stages = root.stages.map((entry) => {
@@ -1067,18 +880,11 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         };
     });
     const canonicalStages = ['fastq_align', 'dimer_qc', 'fastq_qc', 'construct_verification'];
-    const canonicalStageOutputCounts = [5, 6, 8, 6];
     if (
         stages.length !== canonicalStages.length
         || stages.some((stage, index) => stage.stage !== canonicalStages[index])
     ) {
         throw new Error('canonical stage order is invalid');
-    }
-    if (
-        parsedJob.status === 'completed'
-        && stages.some((stage, index) => stage.status !== 'complete' || stage.output_count !== canonicalStageOutputCounts[index])
-    ) {
-        throw new Error('completed result stage state or output count is invalid');
     }
 
     const resources = object(root.execution_resources, 'execution resources');

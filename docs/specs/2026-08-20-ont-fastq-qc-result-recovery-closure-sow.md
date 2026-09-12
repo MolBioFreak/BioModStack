@@ -10,6 +10,10 @@
 > output membership is order-independent. Cache and display budgets do not cap
 > valid scientific file sizes or raw table row counts. Historical acceptance
 > examples below remain descriptive evidence, not new-run admission rules.
+> **Result-display correction:** FAIL/REVIEW and unevaluated checks remain readable
+> with sparse/error-only metrics, null unavailable measurements and additive
+> evidence. Neither success-only metric fields, fixed stage output counts, missing
+> artifacts nor unrelated cross-source row counts are result-display prerequisites.
 
 
 **Status:** Controlling implementation and acceptance specification
@@ -187,7 +191,7 @@ Every timestamp in these contracts is UTC RFC 3339 with a terminal `Z`. A timezo
 
 JSON Schema owns structural validation. Two closed semantic validators own rules that Draft 2020-12 cannot express:
 
-- `bms.ngs.fastq-qc-result-construction-validator.v1` runs only in the backend while the complete producer rows, manifests, persisted authority, and bounded projection are available. It proves source-row contiguity, full-source extrema, histogram construction, package authority, required-artifact completeness, resource-evidence coherence, and every wire invariant. It emits `coverage.construction_attestation` with exactly `validator`, `source_rows_sha256`, `source_row_count`, `projection_sha256`, and `validated_at`.
+- `bms.ngs.fastq-qc-result-construction-validator.v1` runs only in the backend while the complete producer rows, manifests, persisted authority, and bounded projection are available. It proves source-row contiguity, full-source extrema, histogram construction, package identity and the applicable wire invariants. Scientific measurements, missing artifacts and unavailable resource observations retain their producer states rather than becoming result-display prerequisites. It emits `coverage.construction_attestation` with exactly `validator`, `source_rows_sha256`, `source_row_count`, `projection_sha256`, and `validated_at`.
 - `bms.ngs.fastq-qc-result-wire-validator.v1` runs at backend serialization, the FastAPI response boundary, the TypeScript parser, and exact-fixture gates. It validates the bounded response only. It recomputes `projection_sha256` over RFC 8785 canonical JSON of the complete `coverage` object with `construction_attestation` omitted, requires the attested row count to equal `source_row_count`, validates projected point order and reported extrema within the bounded points, and enforces rules 1 through 20. Only full-source extrema and omitted-row correctness in rule 5 remain construction-only and are accepted through the construction attestation.
 
 The `x-bms-cross-field-invariants` array is synchronized with both validators and does not count as enforcement. An invocation boundary must run the validator whose evidence domain it possesses. No browser validator may claim to inspect omitted source rows.
@@ -246,9 +250,11 @@ Coverage reduction must use `minmax_envelope_v1` over one strict, single-contig,
 
 The envelope minimum is not interchangeable with construct-verification support depth. For retry3, the envelope owns 24,840 at position 3516. The coverage/read-support decision checks own 49,126 at position 5570 from the separate per-base support table. Both use producer values and explicit units.
 
-The normative wire definition is `schemas/ngs/ont_fastq_qc_result_v1.schema.json`. It uses `additionalProperties: false` at every fixed object layer and freezes required keys, field-specific types and units, enum values, nullability, order rules, cardinality, URL/hash/ID syntax, state-discriminated artifact and session branches, stage output counts, closed decision-check metrics and purposes, closed threshold-profile values, and normalized variant coordinates. The expected-reference screen requires `screen_basis=expected_reference_mapping_only` and `organism_identity_claimed=false`. Schema-valid payloads cannot substitute contamination, taxonomy, purity, or off-target claims.
+The normative wire definition is `schemas/ngs/ont_fastq_qc_result_v1.schema.json`. Fixed identity/routing envelopes retain typed keys, URL/hash/ID syntax, state-discriminated artifacts and sessions, closed threshold-profile settings and normalized variant coordinates. Decision metrics are optional and additive: a failed, unavailable or unevaluated calculation can expose only an error or a subset of observations. Preserve null unavailable measurements and their original reasons; never invent zero, a success-only field, a measurement or a PASS verdict. The API validates declared measurement types when present; the browser displays the provided safe JSON evidence and units rather than duplicating scientific validation or exact prose/metric inventories. Purpose and unit-map wording is not a scientific-result acceptance gate. Where present, the expected-reference screen remains `screen_basis=expected_reference_mapping_only` and `organism_identity_claimed=false`; it does not establish taxonomy, purity or off-target absence.
 
-The construction and wire validators must reject every applicable one of these cross-field failures:
+Histograms describe their own length-filtered source population, which may be empty. They are not required to equal all input/aligned reads. Coverage-envelope depth and decision-support depth are distinct populations. The UI preserves their labels and does not block a whole report on cross-population equality. An unavailable artifact may retain its planned disposition/extension, but has no artifact ID, URL, observed digest, size, media type or range capability. It remains visibly unavailable without hiding other artifacts or changing the verdict.
+
+The construction and wire boundaries enforce the following applicable rules; display-only absences remain local to their evidence or action:
 
 1. artifact total disagreement with the full authority/state counts, page count disagreement with the returned artifact array, or inconsistent offsets/next offsets;
 2. an artifact URL whose Job ID or final opaque route segment differs from its owning object's Job ID or `artifact_id`, or whose `artifact_id` equals the file SHA-256;
@@ -261,11 +267,11 @@ The construction and wire validators must reject every applicable one of these c
 9. a stage set or order different from the four canonical stages;
 10. encoded compact UTF-8 JSON above 262,144 bytes;
 11. any non-finite number;
-12. a completed accepted result that contains `missing_required` artifact state;
+12. `missing_required` or `not_produced` artifacts remain visible as unavailable; they do not blank an otherwise readable completed result;
 13. a historical or accepted resource-evidence branch with incoherent receipt fields.
-14. any artifact whose source, kind, scientific role, media type, disposition, filename extension, or display order differs from the exact UI-5 row at that array position;
+14. artifact source/kind/role/type fields follow the descriptor schema, not a frozen historical table position; unavailable artifacts may retain harmless planned type hints but cannot expose a download;
 15. invalid artifact display-order values; page-local indices do not replace the full inventory ordering.
-16. any completed stage whose status or output count differs from complete 5/6/8/6 in canonical order;
+16. stage status and output counts are displayed as recorded; missing receipts and counts other than historical 5/6/8/6 do not gate the report;
 17. a result session summary that differs from its governed session; missing optional presentations do not prevent scientific result access;
 18. a threshold-profile digest that differs from SHA-256 over UTF-8 canonical JSON using sorted keys, comma/colon separators, and `allow_nan=false` for the exact `values` object, or outer version/calibration/public-accuracy metadata that differs from those values;
 19. a PASS verdict unless every check passes, all aggregate and row reason-code arrays are empty, every threshold is satisfied, `automatic_pass_eligible=true`, and `public_accuracy_validated=true`; any review/fail check or nonempty reason array requires REVIEW or FAIL as producer-defined;

@@ -415,7 +415,7 @@ export function OntFastqQcResultPanel({
                                             <td className="px-2 py-1">
                                                 <button
                                                     type="button"
-                                                    disabled={!locus || !onOpenViewer}
+                                                    disabled={!locus || !onOpenViewer || result.authority.alignment_readiness !== 'ready'}
                                                     onClick={() => locus && onOpenViewer?.(locus)}
                                                     className="rounded border border-[var(--border-primary)] px-2 py-1 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
                                                 >

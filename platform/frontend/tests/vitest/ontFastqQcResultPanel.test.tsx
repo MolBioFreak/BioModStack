@@ -117,6 +117,60 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(onOpenViewer).toHaveBeenCalledWith('eGFP_plasmid:3416-3616');
     });
 
+    it.each(['ready', 'unavailable'] as const)('renders sparse FAIL evidence and null identity with alignment %s', async (readiness) => {
+        const payload = resultFixture();
+        payload.verification.verdict = 'FAIL';
+        payload.verification.reason_codes = ['CONSENSUS_UNAVAILABLE'];
+        payload.verification.summary.sequence_identity_fraction = null;
+        Object.assign(payload.verification.checks.sequence_identity, {
+            status: 'fail', reason_codes: ['CONSENSUS_UNAVAILABLE'],
+            metrics: { identity_fraction: null }, units: { identity_fraction: 'fraction' },
+        });
+        payload.verification.checks.coverage.metrics = {};
+        payload.verification.checks.coverage.units = {};
+        payload.verification.checks.topology.metrics = { state: 'unavailable', evidence_sha256: {} };
+        payload.verification.checks.topology.units = { state: 'categorical' };
+        const missing = payload.artifacts.find((artifact) => artifact.state !== 'present')!;
+        missing.state = 'missing_required';
+        missing.unavailable_reason = 'Required output unavailable';
+        missing.content_disposition = 'attachment';
+        missing.filename_extension = 'fasta';
+        payload.stages[0].status = 'missing';
+        payload.stages[0].output_count = 0;
+        payload.authority.alignment_readiness = readiness;
+        if (readiness === 'unavailable') {
+            for (const session of payload.alignment_sessions) {
+                Object.assign(session, { ready: false, reference_contig: null, unavailable_reason: 'Alignment unavailable' });
+            }
+        }
+        // Exercise the parser before rendering, not a bypassed typed fixture.
+        const result = parseOntFastqQcResult(payload, JOB_ID);
+        const onOpenViewer = vi.fn();
+        await act(async () => root.render(
+            <OntFastqQcResultPanel result={result} loading={false} error={null} onOpenViewer={onOpenViewer} />,
+        ));
+        expect(container.textContent).toContain('Scientific verdict: FAIL');
+        expect(container.textContent).toContain('CONSENSUS_UNAVAILABLE');
+        expect(container.textContent).toContain('Consensus identity—observed consensus versus bound reference');
+        expect(container.textContent).not.toContain('Consensus identity0.0000%');
+        expect(container.textContent).toContain('Identity fraction— fraction');
+        expect(container.textContent).toContain('Decision minimum support depth—');
+        expect(container.textContent).toContain('Required output unavailable');
+        expect(container.textContent).toContain('fastq_align: missing · 0 governed outputs');
+        expect(container.querySelectorAll('a[href*="/ngs-artifacts/"]').length).toBeGreaterThan(0);
+        const unavailableArtifact = container.querySelector(`[data-artifact-display-order="${missing.display_order}"]`);
+        expect(unavailableArtifact?.querySelector('a')).toBeNull();
+        expect(unavailableArtifact?.tagName).not.toBe('A');
+        expect(container.querySelectorAll('[data-testid="scientific-plot"]')).toHaveLength(2);
+        const viewerButtons = [...container.querySelectorAll('button')].filter((button) => button.textContent?.includes('IGV'));
+        expect(viewerButtons.length).toBeGreaterThan(1);
+        for (const button of viewerButtons) {
+            expect(button.disabled).toBe(readiness === 'unavailable');
+            await act(async () => button.click());
+        }
+        expect(onOpenViewer.mock.calls.length).toBe(readiness === 'ready' ? viewerButtons.length : 0);
+    });
+
     it('offers bounded manual recovery for an alignment-access denial', async () => {
         const onRecoverAccess = vi.fn();
         await act(async () => {

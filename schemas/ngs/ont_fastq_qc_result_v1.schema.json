@@ -449,14 +449,32 @@
               "type": "null"
             },
             "content_disposition": {
-              "const": "none"
+              "enum": [
+                "inline",
+                "attachment",
+                "none"
+              ]
             },
             "display_order": {
               "minimum": 1,
               "type": "integer"
             },
             "filename_extension": {
-              "type": "null"
+              "enum": [
+                null,
+                "bai",
+                "bam",
+                "bed",
+                "bedgraph",
+                "fai",
+                "fasta",
+                "fastq.gz",
+                "html",
+                "json",
+                "log",
+                "tsv",
+                "vcf"
+              ]
             },
             "kind": {
               "enum": [
@@ -603,7 +621,10 @@
           ]
         },
         "units": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -616,7 +637,7 @@
       "type": "object"
     },
     "consensusSupportValidation": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "reason": {
           "type": [
@@ -637,11 +658,6 @@
           "type": "string"
         }
       },
-      "required": [
-        "reason",
-        "status",
-        "validator"
-      ],
       "type": "object"
     },
     "constructVerificationStage": {
@@ -673,7 +689,7 @@
         {
           "properties": {
             "metrics": {
-              "additionalProperties": false,
+              "additionalProperties": true,
               "properties": {
                 "coverage_fraction": {
                   "maximum": 1,
@@ -706,30 +722,7 @@
                   "type": "integer"
                 }
               },
-              "required": [
-                "row_count",
-                "coverage_fraction",
-                "low_depth_fraction",
-                "low_depth_positions",
-                "minimum_depth",
-                "mixed_allele_positions",
-                "strand_imbalanced_positions"
-              ],
               "type": "object"
-            },
-            "purpose": {
-              "const": "Coverage completeness and low-depth exclusion across the bound reference."
-            },
-            "units": {
-              "const": {
-                "coverage_fraction": "fraction",
-                "low_depth_fraction": "fraction",
-                "low_depth_positions": "reference_positions",
-                "minimum_depth": "alignment_observations",
-                "mixed_allele_positions": "reference_positions",
-                "row_count": "reference_positions",
-                "strand_imbalanced_positions": "reference_positions"
-              }
             }
           }
         }
@@ -764,7 +757,7 @@
         {
           "properties": {
             "metrics": {
-              "additionalProperties": false,
+              "additionalProperties": true,
               "properties": {
                 "mapped_reads": {
                   "minimum": 0,
@@ -790,28 +783,7 @@
                   "type": "integer"
                 }
               },
-              "required": [
-                "screen_basis",
-                "organism_identity_claimed",
-                "total_reads",
-                "mapped_reads",
-                "unmapped_reads",
-                "unmapped_fraction"
-              ],
               "type": "object"
-            },
-            "purpose": {
-              "const": "Expected-reference mapping and unmapped-fraction screen only."
-            },
-            "units": {
-              "const": {
-                "mapped_reads": "reads",
-                "organism_identity_claimed": "boolean",
-                "screen_basis": "categorical",
-                "total_reads": "reads",
-                "unmapped_fraction": "fraction",
-                "unmapped_reads": "reads"
-              }
             }
           }
         }
@@ -879,7 +851,7 @@
         {
           "properties": {
             "metrics": {
-              "additionalProperties": false,
+              "additionalProperties": true,
               "properties": {
                 "coverage_fraction": {
                   "maximum": 1,
@@ -912,30 +884,7 @@
                   "type": "integer"
                 }
               },
-              "required": [
-                "row_count",
-                "coverage_fraction",
-                "low_depth_fraction",
-                "low_depth_positions",
-                "minimum_depth",
-                "mixed_allele_positions",
-                "strand_imbalanced_positions"
-              ],
               "type": "object"
-            },
-            "purpose": {
-              "const": "Per-position depth, allele-mixture, and strand-balance evidence."
-            },
-            "units": {
-              "const": {
-                "coverage_fraction": "fraction",
-                "low_depth_fraction": "fraction",
-                "low_depth_positions": "reference_positions",
-                "minimum_depth": "alignment_observations",
-                "mixed_allele_positions": "reference_positions",
-                "row_count": "reference_positions",
-                "strand_imbalanced_positions": "reference_positions"
-              }
             }
           }
         }
@@ -957,7 +906,7 @@
         {
           "properties": {
             "metrics": {
-              "additionalProperties": false,
+              "additionalProperties": true,
               "properties": {
                 "canonicalization": {
                   "minLength": 1,
@@ -973,7 +922,10 @@
                 "identity_fraction": {
                   "maximum": 1,
                   "minimum": 0,
-                  "type": "number"
+                  "type": [
+                    "number",
+                    "null"
+                  ]
                 },
                 "observed_length": {
                   "minimum": 0,
@@ -994,32 +946,7 @@
                   "type": "integer"
                 }
               },
-              "required": [
-                "canonicalization",
-                "consensus_support_validation",
-                "edit_cost",
-                "identity_fraction",
-                "observed_length",
-                "orientation",
-                "reference_length",
-                "rotation_offset"
-              ],
               "type": "object"
-            },
-            "purpose": {
-              "const": "Observed consensus identity and edit evidence against the bound reference."
-            },
-            "units": {
-              "const": {
-                "canonicalization": "categorical",
-                "consensus_support_validation": "evidence",
-                "edit_cost": "edits",
-                "identity_fraction": "fraction",
-                "observed_length": "base_pairs",
-                "orientation": "categorical",
-                "reference_length": "base_pairs",
-                "rotation_offset": "base_pairs"
-              }
             }
           }
         }
@@ -1294,7 +1221,7 @@
         {
           "properties": {
             "metrics": {
-              "additionalProperties": false,
+              "additionalProperties": true,
               "properties": {
                 "aligned_dimer_reads": {
                   "minimum": 0,
@@ -1362,53 +1289,14 @@
                   ]
                 }
               },
-              "required": [
-                "aligned_dimer_reads",
-                "alignment_records",
-                "contradictory_breakpoint_evidence",
-                "edge_window_bp",
-                "evidence_basis",
-                "expected_topology",
-                "mapped_unique_reads",
-                "non_boundary_split_reads",
-                "origin_spanning_reads",
-                "evidence_sha256",
-                "reason",
-                "schema",
-                "secondary_anomaly_fraction",
-                "samtools_returncode",
-                "state"
-              ],
               "type": "object"
-            },
-            "purpose": {
-              "const": "Circular-boundary support and contradictory breakpoint evidence."
-            },
-            "units": {
-              "const": {
-                "aligned_dimer_reads": "reads",
-                "alignment_records": "alignment_records",
-                "contradictory_breakpoint_evidence": "boolean",
-                "edge_window_bp": "base_pairs",
-                "evidence_basis": "categorical",
-                "evidence_sha256": "sha256_digests",
-                "expected_topology": "categorical",
-                "mapped_unique_reads": "reads",
-                "non_boundary_split_reads": "reads",
-                "origin_spanning_reads": "reads",
-                "reason": "categorical_or_null",
-                "samtools_returncode": "exit_code",
-                "schema": "schema_id",
-                "secondary_anomaly_fraction": "fraction",
-                "state": "categorical"
-              }
             }
           }
         }
       ]
     },
     "topologyEvidenceSha256": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "alignment_bam": {
           "$ref": "#/$defs/sha256"
@@ -1423,12 +1311,6 @@
           "$ref": "#/$defs/sha256"
         }
       },
-      "required": [
-        "alignment_bam",
-        "breakpoint_call",
-        "reference",
-        "secondary_summary"
-      ],
       "type": "object"
     },
     "variant": {
@@ -1538,11 +1420,17 @@
         "coverage_fraction": {
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "observed_length": {
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "reference_length": {
           "minimum": 1,
@@ -1561,12 +1449,18 @@
         "sequence_identity_fraction": {
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "unmapped_fraction": {
           "maximum": 1,
           "minimum": 0,
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "variant_count": {
           "minimum": 0,
@@ -2195,7 +2089,7 @@
           "const": "fixed_width_v1"
         },
         "source_row_count": {
-          "minimum": 1,
+          "minimum": 0,
           "type": "integer"
         }
       },
@@ -2316,29 +2210,29 @@
   "title": "BioModStack ONT FASTQ-QC bounded result projection v1",
   "type": "object",
   "x-bms-cross-field-invariants": [
-    "authority.declared_artifact_count equals artifacts.length",
+    "authority.declared_artifact_count equals the full artifact total; page count equals the returned artifacts length",
     "authority.declared_artifact_count equals authority.present_artifact_count plus authority.unavailable_artifact_count",
-    "present and unavailable authority counts equal artifact item states",
-    "every artifact URL contains the exact encoded job.id and its own sha256",
+    "full inventory state counts equal authority counts; each page contains no more of each state than its declared total",
+    "every present artifact URL contains the exact encoded job.id and opaque artifact_id, not the file sha256",
     "alignment_readiness is ready if and only if at least one alignment session is ready",
     "read_length_histogram bins are contiguous half-open fixed_width_v1 bins beginning at zero and sum(read_count) equals source_row_count",
     "coverage points retain one producer reference and strict ascending 1-based order; bucket_width_rows follows ceil(source_row_count/1024); each bucket retains earliest tied minimum and maximum; reported minimum_depth equals the source global minimum",
     "summary, alignment, verification.summary, alignment sessions, coverage, and reference authority identify one exact reference name and length",
-    "verification.summary.variant_count equals verification.variants.length",
+    "verification.summary.variant_count equals the full variant total; page count equals returned variants length",
     "each variant record and affected interval follow vcf_left_anchored_v1 kind/ref/alt semantics; insertion intervals are between_bases and cross-origin records are rejected",
     "stages contain the four canonical entries once and in canonical order",
     "encoded UTF-8 compact JSON size is at most 262144 bytes",
     "all JSON numbers are finite",
     "wire validator recomputes coverage projection digest and validates construction attestation without claiming access to omitted source rows",
-    "artifact scientific role, media type, disposition, and display order equal the SOW UI-5 table",
-    "artifact display_order is unique and contiguous from 1 through artifact_count",
-    "completed accepted results contain no missing_required artifact",
-    "execution resource branch fields are coherent with historical_unavailable or accepted state",
-    "all four stage summaries have complete status and exact output counts 5, 6, 8, 6",
+    "artifact metadata follows the descriptor schema; unavailable artifacts may retain disposition and extension hints but have no usable URL or byte identity",
+    "artifact display_order is a positive presentation order, not a page-local index",
+    "missing_required and not_produced artifacts remain visibly unavailable without hiding readable results",
+    "execution resource observations are either accepted, historical_unavailable or unavailable; invalid observations do not gate scientific results",
+    "stage states and output counts are reported as observed, not compared with historical fixed counts",
     "threshold_profile.sha256 equals SHA-256 over UTF-8 canonical JSON of threshold_profile.values using sorted keys, separators comma and colon, allow_nan false; outer version, calibration_status, and public_accuracy_validated equal values",
-    "verification verdict is REVIEW when any check status is review or fail or any reason code is present",
+    "verification verdict and reasons are preserved from the producer, including FAIL for failed scientific checks",
     "verification verdict PASS requires every check pass, empty aggregate and row reason codes, automatic_pass_eligible true, public_accuracy_validated true, and all profile thresholds satisfied",
-    "retry3 verdict is REVIEW with exactly MIXED_ALLELES_DETECTED and VARIANT_SUPPORT_AMBIGUOUS aggregate reasons",
+    "decision metrics are optional and additive; unavailable observations remain null, never fabricated success-only values",
     "present artifact URL final segment equals artifact_id and artifact_id differs from file sha256",
     "source_reads_fastq alone has owner_scope managed_input_snapshot; every other descriptor has owner_scope result_root",
     "managed-input artifact authority resolves exact persisted input snapshot without result-root containment; result artifacts resolve no-follow beneath exact Job result root"

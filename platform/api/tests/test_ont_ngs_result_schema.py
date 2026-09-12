@@ -147,6 +147,20 @@ def test_retry3_fixture_exposes_historical_resource_evidence_as_a_discriminated_
     assert resources["receipt_sha256"] is None
 
 
+@pytest.mark.parametrize("state", ["not_produced", "missing_required"])
+def test_schema_accepts_unavailable_artifact_type_hints_without_download(state: str) -> None:
+    value = _fixture()
+    artifact = next(item for item in value["artifacts"] if item["state"] != "present")
+    artifact.update(state=state, content_disposition="attachment", filename_extension="fasta")
+    service.validate_ont_fastq_qc_result_contract(value)
+    assert artifact["url"] is None
+    assert artifact["artifact_id"] is None
+    assert artifact["range_capable"] is False
+    artifact["url"] = "/api/jobs/foreign/ngs-artifacts/" + "a" * 64
+    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
+        service.validate_ont_fastq_qc_result_contract(value)
+
+
 def test_schema_rejects_timezone_free_lifecycle_timestamp() -> None:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     value = _fixture()
