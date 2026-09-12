@@ -10136,6 +10136,55 @@ async def list_structure_files(
     return {"structures": structures, "count": len(structures)}
 
 
+@router.get('/{job_id}/remote-artifacts')
+async def list_remote_artifacts(job_id: str, diagnostics: bool = False, session: AsyncSession = Depends(get_session)):
+    """Browse only the sealed, current Job-bound archive; retained entries are explicit history."""
+    import asyncio
+    from urllib.parse import urlencode, quote
+    from services.remote_execution.executor import retained_result_view, RemoteExecutionError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    try:
+        _, relative, manifest, status = await asyncio.to_thread(retained_result_view, job, diagnostics=diagnostics)
+    except (RemoteExecutionError, OSError, ValueError, KeyError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        'attempt_id': status.attempt_id, 'generation': status.generation,
+        'result_manifest_sha256': status.result_manifest_sha256,
+        'kind': 'diagnostics' if diagnostics else 'current',
+        'artifacts': [{
+            'relative_path': a.relative_path, 'size_bytes': a.size_bytes, 'sha256': a.sha256,
+            'scope': 'current' if Path(a.relative_path).is_relative_to(relative) else 'history',
+            'download_url': f'/api/jobs/{quote(job_id, safe="")}/remote-artifacts/download?' + urlencode({
+                'path': a.relative_path, 'diagnostics': str(diagnostics).lower(),
+                'attempt_id': status.attempt_id, 'manifest_sha256': status.result_manifest_sha256,
+            }),
+        } for a in manifest.artifacts],
+    }
+
+
+@router.get('/{job_id}/remote-artifacts/download')
+async def download_remote_artifact(job_id: str, path: str, attempt_id: str, manifest_sha256: str,
+                                   diagnostics: bool = False, session: AsyncSession = Depends(get_session)):
+    import asyncio
+    from fastapi.responses import FileResponse
+    from services.remote_execution.executor import retained_result_view, retained_result_file, RemoteExecutionError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    try:
+        root, _, manifest, status = await asyncio.to_thread(retained_result_view, job, diagnostics=diagnostics)
+        if status.attempt_id != attempt_id or status.result_manifest_sha256 != manifest_sha256:
+            raise RemoteExecutionError('Requested archive identity is no longer current')
+        selected = await asyncio.to_thread(retained_result_file, root, manifest, path)
+    except (RemoteExecutionError, OSError, ValueError, KeyError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return FileResponse(selected, filename=selected.name, media_type='application/octet-stream')
+
+
 @router.get("/{job_id}/logs")
 async def get_job_logs(
     job_id: str,
@@ -10174,7 +10223,6 @@ async def get_job_logs(
 
     if job.execution_target_id:
         logs_data["nextflow_log_source"] = "remote_pending"
-        output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
 
         def _bounded_remote_log(path: Path) -> str | None:
             if not path.is_file():
@@ -10190,12 +10238,24 @@ async def get_job_logs(
             except OSError:
                 return None
 
-        if output_path is not None:
-            remote_log_root = output_path / "_remote"
-            logs_data["nextflow_log"] = _bounded_remote_log(remote_log_root / "nextflow.log")
-            logs_data["command_log"] = _bounded_remote_log(remote_log_root / "supervisor.log")
-        if logs_data["nextflow_log"] is not None or logs_data["command_log"] is not None:
-            logs_data["nextflow_log_source"] = "remote_returned"
+        from services.remote_execution.executor import retained_result_view, retained_result_file, RemoteExecutionError
+        diagnostics = job.status in {'failed', 'cancelled'}
+        try:
+            root, relative, manifest, status = await asyncio.to_thread(retained_result_view, job, diagnostics=diagnostics)
+            logs_data['exit_code'] = status.exit_code
+            logs_data['remote_result_identity'] = {
+                'attempt_id': status.attempt_id, 'generation': status.generation,
+                'result_manifest_sha256': status.result_manifest_sha256,
+                'kind': 'diagnostics' if diagnostics else 'current',
+            }
+            for field, name in [('nextflow_log', 'nextflow.log'), ('command_log', 'supervisor.log')]:
+                member = (relative / '_remote' / name).as_posix()
+                if any(a.relative_path == member for a in manifest.artifacts):
+                    path = await asyncio.to_thread(retained_result_file, root, manifest, member)
+                    logs_data[field] = await asyncio.to_thread(_bounded_remote_log, path)
+            logs_data['nextflow_log_source'] = 'remote_diagnostics' if diagnostics else 'remote_returned'
+        except (RemoteExecutionError, OSError, ValueError, KeyError) as exc:
+            logs_data['remote_read_error'] = str(exc)[:1000]
         logs_data["parsed_error"] = extract_error_from_logs(
             logs_data["command_log"],
             None,

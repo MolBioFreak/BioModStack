@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { RemoteDiagnosticsPrompt } from '../../src/components/RemoteDiagnosticsPrompt';
 import { api, type Job, type RemoteDiagnosticsRecord } from '../../src/lib/api';
@@ -23,6 +23,7 @@ function mount(job: Job, copies = 1) {
     return { container, render, client };
 }
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); };
+beforeEach(() => { vi.spyOn(api, 'get').mockRejectedValue(new Error('Offline archive fixture')); });
 afterEach(() => { cleanups.splice(0).forEach(fn => fn()); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 it('mount, refresh, duplicate mounts and persisted returning never POST automatically; explicit restart retry is available', async () => {
@@ -54,20 +55,25 @@ it('same-tick clicks across duplicate surfaces issue one encoded POST; failures 
     expect(view.container.textContent).toContain('Check/retry diagnostic pull');
 });
 
-it('polls only normal detail while returning and displays returned path as text without science success', async () => {
+it('polls detail while returning then offers manifest-listed downloads without science success', async () => {
     vi.useFakeTimers();
-    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: recorded('returned') });
+    const url = '/api/jobs/job%2Fid/remote-artifacts/download?path=_remote%2Fnextflow.log&attempt_id=attempt&manifest_sha256=' + receipt.result_manifest_sha256;
+    const get = vi.spyOn(api, 'get').mockImplementation(async path => ({ data: String(path).includes('/remote-artifacts')
+        ? { generation: 1, artifacts: [{ relative_path: '_remote/nextflow.log', size_bytes: 12, sha256: 'a'.repeat(64), download_url: url }] }
+        : recorded('returned') }));
     const post = vi.spyOn(api, 'post');
     const view = mount(recorded('returning'));
     await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
     expect(get).toHaveBeenCalledWith('/api/jobs/job%2Fid');
     expect(view.container.textContent).toContain('Diagnostics returned to the controller');
     expect(view.container.textContent).toContain('job remains failed');
-    expect(view.container.querySelector('code')?.textContent).toBe('/controller/attempt/files');
-    expect(view.container.querySelector('a')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(view.container.querySelector('code')).toBeNull();
+    expect(view.container.querySelector('a')?.getAttribute('href')).toBe(url);
+    expect(view.container.textContent).toContain('generation 1');
     expect(view.container.querySelector('button')).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(get).toHaveBeenCalledTimes(1); expect(post).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(2); expect(post).not.toHaveBeenCalled();
 });
 
 it('persisted failure survives remount and returned does not offer a transfer', () => {

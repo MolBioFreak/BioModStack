@@ -7,6 +7,9 @@ leader exit. Supervisor death (including host service-wide kill) fails closed.
 from __future__ import annotations
 
 import ctypes
+import hashlib
+import socket
+import struct
 import json
 import os
 from pathlib import Path
@@ -31,6 +34,12 @@ def process_identity(pid: int) -> dict:
             "process_group": int(fields[2]), "session": int(fields[3])}
 
 
+def control_address(marker: Path) -> str:
+    # Linux abstract sockets disappear on owner death, cannot be redirected by
+    # a stale filesystem socket, and avoid Unix pathname length limits.
+    return '\0bms-return-' + hashlib.sha256(str(marker.resolve()).encode()).hexdigest()
+
+
 def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
     record = json.loads(marker.read_text())
     if record["schema"] != SCHEMA or record["phase"] != "starting":
@@ -40,6 +49,10 @@ def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
     # PR_SET_CHILD_SUBREAPER: adopted grandchildren remain ours until reaped.
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Cannot establish transport subreaper")
+    control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    control.bind(control_address(marker))
+    control.listen(8)
+    clients = []
     record.update(phase="supervising", supervisor=process_identity(os.getpid()))
     durable_json(marker, record)
     # A controller that died before spawn authorizes no new writer.
@@ -56,7 +69,21 @@ def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
         # Popen.poll() here: reaping before killpg creates a PID reuse race.
         if os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
             break
-        if select.select([control_fd], [], [], 0.05)[0]:
+        ready = select.select([control_fd, control], [], [], 0.05)[0]
+        if control in ready:
+            client, _ = control.accept()
+            _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            client.settimeout(0.2)
+            try:
+                requested = uid == os.getuid() and client.recv(7) == b'cancel\n'
+            except OSError:
+                requested = False
+            if requested:
+                clients.append(client)
+                interrupted = True
+                break
+            client.close()
+        if control_fd in ready:
             interrupted = True
             break
     try:
@@ -74,6 +101,14 @@ def supervise(marker: Path, control_fd: int, argv: list[str]) -> int:
             break
     record.update(phase="quiescent", quiescence="descendants-reaped")
     durable_json(marker, record)
+    for client in clients:
+        try:
+            client.sendall(b'quiescent\n')
+        except OSError:
+            pass
+        finally:
+            client.close()
+    control.close()
     if interrupted:
         return 125
     return child.returncode if child.returncode >= 0 else 128 - child.returncode

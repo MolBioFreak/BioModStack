@@ -127,9 +127,12 @@ async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session
     await session.commit()
 
     payload = await jobs.get_job_logs(remote.id, session=session)
-    assert payload["nextflow_log_source"] == "remote_returned"
-    assert payload["nextflow_log"] == "remote-nextflow-log"
-    assert payload["command_log"] == "remote-supervisor-log"
+    # Unbound legacy files are not a verified remote archive. Positive sealed
+    # diagnostics/current-generation reads live in test_remote_rectify_return.
+    assert payload["nextflow_log_source"] == "remote_pending"
+    assert payload["nextflow_log"] is None
+    assert payload["command_log"] is None
+    assert payload['remote_read_error']
     assert "host-global-sentinel" not in str(payload)
     assert "host-task-sentinel" not in str(payload)
     pending_payload = await jobs.get_job_logs(pending.id, session=session)

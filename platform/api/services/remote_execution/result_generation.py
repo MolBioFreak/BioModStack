@@ -91,38 +91,42 @@ def prepare_transfer(incoming: Path) -> None:
     """
     marker = transfer_marker(incoming)
     if marker.exists():
-        record = json.loads(marker.read_text())
-        import uuid
-
-        try:
-            uuid.UUID(record["boot_id"])
-        except (ValueError, KeyError, TypeError, AttributeError) as exc:
-            raise GenerationError("Invalid retained transfer ownership record") from exc
-        if record.get("schema") is not None:
-            from .transfer_supervisor import SCHEMA
-
-            if record.get("schema") != SCHEMA or record.get("destination") != str(checked(incoming)):
-                raise GenerationError("Invalid retained transfer destination/ownership schema")
-        if record.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip():
-            if record.get("schema") is None or record.get("phase") != "quiescent":
-                raise GenerationError("Interrupted result transport requires local writer-quiescence recovery; supervisor receipt is not yet available")
-            proof = record.get("quiescence")
-            owners = [record.get("controller"), record.get("supervisor")]
-            if proof == "descendants-reaped":
-                owners.append(record.get("writer"))
-            elif proof != "no-writer" or "writer" in record:
-                raise GenerationError("Invalid transfer quiescence proof")
-            fields = {"pid", "start_ticks", "process_group", "session"}
-            if any(not isinstance(owner, dict) or set(owner) != fields
-                   or any(type(value) is not int or value <= 0 for value in owner.values())
-                   for owner in owners):
-                raise GenerationError("Invalid transfer process identity receipt")
-            if proof == "descendants-reaped":
-                writer = record["writer"]
-                if writer["pid"] != writer["process_group"] or writer["pid"] != writer["session"]:
-                    raise GenerationError("Invalid transfer writer process group")
+        validate_transfer_receipt(json.loads(marker.read_text()), incoming)
         marker.unlink()
         sync_dir(marker.parent)
+
+
+def validate_transfer_receipt(record: dict, incoming: Path) -> None:
+    """Validate the supervisor's durable receipt without removing its fence."""
+    import uuid
+
+    try:
+        uuid.UUID(record["boot_id"])
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise GenerationError("Invalid retained transfer ownership record") from exc
+    if record.get("schema") is not None:
+        from .transfer_supervisor import SCHEMA
+
+        if record.get("schema") != SCHEMA or record.get("destination") != str(checked(incoming)):
+            raise GenerationError("Invalid retained transfer destination/ownership schema")
+    if record.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        if record.get("schema") is None or record.get("phase") != "quiescent":
+            raise GenerationError("Interrupted result transport requires local writer-quiescence recovery; supervisor receipt is not yet available")
+        proof = record.get("quiescence")
+        owners = [record.get("controller"), record.get("supervisor")]
+        if proof == "descendants-reaped":
+            owners.append(record.get("writer"))
+        elif proof != "no-writer" or "writer" in record:
+            raise GenerationError("Invalid transfer quiescence proof")
+        fields = {"pid", "start_ticks", "process_group", "session"}
+        if any(not isinstance(owner, dict) or set(owner) != fields
+               or any(type(value) is not int or value <= 0 for value in owner.values())
+               for owner in owners):
+            raise GenerationError("Invalid transfer process identity receipt")
+        if proof == "descendants-reaped":
+            writer = record["writer"]
+            if writer["pid"] != writer["process_group"] or writer["pid"] != writer["session"]:
+                raise GenerationError("Invalid transfer writer process group")
 
 
 def begin_transfer(incoming: Path) -> None:

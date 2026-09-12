@@ -28,7 +28,6 @@ export function remoteDiagnosticsState(job: DiagnosticsJob) {
         identity, digest,
         state: matches && ['returning', 'returned', 'failed'].includes(String(record.state)) ? record.state as RemoteDiagnosticsRecord['state'] : null,
         error: matches && typeof record.error === 'string' ? record.error : null,
-        outputDir: matches && typeof record.output_dir === 'string' ? record.output_dir : null,
     };
 }
 
@@ -47,6 +46,15 @@ export function RemoteDiagnosticsPrompt({ job }: { job: DiagnosticsJob }) {
         refetchInterval: query => query.state.data && remoteDiagnosticsState(query.state.data)?.state === 'returning' ? 3000 : false,
     });
     const state = remoteDiagnosticsState(detail.data);
+    const archive = useQuery({
+        queryKey: ['remote-diagnostic-artifacts', job.id, state?.digest],
+        queryFn: async () => (await api.get<{
+            generation: number;
+            artifacts: { relative_path: string; size_bytes: number; sha256: string; download_url: string }[];
+        }>(`/api/jobs/${encodeURIComponent(job.id)}/remote-artifacts?diagnostics=true`)).data,
+        enabled: state?.state === 'returned',
+        retry: false,
+    });
     const mutationKey = ['remote-diagnostics-pull', job.id];
     const active = useIsMutating({ mutationKey });
     const mutation = useMutation({
@@ -72,7 +80,15 @@ export function RemoteDiagnosticsPrompt({ job }: { job: DiagnosticsJob }) {
             {state.state === 'returned' ? 'Diagnostics returned to the controller.' : state.state === 'returning' ? 'Diagnostic pull is returning. Check/retry safely resumes an interrupted controller claim.' : state.state === 'failed' ? 'Diagnostic retrieval failed; diagnostics remain unavailable here until retrieved.' : 'Diagnostics remain on the worker and are unavailable here until you explicitly pull them.'}
         </p>
         {error && <p role="alert" className="mt-1 text-xs text-red-300">{error}</p>}
-        {state.state === 'returned' && state.outputDir && <p className="mt-1 text-xs text-slate-300">Controller-local archive (not a download link): <code>{state.outputDir}</code></p>}
+        {state.state === 'returned' && <details className="mt-2 text-xs text-slate-300">
+            <summary>Browse/download returned diagnostics and logs</summary>
+            {archive.isPending && <p>Loading verified archive…</p>}
+            {archive.error && <p role="alert">{remotePullError(archive.error)}</p>}
+            {archive.data && <><p>Attempt {job.remote_attempt_id}, generation {archive.data.generation}</p>
+                <ul className="max-h-64 overflow-auto">{archive.data.artifacts.map(file => <li key={file.relative_path}>
+                    <a href={file.download_url} download className="text-cyan-300 underline">{file.relative_path}</a> ({file.size_bytes} bytes)
+                </li>)}</ul></>}
+        </details>}
         {state.state !== 'returned' && <button type="button" onClick={pull} disabled={busy} aria-busy={busy} className="mt-2 rounded bg-amber-600/30 px-3 py-1 text-xs text-amber-100 disabled:opacity-50">
             {busy ? 'Requesting diagnostic pull…' : state.state === 'returning' ? 'Check/retry diagnostic pull' : error || state.state === 'failed' ? 'Retry diagnostics' : 'Pull diagnostics'}
         </button>}

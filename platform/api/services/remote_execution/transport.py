@@ -174,6 +174,53 @@ async def _run_owned(argv: Sequence[str], destination: Path, *, timeout: float) 
                 os.close(fd)
 
 
+async def cancel_owned_transfer(destination: Path, *, timeout: float = 5.0) -> bool | None:
+    """Address the durable destination owner, never signal a PID from disk.
+
+    None means no endpoint was reachable, not proof of writer quiescence. The
+    caller must then hold the producer guard and verify the retained fence.
+    """
+    import socket
+    import struct
+    from .transfer_supervisor import control_address
+
+    marker = transfer_marker(destination)
+    def request():
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+            control.settimeout(timeout)
+            try:
+                control.connect(control_address(marker))
+            except (ConnectionRefusedError, FileNotFoundError):
+                return None
+            try:
+                record = json.loads(marker.read_text())
+                pid, uid, _ = struct.unpack('3i', control.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if (uid != os.getuid() or record.get('schema') != SCHEMA
+                        or record.get('destination') != str(destination.resolve())
+                        or record.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                        or record.get('supervisor') != process_identity(pid)):
+                    return False
+                control.sendall(b'cancel\n')
+                if control.recv(64) != b'quiescent\n':
+                    return False
+                # ACK follows fsync, but is not itself the quiescence authority.
+                # The producer may already have consumed the record; in that
+                # case the caller must obtain its guard before accepting absence.
+                try:
+                    receipt = json.loads(marker.read_text())
+                except FileNotFoundError:
+                    return None
+                from .result_generation import validate_transfer_receipt
+                validate_transfer_receipt(receipt, destination)
+                if any(receipt.get(key) != record.get(key) for key in
+                       ('boot_id', 'controller', 'supervisor', 'destination')):
+                    return False
+                return True
+            except (OSError, ValueError, KeyError):
+                return False
+    return await asyncio.to_thread(request)
+
+
 async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
     process = await asyncio.create_subprocess_exec(
         *argv,

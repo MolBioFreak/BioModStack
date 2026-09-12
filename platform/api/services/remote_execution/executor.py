@@ -1408,6 +1408,7 @@ async def collect_remote_results(
     incoming = staging_path(job, str(status.result_manifest_sha256))
     incoming.parent.mkdir(parents=True, exist_ok=True)
     remote_results_dir = f"{attempt_dir}/results"
+    transfer_authority = (_pull_identity(job), job.status, job.queue_status, job.provenance)
     await session.commit()
     try:
         manifest = await _fetch_result_manifest(
@@ -1422,6 +1423,11 @@ async def collect_remote_results(
         if missing:
             from .result_generation import begin_transfer, end_transfer
 
+            await session.refresh(job)
+            if ((_pull_identity(job), job.status, job.queue_status, job.provenance) != transfer_authority
+                    or job.queue_status == 'cancelling'):
+                raise RemoteExecutionError('Result transfer authority changed before writer launch')
+            await session.commit()
             begin_transfer(incoming)
             try:
                 await rsync_selected_from_remote(
@@ -2140,11 +2146,9 @@ async def _run_requested_diagnostics(job_id, identity, digest, guard, receipt_sn
                         result_manifest_sha256=digest, output_dir=None, error=str(exc)[:1500])
                     await _publish_remote_transition(session, job, {"provenance": provenance}, require_lease=False)
     finally:
-        try:
-            if incoming is not None:
-                await asyncio.to_thread(shutil.rmtree, incoming, True)
-        finally:
-            guard.__exit__(None, None, None)
+        # Failed/cancelled publication retains verified staging for explicit retry.
+        # In particular, never reclaim bytes on a missing supervisor receipt.
+        guard.__exit__(None, None, None)
 
 
 def _retained_terminal_status(job, receipt):
@@ -2195,6 +2199,65 @@ def _native_result_view(job, status, artifact_root, manifest):
     # This is a native path projection of authenticated entries, not a new
     # transport manifest or any changed scientific bytes/digests.
     return relative, root, manifest.model_copy(update={'artifacts': records})
+
+
+def retained_result_view(job, *, diagnostics: bool = False):
+    """One job-scoped authority for current logs and manifest-listed history.
+
+    Validate the small sealed manifest here; hash only the selected artifact on
+    read, rather than rehashing large scientific outputs on every logs request.
+    """
+    from .result_generation import checked, identity, output_path
+
+    receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+    status = _retained_terminal_status(job, receipt)
+    digest = status.result_manifest_sha256
+    if not digest:
+        raise RemoteExecutionError('No returned terminal manifest')
+    if diagnostics:
+        record = (job.provenance or {}).get('remote_diagnostics') or {}
+        root = _diagnostic_destination(str(job.id), _pull_identity(job), digest)
+        if (job.status not in {'failed', 'cancelled'} or record.get('state') != 'returned'
+                or record.get('identity') != _pull_identity(job)
+                or record.get('result_manifest_sha256') != digest
+                or record.get('output_dir') != str(root)):
+            raise RemoteExecutionError('No current returned diagnostic archive')
+    else:
+        root = output_path(job)
+        if (job.provenance or {}).get('remote_result_generation') != identity(job, digest):
+            raise RemoteExecutionError('No committed current result generation')
+    manifest_path = checked(root / 'result-manifest.json')
+    if manifest_path.stat().st_size > MAX_RESULT_MANIFEST_BYTES:
+        raise RemoteExecutionError('Returned manifest exceeds bounded size')
+    raw = manifest_path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise RemoteExecutionError('Returned manifest identity changed')
+    manifest = RemoteResultManifest.model_validate_json(raw)
+    if (manifest.job_id != str(job.id) or manifest.attempt_id != str(job.remote_attempt_id)
+            or manifest.source_revision != str(job.execution_source_revision)
+            or manifest.source_tree != str(job.execution_source_tree)
+            or manifest.execution_envelope_sha256 != str(job.execution_bundle_sha256)
+            or manifest.generation != status.generation or manifest.exit_code != status.exit_code
+            or not status.quiescent or len(manifest.artifacts) > MAX_RESULT_ARTIFACTS):
+        raise RemoteExecutionError('Returned manifest belongs to another attempt/generation')
+    relative, native, _ = _native_result_view(job, status, root, manifest)
+    if not diagnostics and receipt.get('published_output_dir') != str(native):
+        raise RemoteExecutionError('Published native generation root conflicts')
+    return root, relative, manifest, status
+
+
+def retained_result_file(root, manifest, relative_path):
+    """Return only an immutable manifest member; caller cannot select a root."""
+    from .result_generation import checked
+
+    artifact = next((a for a in manifest.artifacts if a.relative_path == relative_path), None)
+    if artifact is None:
+        raise RemoteExecutionError('Artifact is not listed in the returned manifest')
+    path = checked(_safe_result_path(root, relative_path))
+    if (not path.is_file() or path.stat().st_size != artifact.size_bytes
+            or _sha256_file(path) != artifact.sha256):
+        raise RemoteExecutionError('Returned artifact integrity changed')
+    return path
 
 
 def _component_projection_context(job, status, relative, manifest):
@@ -2414,9 +2477,46 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
     return True
 
 
-async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0) -> bool:
+async def cancel_local_result_transfer(job: Job, *, timeout: float = 5.0, guard_owned: bool = False) -> bool:
+    """Stop the manifest-addressed controller writer; absence alone is not proof.
+
+    Called after durable cancellation intent. Recovery already holding the
+    controller guard passes guard_owned=True. A live producer must either expose
+    its supervisor or release that guard before absence can mean quiescence.
+    """
+    from .result_generation import staging_path, prepare_transfer
+    from .transport import cancel_owned_transfer
+
+    receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+    digest = receipt.get('result_manifest_sha256')
+    if not digest:
+        return True  # no terminal manifest has authorized a result download
+    try:
+        incoming = staging_path(job, digest)
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            stopped = await cancel_owned_transfer(incoming, timeout=max(0.01, deadline - asyncio.get_running_loop().time()))
+            if stopped is True:
+                return True
+            if guard_owned:
+                prepare_transfer(incoming)
+                return True
+            with _controller_attempt_guard(str(job.id)) as owned:
+                if owned:
+                    prepare_transfer(incoming)
+                    return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            # Bounded startup/guard handoff, not polling scientific Job state.
+            await asyncio.sleep(0.05)
+    except (OSError, ValueError):
+        return False
+
+
+async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0, guard_owned: bool = False) -> bool:
     if not job.execution_target_id or not job.remote_attempt_id:
         return False
+    local_quiescent = await cancel_local_result_transfer(job, timeout=min(5.0, graceful_timeout_seconds), guard_owned=guard_owned)
     async with async_session() as session:
         target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
         if target is None:
@@ -2440,7 +2540,7 @@ async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0)
         if status.job_id != str(job.id) or status.attempt_id != str(job.remote_attempt_id):
             return False
         # Terminal state alone is not proof all attempt writers stopped.
-        return status.state in TERMINAL_REMOTE_STATES and getattr(status, "quiescent", False)
+        return local_quiescent and status.state in TERMINAL_REMOTE_STATES and getattr(status, "quiescent", False)
 
 
 async def cancel_remote_run_id(
