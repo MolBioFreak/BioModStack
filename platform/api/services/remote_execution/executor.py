@@ -1073,14 +1073,33 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
 
 
 async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
-    """Reacquire the same target, then request the owned worker's native edge."""
+    with _controller_attempt_guard(str(job.id)) as owned:
+        if not owned:
+            raise RemoteExecutionError('Checkpoint controller operation is already active')
+        return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+
+
+async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
+    """Commit the explicit operation before transport; acceptance owns generation."""
+    if (job.provenance or {}).get('remote_checkpoint_operation', {}).get('state') in {'requested', 'uncertain'}:
+        raise RemoteExecutionError('Checkpoint decision is unresolved; reconcile the original operation')
+    if not job.awaiting_input or job.status != 'awaiting_input' or job.queue_status == 'cancelling':
+        raise RemoteExecutionError('Checkpoint review is not awaiting an explicit decision')
     from .targets import get_ready_target
     import uuid
     target = await get_ready_target(session, str(job.execution_target_id))
     connection, attempt_dir = _connection_for_attempt(target, job)
     receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    context = receipt.get('component_context_identity') or (job.provenance or {}).get('assignment_context') or {}
     if (not receipt.get("boot_id") or checkpoint.get("attempt_id") != job.remote_attempt_id
-            or checkpoint.get("target_id") != job.execution_target_id or not checkpoint.get("lease_id")):
+            or checkpoint.get("target_id") != job.execution_target_id or not checkpoint.get("lease_id")
+            or context.get('lease_id') != checkpoint['lease_id']
+            or context.get('attempt_id') != str(job.remote_attempt_id)
+            or context.get('target_id') != str(job.execution_target_id)
+            or context.get('root_job_id') != str(job.id)
+            or receipt.get('source_revision') != job.execution_source_revision
+            or receipt.get('source_tree') != job.execution_source_tree
+            or receipt.get('execution_envelope_sha256') != job.execution_bundle_sha256):
         raise RemoteExecutionError("Checkpoint attempt/boot/lease identity is incomplete")
     from .targets import admit_target_resources
     resources = (job.provenance or {}).get('remote_execution_assignment', {}).get('resources') or {}
@@ -1102,8 +1121,13 @@ async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, chec
         await session.rollback()
         raise RemoteExecutionError("Checkpoint worker capacity is already reserved")
     provenance = dict(job.provenance or {})
-    receipt.update(lease_acquired_at=epoch.isoformat(), continuation_lease_id=continuation_lease,
-                   generation=int(receipt.get('generation', 0)) + 1)
+    binding = dict(operation_id=uuid.uuid4().hex, attempt_id=str(job.remote_attempt_id),
+        boot_id=receipt['boot_id'], original_lease_id=checkpoint['lease_id'],
+        checkpoint_id=checkpoint['checkpoint_id'], checkpoint_sha256=checkpoint['checkpoint_sha256'],
+        decision=decision, continuation_lease_id=continuation_lease, resource_admission=admission)
+    provenance['remote_checkpoint_operation'] = dict(binding=binding, state='requested',
+        predecessor_receipt=dict(receipt), checkpoint=checkpoint)
+    receipt.update(lease_acquired_at=epoch.isoformat())
     provenance["remote_execution_receipt"] = receipt
     # Target claim above and full existing job/source/attempt CAS below commit
     # together. Its prior lease epoch no longer applies to this fresh lease.
@@ -1112,29 +1136,101 @@ async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, chec
         "awaiting_input": False, "provenance": provenance,
     }, require_lease=False):
         raise RemoteExecutionError("Checkpoint owner changed during resource reacquisition")
-    argv = _worker_argv(connection, "checkpoint-resume", attempt_dir)
-    argv += ["--attempt-id", str(job.remote_attempt_id), "--expected-boot-id", receipt["boot_id"],
-             "--lease-id", checkpoint["lease_id"], "--checkpoint-id", checkpoint["checkpoint_id"],
-             "--checkpoint-sha256", checkpoint["checkpoint_sha256"],
-             "--decision-json", json.dumps(decision, sort_keys=True, separators=(",", ":")),
-             "--continuation-lease-id", continuation_lease,
-             "--resource-admission-json", json.dumps(admission, sort_keys=True, separators=(",", ":"))]
-    try:
-        response = await run_remote(connection, argv, timeout=60)
-        observed = _parse_status(response.stdout)
-        if (observed.attempt_id != str(job.remote_attempt_id) or observed.job_id != str(job.id)
-                or observed.boot_id != receipt["boot_id"] or observed.continuation_lease_id != continuation_lease
-                or observed.generation != receipt['generation'] or not observed.plan_sha256
-                or not observed.native_output_directory):
-            raise RemoteExecutionError("Checkpoint continuation receipt identity mismatch")
-    except (RemoteTransportError, RemoteExecutionError, ValueError) as exc:
-        await _publish_remote_transition(session, job, {"remote_state": "checkpoint_resume_uncertain"})
-        raise RemoteExecutionError("Checkpoint start is unresolved; retained lease prevents duplicate execution: " + str(exc)) from exc
-    receipt.update(plan_sha256=observed.plan_sha256, native_output_directory=observed.native_output_directory)
-    await _publish_remote_transition(session, job, {'remote_state': 'running',
-        'provenance': dict(job.provenance or {}, remote_execution_receipt=receipt)})
+    await _recover_remote_checkpoint(session, job)
+    intent = (job.provenance or {}).get('remote_checkpoint_operation') or {}
+    if intent.get('state') == 'rejected':
+        raise RemoteExecutionError('Checkpoint continuation rejected: ' + intent['error'])
     return dict(job_id=str(job.id), checkpoint_id=checkpoint["checkpoint_id"],
-                execution_target_id=str(job.execution_target_id), state="continuing")
+                execution_target_id=str(job.execution_target_id),
+                state='continuing' if intent.get('state') == 'accepted' else 'pending')
+
+
+async def _recover_remote_checkpoint(session: AsyncSession, job: Job) -> bool:
+    """Observe/replay ONLY the already committed explicit operation, before status CAS."""
+    if job.status != 'running' or job.queue_status not in {'running', 'cancelling'}:
+        return False
+    intent = (job.provenance or {}).get('remote_checkpoint_operation') or {}
+    binding = intent.get('binding') or {}
+    receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+    context = receipt.get('component_context_identity') or (job.provenance or {}).get('assignment_context') or {}
+    if (binding.get('attempt_id') != str(job.remote_attempt_id)
+            or binding.get('boot_id') != receipt.get('boot_id')
+            or context.get('lease_id') != binding.get('original_lease_id')
+            or context.get('target_id') != str(job.execution_target_id)
+            or context.get('root_job_id') != str(job.id)
+            or context.get('attempt_id') != str(job.remote_attempt_id)
+            or receipt.get('source_revision') != job.execution_source_revision
+            or receipt.get('source_tree') != job.execution_source_tree
+            or receipt.get('execution_envelope_sha256') != job.execution_bundle_sha256):
+        raise RemoteExecutionError('Checkpoint operation source/attempt/lease binding conflicts')
+    if not await _publish_remote_transition(session, job, {'remote_state': job.remote_state}):
+        return False
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    connection, attempt_dir = _connection_for_attempt(target, job)
+    await session.commit()
+    args = ['--attempt-id', binding['attempt_id'], '--expected-boot-id', binding['boot_id'],
+        '--lease-id', binding['original_lease_id'], '--checkpoint-id', binding['checkpoint_id'],
+        '--checkpoint-sha256', binding['checkpoint_sha256'], '--operation-id', binding['operation_id'],
+        '--decision-json', json.dumps(binding['decision'], sort_keys=True),
+        '--continuation-lease-id', binding['continuation_lease_id'],
+        '--resource-admission-json', json.dumps(binding['resource_admission'], sort_keys=True)]
+    try:
+        if job.queue_status == 'cancelling':
+            await cancel_remote_job(job, guard_owned=True)
+        response = await run_remote(connection, _worker_argv(connection, 'checkpoint-status', attempt_dir, *args), timeout=60)
+        payload = json.loads(response.stdout)
+        operation, observed = payload['operation'], RemoteAttemptStatus.model_validate(payload['worker_status'])
+        if (observed.job_id != str(job.id) or observed.attempt_id != binding['attempt_id']
+                or observed.boot_id != binding['boot_id']
+                or (operation is not None and operation.get('binding') != binding)):
+            raise RemoteExecutionError('Checkpoint operation observation conflicts')
+        if job.queue_status == 'cancelling':
+            if observed.state in TERMINAL_REMOTE_STATES and observed.quiescent:
+                return await _finish_remote_cancellation(session, job, observed)
+            return False
+        if operation is None or (operation['state'] == 'accepted' and
+                (observed.generation != operation['generation'] or observed.state == 'prepared')):
+            # CAS again after observation: cancellation or a successor forbids replay.
+            if not await _publish_remote_transition(session, job, {'remote_state': job.remote_state}):
+                return False
+            response = await run_remote(connection, _worker_argv(connection, 'checkpoint-resume', attempt_dir, *args), timeout=60)
+            payload = json.loads(response.stdout)
+            operation, observed = payload['operation'], RemoteAttemptStatus.model_validate(payload['worker_status'])
+            if (operation is None or operation.get('binding') != binding
+                    or observed.job_id != str(job.id) or observed.attempt_id != binding['attempt_id']
+                    or observed.boot_id != binding['boot_id']):
+                raise RemoteExecutionError('Checkpoint continuation receipt identity mismatch')
+        provenance = dict(job.provenance or {})
+        if operation['state'] == 'rejected':
+            predecessor = intent['predecessor_receipt']
+            if (observed.state != 'awaiting_input' or not observed.quiescent
+                    or observed.generation != predecessor.get('generation', 0)
+                    or observed.continuation_lease_id != predecessor.get('continuation_lease_id')
+                    or intent['checkpoint'] not in observed.checkpoints):
+                raise RemoteExecutionError('Checkpoint rejection lacks quiescent predecessor proof')
+            provenance.update(remote_execution_receipt=dict(predecessor),
+                remote_checkpoint_operation=dict(intent, state='rejected', error=operation['error']))
+            return await _publish_remote_transition(session, job, {'provenance': provenance,
+                'status': 'awaiting_input', 'queue_status': 'completed', 'remote_state': 'awaiting_input',
+                'awaiting_input': True}, release_lease=True)
+        edge = operation['edge']
+        if (operation['generation'] != intent['predecessor_receipt'].get('generation', 0) + 1
+                or observed.generation != operation['generation']
+                or observed.continuation_lease_id != binding['continuation_lease_id']
+                or observed.plan_sha256 != edge['plan_sha256']
+                or observed.native_output_directory != edge['parent_snapshot']['output_dir']):
+            raise RemoteExecutionError('Checkpoint accepted generation binding conflicts')
+        if observed.state == 'prepared':
+            return False  # Keep the replay lane until a supervisor owns the generation.
+        receipt.update(generation=observed.generation, continuation_lease_id=observed.continuation_lease_id,
+            plan_sha256=observed.plan_sha256, native_output_directory=observed.native_output_directory)
+        provenance.update(remote_execution_receipt=receipt, remote_checkpoint_operation=dict(intent, state='accepted'))
+        return await _publish_remote_transition(session, job, {'remote_state': 'running',
+            'provenance': provenance, 'awaiting_input': False, 'awaiting_stage': None, 'awaiting_payload': {}})
+    except (RemoteTransportError, RemoteExecutionError, ValueError, KeyError) as exc:
+        # Publish against the original snapshot, never a refreshed successor.
+        await _publish_remote_transition(session, job, {'remote_state': 'checkpoint_resume_uncertain'})
+        raise RemoteExecutionError('Checkpoint start is unresolved; original lease retained: ' + str(exc)) from exc
 
 
 async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, checkpoint: dict) -> Path:
@@ -1489,6 +1585,8 @@ async def _recover_result_generation(session, job):
 async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=None) -> bool:
     if job.remote_attempt_id and (status is None or not getattr(status, "quiescent", False)):
         return False
+    if not await cancel_local_result_transfer(job, guard_owned=True):
+        return False
     provenance = dict(job.provenance or {})
     if status is not None:
         receipt = dict(provenance.get("remote_execution_receipt") or {})
@@ -1559,6 +1657,8 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
     await _recover_result_generation(session, job)
+    if job.remote_state in {'checkpoint_resume_requested', 'checkpoint_resume_uncertain'}:
+        return await _recover_remote_checkpoint(session, job)
     pending = (job.provenance or {}).get('component_retry') or {}
     if job.remote_state in {'component_retry_requested', 'component_retry_uncertain'}:
         # Reconcile the durable operation BEFORE ordinary generation comparison.
@@ -1587,6 +1687,8 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     expected_run_id = str(job.nextflow_run_id or "")
     expected_attempt_id = str(job.remote_attempt_id or "")
     expected_target_id = str(job.execution_target_id or "")
+    expected_authority = (job.execution_source_revision, job.execution_source_tree,
+                          job.execution_bundle_sha256, job.provenance)
     if not expected_run_id or not expected_attempt_id:
         if job.queue_status == "cancelling" and not expected_run_id and not expected_attempt_id:
             return await _finish_remote_cancellation(session, job)
@@ -1608,38 +1710,51 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         str(job.nextflow_run_id or "") != expected_run_id
         or str(job.remote_attempt_id or "") != expected_attempt_id
         or str(job.execution_target_id or "") != expected_target_id
+        or expected_authority != (job.execution_source_revision, job.execution_source_tree,
+                                  job.execution_bundle_sha256, job.provenance)
     ):
         return False
     if job.status in {"cancelled", "completed", "failed"}:
         return False
-    if job.remote_state in {'checkpoint_resume_requested', 'checkpoint_resume_uncertain'}:
-        if not status.plan_sha256 or not status.native_output_directory:
+    if job.queue_status == "cancelling":
+        if status.state in TERMINAL_REMOTE_STATES and status.quiescent:
+            return await _finish_remote_cancellation(session, job, status)
+        # Delivery is not completion. Keep the original attempt/lease until a
+        # subsequent owned observation proves all writers stopped.
+        if not await _publish_remote_transition(session, job, {'remote_state': 'cancelling'}):
             return False
-        receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
-        receipt.update(plan_sha256=status.plan_sha256, native_output_directory=status.native_output_directory)
-        return await _publish_remote_transition(session, job, {
-            'provenance': dict(job.provenance or {}, remote_execution_receipt=receipt),
-            'remote_state': 'cancelling' if job.queue_status == 'cancelling' else 'running'})
+        await cancel_remote_job(job, guard_owned=True)
+        status = await remote_status(session, job)
+        if status.state in TERMINAL_REMOTE_STATES and status.quiescent:
+            return await _finish_remote_cancellation(session, job, status)
+        return False
     if status.state in TERMINAL_REMOTE_STATES and not getattr(status, "quiescent", False):
         return False
-    if job.queue_status == "cancelling":
-        if status.state in TERMINAL_REMOTE_STATES:
-            return await _finish_remote_cancellation(session, job, status)
-        if status.state not in TERMINAL_REMOTE_STATES:
-            return await _publish_remote_transition(session, job, {"remote_state": status.state})
     if status.state == "awaiting_input":
         if job.remote_state in {"checkpoint_resume_requested", "checkpoint_resume_uncertain"}:
             return False  # An in-flight control command can still arrive; retain its lease.
         if not status.quiescent or not status.checkpoints:
             return False
+        receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+        context = receipt.get('component_context_identity') or (job.provenance or {}).get('assignment_context') or {}
+        if not status.boot_id:
+            raise RemoteExecutionError('Remote review checkpoint has no observed boot identity')
         for checkpoint in status.checkpoints:
             if (checkpoint.get("attempt_id") != expected_attempt_id
                     or checkpoint.get("target_id") != expected_target_id
+                    or not checkpoint.get('lease_id')
+                    or (context.get('lease_id') and checkpoint['lease_id'] != context['lease_id'])
                     or not checkpoint.get("checkpoint_sha256") or not checkpoint.get("artifacts")):
                 raise RemoteExecutionError("Remote review checkpoint identity is incomplete or foreign")
         if job.remote_state == "awaiting_input" and job.awaiting_input:
             return False
+        receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
+        receipt.update(boot_id=status.boot_id, generation=status.generation,
+            continuation_lease_id=status.continuation_lease_id, plan_sha256=status.plan_sha256,
+            native_output_directory=status.native_output_directory,
+            started_at=status.started_at.isoformat() if status.started_at else None)
         return await _publish_remote_transition(session, job, {
+            "provenance": dict(job.provenance or {}, remote_execution_receipt=receipt),
             "status": "awaiting_input", "queue_status": "completed", "remote_state": "awaiting_input",
             "awaiting_input": True, "awaiting_stage": status.checkpoints[0]["stage"],
             "awaiting_payload": {"component_checkpoint": status.checkpoints[0],
@@ -1661,6 +1776,16 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             raise RemoteExecutionError("Remote execution target record is missing")
         connection, attempt_dir = _connection_for_attempt(target, job)
         await _verify_launch_runner(session, job, connection, target)
+        from .targets import admit_target_resources
+        resources = (job.provenance or {}).get('remote_execution_assignment', {}).get('resources') or {}
+        required = resources.get('required') or {}
+        if not required or not resources.get('admission'):
+            raise RemoteExecutionError('Prepared recovery lacks retained resource admission')
+        admission = await admit_target_resources(target, required_cpus=required['cpus'],
+            required_memory_bytes=required['memory_bytes'], required_scratch_bytes=required.get('scratch_bytes', 0),
+            gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb', 0))
+        if admission['devices'] != resources['admission'].get('devices'):
+            raise RemoteExecutionError('Prepared recovery physical target devices changed')
         if not await _publish_remote_transition(session, job, {"remote_state": "launch_requested"}):
             return False
         response = await run_remote(

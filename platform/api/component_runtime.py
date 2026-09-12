@@ -787,6 +787,7 @@ class ComponentRuntime(GroupingLedger):
             db.execute("CREATE TABLE IF NOT EXISTS root_execution (singleton INTEGER PRIMARY KEY CHECK(singleton=1), state TEXT NOT NULL, owner TEXT NOT NULL, boot TEXT NOT NULL, detail BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS component_groups (group_id TEXT PRIMARY KEY, children BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS checkpoints (checkpoint TEXT PRIMARY KEY, payload BLOB NOT NULL, decision BLOB)")
+            db.execute("CREATE TABLE IF NOT EXISTS checkpoint_operations (operation TEXT PRIMARY KEY, detail BLOB NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS component_replacements (original TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL, operation TEXT UNIQUE NOT NULL, detail BLOB NOT NULL)")
 
     @staticmethod
@@ -988,10 +989,36 @@ class ComponentRuntime(GroupingLedger):
             self._event(db, self.root_job_id, "root_claimed", dict(owner_id=owner_id, boot_id=boot_id))
         return True
 
+    def checkpoint_operation(self, operation_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT detail FROM checkpoint_operations WHERE operation=?", (operation_id,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def reject_checkpoint_operation(self, binding: Mapping[str, Any], error: str) -> dict[str, Any]:
+        """Record definitive prestart rejection only while the root is still paused."""
+        detail = dict(binding=dict(binding), state='rejected', error=error)
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._active(db)
+            prior = db.execute('SELECT detail FROM checkpoint_operations WHERE operation=?',
+                               (binding['operation_id'],)).fetchone()
+            if prior:
+                if json.loads(prior[0]) != detail:
+                    raise ValueError('checkpoint operation conflicts')
+                return detail
+            root = db.execute('SELECT state,boot,detail FROM root_execution').fetchone()
+            if (not root or root[0] != 'paused' or root[1] != binding['boot_id']
+                    or not json.loads(root[2]).get('quiescent')):
+                raise ValueError('checkpoint rejection lacks paused root authority')
+            db.execute('INSERT INTO checkpoint_operations VALUES(?,?)',
+                       (binding['operation_id'], canonical_bytes(detail)))
+        return detail
+
     def resume_checkpoint(self, checkpoint_id: str, *, checkpoint_sha256: str,
                           decision: Mapping[str, Any], actor: str, boot_id: str,
                           invocation: NativeInvocation, continuation_lease_id: str,
-                          parent_snapshot: Mapping[str, Any], resources: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                          parent_snapshot: Mapping[str, Any], resources: Mapping[str, Any] | None = None,
+                          operation_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Authorize exactly one native root generation from paused/quiescent only."""
         status = self.checkpoint_status(checkpoint_id)
         if not actor or not decision or not continuation_lease_id or status["checkpoint_sha256"] != checkpoint_sha256:
@@ -1013,6 +1040,11 @@ class ComponentRuntime(GroupingLedger):
             self._active(db)
             row = db.execute("SELECT state,boot,detail FROM root_execution").fetchone()
             if row and row[0] == "resume_ready" and json.loads(row[2]).get("continuation_edge") == edge:
+                if operation_binding is not None:
+                    prior_operation = db.execute('SELECT detail FROM checkpoint_operations WHERE operation=?',
+                        (operation_binding['operation_id'],)).fetchone()
+                    if not prior_operation or json.loads(prior_operation[0])['binding'] != dict(operation_binding):
+                        raise ValueError('checkpoint operation conflicts with accepted generation')
                 return self.root_state()
             if not row or row[0] != "paused" or row[1] != boot_id or not json.loads(row[2]).get("quiescent"):
                 raise ValueError("checkpoint continuation requires same-boot paused quiescent root")
@@ -1033,6 +1065,16 @@ class ComponentRuntime(GroupingLedger):
             db.execute("UPDATE checkpoints SET decision=? WHERE checkpoint=?", (decision_payload, checkpoint_id))
             db.execute("UPDATE root_execution SET state='resume_ready',detail=?", (detail,))
             self._event(db, self.root_job_id, "checkpoint_continuation_authorized", json.loads(detail))
+            if operation_binding is not None:
+                if any(operation_binding.get(key) != value for key, value in {
+                    'checkpoint_id': checkpoint_id, 'checkpoint_sha256': checkpoint_sha256,
+                    'decision': dict(decision), 'boot_id': boot_id, 'attempt_id': self.attempt_id,
+                    'original_lease_id': self.lease_id, 'continuation_lease_id': continuation_lease_id,
+                }.items()):
+                    raise ValueError('checkpoint operation binding conflicts')
+                db.execute('INSERT INTO checkpoint_operations VALUES(?,?)',
+                    (operation_binding['operation_id'], canonical_bytes(dict(binding=dict(operation_binding),
+                        state='accepted', generation=generation, edge=edge))))
         return self.root_state()
 
     @staticmethod
