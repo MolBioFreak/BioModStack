@@ -14,8 +14,12 @@ import {
     submitOntNgsJob,
     submitPooledReferenceAssignment,
     submitShapeBlueprint,
+    submitJob,
+    type ExecutionPlacement,
+    type ShapeLaunchRequest,
 } from '../../src/lib/api';
-import { submitCmRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
+import { CANONICAL_CM_ANALYSIS_POLICY, submitCmRequest, type CmSubmitRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
+import { setDraftExecutionPolicy } from '../../src/lib/executionPolicy';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const defaultApiAdapter = api.defaults.adapter;
@@ -134,7 +138,11 @@ beforeEach(() => {
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    setDraftExecutionPolicy(undefined);
+    window.history.replaceState({}, '', '/');
     api.defaults.adapter = defaultApiAdapter;
+    vi.restoreAllMocks();
 });
 
 describe('remote execution operator surfaces', () => {
@@ -460,19 +468,61 @@ describe('remote execution operator surfaces', () => {
         client.clear();
     });
 
-    it('fails closed for Job Submission launchers that cannot execute on Vast', async () => {
+    it('fails closed for genuinely local-only launchers and controller GPU pins on a worker', () => {
         window.history.replaceState({}, '', '/submit');
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
+        const post = vi.spyOn(api, 'post');
 
-        expect(() => submitShapeBlueprint({} as never)).toThrow(/Choose Local/);
         expect(() => submitBoltzApiJob({} as never)).toThrow(/Choose Local/);
-        expect(() => submitOntNgsJob('wf-clone', {} as never)).toThrow(/Choose Local/);
         expect(() => submitOntBarcodeBatch('source', {} as never)).toThrow(/Choose Local/);
         expect(() => submitPooledReferenceAssignment({} as never)).toThrow(/Choose Local/);
-        await expect(submitCmRequest({} as never)).rejects.toThrow(/Choose Local/);
+        expect(() => submitOntNgsJob('wf-clone', { params: {}, pinned_gpu: 0 })).toThrow(/Controller GPU pins cannot be used on a worker/);
+        expect(post).not.toHaveBeenCalled();
     });
 
-    it('clears retained Vast selection when target refresh fails', async () => {
+    it.each(['manual', 'automatic'] as const)('supported native routes preserve science, explicit Local and saved worker with %s return', async (policy) => {
+        window.history.replaceState({}, '', '/submit');
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
+        setDraftExecutionPolicy({ remote_result_policy: policy === 'manual' ? 'automatic' : 'manual' });
+        const post = vi.spyOn(api, 'post').mockResolvedValue(response({}));
+        const shape: ShapeLaunchRequest = {
+            client_request_id: 'shape-placement-fixture', name: 'Shape placement', geometry_id: 'geometry-fixture',
+            expected_geometry_sha256: 'a'.repeat(64), expected_geometry_manifest_sha256: 'b'.repeat(64),
+            expected_point_pool_sha256: 'c'.repeat(64), target_length: 100, num_backbones: 2,
+            sequences_per_backbone: 1, seed: 23, guidance_profile: 'rfd3_ca_shape_transfer_control_v1',
+        };
+        const cm: CmSubmitRequest = {
+            name: 'CM placement', notes: 'Transport fixture', idempotency_key: 'cm-placement-fixture',
+            backend: 'protenix_v2_ensemble', ordered_seeds: [23, 7], samples_per_seed: 2,
+            registered_sequence_id: 'sequence-fixture',
+            feature_policy: { mode: 'features_disabled_control_v1', protein_msa_enabled: false, templates_enabled: false, rna_msa_enabled: false },
+            runtime_policy: { use_default_params: false, n_cycle: 4, n_step: 100 },
+            analysis_policy: CANONICAL_CM_ANALYSIS_POLICY,
+            frustrampnn_settings: {
+                schema_name: 'frustrampnn_settings', schema_version: 2, batching_enabled: false, structures_per_job: 1,
+                protein_selection: { mode: 'all_protein_entities', entities: [], regions: [], residues: [] },
+                source_structure: { selected_model_number: 1, preferred_altloc: 'A' },
+                classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.78 },
+            },
+        };
+        const ngs = { name: 'NGS placement', params: { fastq_path: 'fixture.fastq', min_read_quality: 12 }, pinned_gpu: null };
+        for (const target of [undefined, null, 'vast:saved-worker']) {
+            const placement: ExecutionPlacement = { execution_policy: { remote_result_policy: policy }, ...(target === undefined ? {} : { execution_target_id: target }) };
+            const expectedPlacement = { execution_target_id: target === undefined ? 'vast:123' : target, execution_policy: { remote_result_policy: policy } };
+            post.mockClear();
+            await submitShapeBlueprint({ ...shape, ...placement });
+            await submitCmRequest({ ...cm, ...placement });
+            await submitOntNgsJob('wf-clone', { ...ngs, ...placement });
+            expect(post.mock.calls.map(([url, body]) => [url, body])).toEqual([
+                ['/api/shape-blueprint/requests', { ...shape, ...expectedPlacement }],
+                ['/api/conformational-mapping/requests', { ...cm, ...expectedPlacement }],
+                ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
+            ]);
+        }
+    });
+
+    it('preserves retained Vast selection after refresh failure until an explicit Local choice', async () => {
+        window.history.replaceState({}, '', '/submit');
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         client.setQueryData(['execution-targets'], response([readyTarget]));
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
@@ -488,8 +538,24 @@ describe('remote execution operator surfaces', () => {
             await client.invalidateQueries({ queryKey: ['execution-targets'] });
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(readyTarget.id);
         expect(container.textContent).not.toContain('Vast · Remote 4090');
+        expect(container.textContent).toContain(`Selected worker ${readyTarget.id} is unavailable`);
+        expect(container.textContent).toContain('unavailable remote capacity cannot fall back to Local');
+        const localButton = [...container.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Local')!;
+        expect(localButton.getAttribute('aria-pressed')).toBe('false');
+        const job = { name: 'Retained worker', model_id: 'boltz2', mode: 'predict', params: { sequence: 'ACDE' } };
+        const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('Selected worker unavailable'));
+        await expect(submitJob(job)).rejects.toThrow('Selected worker unavailable');
+        expect(post).toHaveBeenCalledTimes(1);
+        expect(post.mock.calls[0][1]).toEqual({ ...job, execution_target_id: readyTarget.id, execution_policy: { remote_result_policy: 'manual' } });
+        await act(async () => localButton.click());
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(localButton.getAttribute('aria-pressed')).toBe('true');
+        post.mockResolvedValue(response({}));
+        await submitJob(job);
+        expect(post).toHaveBeenCalledTimes(2);
+        expect(post.mock.calls[1][1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'manual' } });
         await act(async () => root.unmount());
         client.clear();
     });

@@ -18,6 +18,14 @@ ui_color: "#ec4899"
 
 # Modes available for this workflow
 modes:
+  - id: nanobody_binder
+    name: BoltzGen Nanobody Generation
+    description: Select the existing native BoltzGen nanobody generator
+    params: [boltzgen_target_pdb_path]
+  - id: generator_backbone_refine
+    name: Seeded PPIFlow Generation
+    description: Select the existing native seeded PPIFlow backbone generator
+    params: [ppiflow_seed_complex_path, ppiflow_seed_input_dir]
   - id: antibody_denovo_pipeline
     name: Full Pipeline
     description: Run the complete de novo antibody design pipeline

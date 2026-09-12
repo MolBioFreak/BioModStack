@@ -46,7 +46,8 @@ from paths import (
     get_molbio_ngs_reference_root,
     resolve_allowed_path,
 )
-from schemas import JobCreate, JobResponse
+from schemas import ExecutionPolicy, JobCreate, JobResponse
+from starlette.concurrency import run_in_threadpool
 from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
 from services.ont_barcode_batches import (
     BarcodeBatchError,
@@ -219,11 +220,17 @@ class OntNgsSubmitRequest(BaseModel):
     name: str | None = Field(default=None, description="Optional job name. Defaults to the workflow display name.")
     params: dict[str, Any] = Field(default_factory=dict)
     pinned_gpu: int | None = Field(default=None)
+    execution_target_id: str | None = Field(default=None)
+    execution_policy: ExecutionPolicy | None = None
     source_instrument_run_id: str | None = Field(default=None)
     managed_reference: OntManagedReferenceRequest | None = None
 
     @model_validator(mode="after")
     def validate_managed_reference_exclusivity(self) -> "OntNgsSubmitRequest":
+        if self.execution_target_id is not None and self.pinned_gpu is not None:
+            raise ValueError("remote placement cannot select a controller physical GPU")
+        if {"execution_target_id", "execution_policy"}.intersection(self.params):
+            raise ValueError("execution placement and policy are typed top-level fields")
         if "managed_reference" in self.params or any(
             key in self.params
             for key in ("managed_reference_path", "managed_reference_fasta_path")
@@ -616,6 +623,8 @@ def _job_create_for_ont_submit(
         mode=model_mode,
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
+        execution_policy=request.execution_policy,
     )
 
 
@@ -1121,6 +1130,10 @@ async def ont_submit_ngs_workflow(
                 "task_input_root": staged["input_root"],
                 "binding_source": "server_approved_panel_receipt",
             }
+        if canonical_id == "ont_fastq_qc" and job.params.get("ont_input_mode") == "fastq":
+            job.params = await run_in_threadpool(
+                ont_submission_trust.materialize_fastq_launch_custody, job.params,
+            )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DomainStateNotFound as exc:

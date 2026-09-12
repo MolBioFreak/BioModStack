@@ -711,6 +711,8 @@ async def _exact_design_link(
     parent_job_id: str,
     parent_workflow_id: str,
     candidate_id: str,
+    source_artifact: Mapping[str, Any] | None = None,
+    producer_provenance: Mapping[str, Any] | None = None,
 ) -> Design | None:
     job = await session.get(Job, parent_job_id)
     if job is None:
@@ -720,7 +722,6 @@ async def _exact_design_link(
             await session.execute(
                 select(ConformationalMappingRequest).where(
                     ConformationalMappingRequest.job_id == parent_job_id,
-                    ConformationalMappingRequest.request_id == job.lineage_root_job_id,
                     ConformationalMappingRequest.status.in_(("queued", "running", "completed")),
                 )
             )
@@ -776,6 +777,75 @@ async def _exact_design_link(
             "FrustraMPNN source artifact identity is required for exact Design association"
         )
     design = await session.get(Design, source_artifact_id)
+    producer_stage = str((source_artifact or {}).get("producer_stage") or "")
+    if parent_workflow_id in {"structure_prediction", "complex_prediction", "protein_design"} and ":" in producer_stage:
+        from .identity import deterministic_candidate_id
+
+        relative_text = str((source_artifact or {}).get("relative_path") or "")
+        relative = Path(relative_text)
+        owner_root = job.child_output_dir or job.output_dir
+        if (
+            not owner_root or not relative_text or relative.is_absolute()
+            or relative.as_posix() != relative_text or "\\" in relative_text
+            or any(part in {".", ".."} for part in relative.parts)
+            or source_artifact_id != candidate_id
+            or deterministic_candidate_id(
+                parent_job_id=parent_job_id, parent_workflow_id=parent_workflow_id,
+                producer_stage=producer_stage, producer_candidate_key=relative_text,
+            ) != candidate_id
+        ):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native source identity is invalid")
+        root = Path(owner_root).resolve()
+        source_path = root / relative
+        if not source_path.resolve().is_relative_to(root):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native source escapes its owner root")
+        # Native importers own their database IDs. Join by the complete declared
+        # source path within the same job, never by basename, rank or digest alone.
+        rows = list((await session.execute(select(Design).where(
+            Design.job_id == parent_job_id,
+        ))).scalars())
+        if producer_provenance is not None:
+            binding = producer_provenance.get("source_to_normalized_binding")
+            original_sha256 = producer_provenance.get("original_source_sha256")
+            if not isinstance(original_sha256, str):
+                raise FrustraMPNNPersistenceError("FrustraMPNN original source digest is missing")
+            if binding != {
+                "kind": "sha256_pair_v1", "source_sha256": original_sha256,
+                "normalized_pdb_sha256": normalized_source_sha256,
+            } or source_artifact_sha256 != normalized_source_sha256:
+                raise FrustraMPNNPersistenceError("FrustraMPNN native normalization binding is invalid")
+            if hashlib.sha256(read_structure_bytes(source_path)).hexdigest() != normalized_source_sha256:
+                raise FrustraMPNNPersistenceError("FrustraMPNN normalized publication differs from request")
+            source_artifact_sha256 = original_sha256
+            matches = []
+            for row in rows:
+                provenance = row.provenance if isinstance(row.provenance, dict) else {}
+                confidence = row.confidence_metrics if isinstance(row.confidence_metrics, dict) else {}
+                block = confidence.get("core_protein_scientific") or {}
+                native = (provenance.get("all_designs_metadata")
+                          or provenance.get("native_producer") or block.get("producer") or {})
+                esmfold2 = provenance.get("esmfold2")
+                if not native and isinstance(esmfold2, dict) and esmfold2.get("sequence_name"):
+                    manifest_root = Path(esmfold2["manifest_json"]).parent.resolve()
+                    native_path = Path(row.pdb_path).resolve().relative_to(manifest_root)
+                    native = {
+                        "producer_method": "esmfold2", "producer_sample": esmfold2["sequence_name"],
+                        "producer_rank": None,
+                        "producer_output_key": f"{esmfold2['sequence_name']}/{native_path.as_posix()}",
+                    }
+                if all(native.get(key) == producer_provenance.get(key) for key in (
+                    "producer_method", "producer_sample", "producer_rank", "producer_output_key",
+                )) and native.get("producer_output_key"):
+                    matches.append(row)
+        else:
+            matches = [row for row in rows if row.pdb_path and (
+                Path(row.pdb_path) if Path(row.pdb_path).is_absolute() else root / row.pdb_path
+            ).resolve() == source_path]
+        if len(matches) != 1 or (design is not None and design.id != matches[0].id):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN source must match exactly one native primary Design"
+            )
+        design = matches[0]
     if design is not None and design.job_id != parent_job_id:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN source design/artifact does not belong to the authorized job"
@@ -785,7 +855,15 @@ async def _exact_design_link(
             "FrustraMPNN source artifact does not exactly match a persisted Design"
         )
     try:
-        observed = hashlib.sha256(read_structure_bytes(design.pdb_path)).hexdigest()
+        physical_source = Path(design.pdb_path)
+        owner_root = job.child_output_dir or job.output_dir
+        if owner_root:
+            root = Path(owner_root).resolve()
+            if not physical_source.is_absolute():
+                physical_source = root / physical_source
+            if not physical_source.resolve().is_relative_to(root):
+                raise FrustraMPNNPersistenceError("FrustraMPNN native Design source escapes its owner root")
+        observed = hashlib.sha256(read_structure_bytes(physical_source)).hexdigest()
     except (OSError, StructureNormalizationError) as exc:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN physical source structure is unavailable or unsafe"
@@ -894,13 +972,23 @@ async def _assert_identical_replay(
     result_values: Mapping[str, Any],
     artifact_values: Sequence[Mapping[str, Any]],
     landscape_values: Sequence[Mapping[str, Any]],
+    *,
+    contract_version: int,
 ) -> None:
-    observed_result = _model_values(existing, _RESULT_IMMUTABLE_FIELDS)
-    observed_result["statistics_json"] = resolve_json_value(observed_result["statistics_json"])
+    fields = _RESULT_IMMUTABLE_FIELDS
+    if contract_version == 3:
+        # V3 statistics belong to the separately bound statistics child, not
+        # the immutable core import. Replaying core bytes must not reset them.
+        fields = tuple(field for field in fields if field not in {
+            "statistics_sha256", "statistics_json", "comparison_compatibility_id",
+        })
+    observed_result = _model_values(existing, fields)
+    if "statistics_json" in observed_result:
+        observed_result["statistics_json"] = resolve_json_value(observed_result["statistics_json"])
     if not _strict_authority_values_equal(
         observed_result,
         result_values,
-        _RESULT_IMMUTABLE_FIELDS,
+        fields,
     ):
         raise FrustraMPNNConflictError(
             "FrustraMPNN invocation already exists with different result authority"
@@ -1050,6 +1138,8 @@ async def ingest_result_bundle(
             parent_job_id=parent_job_id,
             parent_workflow_id=bundle.request["parent_workflow_id"],
             candidate_id=bundle.manifest["candidate_id"],
+            source_artifact=bundle.request["source_artifact"],
+            producer_provenance=bundle.request.get("producer_provenance"),
         )
         statistics_bundle_relative_path: str | None = None
         if bundle.contract_version == 3:
@@ -1085,6 +1175,7 @@ async def ingest_result_bundle(
                 result_values,
                 artifact_values,
                 landscape_values,
+                contract_version=bundle.contract_version,
             )
             if bundle.contract_version == 3:
                 assert statistics_bundle_relative_path is not None

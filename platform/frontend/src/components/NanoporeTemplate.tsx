@@ -1,3 +1,6 @@
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { ExecutionPolicyControl } from './ExecutionPolicyControl';
+import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 /**
  * NanoporeTemplate – ONT Nanopore methylation basecalling and analysis.
  *
@@ -22,6 +25,7 @@ import {
     issueMolBioNgsReceipt,
     previewMolBioSequenceImport,
     submitOntNgsJob,
+    prepareExecutionPlacement,
     submitPooledReferenceAssignment,
     type MolBioSequenceImportCommitResponse,
     type MolBioSequenceImportError,
@@ -949,7 +953,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [assemblyApproxSize, setAssemblyApproxSize] = useState<number>(initialValues?.assemblyApproxSize as number || 7000);
     const [assemblyCoverage, setAssemblyCoverage] = useState<number>(initialValues?.assemblyCoverage as number || 60);
     const [assemblyTrimLength, setAssemblyTrimLength] = useState<number>(initialValues?.assemblyTrimLength as number || 0);
-    const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number || 9);
+    const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number ?? 9);
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
     const [wfCloneFlyeQuality, setWfCloneFlyeQuality] = useState<FlyeReadQuality>(
@@ -974,6 +978,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [singleRefSplitMinMapq, setSingleRefSplitMinMapq] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMinMapq, 20, 0, 60));
     const [singleRefSplitMinSegmentBp, setSingleRefSplitMinSegmentBp] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMinSegmentBp, 250, 1, 1_000_000));
     const [singleRefSplitMaxQueryGapBp, setSingleRefSplitMaxQueryGapBp] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMaxQueryGapBp, 500, 0, 1_000_000));
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(() =>
+        typeof initialValues?.execution_target_id === 'string' ? initialValues.execution_target_id : null);
+    const [initialReturnPolicy] = useState(() => initialValues?.execution_policy
+        ? { remote_result_policy: normalizeResultPolicy((initialValues.execution_policy as ExecutionPolicy).remote_result_policy) }
+        : newJobExecutionPolicy());
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(() => {
         const raw = (initialValues?.pinnedGpus ?? initialValues?.pinned_gpus ?? initialValues?.pinned_gpu) as unknown;
         if (Array.isArray(raw)) {
@@ -1124,12 +1133,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
     const managedReferenceBlocker = useMemo(() => {
-        if (usesMolBioReceiptLane) return molbioRevisionPairError;
         if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
         if (!exactStateRevisionId) return 'Select an exact local state revision.';
         if (!availability.canMutateDomain) return availability.reason;
         if (selectedReferenceDetailQuery.isError) return 'The selected immutable reference revision could not be loaded.';
         if (exactStateRevisionQuery.isError) return 'The exact local state revision could not be loaded.';
+        if (usesMolBioReceiptLane) {
+            if (molbioRevisionPairError) return molbioRevisionPairError;
+            if (!selectedMolbioSequence || !selectedMolbioRevision) return 'Select a molecular sequence revision belonging to the exact selected local state revision.';
+            return null;
+        }
+        if (managedReferencesQuery.isError) return 'Managed references could not be loaded.';
         if (!selectedManagedReference) return 'Select an immutable managed reference revision.';
         if (!selectedReferenceIsExactStateMember) return 'The selected reference revision is not a member of the exact selected local state revision.';
         return null;
@@ -1142,6 +1156,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceDetailQuery.isError,
         molbioRevisionPairError,
         selectedManagedReference,
+        selectedMolbioSequence,
+        selectedMolbioRevision,
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
@@ -1162,9 +1178,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         || (usesMolBioReceiptLane ? Boolean(selectedMolbioSequenceId && selectedMolbioRevisionId) : Boolean(selectedManagedReference && selectedReferenceIsExactStateMember));
     const getSubmissionBlockers = (): string[] => {
         const blockers: string[] = [];
+        if (executionTargetId && inputSource === 'pod5') blockers.push('Raw POD5/instrument execution is not portable. Choose Local explicitly or provide a supported managed FASTQ / bounded move-BAM input.');
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
-        if (inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
+        if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
@@ -1174,7 +1191,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
         if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
-        if (!usesMolBioReceiptLane && managedReferenceBlocker) blockers.push(managedReferenceBlocker);
+        if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
         return [...new Set(blockers)];
     };
@@ -1204,7 +1221,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
     const reviewGpuLabel = inputSource === 'fastq'
         ? 'CPU ONLY'
-        : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
+        : executionTargetId ? 'WORKER SCHEDULER' : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
     const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
     const handleValidate = () => {
         const blockers = getSubmissionBlockers();
@@ -1268,6 +1285,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     const submitMutation = useMutation({
         mutationFn: async () => {
+            const placement = prepareExecutionPlacement({ execution_target_id: executionTargetId });
             let molbioNgsReceiptId = '';
             let comparisonPanelReceiptId = '';
 
@@ -1310,7 +1328,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
-                pinned_gpu: inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                ...placement,
+                pinned_gpu: !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
                     ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
@@ -1518,6 +1537,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         setRunAssembly(false);
         setRunFastqQc(false);
         if (workflow === 'rna') {
+            setTrimAdapters(true);
             setDoradoMolecule('rna');
             setDoradoMode('simplex');
             setModifiedBases('none');
@@ -1527,6 +1547,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         }
         setDoradoMolecule('dna');
         if (workflow === 'duplex') {
+            setTrimAdapters(true);
             setDoradoMode('duplex');
             setModifiedBases('none');
             setBarcodeKit('');
@@ -1557,6 +1578,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     return (
         <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} disabled={submitMutation.isPending} />
+            <div hidden={selectedWorkflow === 'pooledAssignment'}><ExecutionPolicyControl initialPolicy={initialReturnPolicy} /></div>
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1596,7 +1619,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         placeholder="my_nanopore_run"
                         className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
                     />
-                    {inputSource === 'fastq' ? (
+                    {executionTargetId ? (
+                        <p className="mt-4 text-xs text-[var(--text-secondary)]">Worker scheduler owns GPU assignment; controller GPU pins are not sent. Remote admission supports managed FASTQ and bounded external move-BAM, not raw/instrument input.</p>
+                    ) : inputSource === 'fastq' ? (
                         <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
                             <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
                             <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
@@ -1616,7 +1641,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </select>
                     </label>
                     )}
-                    {inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                    {!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
                 </div>
 
             {/* Data Source */}
@@ -1750,8 +1775,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
-                {selectedWorkflow === 'pooledAssignment' ? (
-                    <PooledReferenceAssignmentPanel
+                {selectedWorkflow === 'pooledAssignment' ? (executionTargetId
+                    ? <p role="alert" className="text-sm text-amber-200">Pooled assignment uses its independent local workflow. Choose Local explicitly before submitting; it will not fall back from the selected worker.</p>
+                    : <PooledReferenceAssignmentPanel
                         fastqPath={fastqPath}
                         sequences={molbioSequences}
                         onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}

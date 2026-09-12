@@ -16,6 +16,303 @@ from services.remote_stage_receipts import (
 )
 
 
+@pytest.mark.parametrize('denial', [None, 'cpus', 'memory_bytes', 'scratch_bytes', 'devices', 'target'])
+def test_worker_continuation_rebinds_actual_budget(tmp_path, monkeypatch, denial):
+    from dataclasses import replace
+    from component_runtime import ComponentRuntime, NativeInvocation, GeneratedInput, SourceIdentity
+    from services import nextflow
+    from tools import bms_remote_worker as worker
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.lib.component_adapter import current_generation_context
+    from scripts.open_stage_gate import open_component_gate
+    identity = SourceIdentity(revision='a'*40, tree='b'*40)
+    runtime = ComponentRuntime(tmp_path / 'ledger.sqlite', artifact_root=tmp_path,
+        attempt_id='attempt', root_job_id='root', target_id='worker', lease_id='lease',
+        source_identity=identity.__dict__)
+    candidates = tmp_path / 'candidates'
+    candidates.mkdir()
+    (candidates / 'one.pdb').write_text('native fixture')
+    checkpoint = open_component_gate(runtime, job_id='root', stage='review', payload={},
+        directories={'candidate': candidates})
+    runtime.claim_root(owner_id='owner', boot_id='boot')
+    runtime.set_root_state('paused', owner_id='owner', boot_id='boot', quiescent=True)
+    devices = [dict(gpu_index=3, gpu_uuid='GPU-worker')]
+    previous = dict(gpu_ids=[3], required=dict(cpus=1, memory_bytes=1, scratch_bytes=999999),
+        admission=dict(devices=devices))
+    context = dict(target_id='worker', resources=previous, artifact_root=str(tmp_path),
+        parent=dict(id='root', model_id='fixture', mode='run', params={}, output_dir=str(tmp_path)))
+    runtime.context = context
+    from component_runtime import NativeComponent, SelectedExecutionMetadata, SelectedExecutionPlan, canonical_bytes
+    component = NativeComponent(component_key='native', authority='fixture:native', selection_json=b'{}',
+        resources_json=canonical_bytes(dict(cpus=dict(value=4), memory=dict(value='12 GB'), gpu=dict(count=1))))
+    metadata = SelectedExecutionMetadata('fixture', 'fixture', (component,), (), (), (), (), b'{}', None, None, ())
+    plan = SelectedExecutionPlan(identity, 'fixture', 'fixture', 'run', 'fixture.nf',
+        b'{}', b'{}', canonical_bytes({'out_dir': str(tmp_path)}), metadata)
+    invocation = replace(NativeInvocation.capture(model_id='fixture', mode='run', command=['never-science'],
+        requested={}, effective={}, native_parameters={'out_dir': str(tmp_path)}, entrypoint='fixture.nf',
+        generated_inputs=[GeneratedInput('new.json', b'new')]), source_identity=identity, execution_plan=plan)
+    admission = dict(schema='bms.target-resource-admission.v1', execution_target_id='worker', devices=devices,
+        required=dict(cpus=1, memory_bytes=1, scratch_bytes=0),
+        available=dict(cpus=8, memory_bytes=16*1024**3, scratch_bytes=3))
+    if denial in ('cpus', 'memory_bytes', 'scratch_bytes'):
+        admission['available'][denial] = 0
+    elif denial == 'devices': admission['devices'] = [dict(gpu_index=3, gpu_uuid='replacement')]
+    elif denial == 'target': admission['execution_target_id'] = 'other'
+    worker.atomic_json(worker.envelope_path(tmp_path), {})
+    status = dict(attempt_id='attempt', boot_id='boot', state='awaiting_input', quiescent=True)
+    worker.atomic_json(worker.status_path(tmp_path), status)
+    monkeypatch.setattr(worker, 'status', lambda _: status)
+    monkeypatch.setattr(worker, 'boot_id', lambda: 'boot')
+    monkeypatch.setattr(worker, '_component_checkpoint_runtime', lambda _: runtime)
+    monkeypatch.setattr(nextflow, 'compile_component_checkpoint_continuation', lambda *args: invocation)
+    spawned = []
+    monkeypatch.setattr(worker.subprocess, 'Popen', lambda *a, **kw: spawned.append(a))
+    kwargs = dict(attempt_id='attempt', expected_boot_id='boot', lease_id='lease',
+        checkpoint_id='root:review', checkpoint_sha256=checkpoint['checkpoint_sha256'],
+        decision={'continue': True}, continuation_lease_id='new-lease', resource_admission=admission)
+    if denial:
+        with pytest.raises(ValueError, match='capacity|devices'):
+            worker.checkpoint_control(tmp_path, **kwargs)
+        assert runtime.root_state()['state'] == 'paused'
+        assert runtime.checkpoint_status('root:review')['decision'] is None
+        assert not spawned and not (tmp_path / 'new.json').exists()
+    else:
+        worker.checkpoint_control(tmp_path, **kwargs)
+        projected = current_generation_context(context, runtime.root_state())
+        assert projected['resources']['required'] == dict(cpus=4, memory_bytes=12*1024**3, scratch_bytes=3)
+        assert projected['resources']['admission']['required'] == projected['resources']['required']
+        assert context['resources'] == previous and len(spawned) == 1
+        assert (tmp_path / 'new.json').read_bytes() == b'new'
+
+
+def test_component_gate_native_artifacts_and_annotation_are_bound_without_http(tmp_path, monkeypatch):
+    import sys
+    from component_runtime import ComponentRuntime, ResultReference
+    code = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(code))
+    from scripts import open_stage_gate as gate
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    candidate = tmp_path / "native"
+    candidate.mkdir()
+    (candidate / "candidate.pdb").write_text("native fixture bytes")
+    annotation = tmp_path / "gate_post_fampnn_annotations.json"
+    annotation.write_text('{"annotation_receipt": "native fixture"}')
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps(dict(artifact_root=str(root), ledger_path=str(tmp_path / "ledger.sqlite"),
+        attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease")))
+    monkeypatch.setenv("BMS_COMPONENT_CONTEXT", str(context))
+    monkeypatch.setattr(gate.requests, "post", lambda *a, **kw: pytest.fail("checkpoint used HTTP"))
+    monkeypatch.setattr(sys, "argv", ["gate", "--job_id", "root", "--stage", "post_fampnn",
+        "--candidate_dir", str(candidate), "--payload_json", str(annotation), "--output", str(tmp_path / "gate.json")])
+    assert gate.main() == 0
+    runtime = ComponentRuntime(tmp_path / "ledger.sqlite", artifact_root=root,
+        attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease")
+    status = runtime.pending_checkpoints()[0]
+    refs = status["checkpoint"]["artifacts"]
+    assert any(r["relative_path"].endswith(annotation.name) for r in refs)
+    assert any(ResultReference(**r).resolve(root).read_bytes() == b"native fixture bytes" for r in refs)
+    projection = gate.component_checkpoint_projection(runtime)[0]
+    assert projection["checkpoint_sha256"] == status["checkpoint_sha256"]
+    assert projection["stage"] == "post_fampnn"
+    assert gate.main() == 0  # exact replay, never approval
+    assert len(runtime.pending_checkpoints()) == 1
+    with pytest.raises(ValueError, match="binding"):
+        runtime.decide_checkpoint("root:post_fampnn", checkpoint_sha256="0" * 64,
+                                  decision={"continue": True}, actor="explicit-reviewer")
+    (candidate / "candidate.pdb").write_text("changed native bytes")
+    with pytest.raises(ValueError, match="immutable"):
+        gate.main()
+
+
+def test_worker_pause_is_quiescent_not_result_ready_and_resume_is_fenced(tmp_path, monkeypatch):
+    import ctypes
+    from component_runtime import ComponentRuntime
+    from tools import bms_remote_worker as worker
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.open_stage_gate import open_component_gate
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "results"
+    root.mkdir()
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    (candidates / "one.pdb").write_text("native review fixture")
+    runtime = ComponentRuntime(tmp_path / "ledger.sqlite", artifact_root=root,
+        attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease")
+    checkpoint = open_component_gate(runtime, job_id="root", stage="review", payload={},
+                                     directories={"candidate": candidates})
+    runtime.claim_root(owner_id="fixture", boot_id="boot")
+    runtime.set_root_state("paused", owner_id="fixture", boot_id="boot", quiescent=True)
+    monkeypatch.setattr(worker, "boot_id", lambda: "boot")
+    worker.atomic_json(worker.envelope_path(tmp_path), dict(attempt_id="attempt", job_id="root",
+        output_directory=str(root), working_directory=str(tmp_path), command=["never-executed"]))
+    worker.atomic_json(worker.status_path(tmp_path), dict(attempt_id="attempt", job_id="root",
+        state="prepared", boot_id="boot"))
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **kw: SimpleNamespace(prctl=lambda *a: 0))
+    monkeypatch.setattr(worker, "process_start_ticks", lambda pid: 10)
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **kw: SimpleNamespace(pid=123, poll=lambda: 75, wait=lambda: 75))
+    joined = []
+    monkeypatch.setattr(worker, "quiesce_writers", lambda status: joined.append(True) or True)
+    monkeypatch.setattr(worker.os, "waitpid", lambda *a: (0, 0))
+    def owned_runtime(envelope):
+        assert joined
+        return runtime
+    monkeypatch.setattr(worker, "_component_checkpoint_runtime", owned_runtime)
+    monkeypatch.setattr(worker, "build_result_manifest", lambda *a: pytest.fail("review published full results"))
+    assert worker._supervise_owned(tmp_path) == 0
+    status = worker.load_json(worker.status_path(tmp_path))
+    assert status["state"] == "awaiting_input" and status["quiescent"]
+    assert status["result_manifest_sha256"] is None
+    monkeypatch.setattr(worker, "status", lambda path: status)
+    kwargs = dict(attempt_id="attempt", expected_boot_id="boot", lease_id="lease",
+                  checkpoint_id="root:review", checkpoint_sha256=checkpoint["checkpoint_sha256"],
+                  decision={"selected_artifacts": ["one.pdb"]}, continuation_lease_id="next-lease")
+    with pytest.raises(RuntimeError, match="boot/quiescence"):
+        worker.checkpoint_control(tmp_path, **dict(kwargs, expected_boot_id="old-boot"))
+    with pytest.raises(RuntimeError, match="artifact-set"):
+        worker.checkpoint_control(tmp_path, **dict(kwargs, checkpoint_sha256="0" * 64))
+    assert runtime.checkpoint_status("root:review")["decision"] is None
+
+
+def test_checkpoint_edge_compiles_native_resume_and_runs_shared_adapter_once(tmp_path, monkeypatch):
+    import sys
+    from dataclasses import replace
+    from component_runtime import ComponentRuntime, NativeInvocation, SourceIdentity
+    from services import nextflow
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.open_stage_gate import open_component_gate
+    from scripts.lib.component_adapter import run_component_workflow
+    import os
+    monkeypatch.setattr(os, 'environ', os.environ.copy())
+    root = tmp_path / "results"
+    root.mkdir()
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    (candidates / "one.pdb").write_text("native fixture")
+    identity = {"revision": "a" * 40, "tree": "b" * 40}
+    context = dict(attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease",
+        source_identity=identity, artifact_root=str(root), ledger_path=str(tmp_path / "ledger.sqlite"),
+        working_directory=str(tmp_path), root_command=[sys.executable, "-c", "raise RuntimeError('original root replayed')"],
+        parent=dict(id="root", model_id="antibody_design", mode="denovo", params={}, output_dir=str(root)))
+    path = tmp_path / "context.json"
+    path.write_text(json.dumps(context))
+    runtime = ComponentRuntime(tmp_path / "ledger.sqlite", artifact_root=root,
+        attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease", source_identity=identity)
+    checkpoint = open_component_gate(runtime, job_id="root", stage="post_fampnn", payload={},
+                                     directories={"candidate": candidates})
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    runtime.claim_root(owner_id="predecessor", boot_id=boot)
+    runtime.set_root_state("paused", owner_id="predecessor", boot_id=boot, quiescent=True)
+    selected = [r["relative_path"] for r in checkpoint["checkpoint"]["artifacts"] if r["relative_path"].endswith(".pdb")]
+    decision = {"selected_artifacts": selected}
+    calls = []
+    marker = tmp_path / 'recorder.txt'
+    def native_compiler(model, mode, params, output, **kwargs):
+        calls.append(params)
+        command = [sys.executable, '-c', f"from pathlib import Path; p=Path({str(marker)!r}); p.write_text('resumed')"]
+        return replace(NativeInvocation.capture(model_id=model, mode=mode, command=command,
+            requested=params, effective=params, native_parameters={**params, "out_dir": str(output)}, entrypoint='fixture.nf'),
+            source_identity=kwargs['source_identity'])
+    monkeypatch.setattr(nextflow, 'compile_nextflow_invocation', native_compiler)
+    # Harmless Python recorder is not a Nextflow task; resource-config tests own that boundary.
+    from scripts.lib import component_adapter
+    # This test records processes; real Nextflow resource conformance is separate.
+    monkeypatch.setattr(component_adapter, 'resource_bound_command', lambda argv, *_: argv)
+
+    invocation = nextflow.compile_component_checkpoint_continuation(context, checkpoint, decision)
+    assert calls[0]['interactive_gate_continue'] is True
+    assert calls[0]['fampnn_collected_pdbs'].startswith(str(root / '.bms-review' / 'selections'))
+    kwargs = dict(checkpoint_sha256=checkpoint['checkpoint_sha256'], decision=decision, actor='reviewer',
+                  boot_id=boot, invocation=invocation, continuation_lease_id='new-lease',
+                  parent_snapshot=nextflow.component_checkpoint_parent_snapshot(invocation, context))
+    with pytest.raises(ValueError, match='same-boot'):
+        runtime.resume_checkpoint('root:post_fampnn', **dict(kwargs, boot_id='foreign-boot'))
+    runtime.resume_checkpoint('root:post_fampnn', **kwargs)
+    assert runtime.root_state()['state'] == 'resume_ready'
+    assert run_component_workflow(path) == 0
+    assert marker.read_text() == 'resumed'
+    marker.unlink()
+    assert run_component_workflow(path) == 0 and not marker.exists()
+    assert runtime.root_state()['generation'] == 1
+    with pytest.raises(ValueError, match='paused'):
+        runtime.resume_checkpoint('root:post_fampnn', **kwargs)
+
+
+@pytest.mark.parametrize('stage,model', [('post_boltzgen', 'boltzgen'), ('post_ppiflow_generator', 'ppiflow')])
+def test_checkpoint_domain_uses_ordinary_native_refinement_policy(tmp_path, monkeypatch, stage, model):
+    from routers import jobs
+    from component_runtime import ResultReference
+    from services import nextflow
+    from dataclasses import replace
+    from component_runtime import NativeInvocation, SourceIdentity, GeneratedInput, ComponentRuntime
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.open_stage_gate import open_component_gate
+    root = tmp_path / 'results'
+    root.mkdir()
+    candidates = tmp_path / 'candidates'
+    candidates.mkdir()
+    (candidates / 'one.pdb').write_text('retained native bytes')
+    parent = dict(id='root', model_id=model, mode='nanobody', params={'framework_type': 'vhh',
+        'seq_design_fampnn': True, 'interactive_gating': True}, output_dir=str(root))
+    runtime = ComponentRuntime(tmp_path / 'ledger.sqlite', artifact_root=root,
+        attempt_id='attempt', root_job_id='root', target_id='worker', lease_id='lease')
+    checkpoint = open_component_gate(runtime, job_id='root', stage=stage, payload={}, directories={'candidate': candidates})
+    context = dict(parent=parent, artifact_root=str(root), attempt_id='attempt', root_job_id='root',
+        target_id='worker', lease_id='lease', source_identity={'revision': 'a'*40, 'tree': 'b'*40})
+    selected = [ref['relative_path'] for ref in checkpoint['checkpoint']['artifacts'] if ref['relative_path'].endswith('.pdb')]
+    calls = []
+    real_compiler = nextflow.compile_nextflow_invocation
+    def compile_native(model, mode, params, output, **kwargs):
+        calls.append((model, mode, params))
+        return replace(NativeInvocation.capture(model_id=model, mode=mode, command=['true'],
+            requested=params, effective=params, native_parameters={**params, "out_dir": str(output)}, entrypoint='fixture.nf',
+            generated_inputs=[GeneratedInput('native-input.json', b'new generation')]), source_identity=kwargs['source_identity'])
+    monkeypatch.setattr(nextflow, 'compile_nextflow_invocation', compile_native)
+    invocation = nextflow.compile_component_checkpoint_continuation(context, checkpoint, {'selected_artifacts': selected})
+    assert calls[0][0] == 'template_antibody_denovo'
+    assert calls[0][2]['skip_rfantibody'] is True
+    assert calls[0][2]['seq_design_fampnn'] is True
+    assert calls[0][2]['interactive_gate_continue'] is True
+    assert all(item.relative_path.startswith('.bms-review/selections/') for item in invocation.generated_inputs)
+    assert not (root / 'native-input.json').exists()
+    monkeypatch.setattr(nextflow, 'compile_nextflow_invocation', real_compiler)
+    actual = nextflow.compile_component_checkpoint_continuation(context, checkpoint, {'selected_artifacts': selected})
+    assert actual.execution_plan is not None
+    assert actual.model_id == 'template_antibody_denovo'
+    assert not (root / 'native-input.json').exists()
+
+
+def test_paused_checkpoint_cancellation_uses_retained_quiescence(tmp_path, monkeypatch):
+    from component_runtime import ComponentRuntime
+    from tools import bms_remote_worker as worker
+    runtime = ComponentRuntime(tmp_path / 'ledger.sqlite', artifact_root=tmp_path,
+        attempt_id='attempt', root_job_id='root', target_id='worker', lease_id='lease')
+    runtime.claim_root(owner_id='owner', boot_id='boot')
+    runtime.set_root_state('paused', owner_id='owner', boot_id='boot', quiescent=True)
+    worker.atomic_json(worker.envelope_path(tmp_path), dict(job_id='root', attempt_id='attempt'))
+    worker.atomic_json(worker.status_path(tmp_path), dict(job_id='root', attempt_id='attempt',
+        state='awaiting_input', boot_id='boot', quiescent=True))
+    monkeypatch.setattr(worker, 'boot_id', lambda: 'boot')
+    monkeypatch.setattr(worker, 'process_matches', lambda *args: False)
+    monkeypatch.setattr(worker, '_component_checkpoint_runtime', lambda envelope: runtime)
+    assert worker.cancel(tmp_path, 0)['state'] == 'cancelled'
+    with pytest.raises(RuntimeError, match='cancel'):
+        runtime.check_active()
+    assert (tmp_path / 'ledger.sqlite').exists()
+
+
+def test_component_gate_empty_artifacts_cannot_open(tmp_path, monkeypatch):
+    from component_runtime import ComponentRuntime
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.open_stage_gate import open_component_gate
+    monkeypatch.chdir(tmp_path)
+    runtime = ComponentRuntime(tmp_path / "ledger.sqlite", artifact_root=tmp_path,
+        attempt_id="attempt", root_job_id="root", target_id="worker", lease_id="lease")
+    with pytest.raises(ValueError, match="actual declared review artifacts"):
+        open_component_gate(runtime, job_id="root", stage="review", payload={}, directories={})
+    assert not runtime.pending_checkpoints()
+
+
 @pytest.fixture
 def remote(tmp_path, monkeypatch):
     attempt = str(uuid.uuid4())

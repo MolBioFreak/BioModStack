@@ -892,6 +892,21 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     if (resources.accelerator_applicability !== 'not_applicable' || resources.dorado_invoked !== false) {
         throw new Error('FASTQ-only accelerator semantics are invalid');
     }
+    if (!['accepted', 'historical_unavailable', 'unavailable'].includes(String(resources.evidence_status))) {
+        throw new Error('resource evidence status is invalid');
+    }
+    if (resources.evidence_status === 'accepted') {
+        const remote = resources.receipt_schema === 'bms.workflow-resource-usage.v3';
+        if ((!remote && !['bms.workflow-resource-usage.v1', 'bms.workflow-resource-usage.v2'].includes(String(resources.receipt_schema)))
+            || (remote ? resources.execution_invocation_id !== null : typeof resources.execution_invocation_id !== 'string')
+            || !resources.receipt_id || !resources.receipt_sha256 || !resources.run_attempt_id) {
+            throw new Error('accepted resource receipt identity is invalid');
+        }
+    } else if (['receipt_schema', 'receipt_id', 'receipt_sha256', 'run_attempt_id', 'execution_invocation_id',
+        'gpu_index', 'gpu_uuid', 'admitted_vram_bytes', 'outcome', 'admitted_cpu_threads',
+        'observed_memory_peak_bytes', 'observed_pids_peak'].some((key) => resources[key] !== null)) {
+        throw new Error('unavailable resource observations must be null');
+    }
     const schedulerGpuAssignment = resources.scheduler_gpu_assignment;
     if (schedulerGpuAssignment !== null && typeof schedulerGpuAssignment !== 'string' && typeof schedulerGpuAssignment !== 'number') {
         throw new Error('scheduler GPU assignment is invalid');

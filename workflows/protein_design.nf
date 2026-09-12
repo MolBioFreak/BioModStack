@@ -829,17 +829,20 @@ workflow PROTEIN_DESIGN {
 
             CollectBoltzGenOutputs(WaitForBoltzGenChildren.out.result)
 
+            // Select once over the complete collected campaign, never per child.
+            FilterBoltzGen(CollectBoltzGenOutputs.out.pdbs.collect(), CollectBoltzGenOutputs.out.jsons.collect())
             AggregateBoltzGenResults(
                 params.job_id ?: 'unknown',
-                CollectBoltzGenOutputs.out.pdbs.collect(),
-                CollectBoltzGenOutputs.out.jsons.collect(),
+                FilterBoltzGen.out.pdbs.collect(),
+                FilterBoltzGen.out.jsons.collect(),
                 CollectBoltzGenOutputs.out.manifest,
             )
 
             rfd_tuples = Channel.empty()
             filt_rfd_pdbs_jsons = Channel.empty()
             filt_seq_pdbs = Channel.empty()
-            analysis_input_pdbs = CollectBoltzGenOutputs.out.pdbs.flatten()
+            seq_tuple = Channel.empty()
+            analysis_input_pdbs = FilterBoltzGen.out.pdbs.flatten()
         }
         else {
             RunBoltzGen(PrepBoltzGenInput.out.yaml)

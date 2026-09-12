@@ -1,7 +1,7 @@
 nextflow.enable.dsl = 2
 
 process ValidateShapeBundle {
-    label 'process_low'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     publishDir "${params.out_dir}/metadata", mode: 'copy', pattern: 'shape_input_receipt.json'
@@ -31,7 +31,7 @@ process ValidateShapeBundle {
 }
 
 process PlanRFD3Batches {
-    label 'ShapePlanning'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_batch_plan.json'
@@ -95,7 +95,7 @@ process RunShapeRFD3 {
 
 process AdmitRFD3InitialCandidate {
     tag "${candidate.simpleName}"
-    label 'ShapeAdmission'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     publishDir "${params.out_dir}/run/shape_initial_admission", mode: 'copy'
@@ -108,7 +108,7 @@ process AdmitRFD3InitialCandidate {
     path sdf_f32le
 
     output:
-    tuple path(candidate), path('initial_admission.json'), emit: admitted
+    tuple path(candidate), path("${candidate.simpleName}.initial_admission.json"), emit: admitted
 
     script:
     """
@@ -119,13 +119,13 @@ process AdmitRFD3InitialCandidate {
         --manifest ${geometry_manifest} \\
         --points ${points_f32le} \\
         --sdf ${sdf_f32le} \\
-        --output initial_admission.json
+        --output ${candidate.simpleName}.initial_admission.json
     """
 }
 
 process PrepareShapeBackbone {
     tag "${candidate.simpleName}"
-    label 'ShapeAdmission'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     input:
@@ -147,7 +147,7 @@ process PrepareShapeBackbone {
 }
 
 process BuildRFD3Aggregate {
-    label 'ShapeAdmission'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_aggregate_manifest.json'
@@ -187,6 +187,7 @@ process RunShapeProteinMPNN {
     tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
+    path request_json
 
     output:
     path "${candidate_id}_proteinmpnn", emit: bundle
@@ -199,11 +200,13 @@ process RunShapeProteinMPNN {
     micromamba activate mpnn
     python ${params.code_root}/scripts/shape_blueprint/run_shape_sequence.py \\
         --engine proteinmpnn \\
+        --candidate-id ${candidate_id} \\
         --backbone ${backbone} \\
         --output-dir ${bundle} \\
         --receipt ${bundle}/runtime_receipt.json \\
         --count ${sequence_count} \\
-        --seed ${seed}
+        --seed ${seed} \\
+        --request ${request_json}
     """
 }
 
@@ -219,6 +222,7 @@ process RunShapeFAMPNN {
     tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
+    path request_json
 
     output:
     path "${candidate_id}_fampnn", emit: bundle
@@ -229,11 +233,13 @@ process RunShapeFAMPNN {
     set -euo pipefail
     /opt/venv/bin/python ${params.code_root}/scripts/shape_blueprint/run_shape_sequence.py \\
         --engine fampnn \\
+        --candidate-id ${candidate_id} \\
         --backbone ${backbone} \\
         --output-dir ${bundle} \\
         --receipt ${bundle}/runtime_receipt.json \\
         --count ${sequence_count} \\
-        --seed ${seed}
+        --seed ${seed} \\
+        --request ${request_json}
     """
 }
 
@@ -269,37 +275,102 @@ process EvaluateShapeCandidate {
     """
 }
 
-process RunShapeValidatorEvidence {
+process RunShapeBoltzValidator {
     tag "${sequence_name}"
-    label 'ShapeValidator'
+    label 'Boltz'
+    label 'gpu'
     stageInMode 'copy'
 
     input:
-    tuple val(sequence_name), path(esm_structure), path(esm_metrics), val(sequence)
+    tuple val(sequence_name), val(sequence)
+    val seed
+
+    output:
+    tuple val(sequence_name), path("boltz_validator_evidence_${sequence_name}"), emit: evidence
+
+    script:
+    """
+    set -euo pipefail
+    mkdir -p tmp
+    export NUMBA_CACHE_DIR="\$PWD/tmp"
+    export XDG_CONFIG_HOME="\$PWD/tmp"
+    export TRITON_CACHE_DIR="\$PWD/tmp"
+    export HOME="\$PWD/tmp"
+    python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
+        --mode native --validator boltz2 \\
+        --sequence '${sequence}' --sequence-name '${sequence_name}' \\
+        --seed ${seed as Integer} --code-root ${params.code_root} \\
+        --output boltz_validator_evidence_${sequence_name}/shape_validator_records.json
+    """
+}
+
+process RunShapeProtenixValidator {
+    tag "${sequence_name}"
+    label 'Protenix'
+    label 'gpu'
+    stageInMode 'copy'
+
+    input:
+    tuple val(sequence_name), val(sequence)
+    val seed
+
+    output:
+    tuple val(sequence_name), path("protenix_validator_evidence_${sequence_name}"), emit: evidence
+
+    script:
+    """
+    set -euo pipefail
+    export PROTENIX_ROOT_DIR=/protenix_weights
+    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
+    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
+    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    export PYTHONNOUSERSITE=1
+    export PIP_NO_USER=1
+    export PATH="/root/miniconda3/bin:\$PATH"
+    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
+        --mode native --validator protenix_v2 \\
+        --sequence '${sequence}' --sequence-name '${sequence_name}' \\
+        --seed ${seed as Integer} --code-root ${params.code_root} \\
+        --output protenix_validator_evidence_${sequence_name}/shape_validator_records.json
+    """
+}
+
+process AggregateShapeValidatorEvidence {
+    tag "${sequence_name}"
+    label 'ShapeEvaluate'
+    stageInMode 'copy'
+
+    input:
+    tuple val(sequence_name), path(esm_structure), path(esm_metrics), val(sequence), path(peer_evidence)
     val validator_suite
     val seed
 
     output:
-    tuple val(sequence_name), path('shape_validator_records.json'), emit: evidence
+    tuple val(sequence_name), path("validator_evidence_${sequence_name}"), emit: evidence
 
     script:
     def validators = (validator_suite ?: []).join(',')
+    def peerBundles = peer_evidence instanceof Collection ? peer_evidence : [peer_evidence]
+    def peerArgs = peerBundles.collect { bundle -> "--peer-evidence ${bundle}" }.join(' ')
     """
     set -euo pipefail
     python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
+        --mode aggregate ${peerArgs} \\
         --sequence '${sequence}' \\
         --sequence-name '${sequence_name}' \\
         --esm-metrics ${esm_metrics} \\
+        --esm-structure ${esm_structure} \\
         --validators '${validators}' \\
         --seed ${seed as Integer} \\
         --code-root ${params.code_root} \\
-        --output shape_validator_records.json
+        --output validator_evidence_${sequence_name}/shape_validator_records.json
     """
 }
 
 process AttachShapePostRefold {
     tag "${sequence_name}"
-    label 'ShapeValidator'
+    label 'ShapeEvaluate'
     stageInMode 'copy'
 
     input:
@@ -310,15 +381,15 @@ process AttachShapePostRefold {
     path sdf_grid
 
     output:
-    tuple val(sequence_name), path('attached_shape_candidate_bundle'), emit: bundle
+    tuple val(sequence_name), path("attached_shape_candidate_bundle_${sequence_name}"), emit: bundle
 
     script:
     """
     set -euo pipefail
-    cp -a ${candidate_bundle} attached_shape_candidate_bundle
+    cp -a ${candidate_bundle} attached_shape_candidate_bundle_${sequence_name}
     python3 ${params.code_root}/scripts/shape_blueprint/attach_shape_post_refold.py \\
-        --bundle attached_shape_candidate_bundle \\
-        --validator-records ${validator_records} \\
+        --bundle attached_shape_candidate_bundle_${sequence_name} \\
+        --validator-records ${validator_records}/shape_validator_records.json \\
         --request ${request_json} \\
         --geometry-manifest ${geometry_manifest} \\
         --points ${point_pool} \\
@@ -336,7 +407,7 @@ process BuildShapeSkipBundle {
     path request_json
 
     output:
-    path 'shape_skip_bundle', emit: bundle
+    path "shape_skip_bundle_${candidate_id}", emit: bundle
 
     script:
     """
@@ -344,7 +415,7 @@ process BuildShapeSkipBundle {
     python3 ${params.code_root}/scripts/shape_blueprint/build_shape_skip_bundle.py \\
         --backbone-dir ${backbone_bundle} \\
         --request ${request_json} \\
-        --output-dir shape_skip_bundle
+        --output-dir shape_skip_bundle_${candidate_id}
     """
 }
 

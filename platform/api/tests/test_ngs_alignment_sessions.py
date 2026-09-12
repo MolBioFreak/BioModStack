@@ -1879,6 +1879,7 @@ async def test_signal_inventory_route_uses_pinned_root_without_fastq_projection(
         router,
         "build_ont_fastq_qc_result",
         lambda *_args: (_ for _ in ()).throw(OntNgsResultError("FASTQ projection must not run")),
+        raising=False,
     )
     monkeypatch.setattr(
         router.service,
@@ -3426,7 +3427,6 @@ def test_oversized_snapshot_uses_uncached_readonly_staging_without_cache_admissi
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from services import ngs_alignment_sessions as service
-
     _isolate_snapshot_state(service, monkeypatch, tmp_path, limit=4)
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"12345")
@@ -3541,6 +3541,7 @@ def test_active_snapshot_lease_rejects_cache_reservation_but_allows_private_stag
     with service.open_verified_artifact_snapshot(second_path, expected_size=4, expected_sha256=second_digest) as second:
         assert second.read() == b"2222"
         assert dict(service._snapshot_cache) == {second_digest: 4}
+
 
 
 
@@ -3800,6 +3801,7 @@ def test_artifact_route_rejects_package_drift_before_descriptor_resolution(
             response = client.get(f"/api/jobs/{job.id}/{suffix}")
             assert response.status_code == 409
             assert response.json()["code"] == "NGS_AUTHORITY_CONFLICT"
+
 
 
 
@@ -4203,3 +4205,20 @@ def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
         "dorado_emission_rate_bases_per_second": None,
         "samples_per_aligned_reference_base": None,
     }
+
+
+
+def test_result_route_passes_pagination_without_cached_summary(monkeypatch):
+    job = SimpleNamespace(id="paged", model_id="nanopore", status="completed", params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, provenance={})
+    app, token = _build_public_ngs_result_test_app(monkeypatch, job, {})
+    calls = []
+    async def builder(_job, **kwargs):
+        calls.append(kwargs)
+        return json.loads((API_ROOT / "tests/fixtures/ont_fastq_qc_result_retry3_v1.json").read_text())
+    monkeypatch.setattr(ngs_routes, "build_ont_fastq_qc_result", builder)
+    from services import alignment_access
+    with TestClient(app, client=("127.0.0.1", 40000)) as client:
+        client.cookies.set(alignment_access.cookie_name(job.id), token, path="/")
+        response = client.get(f"/api/jobs/{job.id}/ngs-result?variant_offset=10&artifact_offset=20&page_size=3&collection=artifacts")
+    assert response.status_code == 200
+    assert calls == [{"variant_offset": 10, "artifact_offset": 20, "page_size": 3, "collection": "artifacts"}]

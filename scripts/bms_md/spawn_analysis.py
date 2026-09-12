@@ -9,6 +9,8 @@ from typing import Any
 
 import requests
 
+from scripts.child_job_utils import component_runtime_enabled, submit_child_job
+
 from .aggregate_children import publish_json_immutable
 
 
@@ -75,6 +77,8 @@ def spawn_analysis(
         manifest_sha256 = _sha256(manifest)
         manifests.append((replica_index, manifest_sha256, manifest))
 
+    if len({index for index, _digest, _path in manifests}) != len(manifests):
+        raise ValueError("duplicate MD aggregate replica index")
     manifests.sort(key=lambda value: value[0])
     manifest_set_sha256 = _manifest_set_sha256([(index, digest) for index, digest, _path in manifests])
     created: list[dict[str, Any]] = []
@@ -107,12 +111,21 @@ def spawn_analysis(
             "batch_name": parent_name,
             "child_stage": "md_analysis",
         }
-        response = requests.post(f"{api_url.rstrip('/')}/api/jobs", json=payload, timeout=30)
-        if not response.ok:
-            raise RuntimeError(
-                f"failed to create MD analysis child {replica_index}: HTTP {response.status_code} {response.text[:500]}"
+        if component_runtime_enabled():
+            from scripts.lib.component_adapter import runtime_from_environment
+            generation = runtime_from_environment().context.get('generation', 0)
+            child_id = submit_child_job(
+                payload, parent_job_id=parent_job_id, stage="md_analysis",
+                child_key=f"{generation}:{manifest_set_sha256}:{replica_index}", required=True,
             )
-        child = response.json()
+            child = {"id": child_id, "name": payload["name"], "status": "queued"}
+        else:
+            response = requests.post(f"{api_url.rstrip('/')}/api/jobs", json=payload, timeout=30)
+            if not response.ok:
+                raise RuntimeError(
+                    f"failed to create MD analysis child {replica_index}: HTTP {response.status_code} {response.text[:500]}"
+                )
+            child = response.json()
         created.append(
             {
                 "id": child["id"],

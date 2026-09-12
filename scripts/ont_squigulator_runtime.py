@@ -244,6 +244,10 @@ def _normalize_sam(
         if signal_interval != expected_interval or tags["ss"] != f"Z:{paf_tags.get('ss', '')}":
             raise ValueError("Squigulator SAM truth diverges from validated PAF")
     fields[1] = str((flag | 16) if orientation == "reverse" else (flag & ~16))
+    if orientation == "reverse":
+        # SAM SEQ is reference-forward for flag 0x10, unlike the retained
+        # simulator FASTA and signal-order ss dwell truth. QUAL is required '*'.
+        fields[9] = reverse_complement(sequence)
     fields[2], fields[3] = contig, str(start)
     destination.write_text(
         f"@HD\tVN:1.6\n@SQ\tSN:{contig}\tLN:{contig_length}\n" + "\t".join(fields) + "\n",

@@ -125,13 +125,28 @@ def run_sequence_lane(
     receipt_path: Path,
     count: int,
     seed: int,
+    candidate_id: str,
+    request: dict[str, Any],
     runner: str | None = None,
     environment: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
+    if not re.fullmatch(r"[0-9a-f]{64}", candidate_id):
+        raise ValueError("sequence lane requires the immutable RFD3 candidate ID")
     if engine not in DEFAULT_RUNNERS:
         raise ValueError("engine must be proteinmpnn or fampnn")
     if not 1 <= count <= 32:
         raise ValueError("sequence count must be between 1 and 32")
+    request_body = {key: value for key, value in request.items() if key != "request_sha256"}
+    if hashlib.sha256(_canonical(request_body)).hexdigest() != request.get("request_sha256"):
+        raise ValueError("sequence lane canonical request hash mismatch")
+    if (request.get("sequence_engine") or "proteinmpnn") != engine or request.get("sequence_policy") == "skip":
+        raise ValueError("sequence lane does not match canonical request")
+    if request.get("sequences_per_backbone") != count or request.get("seed") != seed:
+        raise ValueError("sequence count/seed does not match canonical request")
+    settings = request.get("sequence_settings")
+    settings_identity = request.get("sequence_settings_identity")
+    if not isinstance(settings, dict) or not isinstance(settings_identity, dict) or settings_identity.get("engine") != engine:
+        raise ValueError("canonical request lacks resolved global sequence settings; resubmit for explicit normalization")
     backbone_path = _regular(backbone_path, "backbone")
     if output_dir.exists():
         raise ValueError("sequence output directory must be new")
@@ -155,6 +170,10 @@ def run_sequence_lane(
         "requested_seed": seed,
         "effective_seed": effective_seed,
         "expected_length": expected_length,
+        "request_sha256": request["request_sha256"],
+        "requested_settings": request["requested_sequence_settings"],
+        "effective_settings": settings,
+        "settings_identity": settings_identity,
     }
     try:
         if engine == "proteinmpnn":
@@ -164,12 +183,21 @@ def run_sequence_lane(
                 "--out_folder", str(runtime_dir),
                 "--num_seq_per_target", str(count),
                 "--batch_size", "1",
-                "--sampling_temp", "0.1",
-                "--omit_AAs", "CX",
+                "--sampling_temp", str(settings["mpnn_temperature"]),
+                "--omit_AAs", settings["mpnn_omitAAs"],
+                "--backbone_noise", str(settings["mpnn_backbone_noise"]),
                 "--seed", str(effective_seed),
-                "--path_to_model_weights", "/dl_binder_design/mpnn_fr/ProteinMPNN/soluble_model_weights",
-                "--model_name", "v_48_020",
+                "--path_to_model_weights", {
+                    "soluble": "/dl_binder_design/mpnn_fr/ProteinMPNN/soluble_model_weights",
+                    "vanilla": "/dl_binder_design/mpnn_fr/ProteinMPNN/vanilla_model_weights",
+                }[settings["mpnn_checkpoint_type"]],
+                "--model_name", settings["mpnn_checkpoint_model"],
             ]
+            receipt["runtime"] = {
+                "runner": runner,
+                "model_weights_path": command[command.index("--path_to_model_weights") + 1],
+                "model_name": settings["mpnn_checkpoint_model"],
+            }
             subprocess.run(command, check=True, env=run_environment)
             fasta = runtime_dir / "seqs" / f"{backbone_path.stem}.fa"
             source_records = _read_fasta(_regular(fasta, "ProteinMPNN FASTA"))
@@ -182,7 +210,7 @@ def run_sequence_lane(
                     "backbone_name": backbone_path.name,
                     "backbone_sha256": backbone_sha256,
                     "sample_index": index,
-                    "sequence_name": f"{backbone_path.stem}__proteinmpnn__{index:03d}",
+                    "sequence_name": f"{candidate_id}__proteinmpnn__{index:03d}",
                     "sequence": _validate_sequence(sequence, expected_length),
                     "metadata": _metadata(header),
                 }
@@ -195,20 +223,26 @@ def run_sequence_lane(
             shutil.copyfile(backbone_path, staged_backbone)
             command = _command_prefix(runner) + [
                 f"seed={effective_seed}",
-                f"batch_size={count}",
+                f"batch_size={settings['fampnn_batch_size']}",
                 "checkpoint_path=/app/fampnn/weights/fampnn_0_3.pt",
                 f"pdb_dir={input_dir}",
                 f"out_dir={runtime_dir}",
                 f"num_seqs_per_pdb={count}",
                 "fixed_pos_verbose=false",
-                "seq_only=true",
-                "repack_last=false",
-                "temperature=0.1",
-                "timestep_schedule.num_steps=100",
+                f"seq_only={str(settings['fampnn_seq_only']).lower()}",
+                f"repack_last={str(settings['fampnn_repack_last']).lower()}",
+                f"temperature={settings['fampnn_temperature']}",
+                f"timestep_schedule.num_steps={settings['fampnn_num_steps']}",
+                f"exclude_cys={str(settings['fampnn_exclude_cys']).lower()}",
+                f"psce_threshold={settings['fampnn_psce_threshold']}",
                 f"hydra.run.dir={runtime_dir / '.hydra'}",
                 "hydra.output_subdir=null",
                 "hydra.job.chdir=false",
             ]
+            receipt["runtime"] = {
+                "runner": runner,
+                "checkpoint_path": "/app/fampnn/weights/fampnn_0_3.pt",
+            }
             run_environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
             subprocess.run(command, check=True, env=run_environment)
             fasta_dir = runtime_dir / "fastas"
@@ -235,7 +269,7 @@ def run_sequence_lane(
                         "backbone_name": backbone_path.name,
                         "backbone_sha256": backbone_sha256,
                         "sample_index": index,
-                        "sequence_name": f"{backbone_path.stem}__fampnn__{index:03d}",
+                        "sequence_name": f"{candidate_id}__fampnn__{index:03d}",
                         "sequence": _validate_sequence(source_records[0][1], expected_length),
                         "metadata": {"header": source_records[0][0]},
                     }
@@ -243,6 +277,10 @@ def run_sequence_lane(
         source_backbone = output_dir / "source_backbone.pdb"
         shutil.copyfile(backbone_path, source_backbone)
         for record in records:
+            record["sequence_settings"] = settings
+            record["requested_sequence_settings"] = request["requested_sequence_settings"]
+            record["sequence_settings_identity"] = settings_identity
+            record["backbone_candidate_id"] = candidate_id
             record["source_backbone"] = source_backbone.name
         _write_json(output_dir / "sequence_records.json", {"schema": "bms_shape_sequences_v1", "records": records})
         (output_dir / "sequences.fasta").write_text(
@@ -262,19 +300,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", required=True, choices=sorted(DEFAULT_RUNNERS))
     parser.add_argument("--backbone", type=Path, required=True)
+    parser.add_argument("--candidate-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--count", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--runner")
     args = parser.parse_args()
     run_sequence_lane(
         engine=args.engine,
         backbone_path=args.backbone,
+        candidate_id=args.candidate_id,
         output_dir=args.output_dir,
         receipt_path=args.receipt,
         count=args.count,
         seed=args.seed,
+        request=json.loads(args.request.read_text(encoding="utf-8")),
         runner=args.runner,
     )
     return 0

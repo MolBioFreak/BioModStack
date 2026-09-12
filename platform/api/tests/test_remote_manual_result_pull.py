@@ -17,7 +17,8 @@ async def ready(store):
         job.remote_state = "results_available"
         job.awaiting_input, job.awaiting_stage = True, "remote_results"
         job.awaiting_payload = ex._pull_identity(job)
-        job.provenance = {"remote_execution_receipt": {"result_manifest_sha256": "a" * 64}}
+        job.provenance = {"remote_execution_receipt": {
+            "remote_attempt_dir": "/fixture/attempt", "result_manifest_sha256": "a" * 64}}
         (await session.get(ExecutionTarget, "target")).leased_job_id = "other-job"
         await session.commit()
 
@@ -26,7 +27,7 @@ def success():
     return RemoteAttemptStatus(
         job_id="job", attempt_id="attempt", state="succeeded", exit_code=0,
         started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
-        result_manifest_sha256="a" * 64,
+        result_manifest_sha256="a" * 64, quiescent=True,
     )
 
 

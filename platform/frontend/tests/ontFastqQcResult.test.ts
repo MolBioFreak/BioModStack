@@ -293,3 +293,34 @@ test('strict parser rejects impossible alignment-session branches', () => {
         assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /alignment session branch/u);
     }
 });
+
+
+test('unavailable observations preserve science and remote v3 does not invent an invocation', () => {
+    const payload = validPayload();
+    const resources = payload.execution_resources as Record<string, unknown>;
+    resources.evidence_status = 'unavailable';
+    assert.equal(parseOntFastqQcResult(payload, JOB_ID).verification.verdict, 'REVIEW');
+    resources.observed_memory_peak_bytes = 100;
+    assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /unavailable resource/);
+    Object.assign(resources, { evidence_status: 'accepted', receipt_schema: 'bms.workflow-resource-usage.v3',
+        receipt_id: 'admission', receipt_sha256: 'a'.repeat(64), run_attempt_id: 'attempt',
+        execution_invocation_id: null, admitted_cpu_threads: 2, observed_memory_peak_bytes: 100,
+        observed_pids_peak: 1, outcome: 'completed', configured_dorado_device_ignored: null });
+    assert.equal(parseOntFastqQcResult(payload, JOB_ID).execution_resources.execution_invocation_id, null);
+    resources.execution_invocation_id = 'invented-systemd-id';
+    assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /receipt identity/);
+});
+
+test('summary and partial pages permit variable inventories above the row bound', () => {
+    const payload = validPayload();
+    const authority = payload.authority as Record<string, unknown>;
+    Object.assign(authority, {declared_artifact_count: 300, present_artifact_count: 298, unavailable_artifact_count: 2});
+    const variants = verification(payload).variants as unknown[];
+    const total = variants.length;
+    payload.artifacts = [];
+    verification(payload).variants = [];
+    payload.pagination = { artifacts: {offset: 0, count: 0, total: 300, next_offset: 0}, variants: {offset: 0, count: 0, total, next_offset: 0} };
+    assert.equal(parseOntFastqQcResult(payload, JOB_ID).authority.declared_artifact_count, 300);
+    (payload.pagination as Record<string, Record<string, unknown>>).artifacts.count = 1;
+    assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /pagination|inventory/);
+});

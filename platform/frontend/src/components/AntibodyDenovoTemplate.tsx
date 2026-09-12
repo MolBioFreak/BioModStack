@@ -4,6 +4,7 @@ import { BoltzGenRankControls } from './BoltzGenRankControls';
 import { FampnnAnalysisControls, hydrateFampnnOverrides, fampnnOverridePayload } from './FampnnAnalysisControls';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
@@ -227,6 +228,18 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
         chains.flatMap((chain) => chain.residues.map((residue) => residueKeyForChain(chain, residue)))
     );
 
+const hydrateDeNovoStageSelection = (p: Record<string, UntypedApiValue> = {}): Record<DeNovoOrchestrationStage, boolean> => ({
+    sequence_design: p.initial_orchestration_sequence_design !== undefined
+        ? p.initial_orchestration_sequence_design === true
+        : p.seq_designer !== undefined ? p.seq_designer !== 'none'
+            : [p.seq_design_fampnn, p.seq_design_caliby, p.seq_design_antifold, p.seq_design_proteinmpnn].some(value => value === true),
+    ppiflow: p.initial_orchestration_ppiflow !== undefined ? p.initial_orchestration_ppiflow === true
+        : p.run_ppiflow_backbone_refine === true || p.run_ppiflow_maturation === true,
+    validation: p.initial_orchestration_validation !== undefined ? p.initial_orchestration_validation === true : p.run_structure_validation === true,
+    qc: p.initial_orchestration_qc !== undefined ? p.initial_orchestration_qc === true
+        : [p.run_frustrampnn, p.run_anarcii_post, p.run_immunogenicity_scoring, p.run_stability_scoring, p.run_thermompnn, p.openmm_enabled].some(value => value === true),
+});
+
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const location = useLocation();
     const { gpuOptions } = useLiveGpuCatalog();
@@ -296,15 +309,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (boltzMode === 'nanobody_binder') return 'boltzgen';
         return 'rfantibody';
     });
-    const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => ({
-        ...buildGeneratorOnlyStageSelection(),
-        sequence_design: initialValues?.initial_orchestration_sequence_design !== undefined
-            ? initialValues.initial_orchestration_sequence_design === true
-            : initialValues?.seq_design_fampnn === true || initialValues?.seq_designer === 'fampnn',
-        ppiflow: initialValues?.initial_orchestration_ppiflow === true,
-        validation: initialValues?.initial_orchestration_validation === true,
-        qc: initialValues?.initial_orchestration_qc === true,
-    }));
+    const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => hydrateDeNovoStageSelection(initialValues));
 
     useEffect(() => {
         if (refinementState?.refinementMode) {
@@ -386,10 +391,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [fampnnOverrides, setFampnnOverrides] = useState<unknown>(initialValues?.fampnn_analysis_overrides);
     useEffect(() => {
         setFampnnOverrides(initialValues?.fampnn_analysis_overrides);
-        if (initialValues?.initial_orchestration_sequence_design !== undefined || initialValues?.seq_design_fampnn === true || initialValues?.seq_designer === 'fampnn') {
-            setDeNovoStageSelection(current => ({ ...current, sequence_design: initialValues.initial_orchestration_sequence_design !== undefined
-                ? initialValues.initial_orchestration_sequence_design === true : true }));
-        }
+        if (initialValues) setDeNovoStageSelection(hydrateDeNovoStageSelection(initialValues));
     }, [initialValues]);
     let fampnnError = '';
     try { hydrateFampnnOverrides(fampnnOverrides, false); } catch (error) { fampnnError = String(error); }
@@ -513,7 +515,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     // Quality settings
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
-    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
+    const hydratePhysicsSettings = (params: UntypedApiValue): PhysicsRefinementSettings => ({
+        ...PHYSICS_DEFAULTS,
+        enabled: params?.openmm_enabled ?? PHYSICS_DEFAULTS.enabled,
+        computeTier: params?.openmm_compute_tier ?? PHYSICS_DEFAULTS.computeTier,
+        cdrOnly: params?.openmm_cdr_only ?? PHYSICS_DEFAULTS.cdrOnly,
+        restraintMode: params?.openmm_restraint_mode ?? PHYSICS_DEFAULTS.restraintMode,
+        mmgbsaMode: params?.openmm_mmgbsa_mode ?? PHYSICS_DEFAULTS.mmgbsaMode,
+        forceField: params?.openmm_force_field ?? PHYSICS_DEFAULTS.forceField,
+        topNPercentage: params?.openmm_top_n_percentage ?? PHYSICS_DEFAULTS.topNPercentage,
+        maxIterations: params?.openmm_max_iterations ?? PHYSICS_DEFAULTS.maxIterations,
+        tolerance: params?.openmm_tolerance ?? PHYSICS_DEFAULTS.tolerance,
+        restraintStrength: params?.openmm_restraint_strength ?? PHYSICS_DEFAULTS.restraintStrength,
+        implicitSolvent: params?.openmm_implicit_solvent ?? PHYSICS_DEFAULTS.implicitSolvent,
+        platform: params?.openmm_platform ?? PHYSICS_DEFAULTS.platform,
+    });
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(() => hydratePhysicsSettings(initialValues));
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
@@ -623,6 +640,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
+    const uploadedFileRef = useRef<File | null>(null);
 
     const [parsedTargetStructure, setParsedTargetStructure] = useState<ParsedPDB | null>(null);
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
@@ -695,13 +713,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [boltzgenAvoidCysteine, setBoltzgenAvoidCysteine] = useState(
         initialValues?.boltzgen_avoid_cysteine ?? true
     );
-    const [boltzgenStepScale, setBoltzgenStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale || 1.8);
-    const [boltzgenNoiseScale, setBoltzgenNoiseScale] = useState<number | ''>(initialValues?.boltzgen_noise_scale || 0.98);
-    const [boltzgenBudget, setBoltzgenBudget] = useState<number | ''>(initialValues?.boltzgen_budget || 50);
-    const [boltzgenAlpha, setBoltzgenAlpha] = useState(initialValues?.boltzgen_alpha || 0.01);
-    const [boltzgenMaxRmsd, setBoltzgenMaxRmsd] = useState<number | ''>(initialValues?.boltzgen_max_rmsd || 2.0);
-    const [boltzgenMinPlddt, setBoltzgenMinPlddt] = useState<number | ''>(initialValues?.boltzgen_min_plddt || 70);
-    const [boltzgenMinConfScore, setBoltzgenMinConfScore] = useState<number | ''>(initialValues?.boltzgen_min_conf_score || '');
+    const [boltzgenStepScale, setBoltzgenStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale ?? 1.8);
+    const [boltzgenNoiseScale, setBoltzgenNoiseScale] = useState<number | ''>(initialValues?.boltzgen_noise_scale ?? 0.98);
+    const [boltzgenBudget, setBoltzgenBudget] = useState<number | ''>(initialValues?.boltzgen_budget ?? 50);
+    const [boltzgenAlpha, setBoltzgenAlpha] = useState(initialValues?.boltzgen_alpha ?? 0.01);
+    const [boltzgenMaxRmsd, setBoltzgenMaxRmsd] = useState<number | ''>(initialValues?.boltzgen_max_rmsd ?? 2.0);
+    const [boltzgenMinPlddt, setBoltzgenMinPlddt] = useState<number | ''>(initialValues?.boltzgen_min_plddt ?? '');
+    const [boltzgenMinConfScore, setBoltzgenMinConfScore] = useState<number | ''>(initialValues?.boltzgen_min_conf_score ?? '');
     const [boltzgenFilterBiased, setBoltzgenFilterBiased] = useState(initialValues?.boltzgen_filter_biased !== false);
     const [boltzgenMetricsOverride, setBoltzgenMetricsOverride] = useState(initialValues?.boltzgen_metrics_override || '');
     const [boltzgenAdditionalFilters, setBoltzgenAdditionalFilters] = useState(initialValues?.boltzgen_additional_filters || '');
@@ -1046,7 +1064,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     );
 
     const resolveTargetPdbPathForLaunch = async (allowSkipFallback: boolean = false) => {
-        let pdbPath = targetSource?.path || uploadedPath;
+        let pdbPath = targetSource?.path || (uploadedFileRef.current === targetPdb ? uploadedPath : null);
         if (!pdbPath && targetPdb) {
             pdbPath = await handleFileUpload(targetPdb);
         }
@@ -1057,7 +1075,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             throw new Error('Failed to determine PDB file path');
         }
 
-        if (selectedChain && parsedChains.length > 1) {
+        if (selectedChain && (parsedChains.length > 1 || availableTargetModels.length > 1)) {
             const extractResult = await extractChain(
                 pdbPath,
                 selectedChain,
@@ -1126,13 +1144,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences > 1 ? boltzgenInverseFoldNumSequences : undefined,
             boltzgen_inverse_fold_avoid: buildBoltzgenInverseFoldAvoid(),
             boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
-            boltzgen_step_scale: boltzgenStepScale || undefined,
-            boltzgen_noise_scale: boltzgenNoiseScale || undefined,
-            boltzgen_budget: boltzgenBudget || undefined,
+            boltzgen_step_scale: boltzgenStepScale === '' ? null : boltzgenStepScale,
+            boltzgen_noise_scale: boltzgenNoiseScale === '' ? null : boltzgenNoiseScale,
+            boltzgen_budget: boltzgenBudget === '' ? null : boltzgenBudget,
             boltzgen_alpha: boltzgenAlpha,
-            boltzgen_max_rmsd: boltzgenMaxRmsd || undefined,
-            boltzgen_min_plddt: boltzgenMinPlddt || undefined,
-            boltzgen_min_conf_score: boltzgenMinConfScore || undefined,
+            boltzgen_max_rmsd: boltzgenMaxRmsd === '' ? null : boltzgenMaxRmsd,
+            boltzgen_min_plddt: boltzgenMinPlddt === '' ? null : boltzgenMinPlddt,
+            boltzgen_min_conf_score: boltzgenMinConfScore === '' ? null : boltzgenMinConfScore,
             boltzgen_filter_biased: boltzgenFilterBiased,
             boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
             boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
@@ -1319,6 +1337,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (initialValues) {
             console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
             setQualitySettings(mergeQualitySettingsFromParams(initialValues));
+            setPhysicsSettings(hydratePhysicsSettings(initialValues));
 
             // Basic params
             if (initialValues.job_name) setJobName(initialValues.job_name);
@@ -1389,7 +1408,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
             if (typeof initialValues.boltzgen_alpha === 'number') setBoltzgenAlpha(initialValues.boltzgen_alpha);
             if (typeof initialValues.boltzgen_max_rmsd === 'number') setBoltzgenMaxRmsd(initialValues.boltzgen_max_rmsd);
-            if (typeof initialValues.boltzgen_min_plddt === 'number') setBoltzgenMinPlddt(initialValues.boltzgen_min_plddt);
+            if (typeof initialValues.boltzgen_min_plddt === 'number' || initialValues.boltzgen_min_plddt === null) setBoltzgenMinPlddt(initialValues.boltzgen_min_plddt ?? '');
             if (typeof initialValues.boltzgen_min_conf_score === 'number') setBoltzgenMinConfScore(initialValues.boltzgen_min_conf_score);
             if (typeof initialValues.boltzgen_filter_biased === 'boolean') setBoltzgenFilterBiased(initialValues.boltzgen_filter_biased);
             if (typeof initialValues.boltzgen_metrics_override === 'string') setBoltzgenMetricsOverride(initialValues.boltzgen_metrics_override);
@@ -1513,7 +1532,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
                 setSelectedTargetModel((currentModel) => {
-                    const preferredModel = queuedModel ?? currentModel;
+                    if (queuedModel !== null) return queuedModel; // Missing saved model must not select a different conformation.
+                    const preferredModel = currentModel;
                     const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
                     return resolvedModel?.modelNumber ?? 1;
                 });
@@ -1559,15 +1579,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         setSelectedChain((current) => {
             if (activeModel.chains.length === 0) return null;
-            if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) return queuedRestore.chain;
+            if (queuedRestore?.chain) return queuedRestore.chain;
             if (!current || !chainIds.includes(current)) {
                 return activeModel.chains.reduce((a, b) => (a.length > b.length ? a : b)).id;
             }
             return current;
         });
-        setSelectedResidues((current) => new Set(
-            (queuedRestore?.residues || Array.from(current)).filter((key) => availableResidues.has(key)),
-        ));
+        setSelectedResidues((current) => new Set(queuedRestore?.residues
+            ?? Array.from(current).filter((key) => availableResidues.has(key))));
         restoringSelectionRef.current = null;
     }, [parsedTargetStructure, replacePdbBlobUrl, selectedTargetModel]);
 
@@ -1680,6 +1699,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         try {
             const response = await uploadFile('inputs/antibody', file);
             const path = response.data?.path || `inputs/antibody/${file.name}`;
+            uploadedFileRef.current = file;
             setUploadedPath(path);
             console.log('[ANTIBODY_DENOVO] File uploaded:', path, response);
             return path;
@@ -1692,106 +1712,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     };
 
-    const handleSubmit = async () => {
-        if (effectiveSeqDesigner === 'fampnn' && fampnnError) return;
-        // When skipping early steps, target PDB and epitope are not required
-        const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
+    const buildPipelineWorkflowRequest = (pdbPath: string | undefined, epitopeString: string,
+        frameworkPath: string | null | undefined, effectiveFrameworkType: string, effectiveAntibodyType: string) => {
         const runSequenceDesign = effectiveSeqDesigner !== 'none';
-        const requiresTargetAndEpitope =
-            !isRefinementMode &&
-            deNovoGenerator !== 'ppiflow' &&
-            !skippingEarlySteps;
-        const hasResolvedTarget = Boolean(targetPdb || targetSource?.path || uploadedPath);
-
-        if (requiresTargetAndEpitope && !hasResolvedTarget) {
-            alert('Please upload a target PDB file');
-            return;
-        }
-        if (requiresTargetAndEpitope && selectedResidues.size === 0) {
-            alert('Please select at least one epitope residue');
-            return;
-        }
-
-        // When skipping, use a placeholder or the input dir path
-        if (isRefinementMode) {
-            // In refinement mode, the backend determines the input PDB paths via selection_dir
-            // We just let it proceed
-        } else {
-            // Validate skip inputs have paths
-            if (skipRFantibody && !rfantibodyInputPdbs.trim()) {
-                alert('Please provide a path to backbone PDBs for Skip RFantibody');
-                return;
-            }
-            if (skipFampnn && !fampnnCollectedPdbs.trim()) {
-                alert('Please provide a path to sequenced PDBs for Skip FAMPNN');
-                return;
-            }
-        }
-        const fampnnCheckpointSpecified = Boolean(
-            qualitySettings.fampnn_checkpoint_path.trim() || resolvedFampnnCheckpoint.trim()
-        );
-        const needsFampnnCheckpoint =
-            effectiveSeqDesigner === 'fampnn' ||
-            (runPpiFlowMaturation && qualitySettings.maturation_redesign_enabled !== false);
-        if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
-            alert('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
-            return;
-        }
-
-        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn) {
-            alert('Enable at least one refinement stage before launching.');
-            return;
-        }
-
-        // Validate that a SAbDab framework was actually selected
-        if (deNovoGenerator === 'rfantibody' && frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
-            alert('Please select a specific framework from the SAbDab database before submitting, or select a different framework preset.');
-            return;
-        }
-
-        try {
-            // Format selected residues for backend
-            const epitopeString = Array.from(selectedResidues).sort().join(',');
-            const allowSkipFallback = skippingEarlySteps || isRefinementMode;
-            const pdbPath = hasResolvedTarget || allowSkipFallback
-                ? await resolveTargetPdbPathForLaunch(allowSkipFallback)
-                : undefined;
-
-            if (!isRefinementMode && deNovoGenerator === 'boltzgen') {
-                if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
-                    alert('Select a SAbDab framework or switch the scaffold source before launching BoltzGen.');
-                    return;
-                }
-                if (!pdbPath) {
-                    throw new Error('Failed to determine target PDB path for BoltzGen launch.');
-                }
-
-                const boltzgenParams = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
-
-                await submitMutation.mutateAsync({
-                    name: jobName,
-                    model_id: 'boltzgen',
-                    mode: 'nanobody_binder',
-                    params: boltzgenParams,
-                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
-                });
-                return;
-            }
-
-            if (!isRefinementMode && deNovoGenerator === 'ppiflow') {
-                const seedLaunch = await resolvePpiFlowSeedPathForLaunch();
-                const ppiflowParams = buildStandalonePpiFlowGeneratorParams(pdbPath, epitopeString, seedLaunch);
-
-                await submitMutation.mutateAsync({
-                    name: jobName,
-                    model_id: 'ppiflow',
-                    mode: 'generator_backbone_refine',
-                    params: ppiflowParams,
-                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
-                });
-                return;
-            }
-
             // Determine pipeline steps
             const pipelineSteps = [isRefinementMode ? 'selected_inputs' : 'rfantibody'];
             if (runSequenceDesign) pipelineSteps.push(effectiveSeqDesigner);
@@ -1801,42 +1724,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (effectiveUseThermoMPNN) pipelineSteps.push('thermompnn');
             if (effectiveRunStructureValidation) pipelineSteps.push(structureValidator);
             if (effectiveRunFrustrampnn) pipelineSteps.push('frustrampnn');
-
-            // Step 2: Upload custom framework if provided
-            let frameworkPath = frameworkType === 'sabdab'
-                ? (sabdabFramework?.filePath || customFrameworkPath)
-                : customFrameworkPath;
-            let effectiveFrameworkType = frameworkType;
-            let effectiveAntibodyType = frameworkType === 'nanobody' ? 'vhh' : 'scfv';
-
-            if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) {
-                const response = await uploadFile('inputs/antibody', customFrameworkFile);
-                frameworkPath = response.data?.path || `inputs/antibody/${customFrameworkFile.name}`;
-                setCustomFrameworkPath(frameworkPath);
-                console.log('[ANTIBODY_DENOVO] Custom framework uploaded:', frameworkPath, response);
-                effectiveAntibodyType = 'custom';
-            } else if (frameworkType === 'sabdab' && sabdabFramework?.pdbCode) {
-                // Use the converted H/L/T SAbDab artifact from our own backend, not a raw RCSB fetch.
-                try {
-                    effectiveFrameworkType = 'custom';
-                    effectiveAntibodyType = !sabdabFramework.lChain ? 'vhh' : 'fab';
-                    frameworkPath = frameworkPath || sabdabFramework.filePath || null;
-
-                    if (!frameworkPath) {
-                        const hydrated = await loadSabdabFrameworkFile(
-                            sabdabFramework.pdbCode,
-                            `${sabdabFramework.pdbCode}_framework.pdb`
-                        );
-                        frameworkPath = hydrated.filePath || await handleFileUpload(hydrated.file);
-                        setCustomFrameworkPath(frameworkPath);
-                        setSabdabFramework((prev) => prev ? { ...prev, filePath: frameworkPath || prev.filePath } : prev);
-                    }
-                } catch (err) {
-                    console.error('[ANTIBODY_DENOVO] Failed to process SAbDab framework:', err);
-                    alert(`Failed to prepare SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
-                    return;
-                }
-            }
 
             // Step 3: Submit job with uploaded file path
             const selectedLoops = Array.from(selectedCDRLoops).sort();
@@ -2102,6 +1989,155 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     openmm_platform: physicsSettings.platform,
                 }
             };
+        return jobData;
+    };
+
+    const buildBoltzgenWorkflowRequest = (pdbPath: string, epitopeString: string) => ({
+                    name: jobName,
+                    model_id: 'antibody_denovo',
+                    mode: 'nanobody_binder',
+                    params: buildStandaloneBoltzgenParams(pdbPath, epitopeString),
+                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                });
+
+    const buildPpiFlowWorkflowRequest = (pdbPath: string | undefined, epitopeString: string, seedLaunch: { seedComplexPath?: string; seedInputDir?: string }) => ({
+                    name: jobName,
+                    model_id: 'antibody_denovo',
+                    mode: 'generator_backbone_refine',
+                    params: buildStandalonePpiFlowGeneratorParams(pdbPath, epitopeString, seedLaunch),
+                    pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                });
+
+    const validateWorkflowDraft = () => {
+        if (parsedTargetStructure && !isRefinementMode) {
+            const model = getModelByNumber(parsedTargetStructure, selectedTargetModel);
+            if (!model) throw new Error('The saved target conformation is absent; explicitly choose an available model.');
+            if (selectedChain && !model.chains.some(chain => chain.id === selectedChain)) throw new Error('The saved target chain is absent; explicitly choose an available chain.');
+            const available = buildAvailableResidueKeySet(model.chains);
+            if ([...selectedResidues].some(key => !available.has(key))) throw new Error('Saved hotspots are absent from the selected target; repair the selection before launch.');
+        }
+        if (effectiveSeqDesigner === 'fampnn' && fampnnError) throw new Error(fampnnError);
+        // When skipping early steps, target PDB and epitope are not required
+        const skippingEarlySteps = deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn);
+        const runSequenceDesign = effectiveSeqDesigner !== 'none';
+        const requiresTargetAndEpitope =
+            !isRefinementMode &&
+            deNovoGenerator !== 'ppiflow' &&
+            !skippingEarlySteps;
+        const hasResolvedTarget = Boolean(targetPdb || targetSource?.path || uploadedPath);
+
+        if (requiresTargetAndEpitope && !hasResolvedTarget) {
+            throw new Error('Please upload a target PDB file');
+        }
+        if (requiresTargetAndEpitope && selectedResidues.size === 0) {
+            throw new Error('Please select at least one epitope residue');
+        }
+
+        // When skipping, use a placeholder or the input dir path
+        if (isRefinementMode) {
+            // In refinement mode, the backend determines the input PDB paths via selection_dir
+            // We just let it proceed
+        } else {
+            // Validate skip inputs have paths
+            if (skipRFantibody && !rfantibodyInputPdbs.trim()) {
+                throw new Error('Please provide a path to backbone PDBs for Skip RFantibody');
+            }
+            if (skipFampnn && !fampnnCollectedPdbs.trim()) {
+                throw new Error('Please provide a path to sequenced PDBs for Skip FAMPNN');
+            }
+        }
+        const fampnnCheckpointSpecified = Boolean(
+            qualitySettings.fampnn_checkpoint_path.trim() || resolvedFampnnCheckpoint.trim()
+        );
+        const needsFampnnCheckpoint =
+            effectiveSeqDesigner === 'fampnn' ||
+            (runPpiFlowMaturation && qualitySettings.maturation_redesign_enabled !== false);
+        if (needsFampnnCheckpoint && !fampnnCheckpointSpecified) {
+            throw new Error('Please choose FAMPNN weights or provide a checkpoint path before submitting.');
+        }
+
+        if (isRefinementMode && !useManualMutagenesis && !runSequenceDesign && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn) {
+            throw new Error('Enable at least one refinement stage before launching.');
+        }
+
+        // Validate that a SAbDab framework was actually selected
+        if (deNovoGenerator === 'rfantibody' && frameworkType === 'sabdab' && !sabdabFramework?.pdbCode) {
+            throw new Error('Please select a specific framework from the SAbDab database before submitting, or select a different framework preset.');
+        }
+
+        return { skippingEarlySteps, hasResolvedTarget };
+    };
+
+    const handleSubmit = async () => {
+        if (effectiveSeqDesigner === 'fampnn' && fampnnError) return;
+        let draft;
+        try { draft = validateWorkflowDraft(); } catch (error) { alert(error instanceof Error ? error.message : 'Invalid antibody draft'); return; }
+        const { skippingEarlySteps, hasResolvedTarget } = draft;
+
+        try {
+            // Format selected residues for backend
+            const epitopeString = Array.from(selectedResidues).sort().join(',');
+            const allowSkipFallback = skippingEarlySteps || isRefinementMode;
+            const pdbPath = hasResolvedTarget || allowSkipFallback
+                ? await resolveTargetPdbPathForLaunch(allowSkipFallback)
+                : undefined;
+
+            if (!isRefinementMode && deNovoGenerator === 'boltzgen') {
+                if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
+                    alert('Select a SAbDab framework or switch the scaffold source before launching BoltzGen.');
+                    return;
+                }
+                if (!pdbPath) {
+                    throw new Error('Failed to determine target PDB path for BoltzGen launch.');
+                }
+
+                await submitMutation.mutateAsync(buildBoltzgenWorkflowRequest(pdbPath, epitopeString));
+                return;
+            }
+
+            if (!isRefinementMode && deNovoGenerator === 'ppiflow') {
+                const seedLaunch = await resolvePpiFlowSeedPathForLaunch();
+                await submitMutation.mutateAsync(buildPpiFlowWorkflowRequest(pdbPath, epitopeString, seedLaunch));
+                return;
+            }
+
+            // Step 2: Upload custom framework if provided
+            let frameworkPath = frameworkType === 'sabdab'
+                ? (sabdabFramework?.filePath || customFrameworkPath)
+                : customFrameworkPath;
+            let effectiveFrameworkType = frameworkType;
+            let effectiveAntibodyType = frameworkType === 'nanobody' ? 'vhh' : 'scfv';
+
+            if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) {
+                const response = await uploadFile('inputs/antibody', customFrameworkFile);
+                frameworkPath = response.data?.path || `inputs/antibody/${customFrameworkFile.name}`;
+                setCustomFrameworkPath(frameworkPath);
+                console.log('[ANTIBODY_DENOVO] Custom framework uploaded:', frameworkPath, response);
+                effectiveAntibodyType = 'custom';
+            } else if (frameworkType === 'sabdab' && sabdabFramework?.pdbCode) {
+                // Use the converted H/L/T SAbDab artifact from our own backend, not a raw RCSB fetch.
+                try {
+                    effectiveFrameworkType = 'custom';
+                    effectiveAntibodyType = !sabdabFramework.lChain ? 'vhh' : 'fab';
+                    frameworkPath = frameworkPath || sabdabFramework.filePath || null;
+
+                    if (!frameworkPath) {
+                        const hydrated = await loadSabdabFrameworkFile(
+                            sabdabFramework.pdbCode,
+                            `${sabdabFramework.pdbCode}_framework.pdb`
+                        );
+                        frameworkPath = hydrated.filePath || await handleFileUpload(hydrated.file);
+                        setCustomFrameworkPath(frameworkPath);
+                        setSabdabFramework((prev) => prev ? { ...prev, filePath: frameworkPath || prev.filePath } : prev);
+                    }
+                } catch (err) {
+                    console.error('[ANTIBODY_DENOVO] Failed to process SAbDab framework:', err);
+                    alert(`Failed to prepare SAbDab framework ${sabdabFramework.pdbCode}. Please try a different one or use the Nanobody preset.`);
+                    return;
+                }
+            }
+
+            const jobData = buildPipelineWorkflowRequest(pdbPath, epitopeString, frameworkPath, effectiveFrameworkType, effectiveAntibodyType);
 
             if (isRefinementMode && refinementParentJobId && (refinementDesignIds?.length || refinementReviewFilterSetId)) {
                 // Determine action based on UI settings
@@ -2219,6 +2255,35 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             console.error('[ANTIBODY_DENOVO] Submission failed', error);
         }
     };
+
+    const workflowRequest = (() => {
+        // Iteration APIs own source lineage/materialization, not a browser JobCreate.
+        if (isRefinementMode) return null;
+        try {
+            const { skippingEarlySteps, hasResolvedTarget } = validateWorkflowDraft();
+            if (selectedChain && (parsedChains.length > 1 || (parsedTargetStructure?.models.length ?? 0) > 1)) return null; // Launch must extract a new biological file.
+            const pdbPath = targetSource?.path || uploadedPath || (skippingEarlySteps
+                ? (skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs) : undefined);
+            if (hasResolvedTarget && !pdbPath) return null;
+            const epitopeString = Array.from(selectedResidues).sort().join(',');
+            if (deNovoGenerator === 'boltzgen') {
+                if (!pdbPath || (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath)) return null;
+                return buildBoltzgenWorkflowRequest(pdbPath, epitopeString);
+            }
+            if (deNovoGenerator === 'ppiflow') {
+                const seedInputDir = ppiflowSeedInputDir.trim();
+                const seedComplexPath = ppiflowSeedComplexPath?.trim();
+                if (!seedInputDir && !seedComplexPath) return null;
+                return buildPpiFlowWorkflowRequest(pdbPath, epitopeString, seedInputDir ? { seedInputDir } : { seedComplexPath });
+            }
+            const frameworkPath = frameworkType === 'sabdab' ? sabdabFramework?.filePath || customFrameworkPath : customFrameworkPath;
+            if (frameworkType === 'custom' && customFrameworkFile && !frameworkPath) return null;
+            if (frameworkType === 'sabdab' && !frameworkPath) return null;
+            return buildPipelineWorkflowRequest(pdbPath, epitopeString, frameworkPath,
+                frameworkType === 'sabdab' ? 'custom' : frameworkType,
+                frameworkType === 'sabdab' ? (!sabdabFramework?.lChain ? 'vhh' : 'fab') : frameworkType === 'nanobody' ? 'vhh' : 'scfv');
+        } catch { return null; }
+    })();
 
     const hasFrameworkChainsForCDR = parsedFrameworkChains.length > 0;
     const cdrEditorChains = hasFrameworkChainsForCDR ? parsedFrameworkChains : [];
@@ -2360,6 +2425,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <ExecutionTargetPicker workflowRequest={workflowRequest} />
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
@@ -3124,6 +3190,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <TargetAntigenSelector
                             onSelect={async (target) => {
                                 const loadToken = targetLoadControllerRef.current.begin();
+                                uploadedFileRef.current = null;
+                                setUploadedPath(null);
+                                setTargetPdb(null);
+                                setTargetSource(null);
                                 if (target) {
                                     if (target.type === 'upload' && target.file) {
                                         if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
@@ -3139,6 +3209,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         });
                                         try {
                                             const res = await fetch(target.url);
+                                            if (!res.ok) throw new Error(`Failed to load target (${res.status})`);
                                             const blob = await res.blob();
                                             if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
                                             const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
@@ -3156,6 +3227,183 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             }}
                             selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
                         />
+                    )}
+
+                    {/* Chain Selector (when PDB is parsed) */}
+                    {(availableTargetModels.length > 1 || parsedChains.length > 1) && (
+                        <div className="grid gap-4 md:grid-cols-2">
+                            {availableTargetModels.length > 1 && (
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Target Conformation</label>
+                                    <div className="flex items-center gap-3">
+                                        <select
+                                            value={selectedTargetModel ?? availableTargetModels[0]?.modelNumber ?? 1}
+                                            onChange={(e) => setSelectedTargetModel(Number(e.target.value))}
+                                            className="min-w-[12rem] rounded-lg border px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
+                                            style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)' }}
+                                        >
+                                            {availableTargetModels.map((model) => (
+                                                <option key={model.modelNumber} value={model.modelNumber}>
+                                                    {model.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <span className="text-xs text-[var(--text-secondary)]">
+                                            {activeTargetModel
+                                                ? `${activeTargetModel.chains.length} chain${activeTargetModel.chains.length === 1 ? '' : 's'}`
+                                                : `${availableTargetModels.length} models`}
+                                        </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        Choose the specific target conformation to visualize, select hotspots on, and launch into the workflow.
+                                    </p>
+                                </div>
+                            )}
+                            {parsedChains.length > 1 && (
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Antigen Chain</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {parsedChains.map((chain) => (
+                                            <button
+                                                key={chain.id}
+                                                onClick={() => {
+                                                    setSelectedChain(chain.id);
+                                                    setSelectedResidues(new Set());
+                                                }}
+                                                className="rounded-lg border px-4 py-2 font-medium transition-all"
+                                                style={selectedChain === chain.id ? themedSelectedStyle('var(--link)') : themedInsetStyle}
+                                            >
+                                                Chain {chain.id} ({chain.length} aa)
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select the chain representing the antigen/target</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Interactive Epitope Selector with 3D Viewer */}
+                    {parsedChains.length > 0 && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-[var(--text-secondary)]">
+                                    Epitope Selection
+                                    <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">
+                                        (Select hotspot residues the antibody should target)
+                                    </span>
+                                </label>
+
+                                {/* Explicit Toggle Buttons for Target and Framework Viewers */}
+                                <div className="flex gap-2">
+                                    {pdbBlobUrl && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setViewerMode('target');
+                                                setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
+                                            }}
+                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
+                                            style={show3DViewer && viewerMode === 'target' ? themedSelectedStyle('var(--success)') : themedMutedInsetStyle}
+                                        >
+                                            Target 3D
+                                        </button>
+                                    )}
+                                    {frameworkPdbUrl && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setViewerMode('framework');
+                                                setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
+                                            }}
+                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
+                                            style={show3DViewer && viewerMode === 'framework' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
+                                        >
+                                            Framework 3D
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* 3D Molstar Viewer for visualization - toggled */}
+                            {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                    {/* Label showing current view */}
+                                    <div className="mb-2 text-xs text-[var(--text-secondary)]">
+                                        {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
+                                        {viewerMode === 'framework' && detectedCDRs && (
+                                            <span className="ml-2 text-[var(--success)]">(CDRs highlighted)</span>
+                                        )}
+                                        {viewerMode === 'target' && activeTargetModel && availableTargetModels.length > 1 && (
+                                            <span className="ml-2 text-[var(--accent-primary)]">({activeTargetModel.label})</span>
+                                        )}
+                                    </div>
+                                    <EpitopeMolstarViewer
+                                        structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
+                                        height={400}
+                                        selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
+                                            // When viewing framework, highlight detected CDR residues using raw array mapping
+                                            const cdrResidues = new Set<string>();
+                                            if (detectedCDRs) {
+                                                const { heavyChain, lightChain } = resolveFrameworkChains();
+
+                                                if (heavyChain) {
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h1_seq_range, detectedCDRs.cdr_h1_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h2_seq_range, detectedCDRs.cdr_h2_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h3_seq_range, detectedCDRs.cdr_h3_range).forEach((r) => cdrResidues.add(r));
+                                                }
+                                                if (lightChain) {
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l1_seq_range, detectedCDRs.cdr_l1_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l2_seq_range, detectedCDRs.cdr_l2_range).forEach((r) => cdrResidues.add(r));
+                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l3_seq_range, detectedCDRs.cdr_l3_range).forEach((r) => cdrResidues.add(r));
+                                                }
+                                            }
+                                            return cdrResidues;
+                                        })()}
+                                        onResidueClick={viewerMode === 'target' ? (residueKey) => {
+                                            if (!activeTargetResidues.has(residueKey)) {
+                                                return;
+                                            }
+                                            if (selectedChain && !residueKey.startsWith(selectedChain)) {
+                                                return;
+                                            }
+                                            setSelectedResidues((prev) => {
+                                                const next = new Set(prev);
+                                                if (next.has(residueKey)) {
+                                                    next.delete(residueKey);
+                                                } else {
+                                                    next.add(residueKey);
+                                                }
+                                                return next;
+                                            });
+                                        } : undefined}
+                                    />
+                                </div>
+                            )}
+
+                            {/* 2D Sequence Grid */}
+                            <div>
+                                <div className="mb-1 text-xs text-[var(--text-secondary)]">
+                                    2D Sequence View (shift+click for range)
+                                    {activeTargetModel && availableTargetModels.length > 1 && (
+                                        <span className="ml-2 text-[var(--accent-primary)]">Bound to {activeTargetModel.label}</span>
+                                    )}
+                                </div>
+                                <EpitopeSelector
+                                    chains={parsedChains}
+                                    selectedResidues={selectedResidues}
+                                    onSelectionChange={setSelectedResidues}
+                                    activeChain={selectedChain || undefined}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Fallback text input if no PDB */}
+                    {parsedChains.length === 0 && targetPdb && !isParsing && (
+                        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+                            Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
+                        </div>
                     )}
 
                     {!isRefinementMode && deNovoGenerator === 'boltzgen' ? (
@@ -3446,7 +3694,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         />
                                     </label>
                                     <label className="text-xs text-slate-500">
-                                        Min native pLDDT (0–100; not design pTM)
+                                        Native pLDDT unavailable — leave empty (not design pTM)
                                         <input
                                             type="number"
                                             min={0}
@@ -4064,183 +4312,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 {frameworkType === 'sabdab' && 'Browse VHH structures from SAbDab database (CC-BY 4.0)'}
                                 {frameworkType === 'custom' && 'Use your own HLT-formatted antibody framework'}
                             </p>
-                        </div>
-                    )}
-
-                    {/* Chain Selector (when PDB is parsed) */}
-                    {(availableTargetModels.length > 1 || parsedChains.length > 1) && (
-                        <div className="grid gap-4 md:grid-cols-2">
-                            {availableTargetModels.length > 1 && (
-                                <div>
-                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Target Conformation</label>
-                                    <div className="flex items-center gap-3">
-                                        <select
-                                            value={selectedTargetModel ?? availableTargetModels[0]?.modelNumber ?? 1}
-                                            onChange={(e) => setSelectedTargetModel(Number(e.target.value))}
-                                            className="min-w-[12rem] rounded-lg border px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
-                                            style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)' }}
-                                        >
-                                            {availableTargetModels.map((model) => (
-                                                <option key={model.modelNumber} value={model.modelNumber}>
-                                                    {model.label}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <span className="text-xs text-[var(--text-secondary)]">
-                                            {activeTargetModel
-                                                ? `${activeTargetModel.chains.length} chain${activeTargetModel.chains.length === 1 ? '' : 's'}`
-                                                : `${availableTargetModels.length} models`}
-                                        </span>
-                                    </div>
-                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                                        Choose the specific target conformation to visualize, select hotspots on, and launch into the workflow.
-                                    </p>
-                                </div>
-                            )}
-                            {parsedChains.length > 1 && (
-                                <div>
-                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Antigen Chain</label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {parsedChains.map((chain) => (
-                                            <button
-                                                key={chain.id}
-                                                onClick={() => {
-                                                    setSelectedChain(chain.id);
-                                                    setSelectedResidues(new Set());
-                                                }}
-                                                className="rounded-lg border px-4 py-2 font-medium transition-all"
-                                                style={selectedChain === chain.id ? themedSelectedStyle('var(--link)') : themedInsetStyle}
-                                            >
-                                                Chain {chain.id} ({chain.length} aa)
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select the chain representing the antigen/target</p>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Interactive Epitope Selector with 3D Viewer */}
-                    {parsedChains.length > 0 && (
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                                <label className="block text-sm font-medium text-[var(--text-secondary)]">
-                                    Epitope Selection
-                                    <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">
-                                        (Select hotspot residues the antibody should target)
-                                    </span>
-                                </label>
-
-                                {/* Explicit Toggle Buttons for Target and Framework Viewers */}
-                                <div className="flex gap-2">
-                                    {pdbBlobUrl && (
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setViewerMode('target');
-                                                setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
-                                            }}
-                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
-                                            style={show3DViewer && viewerMode === 'target' ? themedSelectedStyle('var(--success)') : themedMutedInsetStyle}
-                                        >
-                                            Target 3D
-                                        </button>
-                                    )}
-                                    {frameworkPdbUrl && (
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setViewerMode('framework');
-                                                setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
-                                            }}
-                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
-                                            style={show3DViewer && viewerMode === 'framework' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
-                                        >
-                                            Framework 3D
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* 3D Molstar Viewer for visualization - toggled */}
-                            {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
-                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                                    {/* Label showing current view */}
-                                    <div className="mb-2 text-xs text-[var(--text-secondary)]">
-                                        {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
-                                        {viewerMode === 'framework' && detectedCDRs && (
-                                            <span className="ml-2 text-[var(--success)]">(CDRs highlighted)</span>
-                                        )}
-                                        {viewerMode === 'target' && activeTargetModel && availableTargetModels.length > 1 && (
-                                            <span className="ml-2 text-[var(--accent-primary)]">({activeTargetModel.label})</span>
-                                        )}
-                                    </div>
-                                    <EpitopeMolstarViewer
-                                        structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
-                                        height={400}
-                                        selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
-                                            // When viewing framework, highlight detected CDR residues using raw array mapping
-                                            const cdrResidues = new Set<string>();
-                                            if (detectedCDRs) {
-                                                const { heavyChain, lightChain } = resolveFrameworkChains();
-
-                                                if (heavyChain) {
-                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h1_seq_range, detectedCDRs.cdr_h1_range).forEach((r) => cdrResidues.add(r));
-                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h2_seq_range, detectedCDRs.cdr_h2_range).forEach((r) => cdrResidues.add(r));
-                                                    collectResiduesFromDetectedRange(heavyChain, detectedCDRs.cdr_h3_seq_range, detectedCDRs.cdr_h3_range).forEach((r) => cdrResidues.add(r));
-                                                }
-                                                if (lightChain) {
-                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l1_seq_range, detectedCDRs.cdr_l1_range).forEach((r) => cdrResidues.add(r));
-                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l2_seq_range, detectedCDRs.cdr_l2_range).forEach((r) => cdrResidues.add(r));
-                                                    collectResiduesFromDetectedRange(lightChain, detectedCDRs.cdr_l3_seq_range, detectedCDRs.cdr_l3_range).forEach((r) => cdrResidues.add(r));
-                                                }
-                                            }
-                                            return cdrResidues;
-                                        })()}
-                                        onResidueClick={viewerMode === 'target' ? (residueKey) => {
-                                            if (!activeTargetResidues.has(residueKey)) {
-                                                return;
-                                            }
-                                            if (selectedChain && !residueKey.startsWith(selectedChain)) {
-                                                return;
-                                            }
-                                            setSelectedResidues((prev) => {
-                                                const next = new Set(prev);
-                                                if (next.has(residueKey)) {
-                                                    next.delete(residueKey);
-                                                } else {
-                                                    next.add(residueKey);
-                                                }
-                                                return next;
-                                            });
-                                        } : undefined}
-                                    />
-                                </div>
-                            )}
-
-                            {/* 2D Sequence Grid */}
-                            <div>
-                                <div className="mb-1 text-xs text-[var(--text-secondary)]">
-                                    2D Sequence View (shift+click for range)
-                                    {activeTargetModel && availableTargetModels.length > 1 && (
-                                        <span className="ml-2 text-[var(--accent-primary)]">Bound to {activeTargetModel.label}</span>
-                                    )}
-                                </div>
-                                <EpitopeSelector
-                                    chains={parsedChains}
-                                    selectedResidues={selectedResidues}
-                                    onSelectionChange={setSelectedResidues}
-                                    activeChain={selectedChain || undefined}
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Fallback text input if no PDB */}
-                    {parsedChains.length === 0 && targetPdb && !isParsing && (
-                        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
-                            Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
                         </div>
                     )}
 
@@ -5402,14 +5473,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 setDeNovoGenerator('rfantibody');
                                 loaded.push('denovo_generator');
                             }
-                            setDeNovoStageSelection({
-                                sequence_design: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_sequence_design !== undefined
-                                    ? p.initial_orchestration_sequence_design === true
-                                    : p.seq_design_fampnn === true || p.seq_designer === 'fampnn',
-                                ppiflow: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_ppiflow === true,
-                                validation: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_validation === true,
-                                qc: (restoringBoltzgenGenerator || restoringPpiFlowGenerator) ? false : p.initial_orchestration_qc === true,
-                            });
+                            setDeNovoStageSelection((restoringBoltzgenGenerator || restoringPpiFlowGenerator)
+                                ? buildGeneratorOnlyStageSelection() : hydrateDeNovoStageSelection(p));
                             if (
                                 p.initial_orchestration_sequence_design !== undefined ||
                                 p.initial_orchestration_ppiflow !== undefined ||
@@ -5492,7 +5557,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.boltzgen_budget === 'number') { setBoltzgenBudget(p.boltzgen_budget); loaded.push('boltzgen_budget'); }
                         if (typeof p.boltzgen_alpha === 'number') { setBoltzgenAlpha(p.boltzgen_alpha); loaded.push('boltzgen_alpha'); }
                         if (typeof p.boltzgen_max_rmsd === 'number') { setBoltzgenMaxRmsd(p.boltzgen_max_rmsd); loaded.push('boltzgen_max_rmsd'); }
-                        if (typeof p.boltzgen_min_plddt === 'number') { setBoltzgenMinPlddt(p.boltzgen_min_plddt); loaded.push('boltzgen_min_plddt'); }
+                        if (typeof p.boltzgen_min_plddt === 'number' || p.boltzgen_min_plddt === null) { setBoltzgenMinPlddt(p.boltzgen_min_plddt ?? ''); loaded.push('boltzgen_min_plddt'); }
                         if (typeof p.boltzgen_min_conf_score === 'number') { setBoltzgenMinConfScore(p.boltzgen_min_conf_score); loaded.push('boltzgen_min_conf_score'); }
                         if (typeof p.boltzgen_filter_biased === 'boolean') { setBoltzgenFilterBiased(p.boltzgen_filter_biased); loaded.push('boltzgen_filter_biased'); }
                         if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
@@ -5592,6 +5657,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             p.qualitySettings ||
                             (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
                         );
+                        setPhysicsSettings(hydratePhysicsSettings(p));
                         if (hasQualityOverrides) {
                             setQualitySettings(mergeQualitySettingsFromParams(p));
                             loaded.push('quality_settings');
@@ -5624,6 +5690,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     }
                 }}
                 currentParams={{
+                    openmm_enabled: physicsSettings.enabled,
+                    openmm_compute_tier: physicsSettings.computeTier,
+                    openmm_cdr_only: physicsSettings.cdrOnly,
+                    openmm_restraint_mode: physicsSettings.restraintMode,
+                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+                    openmm_force_field: physicsSettings.forceField,
+                    openmm_top_n_percentage: physicsSettings.topNPercentage,
+                    openmm_max_iterations: physicsSettings.maxIterations,
+                    openmm_tolerance: physicsSettings.tolerance,
+                    openmm_restraint_strength: physicsSettings.restraintStrength,
+                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
+                    openmm_platform: physicsSettings.platform,
+
                     fampnn_analysis_overrides: fampnnOverrides,
                     // Core settings
                     job_name: jobName,

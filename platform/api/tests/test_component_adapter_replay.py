@@ -6,8 +6,64 @@ import shutil
 import pytest
 
 from component_runtime import canonical_bytes
+from native_components import native_resource_policy
 from test_frustrampnn_parent_workflow_fanout import _load_client
 from test_remote_frustrampnn_self_contained import prepared
+
+
+def test_resource_config_preserves_native_setup_and_static_authority(tmp_path):
+    from scripts.lib.component_adapter import native_resource_config
+    root = Path(__file__).resolve().parents[3]
+    components = [{'authority': f'modules/{source}.nf:{name}',
+                   'selection_json': {}, 'resources_json': __import__('json').loads(native_resource_policy({}))}
+                  for source, name in [('rfd3', 'RunRFD3'), ('rf3', 'RunRF3'),
+                                       ('rfdiffusion', 'RunRFDiffusion'),
+                                       ('conformational_mapping_protenix', 'CanonicalProtenixEnsemble')]]
+    plan = {'metadata': {'static_components': components,
+                        'dynamic_templates': [{'selection_json': {'native_process': 'WAIT'}}]}}
+    config = native_resource_config(plan, {'required': {'cpus': 8, 'memory_bytes': 4096}},
+                                    str(tmp_path / 'compute.lock'), root)
+    assert "executor.cpus = 8" in config and "executor.memory = '4096 B'" in config
+    assert 'mkdir -p rfd3_results rfd3_trajectories' in config
+    assert 'mkdir -p rf3_results' in config and 'mkdir -p outputs schedules .dgl' in config
+    assert '--executing-image "${runtime_image}" >/dev/null || exit 1' in config
+    assert config.count('flock -x 198') == 4
+    assert 'WAIT' not in config
+
+
+def test_resource_slot_serializes_writers_and_keeps_targets_independent(tmp_path, monkeypatch):
+    import ast
+    import re
+    import subprocess
+    from scripts.lib.component_adapter import native_resource_config
+    from native_components import PROCESS_CONTRACTS
+    monkeypatch.setitem(PROCESS_CONTRACTS, 'science.nf:SCIENCE', ((), (), (), (), ()))
+    plan = {'metadata': {'static_components': [{'authority': 'science.nf:SCIENCE',
+        'selection_json': {'native_process': 'SCIENCE'},
+        'resources_json': __import__('json').loads(native_resource_policy({}))}]}}
+    def setup(target):
+        config = native_resource_config(plan, {'required': {'cpus': 1, 'memory_bytes': 1024}},
+                                        str(tmp_path / target), tmp_path)
+        return ast.literal_eval(re.search(r'return (.+?) \+ \(nativeSetup', config)[1])
+    # A harmless shell holds the generated descriptor while awaiting stdin.
+    first = subprocess.Popen(['bash', '-c', setup('first') + 'printf ready; read -r release'],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    second = independent = None
+    try:
+        assert first.stdout.read(5) == b'ready'
+        second = subprocess.Popen(['bash', '-c', setup('first') + 'printf second'], stdout=subprocess.PIPE)
+        independent = subprocess.run(['bash', '-c', setup('other') + 'printf independent'],
+                                     capture_output=True, timeout=5, check=True)
+        assert independent.stdout == b'independent'
+        assert second.poll() is None
+        first.communicate(b'release\n', timeout=5)
+        assert second.communicate(timeout=5)[0] == b'second'
+        assert first.returncode == second.returncode == 0
+    finally:
+        for process in (first, second):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 @pytest.mark.parametrize("interrupt", [False, True])
@@ -112,3 +168,78 @@ def test_local_request_replay_fences_semantics_before_post(tmp_path, monkeypatch
         with pytest.raises(ValueError, match="immutable grouping plan conflicts"):
             client.execute_parent_fanout(**args)
         assert len(calls) == 1
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_shared_pump_real_processes_replay_and_native_collection(tmp_path, monkeypatch, checkpoint):
+    """Harmless Python recorder processes; no model/image/provider execution."""
+    import json
+    import sys
+    import textwrap
+    from component_runtime import NativeInvocation
+    from scripts.lib import component_adapter as adapter
+    import services.nextflow as compiler
+
+    root_script = textwrap.dedent('''
+        import hashlib, json, time
+        from pathlib import Path
+        from scripts.lib.component_adapter import runtime_from_environment
+        from component_runtime import ComponentRequest, ResultReference
+        runtime = runtime_from_environment()
+        ids = [runtime.submit(ComponentRequest.capture(parent_job_id='root', stage='record', child_key=str(i),
+            payload=dict(model_id='recorder', mode='record', params=dict(seed=i)))) for i in range(2)]
+        for identity in ids:
+            for attempt in range(100):
+                row = runtime.child_status(identity)
+                if row['status'] == 'execution_finished':
+                    break
+                if row['status'] == 'failed':
+                    raise RuntimeError('recorder process failed')
+                time.sleep(.05)
+            else:
+                raise RuntimeError('recorder timed out')
+            # The native collector, not process exit, validates fixture content.
+            value = json.loads((Path(row['output_dir']) / 'record.json').read_text())
+            assert value == row['params']
+            artifact = Path(row['output_dir']) / 'record.json'
+            raw = artifact.read_bytes()
+            ref = ResultReference(identity, artifact.relative_to(runtime.artifact_root).as_posix(),
+                                  hashlib.sha256(raw).hexdigest(), len(raw), 'fixture.record.v1')
+            runtime.complete_validated_child(identity, result={'fixture_json_validated': True}, references=[ref])
+        if CHECKPOINT:
+            artifact = runtime.artifact_root / 'review.json'
+            artifact.write_bytes(b'{"review":"fixture"}')
+            ref = ResultReference('root', artifact.name, hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                                  artifact.stat().st_size, 'review.fixture.v1')
+            runtime.checkpoint('explicit-review', component_ids=['root'], artifacts=[ref])
+    ''').replace('CHECKPOINT', repr(checkpoint))
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps(dict(ledger_path=str(tmp_path / 'ledger.sqlite'), artifact_root=str(tmp_path),
+        attempt_id='pump-attempt', root_job_id='root', target_id='worker', lease_id='lease',
+        parent=dict(id='root', model_id='recorder', mode='record', params={}, execution_target_id='worker'),
+        root_command=[sys.executable, '-c', root_script], working_directory=str(tmp_path))))
+    compiled = []
+    def compile_recorder(request, context):
+        compiled.append(request.child_key)
+        script = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])"
+        return NativeInvocation.capture(model_id='recorder', mode='record',
+            command=[sys.executable, '-c', script, str(Path(context['child_output_dir']) / 'record.json'),
+                     json.dumps(request.payload['params'])],
+            requested=request.payload, effective=request.payload, native_parameters={'out_dir': context['child_output_dir']}, entrypoint='fixture.nf')
+    monkeypatch.setattr(compiler, 'compile_component_nextflow_invocation', compile_recorder, raising=False)
+    # This process recorder is not Nextflow; real generated resource directives
+    # are exercised separately rather than passed to Python as fake NF flags.
+    monkeypatch.setattr(adapter, 'resource_bound_command', lambda command, *_args: list(command))
+    monkeypatch.setenv('BMS_COMPONENT_CONTEXT', str(context))
+    monkeypatch.setenv('APPTAINERENV_BMS_COMPONENT_CONTEXT', str(context))
+    assert adapter.run_component_workflow(context) == (75 if checkpoint else 0)
+    assert compiled == ['0', '1']
+    state = json.loads(context.with_suffix('.state.json').read_text())
+    assert state['state'] == ('paused' if checkpoint else 'completed')
+    assert state['quiescent'] is True
+    assert adapter.run_component_workflow(context) == (75 if checkpoint else 0)
+    assert compiled == ['0', '1']  # No duplicate root or child execution on replay.
+    runtime = adapter.runtime_from_environment()
+    assert all(row['status'] == 'completed' and len(row['references']) == 1 for row in runtime.children('root'))
+    if checkpoint:
+        assert runtime.pending_checkpoints()[0]['decision'] is None

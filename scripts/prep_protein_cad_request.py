@@ -7,6 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from lib.portable_inputs import bind_native_document, resolve_input_path
+
 
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -44,7 +46,7 @@ def _copy_optional(path_value: str, input_dir: Path) -> str:
     raw = str(path_value or "").strip()
     if not raw:
         return ""
-    source = Path(raw).expanduser().resolve()
+    source = resolve_input_path(Path(raw).expanduser()).resolve()
     if not source.exists():
         raise FileNotFoundError(f"Input file not found: {source}")
     target = input_dir / source.name
@@ -138,6 +140,13 @@ def main() -> None:
     copied_motif_pdb = _copy_optional(args.laproteina_motif_pdb, input_dir)
     copied_disco_json = _copy_optional(args.disco_input_json_path, input_dir)
     copied_ligand_sdf = _copy_optional(args.disco_ligand_sdf, input_dir)
+    if copied_disco_json:
+        source_json = resolve_input_path(args.disco_input_json_path)
+        native_jobs = json.loads(source_json.read_text(encoding="utf-8"))
+        execution_jobs = bind_native_document(native_jobs, "disco-json", owner=source_json)
+        execution_json = input_dir / "disco_execution_input.json"
+        execution_json.write_text(json.dumps(execution_jobs, indent=2), encoding="utf-8")
+        copied_disco_json = str(execution_json)
 
     if args.backend == "laproteina":
         if args.task == "motif_scaffolding" and not (args.laproteina_motif_task_name or (copied_motif_pdb and args.laproteina_contig_string)):

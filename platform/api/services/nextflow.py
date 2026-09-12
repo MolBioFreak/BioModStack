@@ -459,6 +459,11 @@ DEFAULT_WORKFLOW_ENTRYPOINT = "workflows/protein_design.nf"
 COMPLEX_PREDICTION_ENTRYPOINT = "workflows/complex_prediction.nf"
 STRUCTURE_PREDICTION_ENTRYPOINT = "workflows/structure_prediction.nf"
 
+PUBLIC_SEQUENCE_MODES = frozenset({
+    ('fampnn', 'design'), ('fampnn', 'fixed_backbone'),
+    ('fampnn', 'binder_design'), ('proteinmpnn', 'design'),
+})
+
 # Workflow/product-specific Nextflow entrypoints that have been intentionally
 # migrated away from the legacy global main.nf router. Keep this keyed by the
 # resolved BioModStack workflow/profile identity only when the profile is not a
@@ -495,6 +500,7 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 }
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
@@ -513,7 +519,9 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
     ("protenix", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
 
-    ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
+    # Internal generators selected through the supported antibody parent only.
+    ("antibody_denovo", "nanobody_binder"): "workflows/protein_design.nf",
+    ("antibody_denovo", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
 
     ("diffdock", "dock"): "workflows/docking.nf",
     ("diffdock", "ntp_dock"): "workflows/docking.nf",
@@ -524,6 +532,8 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
+    **{('boltzgen_child', mode): 'workflows/boltzgen_child.nf'
+       for mode in ('nanobody_binder', 'peptide_binder', 'protein_binder')},
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
     ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
     ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
@@ -567,9 +577,9 @@ def resolve_nextflow_entrypoint(
     if normalized_model_id.lower() == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
 
-    if normalized_model_id == "boltzgen":
+    if normalized_model_id in {"boltzgen", "ppiflow"}:
         raise ValueError(
-            "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
+            "This is an internal de-novo engine; launch the antibody_denovo workflow"
         )
 
     if (
@@ -595,7 +605,7 @@ def resolve_nextflow_entrypoint(
         return STRUCTURE_PREDICTION_ENTRYPOINT
     if requested_profile == "boltzgen":
         raise ValueError(
-            "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
+            "This is an internal de-novo engine; launch the antibody_denovo workflow"
         )
     normalized_profile = legacy_profile_aliases.get(
         requested_profile,
@@ -842,12 +852,16 @@ def _write_sequence_batch_name_map(
     *,
     output_dir: Path,
     entries: List[Dict[str, Any]],
+    write_input=None,
 ) -> None:
     if not entries:
         return
 
     csv_path = output_dir / "sequence_batch_manifest.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+    from io import StringIO
+    from component_runtime import durable_write
+    write_input = write_input or durable_write
+    with StringIO(newline="") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
@@ -873,6 +887,7 @@ def _write_sequence_batch_name_map(
                     "complex_json": entry.get("complex_json", ""),
                 }
             )
+        write_input(csv_path, handle.getvalue().encode('utf-8'))
 
 
 def _write_sequence_batch_payloads(
@@ -880,7 +895,10 @@ def _write_sequence_batch_payloads(
     output_dir: str,
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
+    write_input=None,
 ) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
+    from component_runtime import durable_write
+    write_input = write_input or durable_write
     batch_prefix = (
         str(
             params.get("sequence_batch_prefix")
@@ -898,7 +916,6 @@ def _write_sequence_batch_payloads(
         return None, None, complex_components
 
     out_root = Path(output_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
 
     sequence_batch_json_path: Optional[Path] = None
     complex_batch_dir: Optional[Path] = None
@@ -957,7 +974,6 @@ def _write_sequence_batch_payloads(
             raise ValueError("Could not determine which complex protein component should be replaced by sequence_batch_entries")
 
         complex_batch_dir = out_root / "complex_batch_inputs"
-        complex_batch_dir.mkdir(parents=True, exist_ok=True)
         batch_manifest: List[Dict[str, Any]] = []
         for index, entry in enumerate(batch_entries, start=1):
             variant_name = sanitize_filename(f"{entry['name']}")
@@ -980,8 +996,7 @@ def _write_sequence_batch_payloads(
                 "components": variant_components,
             }
             variant_path = complex_batch_dir / f"{index:03d}_{variant_name}.json"
-            with variant_path.open("w", encoding="utf-8") as handle:
-                json.dump(variant_payload, handle, indent=2)
+            write_input(variant_path, json.dumps(variant_payload, indent=2).encode('utf-8'))
             batch_manifest.append(
                 {
                     "name": variant_name,
@@ -991,15 +1006,13 @@ def _write_sequence_batch_payloads(
                 }
             )
         sequence_batch_json_path = out_root / "sequence_batch_manifest.json"
-        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
-            json.dump(batch_manifest, handle, indent=2)
-        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_manifest)
+        write_input(sequence_batch_json_path, json.dumps(batch_manifest, indent=2).encode('utf-8'))
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_manifest, write_input=write_input)
         complex_components = normalized_components
     else:
         sequence_batch_json_path = Path(output_dir) / "sequence_batch_manifest.json"
-        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
-            json.dump(batch_entries, handle, indent=2)
-        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries)
+        write_input(sequence_batch_json_path, json.dumps(batch_entries, indent=2).encode('utf-8'))
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries, write_input=write_input)
 
     return sequence_batch_json_path, complex_batch_dir, complex_components
 
@@ -1134,6 +1147,7 @@ def _write_boltz_cp_input_yaml(
     output_dir: str,
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
+    write_input=None,
 ) -> Optional[Path]:
     if params.get("bcp_input_path") or params.get("input_path"):
         return None
@@ -1165,12 +1179,10 @@ def _write_boltz_cp_input_yaml(
         sequences = [{"protein": protein_payload}]
 
     out_root = Path(output_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
     yaml_path = out_root / "boltz_cp_input.yaml"
-    yaml_path.write_text(
-        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False),
-        encoding="utf-8",
-    )
+    from component_runtime import durable_write
+    (write_input or durable_write)(yaml_path,
+        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False).encode('utf-8'))
     return yaml_path
 
 
@@ -1326,9 +1338,10 @@ def _estimate_protenix_token_count(params: Dict[str, Any]) -> int:
 
 def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     """
-    Apply conservative Protenix-only launch guardrails before first run.
+    Report conservative Protenix recommendations without changing science.
 
-    This avoids obvious OOM scenarios without touching non-Protenix workflows.
+    Resource admission owns capacity; token heuristics cannot rewrite samples,
+    cycles, grouping or defaults after the operator has approved a request.
     """
     tuned = dict(params)
     notes: List[str] = []
@@ -1354,19 +1367,15 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
 
     if tier == "medium":
         if n_sample > 3:
-            tuned["protenix_n_sample"] = 3
-            notes.append(f"protenix_n_sample: {n_sample} -> 3")
+            notes.append(f"recommend protenix_n_sample <= 3; requested {n_sample} retained")
         if n_cycle > 8:
-            tuned["protenix_n_cycle"] = 8
-            notes.append(f"protenix_n_cycle: {n_cycle} -> 8")
+            notes.append(f"recommend protenix_n_cycle <= 8; requested {n_cycle} retained")
 
     if tier == "high":
         if n_sample > 1:
-            tuned["protenix_n_sample"] = 1
-            notes.append(f"protenix_n_sample: {n_sample} -> 1")
+            notes.append(f"recommend protenix_n_sample <= 1; requested {n_sample} retained")
         if n_cycle > 4:
-            tuned["protenix_n_cycle"] = 4
-            notes.append(f"protenix_n_cycle: {n_cycle} -> 4")
+            notes.append(f"recommend protenix_n_cycle <= 4; requested {n_cycle} retained")
 
     if use_msa:
         backend = _normalize_protenix_msa_backend(tuned.get("protenix_msa_backend")) or "auto"
@@ -1378,16 +1387,7 @@ def _apply_protenix_preflight(params: Dict[str, Any]) -> Tuple[Dict[str, Any], L
         if backend == "local" and msa_cache_only:
             batch_cap = requested_validation_batch
         if requested_validation_batch > batch_cap:
-            tuned["seqs_per_validation_job"] = batch_cap
-            notes.append(f"seqs_per_validation_job: {requested_validation_batch} -> {batch_cap}")
-        if "protenix_local_msa_timeout_seconds" not in tuned:
-            tuned["protenix_local_msa_timeout_seconds"] = 900
-
-    # Allow override; keep the retry ladder configured but disabled by default.
-    if "protenix_oom_retry_attempts" not in tuned:
-        tuned["protenix_oom_retry_attempts"] = 2
-    if "protenix_auto_oom_retry" not in tuned:
-        tuned["protenix_auto_oom_retry"] = False
+            notes.append(f"recommend seqs_per_validation_job <= {batch_cap}; requested {requested_validation_batch} retained")
 
     if notes:
         notes.insert(0, f"tier={tier}, token_estimate={token_count}, use_msa={use_msa}")
@@ -1488,14 +1488,25 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         return
 
     from database import Job, Design
-    from sqlalchemy import select, func, or_
+    from sqlalchemy import select, func, or_, update
+    from uuid import uuid5, NAMESPACE_URL
 
     try:
+        # Callers may hold a stale ORM object after terminal publication. Bind
+        # this hook to the exact persisted completion, not just its batch id.
+        identity = (job.remote_attempt_id, job.nextflow_run_id, job.execution_target_id, job.retry_count)
+        current = (await session.execute(select(
+            Job.status, Job.remote_attempt_id, Job.nextflow_run_id, Job.execution_target_id,
+            Job.retry_count, Job.awaiting_input,
+        ).where(Job.id == job.id))).one_or_none()
+        if (current is None or current[0] not in {"completed", "failed"}
+                or tuple(current[1:5]) != identity or current[5]):
+            return
         msa_result = await session.execute(
             select(Job).where(
                 Job.batch_id == job.batch_id,
                 Job.job_phase == "msa_generation",
-            )
+            ).execution_options(populate_existing=True)
         )
         msa_job = msa_result.scalar_one_or_none()
         if not msa_job:
@@ -1539,10 +1550,8 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         )
         successful_jobs = successful_jobs_result.scalars().all()
 
-        msa_job.params = {**msa_job.params, "_mutation_seed_refinement_triggered": True}
         if not successful_jobs:
             logger.warning(f"[MUT-SEED] No successful variant jobs found for batch {job.batch_id[:8]}")
-            await session.commit()
             return
 
         design_result = await session.execute(
@@ -1551,12 +1560,16 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         found_designs = design_result.scalars().all()
         if not found_designs:
             logger.warning(f"[MUT-SEED] No ingested designs found for successful batch {job.batch_id[:8]}")
-            await session.commit()
             return
 
         design_by_job: Dict[str, List[Design]] = {}
         for design in found_designs:
             design_by_job.setdefault(str(design.job_id), []).append(design)
+
+        # Remote inference completion precedes native import. Wait for every
+        # successful variant, rather than launching from a partially pulled set.
+        if any(str(variant.id) not in design_by_job for variant in successful_jobs):
+            return
 
         ordered_designs: List[Design] = []
         design_job_map: Dict[str, Job] = {}
@@ -1568,21 +1581,18 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
 
         if not ordered_designs:
             logger.warning(f"[MUT-SEED] Successful batch {job.batch_id[:8]} had no ordered designs to seed refinement")
-            await session.commit()
             return
 
         source_job_id = str(trigger_cfg.get("source_job_id") or "").strip()
         root_job_id = str(trigger_cfg.get("root_job_id") or "").strip()
         if not source_job_id or not root_job_id:
             logger.warning(f"[MUT-SEED] Missing source/root job ids in trigger config for batch {job.batch_id[:8]}")
-            await session.commit()
             return
 
         source_job = await session.get(Job, source_job_id)
         root_job = await session.get(Job, root_job_id)
         if not source_job or not root_job:
             logger.warning(f"[MUT-SEED] Could not resolve source/root jobs for batch {job.batch_id[:8]}")
-            await session.commit()
             return
 
         from fastapi import BackgroundTasks
@@ -1591,6 +1601,29 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             _build_antibody_iteration_job,
             create_job,
         )
+
+        # The batch claim and canonical follow-on insertion commit together.
+        # A competing finalizer loses the CAS; a crash rolls it back. UUID5
+        # also binds retries to the same canonical Job/output identity.
+        follow_on_id = str(uuid5(NAMESPACE_URL, f"bms:mutation-seed-refinement:{msa_job.id}"))
+        claim = await session.execute(update(Job).where(
+            Job.id == msa_job.id, Job.params == msa_job.params,
+            select(Job.id).where(
+                Job.id == job.id, Job.status.in_(["completed", "failed"]),
+                Job.awaiting_input.is_(False),
+                Job.remote_attempt_id == identity[0], Job.nextflow_run_id == identity[1],
+                Job.execution_target_id == identity[2],
+                Job.retry_count == identity[3],
+            ).correlate(None).exists(),
+            ~select(Job.id).where(
+                Job.batch_id == job.batch_id, Job.job_phase == "inference",
+                Job.status.not_in(["completed", "failed"]),
+            ).correlate(None).exists(),
+        ).values(params={**msa_job.params, "_mutation_seed_refinement_triggered": True})
+            .execution_options(synchronize_session=False))
+        if claim.rowcount != 1:
+            await session.rollback()
+            return
 
         selection_dir, fixed_json_path = _materialize_seed_selection_from_completed_designs(
             root_job=root_job,
@@ -1615,13 +1648,15 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             param_overrides=param_overrides,
         )
 
-        await session.commit()
         logger.info(
             f"[MUT-SEED] Launching seeded refinement from {len(ordered_designs)} rebuilt designs for batch {job.batch_id[:8]}"
         )
-        await create_job(launch_request, BackgroundTasks(), session)
+        await create_job(launch_request, BackgroundTasks(), session,
+                         _preallocated_job_id=follow_on_id, _commit=False)
+        await session.commit()
 
     except Exception as e:
+        await session.rollback()
         logger.error(f"[MUT-SEED] Error triggering seeded refinement: {e}", exc_info=True)
 
 
@@ -2009,7 +2044,7 @@ async def _validate_ont_fastq_qc_terminal_completion(
     )
 
 
-async def _persist_boltz_launch_authority(session, job, command):
+async def _persist_boltz_launch_authority(session, job, command, *, compiled_transport=None):
     """Commit trusted inputs before any remote handoff or scientific spawn."""
     from services.boltz_launch_authority import KEY, build_authority, transport, validate_launch_settings, command_params
     from services.frustrampnn.contracts import canonical_json_bytes
@@ -2034,7 +2069,487 @@ async def _persist_boltz_launch_authority(session, job, command):
     else:
         job.provenance = {**(job.provenance or {}), KEY: authority}
     await session.commit()
-    return list(command) + ['--protein_science_contract_revision', '1'] + transport(authority)
+    authority_transport = transport(authority)
+    if compiled_transport is not None:
+        # This is only the native adapter's server-owned transport, never a
+        # reconstruction of scientific settings from the rendered command.
+        compiled_transport['protein_science_contract_revision'] = 1
+        compiled_transport.update({flag.removeprefix('--'): value
+            for flag, value in zip(authority_transport[::2], authority_transport[1::2])})
+    return list(command) + ['--protein_science_contract_revision', '1'] + authority_transport
+
+
+async def _prepare_launch_msa_on_controller(session, job, model_id, params, destination, authority=None, *, native_invocation=None):
+    """One hosted operation, explicit waiting, and joined local cancellation.
+
+    No provider switch or POST retry is implemented here. Pending requests
+    resume through the existing durable client. Ordinary scientific components
+    do not call this controller boundary.
+    """
+    import threading
+    from biomodstack_msa_api import ClientConfig, PendingMSA, preparation_stop_scope
+    from services.model_msa_handoff import prepare_launch_msa
+    from component_runtime import canonical_bytes
+    from schemas import JobStatus
+
+    input_revision = canonical_bytes(getattr(job, 'params', {}) or {})
+    provenance_revision = canonical_bytes({k: v for k, v in dict(job.provenance or {}).items()
+                                           if k != 'msa_preparation'})
+
+    async def current():
+        await session.refresh(job)
+        if (job.status == JobStatus.CANCELLED.value
+                or canonical_bytes(getattr(job, 'params', {}) or {}) != input_revision
+                or canonical_bytes({k: v for k, v in dict(job.provenance or {}).items()
+                                    if k != 'msa_preparation'}) != provenance_revision):
+            raise asyncio.CancelledError()
+        if authority is not None:
+            observed = (job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+                        dict((job.provenance or {}).get('remote_execution_assignment') or {}))
+            if (observed != authority or job.status != 'queued'
+                    or job.queue_status != 'preparing' or job.remote_state not in {'preparing', 'staging'}):
+                raise asyncio.CancelledError()
+            from database import ExecutionTarget
+            target = await session.get(ExecutionTarget, job.execution_target_id, populate_existing=True)
+            if target is None or target.leased_job_id != str(job.id):
+                raise asyncio.CancelledError()
+
+    async def publish(state, operation=None):
+        await current()
+        provenance = {**dict(job.provenance or {}), 'msa_preparation': {
+            'state': state, 'operation': operation or {}}}
+        values = {'provenance': provenance,
+                  'current_stage': 'waiting_for_msa' if state == 'pending' else 'preparing'}
+        if authority is not None:
+            from services.remote_execution.executor import _publish_remote_transition
+            if not await _publish_remote_transition(session, job, values):
+                raise asyncio.CancelledError()
+        else:
+            for key, value in values.items():
+                setattr(job, key, value)
+            await session.commit()
+
+    waited = False
+    while True:
+        await current()
+        stop = threading.Event()
+        with preparation_stop_scope(stop):
+            bindings = {'native_invocation': native_invocation} if native_invocation is not None else {}
+            task = asyncio.create_task(asyncio.to_thread(prepare_launch_msa, model_id, params, destination, **bindings))
+        try:
+            # Poll only this preparation's ownership/cancellation, never the DB
+            # tree or scientific state. Shield retains the thread join handle.
+            while not task.done():
+                done, _ = await asyncio.wait({task}, timeout=1.0)
+                if not done:
+                    await current()
+            result = await asyncio.shield(task)
+        except PendingMSA as exc:
+            waited = True
+            await publish('pending', exc.operation)
+            delay = (exc.operation or {}).get('retry_after_seconds', ClientConfig().poll_seconds)
+            deadline = asyncio.get_running_loop().time() + max(1.0, delay)
+            while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+                await asyncio.sleep(min(1.0, remaining))
+                await current()
+            continue
+        except BaseException:
+            stop.set()
+            # Never claim preparation quiescent while a provider thread can
+            # still write inputs. Its current bounded HTTP call may finish;
+            # no additional poll/download or submission role is started.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if task.done() and not task.cancelled():
+                task.exception()  # Consume a final worker exception without replacing cancellation.
+            raise
+        await current()
+        if waited:
+            await publish('ready')
+        return result
+
+
+async def _compile_launch_nextflow_invocation(session, job, params, output_dir, *, prepared_invocation=None):
+    """One execution-owner handoff for local retry and ordinary remote launch."""
+    from dataclasses import replace
+    from component_runtime import canonical_bytes
+
+    if prepared_invocation is None:
+        invocation = compile_job_nextflow_invocation(job, params, output_dir)
+        invocation.materialize_inputs(Path(output_dir))
+    else:
+        # The same compiler-produced input roster was materialized for hosted
+        # MSA. Do not compile the scientific request or rewrite its files again.
+        invocation = prepared_invocation
+        if (invocation.model_id, invocation.mode) != (job.model_id, job.mode):
+            raise ValueError('Prepared invocation belongs to another workflow')
+        invocation = _bind_protenix_msa_transport(invocation, params)
+    compiled_transport = {}
+    command = await _persist_boltz_launch_authority(session, job, list(invocation.command),
+                                                   compiled_transport=compiled_transport)
+    if not compiled_transport and tuple(command) == invocation.command:
+        return invocation
+    return replace(invocation, command=tuple(command), native_parameters_json=canonical_bytes(
+        {**invocation.native_parameters, **compiled_transport}))
+
+
+async def _pin_local_invocation_images(session, job, invocation):
+    """Bind the same selected image projection to both local spawn paths.
+
+    The existing ledger retains recoverable uses; process exit is not permission
+    to release an image that a retry or retained execution may still need.
+    """
+    from paths import get_container_dir
+    from services.remote_execution.bundle import _runtime_assets
+    from services.remote_execution.images import bind_local_image_references
+
+    def pin():
+        plan = invocation.execution_plan
+        if plan is None:
+            raise ValueError('Local image admission requires the selected native plan')
+        from component_runtime import canonical_bytes
+        from services.remote_execution.images import image_environment_key, load_state
+        from services.remote_execution.bundle import verify_selected_runtime_hashes, verify_selected_preparation_inputs
+        from model_registry import _native_metadata_bytes
+        from paths import get_weights_root
+        import hashlib
+        metadata_hashes = {}
+        for dependency in plan.dependencies:
+            if not str(dependency.semantic_release or '').startswith('sha256:'):
+                continue
+            if dependency.kind != 'weights' or not dependency.relative_path:
+                raise ValueError('Local runtime metadata has no declared weights binding')
+            data = _native_metadata_bytes(get_weights_root(), dependency.relative_path)
+            metadata_hashes['weights/' + dependency.relative_path] = hashlib.sha256(data).hexdigest()
+        verify_selected_runtime_hashes(plan, metadata_hashes)
+        verify_selected_preparation_inputs(plan)
+        containers = get_container_dir()
+        root = Path(os.environ.get('BMS_RUNTIME_IMAGE_STORE', '').strip() or containers / '.image-store')
+        previous = (job.provenance or {}).get('runtime_image_references', {}).get(plan.plan_sha256)
+        selected = {}
+        if previous and not previous.get('legacy_images') and previous.get('identities'):
+            # Replay the retained byte selection, not a newly promoted lane.
+            # The mapping hash is part of the ledger owner so provenance cannot
+            # swap two semantic image names sharing a multi-image lease.
+            for dependency in plan.dependencies:
+                if dependency.kind == 'image':
+                    if not dependency.relative_path:
+                        raise ValueError('Retained image lacks its declared semantic name')
+                    name = Path(dependency.relative_path).name
+                    selected[name] = Path(previous['environment'][image_environment_key(name)])
+            if previous.get('store_root') != str(root):
+                raise ValueError('Retained image store changed')
+        else:
+            for path, relative in _runtime_assets(invocation.model_id, invocation.mode,
+                    invocation.native_parameters, native_invocation=invocation,
+                    only_kinds=frozenset({'image'})):
+                name = Path(relative).name
+                existing = selected.setdefault(name, path)
+                if existing != path:
+                    raise ValueError('Selected images have conflicting semantic names')
+        mapping = {name: str(path) for name, path in sorted(selected.items())}
+        mapping_sha = hashlib.sha256(canonical_bytes(mapping)).hexdigest()
+        owner = f'local-job:{job.id}:plan:{plan.plan_sha256}:images:{mapping_sha}'
+        if previous and not previous.get('legacy_images') and previous.get('identities'):
+            lease = load_state(root)['leases'].get(previous.get('lease_token'))
+            if (not lease or lease['owner'] != owner or previous.get('owner') != owner
+                    or lease['identities'] != previous.get('identities')):
+                raise ValueError('Retained local image lease does not match execution identity')
+        return bind_local_image_references(selected, containers, owner=owner)
+
+    task = asyncio.create_task(asyncio.to_thread(pin))
+    try:
+        receipt = await asyncio.shield(task)
+    except BaseException:
+        # A cancelled caller must not leave an unobserved ledger publisher.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
+    provenance = dict(job.provenance or {})
+    retained = dict(provenance.get('runtime_image_references') or {})
+    retained[invocation.execution_plan.plan_sha256] = receipt
+    provenance['runtime_image_references'] = retained
+    job.provenance = provenance
+    await session.commit()
+    return receipt['environment']
+
+
+
+def component_launch_context(invocation, job, *, command, context_path, artifact_root,
+                             working_directory, attempt_id, target_id, lease_id,
+                             resources):
+    """Bind the ordinary native invocation to the shared attempt owner."""
+    from schemas import ExecutionPolicy
+    plan = invocation.execution_plan
+    return {
+        'ledger_path': str(Path(context_path).with_suffix('.sqlite')),
+        'artifact_root': str(artifact_root), 'attempt_id': str(attempt_id),
+        'root_job_id': str(getattr(job, 'root_job_id', None) or job.id),
+        'target_id': str(target_id), 'lease_id': str(lease_id),
+        'source_identity': {'revision': invocation.source_identity.revision,
+                            'tree': invocation.source_identity.tree},
+        'plan_sha256': plan.plan_sha256, 'execution_plan': plan.to_dict(),
+        'root_command': list(command), 'working_directory': str(working_directory),
+        'child_work_root': str(Path(context_path).parent / 'component-work'),
+        'resource_lock_path': str(Path(context_path).parent / 'compute.lock'),
+        'resources': dict(resources),
+        'parent': {'id': str(job.id), 'model_id': job.model_id, 'mode': job.mode,
+                   'params': invocation.native_parameters,
+                   'provenance': dict(job.provenance or {}),
+                   'execution_target_id': None if str(target_id) == 'local' else str(target_id),
+                   'execution_policy': ExecutionPolicy.from_params(job.params).model_dump(mode='json'),
+                   'output_dir': str(artifact_root),
+                   'child_output_dir': str(getattr(job, 'child_output_dir', None) or '')},
+    }
+
+
+def needs_component_runtime(invocation):
+    metadata = invocation.execution_plan.metadata
+    return bool(metadata.dynamic_templates or
+            any(component.authority.rsplit(':', 1)[-1].startswith('OpenInteractive')
+                for component in metadata.static_components) or
+            any(dependency.kind == 'support_tool' and
+                dependency.relative_path == 'scripts/lib/component_adapter.py'
+                for dependency in metadata.dependencies) or
+            any(blocker.field == 'computational_closure' for blocker in metadata.blockers))
+
+
+def _local_checkpoint_resume(job):
+    """Load a retained local owner; never initialize a replacement ledger."""
+    import sys
+    from component_runtime import SourceIdentity
+    from dataclasses import asdict
+    provenance = dict(job.provenance or {})
+    pending = provenance.get('component_checkpoint_resume') or provenance.get('component_retry')
+    if not pending:
+        return None
+    if provenance.get('component_checkpoint_resume') and provenance.get('component_retry'):
+        raise ValueError('Review continuation and component retry cannot share one launch')
+    path = Path(provenance['component_context_path'])
+    context = json.loads(path.read_text())
+    if (not path.is_absolute() or not Path(context['ledger_path']).is_file()
+            or context['target_id'] != 'local' or context['root_job_id'] != str(job.id)
+            or context['attempt_id'] != pending['attempt_id']
+            or context['source_identity'] != asdict(SourceIdentity.from_checkout(PROJECT_ROOT))):
+        raise ValueError('Retained local checkpoint attempt/source authority conflicts')
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from scripts.lib.component_adapter import runtime_from_environment
+    runtime = runtime_from_environment(str(path))
+    runtime.check_active()
+    if provenance.get('component_retry'):
+        return path, runtime.context, runtime, None, pending
+    checkpoint = runtime.checkpoint_status(pending['checkpoint_id'])
+    if checkpoint['checkpoint_sha256'] != pending['checkpoint_sha256']:
+        raise ValueError('Retained local checkpoint digest conflicts')
+    runtime.check_active()
+    return path, runtime.context, runtime, checkpoint, pending
+
+
+def _compile_local_component_retry(job, retained):
+    """Reuse the scheduler-acquired local owner and the shared retry adapter."""
+    from scripts.lib.component_adapter import retry_component_workflow
+    path, context, runtime, _, pending = retained
+    if (job.execution_target_id is not None or job.status != 'running'
+            or not pending.get('continuation_lease_id')
+            or context['resources'].get('gpu_id') != job.assigned_gpu):
+        raise ValueError('Component retry requires renewed same-target scheduler/GPU ownership')
+    from types import SimpleNamespace
+    prior = runtime.retry_status(pending['operation_id'])
+    # Ambiguous replay consumes the authorized operation snapshot, even when a
+    # later generation has changed runtime.context. No second admission/lease.
+    resources = (dict(prior['resources']) if prior is not None else
+        component_checkpoint_resources(SimpleNamespace(
+            execution_plan=context['execution_plan'], generated_inputs=()), context))
+    invocations = []
+    edge = retry_component_workflow(path, component_id=pending['component_id'],
+        operation_id=pending['operation_id'], failure_code=pending['failure_code'],
+        actor=pending['actor'], boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+        continuation_lease_id=pending['continuation_lease_id'],
+        resources=resources, native_invocations=invocations)
+    if len(invocations) != 1 or edge['attempt_id'] != context['attempt_id']:
+        raise ValueError('Shared component retry did not return its bound native invocation')
+    job.provenance = {**dict(job.provenance or {}), 'component_retry_execution': {
+        'operation_id': edge['operation_id'], 'attempt_id': edge['attempt_id'],
+        'target_id': edge['target_id'], 'generation': edge['generation'],
+        'child_job_id': edge['child_job_id'], 'plan_sha256': edge['plan_sha256'],
+        'output_dir': edge['parent_snapshot']['output_dir']}}
+    return invocations[0]
+
+
+def component_checkpoint_resources(invocation, context, resource_admission=None):
+    """Bind the compiled continuation, not its predecessor, to same-target capacity."""
+    from types import SimpleNamespace
+    from services.remote_execution.targets import selected_plan_target_resources
+    previous = context['resources']
+    admission = resource_admission or {}
+    # Only new native input bytes need space; retained runtime/images are installed.
+    scratch = sum(len(item.payload) for item in invocation.generated_inputs
+                  if not (Path(context['artifact_root']) / item.relative_path).exists())
+    resources = selected_plan_target_resources(SimpleNamespace(id=context['target_id']),
+        invocation.execution_plan, gpu_ids=previous['gpu_ids'], scratch_bytes=scratch)
+    if context['target_id'] == 'local':
+        from biomodstack_local_resources import applied_local_policy, detect_local_capacity
+        import shutil
+        policy, physical = applied_local_policy(), detect_local_capacity()
+        available = dict(cpus=min(policy.cpu_threads, physical.cpu_threads),
+            memory_bytes=min(policy.memory_bytes, physical.memory_bytes),
+            scratch_bytes=shutil.disk_usage(context['artifact_root']).free)
+        resources['gpu_id'] = previous.get('gpu_id')
+    else:
+        old_admission = previous.get('admission') or {}
+        devices = admission.get('devices')
+        if (admission.get('schema') != 'bms.target-resource-admission.v1'
+                or admission.get('execution_target_id') != context['target_id']
+                or not isinstance(devices, list)
+                or devices != old_admission.get('devices')
+                or [item.get('gpu_index') for item in devices] != previous['gpu_ids']
+                or any(not item.get('gpu_uuid') for item in devices)):
+            raise ValueError('Checkpoint resource admission target/physical devices conflict')
+        available = admission.get('available') or {}
+    for key, required in resources['required'].items():
+        capacity = available.get(key)
+        if not isinstance(capacity, (int, float)) or not capacity >= required:
+            raise ValueError(f'Checkpoint {key} capacity {capacity} cannot satisfy {required}')
+    if context['target_id'] != 'local':
+        resources['admission'] = dict(admission, required=dict(resources['required']))
+    resources['admission_required'] = False
+    return resources
+
+
+def _component_launch_command(invocation, job, command, environment, *, attempt, output_dir):
+    """Use the same coordinator on local and worker placement, only when selected."""
+    import sys
+    from paths import get_work_dir
+    retained = _local_checkpoint_resume(job)
+    if retained:
+        path, context, runtime, checkpoint, pending = retained
+        if not pending.get('continuation_lease_id') or job.status != 'running':
+            raise ValueError('Checkpoint continuation requires scheduler resource reacquisition')
+        resources = context.get('resources') or {}
+        if resources.get('gpu_id') != job.assigned_gpu:
+            raise ValueError('Checkpoint continuation conflicts with retained local GPU binding')
+        if checkpoint is not None:
+            runtime.resume_checkpoint(pending['checkpoint_id'],
+                checkpoint_sha256=pending['checkpoint_sha256'], decision=pending['decision'],
+                actor='jobs.resume', boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                invocation=invocation, continuation_lease_id=pending['continuation_lease_id'],
+                parent_snapshot=component_checkpoint_parent_snapshot(invocation, context),
+                resources=component_checkpoint_resources(invocation, context))
+        else:
+            edge = runtime.retry_status(pending['operation_id'])
+            if edge is None or edge['plan_sha256'] != invocation.execution_plan.plan_sha256:
+                raise ValueError('Component retry launch does not match its authorized continuation')
+        environment['BMS_COMPONENT_CONTEXT'] = str(path)
+        environment['APPTAINERENV_BMS_COMPONENT_CONTEXT'] = str(path)
+        return [sys.executable, str(PROJECT_ROOT / 'scripts/lib/component_adapter.py'), '--context', str(path)]
+    if not needs_component_runtime(invocation):
+        return command
+    context_path = Path(environment.get('BMS_WORK') or get_work_dir()) / f'component-{job.id}-{attempt}' / 'context.json'
+    context_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt = (job.provenance or {}).get('runtime_image_references', {}).get(
+        invocation.execution_plan.plan_sha256, {})
+    from services.remote_execution.targets import selected_plan_target_resources
+    from types import SimpleNamespace
+    gpu_ids = (job.params or {}).get('pinned_gpus') or ([] if job.assigned_gpu is None else [job.assigned_gpu])
+    resources = selected_plan_target_resources(SimpleNamespace(id='local'), invocation.execution_plan,
+        gpu_ids=gpu_ids, scratch_bytes=0)
+    resources['gpu_id'] = job.assigned_gpu
+    import uuid
+    local_attempt_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms-local-component:{job.id}:{attempt}'))
+    context = component_launch_context(invocation, job, command=command,
+        context_path=context_path, artifact_root=output_dir,
+        working_directory=PROJECT_ROOT, attempt_id=local_attempt_id, target_id='local',
+        lease_id=receipt.get('lease_token') or f'local:{job.id}',
+        resources=resources)
+    context_path.write_text(json.dumps(context, sort_keys=True))
+    environment['BMS_COMPONENT_CONTEXT'] = str(context_path)
+    environment['APPTAINERENV_BMS_COMPONENT_CONTEXT'] = str(context_path)
+    job.provenance = {**dict(job.provenance or {}), 'component_context_path': str(context_path)}
+    return [sys.executable, str(PROJECT_ROOT / 'scripts/lib/component_adapter.py'),
+            '--context', str(context_path)]
+
+
+def _local_component_checkpoints(context_path):
+    if not context_path:
+        return []
+    import sys
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from scripts.lib.component_adapter import runtime_from_environment
+    from scripts.open_stage_gate import component_checkpoint_projection
+    runtime = runtime_from_environment(context_path)
+    state = runtime.root_state()
+    if state is None or state['state'] != 'paused' or not state.get('quiescent'):
+        return []
+    return component_checkpoint_projection(runtime)
+
+
+async def _project_local_components(job, session, context_path):
+    """Project stopped local ledger executions before native terminal handling."""
+    if not context_path:
+        return
+    import sys
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from scripts.lib.component_adapter import runtime_from_environment
+    from services.result_ingester import ingest_component_projection
+    from component_runtime import canonical_bytes
+    runtime = runtime_from_environment(context_path)
+    if runtime is None or runtime.target_id != 'local' or runtime.root_job_id != str(job.id):
+        raise ValueError('Local component projection requires the retained root owner')
+    state = runtime.root_state()
+    if state is None or not state.get('quiescent'):
+        raise ValueError('Local component projection requires stopped execution writers')
+    # Transport bindings stay relative to the original attempt root. Each native
+    # collector publishes its own immutable sidecar inside its output generation.
+    native_output = Path(runtime.context['parent']['output_dir']).resolve()
+    projection_relative = (native_output.relative_to(runtime.artifact_root) / '.bms-components.json').as_posix()
+    expected = dict(root_job_id=runtime.root_job_id, attempt_id=runtime.attempt_id,
+        target_id=runtime.target_id, lease_id=runtime.lease_id,
+        source_identity=runtime.source_identity, plan_sha256=runtime.plan_sha256,
+        current_plan_sha256=runtime.context['plan_sha256'],
+        generation=state.get('generation', 0), artifact_root=str(runtime.artifact_root),
+        projection_relative_path=projection_relative,
+        projection_sha256=hashlib.sha256(canonical_bytes(runtime.export_projection())).hexdigest())
+    await ingest_component_projection(job, str(runtime.artifact_root), session,
+                                      expected_context=expected)
+
+
+async def _finalize_local_md_job(job, session, output_dir, *, projection_ingested=False):
+    """One native completion transaction for launch and process-loss recovery."""
+    from services.md.completion import validate_and_finalize_md_job
+    from services.result_ingester import ingest_component_projection
+    from services.result_state_integrity import finalize_component_projection
+
+    if not projection_ingested:
+        context_path = (job.provenance or {}).get('component_context_path')
+        if context_path:
+            await _project_local_components(job, session, context_path)
+        else:
+            await ingest_component_projection(job, output_dir, session)
+    previous_child_output = job.child_output_dir
+    retry = (job.provenance or {}).get('component_retry_execution')
+    if retry:
+        job.child_output_dir = retry['output_dir']
+    try:
+        await validate_and_finalize_md_job(job, session)
+        await finalize_component_projection(job, session)
+    except Exception:
+        job.child_output_dir = previous_child_output
+        raise
 
 
 async def launch_nextflow_job(
@@ -2171,14 +2686,19 @@ async def launch_nextflow_job(
             # Persisted provenance, never a parameter/file self-marker, owns revision.
             from services.core_protein_scientific_contract import workflow_params
             launch_params = workflow_params(job, launch_params)
-            launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
+            component_retry = (job.provenance or {}).get('component_retry')
+            checkpoint_resume = (job.provenance or {}).get('component_checkpoint_resume') or component_retry
+            if checkpoint_resume:
+                boltzgen_notes = []
+            else:
+                launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
             preflight_notes: List[str] = list(boltzgen_notes)
             is_protenix = _is_protenix_job(model_id, launch_params)
             if is_protenix:
                 launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
                 if preflight_notes:
                     logger.warning(
-                        f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
+                        f"[PROTENIX-PREFLIGHT] Advisory only for job {job_id}: "
                         + " | ".join(preflight_notes)
                     )
         except Exception as exc:
@@ -2258,30 +2778,36 @@ async def launch_nextflow_job(
             )
 
         try:
-            # Provider work runs once on BMS, before native input sealing. Remote
-            # bundles transfer these inputs regardless of result-return policy.
-            from services.model_msa_handoff import prepare_launch_msa
-            if model_id == 'boltz_cp_experimental' and not launch_params.get('bcp_input_path'):
-                cp_input = _write_boltz_cp_input_yaml(
-                    output_dir=output_dir, params=launch_params,
-                    complex_components=launch_params.get('complex_components'))
-                if cp_input:
-                    launch_params['bcp_input_path'] = str(cp_input)
-            launch_params = await asyncio.to_thread(
-                prepare_launch_msa, model_id, launch_params, Path(output_dir) / 'prepared-msa')
-            if model_id == 'boltz2':
-                # Persist controller materialization before the immutable Boltz
-                # input roster is compared with its persisted launch request.
-                job.params = {**dict(job.params or {}), **{
-                    key: launch_params[key] for key in ('msa_path', 'complex_components')
-                    if key in launch_params}}
-                await session.commit()
+            # Native input construction precedes MSA preparation. Reuse this
+            # exact invocation afterwards; complex/batch science is not rebuilt
+            # by a separate controller parser or compiled twice.
+            prepared_invocation = None
+            msa_params = launch_params
+            if not checkpoint_resume and model_id in {'protenix', 'boltz2', 'boltz_cp_experimental'}:
+                gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
+                if gpu_id is not None:
+                    launch_params['gpu_id'] = gpu_id
+                prepared_invocation = compile_job_nextflow_invocation(job, launch_params, output_dir)
+                prepared_invocation.materialize_inputs(Path(output_dir))
+                msa_params = {**launch_params, **prepared_invocation.native_parameters}
+            # Provider work is controller-owned; transfer is independent of
+            # result-return policy. Only prepared artifact fields bind science.
+            prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(
+                session, job, model_id, msa_params, Path(output_dir) / 'prepared-msa', remote_launch_authority,
+                native_invocation=prepared_invocation)
+            if prepared_invocation is None:
+                launch_params = prepared_params
+            else:
+                launch_params = {**launch_params, **{key: prepared_params[key]
+                    for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256',
+                                'boltz_prepared_msa_dir', 'boltz_prepared_msa_sha256', 'bcp_input_path')
+                    if key in prepared_params}}
             # Resolve the same command/input owner used at execution, then seal
             # its input roster before even a workflow-adapter handoff.
             if job.model_id == 'boltz2' and job.mode in ('predict', 'complex'):
                 from services.core_protein_scientific_contract import revision_for_job
                 if revision_for_job(job) is not None:
-                    await _persist_boltz_launch_authority(session, job, build_job_nextflow_command(job, launch_params, output_dir))
+                    await _persist_boltz_launch_authority(session, job, list(prepared_invocation.command))
             if job.execution_target_id:
                 if transient_runner:
                     raise ExecutionOwnershipError(
@@ -2291,12 +2817,14 @@ async def launch_nextflow_job(
                 gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
                 if gpu_id is not None:
                     launch_params["gpu_id"] = gpu_id
-                remote_command = (
+                if model_id == "msa_batch":
+                    # Retain the existing local-search rejection; this phase
+                    # does not introduce a direct-script invocation compiler.
                     _build_msa_batch_command(launch_params, output_dir)
-                    if model_id == "msa_batch"
-                    else build_job_nextflow_command(job, launch_params, output_dir)
-                )
-                remote_command = await _persist_boltz_launch_authority(session, job, remote_command)
+                remote_invocation = await _compile_launch_nextflow_invocation(
+                    session, job, launch_params, output_dir,
+                    **({'prepared_invocation': prepared_invocation} if prepared_invocation is not None else {}))
+                remote_command = list(remote_invocation.command)
                 remote_environment = {"NXF_ANSI_LOG": "false"}
                 if is_protenix:
                     remote_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -2312,6 +2840,7 @@ async def launch_nextflow_job(
                     session,
                     job,
                     command=remote_command,
+                    native_invocation=remote_invocation,
                     environment=remote_environment,
                     secret_environment={stage_reporting.ENV_TOKEN_KEY: stage_report_token},
                 )
@@ -2506,7 +3035,7 @@ async def launch_nextflow_job(
                 allow_retries = bool(allow_retries_raw)
 
             max_resume_lock_retries = 0
-            if launch_params.get("resume_work_dir") and allow_retries:
+            if not checkpoint_resume and launch_params.get("resume_work_dir") and allow_retries:
                 try:
                     max_resume_lock_retries = int(launch_params.get("resume_lock_retry_attempts", 2))
                 except (TypeError, ValueError):
@@ -2514,7 +3043,7 @@ async def launch_nextflow_job(
                 max_resume_lock_retries = max(0, min(5, max_resume_lock_retries))
 
             max_protenix_oom_retries = 0
-            if is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", False), default=False):
+            if not checkpoint_resume and is_protenix and _coerce_bool(launch_params.get("protenix_auto_oom_retry", False), default=False):
                 max_protenix_oom_retries = max(
                     0,
                     min(3, _coerce_int(launch_params.get("protenix_oom_retry_attempts", 2), 2)),
@@ -2527,10 +3056,32 @@ async def launch_nextflow_job(
             attempt = 1
 
             while True:
-                cmd = build_job_nextflow_command(job, launch_params, output_dir)
-                cmd = await _persist_boltz_launch_authority(session, job, cmd)
+                if checkpoint_resume:
+                    retained = _local_checkpoint_resume(job)
+                    if retained is None:
+                        raise ValueError('Retained component continuation context is missing')
+                    _, context, runtime, checkpoint, pending = retained
+                    invocation = (_compile_local_component_retry(job, retained) if component_retry else
+                        compile_component_checkpoint_continuation(context, checkpoint, pending['decision']))
+                else:
+                    invocation = await _compile_launch_nextflow_invocation(
+                        session, job, launch_params, output_dir,
+                        **({'prepared_invocation': prepared_invocation} if prepared_invocation is not None else {}))
+                prepared_invocation = None  # A subsequent authorized retry gets its own native compilation.
+                image_environment = await _pin_local_invocation_images(session, job, invocation)
+                # Rebuild only the selected-image portion on each retry; never
+                # inherit a prior request's generic image selection.
+                for key in tuple(env):
+                    if key.startswith('BMS_SELECTED_IMAGE_'):
+                        env.pop(key)
+                env.update(image_environment)
+                cmd = list(invocation.command)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
+                cmd = _component_launch_command(invocation, job, cmd, env,
+                    attempt=attempt, output_dir=output_dir)
+                if env.get('BMS_COMPONENT_CONTEXT'):
+                    await session.commit()  # Retain the trusted context before starting its owner.
                 logger.info(
                     f"[JOB {job_id}] Launch attempt {attempt} "
                     f"(resume_retries={resume_lock_retries_used}/{max_resume_lock_retries}, "
@@ -2875,13 +3426,29 @@ async def launch_nextflow_job(
                 # Refresh status to see if it was cancelled by API while we waited
                 await session.refresh(job)
                 terminal_snapshot = capture_terminal_job_publication_snapshot(job)
+                # Failed/cancelled executions also need real child control facts
+                # before MD retry reconciliation; never infer science from exit.
+                await _project_local_components(job, session, env.get('BMS_COMPONENT_CONTEXT'))
                 
                 if job.status == JobStatus.CANCELLED.value:
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
                     job.queue_status = 'cancelled'
                     
                 else:
-                    if exit_code == 0:
+                    checkpoints = await asyncio.to_thread(_local_component_checkpoints,
+                        env.get('BMS_COMPONENT_CONTEXT'))
+                    if checkpoints:
+                        job.awaiting_payload = {**dict(job.awaiting_payload or {}),
+                            'component_checkpoint': checkpoints[0], 'component_checkpoints': checkpoints}
+                        job.awaiting_stage = checkpoints[0]['stage']
+                        job.awaiting_input = True
+                        job.status = JobStatus.AWAITING_INPUT.value
+                        job.queue_status = 'completed'
+                        job.paused = False
+                        job.assigned_gpu = None
+                        job.current_stage = job.awaiting_stage
+                        job.error_message = None
+                    elif exit_code == 0:
                         if job.awaiting_input:
                             job.status = JobStatus.AWAITING_INPUT.value
                             job.queue_status = 'completed'
@@ -2914,9 +3481,8 @@ async def launch_nextflow_job(
                             )
 
                             if is_md_parent:
-                                from services.md.completion import validate_and_finalize_md_job
-
-                                await validate_and_finalize_md_job(job, session)
+                                await _finalize_local_md_job(
+                                    job, session, result_output_dir, projection_ingested=True)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             elif is_ont_fastq_qc_job(job):
                                 integrity = await _validate_ont_fastq_qc_terminal_completion(
@@ -3311,33 +3877,343 @@ def normalize_plr_input_pdb_path(
 
 
 def compile_controller_protenix_input(params: Dict[str, Any]) -> list:
-    """Exact native input for the remote standalone sequence predictor.
+    """Use the same native adapter as ProtenixPredict/PrepProtenixComplex.
 
-    This is transport compilation, not a second scientific parameter registry.
-    Complex/batch child workflows need their own native compiler and fail closed.
+    Complex/batch inputs must be the existing compiler's materialized products,
+    not a second interpretation of raw scientific requests.
     """
-    if any(params.get(key) for key in ('complex_json_path', 'complex_batch_dir',
-                                      'complex_components', 'sequence_batch_json_path')):
-        raise ValueError('Controller MSA handoff does not yet support Protenix complex/batch inputs')
-    import re
-    sequence = str(params.get('sequence_input') or '')
-    if not sequence or not re.fullmatch(r'[A-Z]+', sequence):
-        raise ValueError('Controller MSA handoff requires a compiled literal protein sequence_input')
-    seeds = [int(seed.strip()) for seed in str(params.get('protenix_seeds') or '42').split(',')]
-    return [{'name': str(params.get('sequence_name') or 'predicted'), 'modelSeeds': seeds,
-             'sequences': [{'proteinChain': {'sequence': sequence, 'count': 1}}]}]
+    from services.msa_preparation import ROOT
+    import sys
+    if str(ROOT / 'scripts') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'scripts'))
+    from prepare_protenix_msa import load_native_protenix_input
+    return load_native_protenix_input(params)
 
 
-def build_job_nextflow_command(job, params, output_dir):
-    """All launch/rebuild paths join request origin from their owning persisted Job."""
+def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None,
+                               materialize_inputs=True, native_invocations=None):
+    """Compatibility rendering of the same persisted-Job native invocation."""
+    invocation = compile_job_nextflow_invocation(job, params, output_dir)
+    if native_invocations is not None:
+        native_invocations[:] = [invocation]
+    if materialize_inputs:
+        invocation.materialize_inputs(Path(output_dir))
+    if compiled_parameters is not None:
+        compiled_parameters.clear()
+        compiled_parameters.update(invocation.native_parameters)
+    return list(invocation.command)
+
+
+def compile_job_nextflow_invocation(job, params, output_dir):
+    """Bind persisted request origin and trusted MSA transport without writes."""
+    from dataclasses import replace
+    from component_runtime import SourceIdentity, canonical_bytes
+    from paths import get_code_root
     from services.core_protein_scientific_contract import workflow_params
+
+    source = SourceIdentity.from_checkout(get_code_root())
+    pinned_revision = getattr(job, 'execution_source_revision', None)
+    pinned_tree = getattr(job, 'execution_source_tree', None)
+    if pinned_revision is not None or pinned_tree is not None:
+        if SourceIdentity(pinned_revision, pinned_tree) != source:
+            raise ValueError('Job source identity changed; explicit re-preview is required')
     requested = (job.provenance or {}).get('core_protein_requested_params')
-    command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
-        output_dir, job_id=job.id, requested_params=requested)
-    for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
-        if params.get(key):
-            command.extend(['--' + key, str(params[key])])
-    return command
+    # Preserve request identity separately from the existing native provenance
+    # input. Supplying a new requested_params fallback to the native compiler
+    # would change its legacy scientific transport flags.
+    requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
+    invocation = compile_nextflow_invocation(job.model_id, job.mode, workflow_params(job, params),
+        output_dir, job_id=job.id, requested_params=requested,
+        source_identity=source, requested_identity_json=requested_json)
+    if SourceIdentity.from_checkout(get_code_root()) != source:
+        raise ValueError('Source identity changed during native compilation')
+    invocation = replace(invocation, source_identity=source, requested_json=requested_json)
+    return _bind_protenix_msa_transport(invocation, params)
+
+
+def _native_plan_metadata_settings(model_id, params):
+    """Expose the already-normalized native document to its shared descriptors.
+
+    Config contents are metadata only: never add unknown scientific argv flags.
+    Prefer the existing normalized MD spec; canonical CM stores its immutable
+    request in a bounded managed file before native command construction.
+    """
+    from copy import deepcopy
+    from paths import get_results_dir, get_inputs_dir, get_data_root
+    settings = deepcopy(params)
+    key = 'cm_request' if model_id == 'conformational_mapping' else 'md_config' if model_id == 'molecular_dynamics' else None
+    if key is None:
+        return settings
+    if key in settings:
+        return settings
+    if model_id == 'molecular_dynamics' and isinstance(params.get('md_job_spec'), dict):
+        settings[key] = deepcopy(params['md_job_spec'])
+        return settings
+    name = params.get('cm_request_path' if key == 'cm_request' else 'md_job_config')
+    if not name:
+        return settings
+    path = Path(str(name)).expanduser()
+    roots = (get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve())
+    if (not path.is_absolute() or any(part.is_symlink() for part in (path, *path.parents))
+            or not any(path.resolve().is_relative_to(root) for root in roots)
+            or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
+        raise ValueError('Selected native configuration is not a bounded managed input')
+    document = json.loads(path.read_bytes())
+    if not isinstance(document, dict):
+        raise ValueError('Selected native configuration must be an object')
+    settings[key] = document
+    return settings
+
+
+def build_selected_execution_plan(*, model_id, mode, entrypoint, requested, effective,
+                                  native_parameters, source_identity, metadata_settings=None):
+    """One shared logical-plan constructor for native commands and typed requests.
+
+    A dependency-only preview does not need a fabricated Job, GPU assignment or
+    rendered command. Both surfaces use the same native metadata producer and
+    immutable plan type; placement and input materialization remain separate.
+    """
+    from component_runtime import SelectedExecutionPlan, canonical_bytes
+    from model_registry import selected_execution_metadata
+
+    def snapshot(value):
+        return value if isinstance(value, bytes) else canonical_bytes(value)
+
+    effective_json = snapshot(effective)
+    from paths import get_weights_root
+    metadata_params = dict(json.loads(effective_json) if metadata_settings is None else metadata_settings)
+    # Placement authority is server-owned and never changes requested science.
+    # Native runtime metadata may inspect only bounded declared weight members.
+    metadata_params['weights_root'] = str(get_weights_root())
+    metadata_params.pop('_boltzgen_protocol_metadata', None)
+    metadata = selected_execution_metadata(model_id, mode, metadata_params, entrypoint)
+    # Resolve native preparation only if the registry selected that process.
+    # Both metadata passes use the same registry; no parallel model selector.
+    if any(row.authority.endswith(':RunBoltzGen') for row in
+           (*metadata.static_components, *metadata.dynamic_templates)):
+        from scripts.lib.boltzgen_native import preview_protocol_metadata
+        from paths import get_inputs_dir, get_results_dir, get_data_root, get_code_root
+        from dataclasses import replace
+        derived = preview_protocol_metadata(metadata_params, allowed_input_roots=(
+            get_inputs_dir(), get_results_dir(), get_data_root(), get_code_root()))
+        metadata_params['_boltzgen_protocol_metadata'] = derived
+        metadata = selected_execution_metadata(model_id, mode, metadata_params, entrypoint)
+        def bind_preparation(row):
+            if not row.authority.endswith(':RunBoltzGen'):
+                return row
+            selection = json.loads(row.selection_json)
+            selection['native_preparation_metadata'] = dict(derived)
+            return replace(row, selection_json=canonical_bytes(selection))
+        metadata = replace(metadata,
+            static_components=tuple(bind_preparation(row) for row in metadata.static_components),
+            dynamic_templates=tuple(bind_preparation(row) for row in metadata.dynamic_templates))
+    return SelectedExecutionPlan(source_identity, Path(entrypoint).stem, model_id, mode,
+        entrypoint, snapshot(requested), effective_json, snapshot(native_parameters), metadata)
+
+
+async def compile_native_workflow_provision_request(workflow_request, http_request, session):
+    """Authorize native controls, then compile metadata without command or biology.
+
+    Request/session are used only here, never retained by the immutable plan.
+    Declared input identities participate in the plan digest, not launch bindings.
+    """
+    from component_runtime import SourceIdentity
+    from services.remote_execution.bundle import current_source_identity
+    from services.remote_execution.contracts import (
+        ConformationalMappingProvisionWorkflow, MolecularDynamicsProvisionWorkflow,
+    )
+    if http_request is None or session is None:
+        raise ValueError('Native provisioning requires an authenticated request and session')
+    source = SourceIdentity(*await asyncio.to_thread(current_source_identity))
+    if isinstance(workflow_request, ConformationalMappingProvisionWorkflow):
+        from routers.conformational_mapping import normalize_cm_provision_request
+        normalized = await normalize_cm_provision_request(workflow_request.request, http_request, session)
+    elif isinstance(workflow_request, MolecularDynamicsProvisionWorkflow):
+        from routers.molecular_dynamics import normalize_md_provision_request
+        normalized = await normalize_md_provision_request(workflow_request.request.intent, session)
+    else:
+        raise ValueError('Expected a closed native workflow provisioning request')
+    plan = build_selected_execution_plan(
+        model_id=normalized.model_id, mode=normalized.mode, entrypoint=normalized.entrypoint,
+        requested=normalized.requested_params, effective=normalized.effective_params,
+        metadata_settings=normalized.effective_params,
+        native_parameters={'input_bindings': normalized.input_bindings}, source_identity=source,
+    )
+    if await asyncio.to_thread(current_source_identity) != (source.revision, source.tree):
+        raise ValueError('Workflow provision source identity changed')
+    return plan
+
+
+def compile_workflow_provision_request(request):
+    """Compile an unsaved typed request without staging inputs or creating a Job.
+
+    Reuse the ordinary Job normalization and native compiler. The deterministic
+    output binding is only a name for captured GeneratedInput bytes; it is never
+    created here. Target admission and immutable runtime binding remain with the
+    existing provisioning owner. No provider, scheduler or resource probe runs.
+    """
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from component_runtime import canonical_bytes, digest
+    from model_registry import get_registry
+    from paths import get_results_dir
+    from routers.jobs import normalize_job_request
+    from schemas import JobCreate
+    from services import core_protein_scientific_contract as scientific_contract
+    from services.msa_policy import apply_msa_policy
+    from services.fampnn_policy_admission import compile_declaration
+
+    payload = request.model_dump() if isinstance(request, JobCreate) else request
+    typed = JobCreate.model_validate(payload)
+    original = deepcopy(typed.params)
+    registry = get_registry()
+    model = registry.get_model(typed.model_id)
+    if model is None or typed.mode not in {mode.id for mode in model.modes}:
+        raise ValueError('Workflow provision requires a supported typed model and mode')
+    typed.params = apply_msa_policy(typed.model_id, typed.params)
+    typed = normalize_job_request(typed, registry=registry)
+    revision = scientific_contract.admission_revision(typed.model_id, typed.mode)
+    if revision is None and typed.fampnn_analysis_overrides is not None:
+        raise ValueError('FA-MPNN analysis overrides require a supported core-protein caller')
+    provenance = {}
+    declaration = None
+    if revision is not None:
+        declaration = compile_declaration(
+            typed.model_id, typed.mode, typed.params,
+            typed.fampnn_analysis_overrides.model_dump()
+            if typed.fampnn_analysis_overrides is not None else None,
+            parent=None,
+        )
+    params, provenance = scientific_contract.admitted_payload(typed.params, provenance, revision)
+    if declaration is not None:
+        provenance['fampnn_analysis_declaration'] = declaration
+    # Requested identity is the user's original parameter set, not our normalized
+    # copy or an invented saved-Job receipt. Policy remains host-owned transport.
+    provenance['core_protein_requested_params'] = original
+    params['remote_result_policy'] = typed.execution_policy.remote_result_policy
+    request_id = digest(typed.model_dump(mode='json'))
+    output = get_results_dir() / '.provision-preview' / request_id
+    snapshot = SimpleNamespace(
+        id='provision-' + request_id[:32], model_id=typed.model_id, mode=typed.mode,
+        params=params, provenance=provenance, pinned_gpu=typed.pinned_gpu,
+        execution_source_revision=None, execution_source_tree=None,
+        output_dir=str(output), child_output_dir=None,
+    )
+    invocation = compile_job_nextflow_invocation(snapshot, params, str(output))
+    if invocation.requested_json != canonical_bytes(original):
+        raise ValueError('Workflow provision changed requested scientific identity')
+    return invocation
+
+
+def _bind_prepared_protenix_plan(invocation, supplied):
+    """Resolve the selected MSA role from the verified native task package.
+
+    This is input admission, not search or scientific recompilation. Requested
+    and effective settings remain byte-identical; the plan now binds the actual
+    prepared task/chain artifacts before local or remote placement admission.
+    """
+    from dataclasses import replace
+    from biomodstack_msa_handoff import digest, hydrate_prepared_protenix_task
+    from biomodstack_msa_policy import apply_msa_policy
+    from scripts.prepare_protenix_msa import load_native_protenix_input
+
+    plan = invocation.execution_plan
+    if plan is None:
+        raise ValueError('Prepared Protenix MSA requires its selected execution plan')
+    native = invocation.native_parameters
+    source = Path(str(supplied['protenix_prepared_msa_dir']))
+    output = Path(str(native['out_dir']))
+    if (not source.is_absolute() or not output.is_absolute()
+            or any(path.is_symlink() for path in (source, *source.parents))
+            or not source.resolve().is_relative_to(output.resolve())):
+        raise ValueError('Prepared MSA transport unavailable outside compiled job output')
+    manifest_path = source / 'msa-inputs.json'
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError('Prepared MSA manifest must be a regular native input')
+    raw = manifest_path.read_bytes()
+    manifest_sha256 = supplied['protenix_prepared_msa_sha256']
+    if digest(raw) != manifest_sha256:
+        raise ValueError('Prepared MSA manifest digest mismatch')
+    manifest = json.loads(raw)
+    system_keys = {'msa_cache_dir', 'msa_local_db', 'protenix_container_path',
+        'protenix_model_dir', 'protenix_download_cache_dir',
+        'protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'}
+    settings = apply_msa_policy('protenix', {key: value for key, value in native.items()
+        if key.startswith(('msa_', 'protenix_', 'colabfold_')) and key not in system_keys})
+    if manifest.get('settings') != settings:
+        raise ValueError('Prepared MSA manifest scientific settings mismatch')
+    tasks = load_native_protenix_input(native)
+    prepared = manifest.get('model_input')
+    if (not isinstance(prepared, list) or len(prepared) != len(tasks)
+            or any({k: v for k, v in a.items() if k != 'sequences'} !=
+                   {k: v for k, v in b.items() if k != 'sequences'}
+                   for a, b in zip(tasks, prepared))):
+        raise ValueError('Prepared MSA native task order/name/seed identity mismatch')
+    hydrate_prepared_protenix_task(tasks, source, manifest_sha256)
+    metadata = plan.metadata
+    services = tuple(row for row in metadata.external_services if row.logical_id == 'protenix:msa')
+    roles = tuple(row for row in metadata.artifact_roles if row.role_id == 'protenix:msa_artifacts')
+    if len(services) != 1 or len(roles) != 1 or services[0].state == 'disabled':
+        raise ValueError('Prepared Protenix MSA has no selected service/artifact role')
+    authority = 'biomodstack_msa_handoff.py:hydrate_prepared_protenix_task'
+    # Rebinding is idempotent, never a different prepared operation under one
+    # invocation. Existing service settings/provider and every other blocker stay.
+    identity = 'sha256:' + manifest_sha256
+    if services[0].operation_identity not in (None, identity):
+        raise ValueError('Prepared MSA plan operation identity changed')
+    return replace(plan, metadata=replace(metadata,
+        external_services=tuple(replace(row, state='prepared', operation_identity=identity)
+            if row.logical_id == 'protenix:msa' else row for row in metadata.external_services),
+        artifact_roles=tuple(replace(row, identity_authority=authority,
+            format='bms.msa-inputs.v1', cardinality_authority=authority,
+            native_declaration='msa-inputs.json@' + identity)
+            if row.role_id == 'protenix:msa_artifacts' else row for row in metadata.artifact_roles),
+        blockers=tuple(row for row in metadata.blockers if not (
+            row.component_or_dependency_id == 'protenix:msa' and row.field == 'external_service_roles'))))
+
+
+def _bind_protenix_msa_transport(invocation, params):
+    """Bind prepared MSA artifacts to the once-compiled native roster.
+
+    The legacy function name remains for in-process callers. Boltz and Fold-CP
+    use the same transport-only handoff; scientific inputs are never recompiled.
+    """
+    from dataclasses import replace
+    from component_runtime import canonical_bytes
+    if invocation.model_id == 'boltz_cp_experimental':
+        if not params.get('boltz_prepared_msa_sha256'):
+            return invocation
+        keys = ('bcp_input_path', 'boltz_prepared_msa_sha256')
+    elif invocation.model_id == 'boltz2':
+        keys = ('boltz_prepared_msa_dir', 'boltz_prepared_msa_sha256')
+    else:
+        keys = ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256')
+    supplied = {key: params[key] for key in keys if params.get(key)}
+    if not supplied:
+        return invocation
+    if set(supplied) != set(keys):
+        raise ValueError('Prepared Protenix MSA requires both directory and digest')
+    command = list(invocation.command)
+    native = invocation.native_parameters
+    for key, value in supplied.items():
+        flag = '--' + key
+        if flag in command:
+            index = command.index(flag) + 1
+            if index == len(command):
+                raise ValueError('Prepared MSA binding has no native argument value')
+            if key == 'bcp_input_path':
+                # A sealed prepared package retains the originals and names;
+                # native hydration verifies each original/config/alignment digest.
+                command[index] = str(value)
+            elif command[index] != str(value):
+                raise ValueError('Prepared Protenix MSA binding changed within invocation')
+        else:
+            command.extend([flag, str(value)])
+        native[key] = value
+    plan = (_bind_prepared_protenix_plan(invocation, supplied)
+            if invocation.model_id == 'protenix' else invocation.execution_plan)
+    return replace(invocation, command=tuple(command), native_parameters_json=canonical_bytes(native),
+                   execution_plan=plan)
 
 
 def build_nextflow_command(
@@ -3345,16 +4221,468 @@ def build_nextflow_command(
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
-    job_id: str = None,
+    job_id: Optional[str] = None,
     *,
     requested_params: Optional[Dict[str, Any]] = None,
+    compiled_parameters: Optional[Dict[str, Any]] = None,
+    materialize_inputs: bool = True,
+    native_invocations=None,
 ) -> list:
+    """Compatibility argv projection of the shared scientific compilation."""
+    invocation = compile_nextflow_invocation(model_id, mode, params, output_dir,
+        job_id=job_id, requested_params=requested_params)
+    if native_invocations is not None:
+        native_invocations[:] = [invocation]
+    if materialize_inputs:
+        invocation.materialize_inputs(Path(output_dir))
+    if compiled_parameters is not None:
+        compiled_parameters.clear()
+        compiled_parameters.update(invocation.native_parameters)
+    return list(invocation.command)
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class NativeCompilerExecutionContext:
+    """Launch-owned physical reservation and already qualified ANARCII runtime."""
+    gpu_id: int | None
+    gpu_ids: tuple[int, ...]
+    anarcii_execution_mode: str
+    anarcii_gpu_id: int | None = None
+
+    def __post_init__(self):
+        if any(type(gpu) is not int or gpu < 0 for gpu in self.gpu_ids):
+            raise ValueError('native execution requires physical GPU identities')
+        if self.gpu_id is not None and self.gpu_id not in self.gpu_ids:
+            raise ValueError('native execution GPU is outside reservation')
+        if self.anarcii_execution_mode not in {'cpu', 'gpu'}:
+            raise ValueError('native execution requires resolved ANARCII runtime from launch owner')
+        if self.anarcii_execution_mode == 'gpu' and self.anarcii_gpu_id not in self.gpu_ids:
+            raise ValueError('ANARCII GPU is outside native reservation')
+        if self.anarcii_execution_mode == 'cpu' and self.anarcii_gpu_id is not None:
+            raise ValueError('CPU ANARCII runtime cannot reserve a GPU')
+
+
+def _component_native_settings(invocation, requested, prior_provenance=None):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from services import core_protein_scientific_contract as science
+    params = json.loads(invocation.effective_json)
+    provenance = dict(prior_provenance or {})
+    for key in (science.REVISION_KEY, 'fampnn_analysis_declaration'):
+        provenance.pop(key, None)
+    provenance['core_protein_requested_params'] = deepcopy(requested)
+    revision = params.pop(science.REVISION_KEY, None)
+    declaration = params.pop('fampnn_analysis_declaration', None)
+    if revision is not None:
+        provenance[science.REVISION_KEY] = revision
+        science.revision_for_job(SimpleNamespace(provenance=provenance))
+        if declaration is not None:
+            provenance['fampnn_analysis_declaration'] = declaration
+    return params, provenance
+
+
+def component_native_parent_snapshot(invocation, request, context):
+    """Pure projection of an admitted child for the existing runtime journal.
+
+    No ancestor provenance is copied: only the child's actual scientific
+    admission marker/declaration, effective settings and requested identity.
     """
-    Build the Nextflow command line dynamically.
-    
-    Converts all params to --key value flags.
+    if (invocation.model_id, invocation.mode) != (request.payload['model_id'], request.payload['mode']):
+        raise ValueError('native parent snapshot invocation identity conflicts')
+    output = Path(context['artifact_root']).resolve() / 'components' / request.component_id.replace(':', '-')
+    if invocation.native_parameters.get('out_dir') != str(output):
+        raise ValueError('native parent snapshot output identity conflicts')
+    params, provenance = _component_native_settings(invocation, request.payload['params'])
+    return dict(id=request.component_id, model_id=invocation.model_id, mode=invocation.mode,
+        params=params, provenance=provenance, output_dir=str(output),
+        execution_target_id=context['parent'].get('execution_target_id'),
+        execution_policy=context['parent'].get('execution_policy', {'remote_result_policy': 'manual'}),
+        parent_job_id=request.parent_job_id, child_stage=request.stage)
+
+
+def component_checkpoint_parent_snapshot(invocation, context):
+    """Native current-generation view, stored opaquely by the shared runtime."""
+    params, provenance = _component_native_settings(invocation,
+        json.loads(invocation.requested_json), context['parent'].get('provenance'))
+    return dict(context['parent'], model_id=invocation.model_id, mode=invocation.mode,
+                params=params, output_dir=invocation.native_parameters['out_dir'], provenance=provenance)
+
+
+def compile_component_nextflow_invocation(request, context: dict):
+    """Admit a native child of the selected plan through the ordinary compiler.
+
+    Context is the launch owner's attempt snapshot, never a browser request.
+    The pump retains materialization, process and resource lifecycle ownership.
     """
-    # Shared preview and scheduler/replay command compilation gate.
+    from copy import deepcopy
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from component_runtime import ComponentRequest, SourceIdentity, canonical_bytes
+    from services import core_protein_scientific_contract as science
+    from services.fampnn_policy_admission import compile_declaration
+
+    if not isinstance(request, ComponentRequest):
+        raise ValueError('native component requires a typed request')
+    payload = request.payload
+    model_id, mode = payload['model_id'], payload['mode']
+    if payload.get('child_stage') != request.stage:
+        raise ValueError('native component stage conflicts with request lineage')
+    parent = SimpleNamespace(**deepcopy(context['parent']))
+    if parent.id != request.parent_job_id:
+        raise ValueError('native component requires its trusted parent snapshot')
+    source = SourceIdentity(**context['source_identity'])
+    root_plan = context['execution_plan']
+    if (root_plan['source_identity'] != context['source_identity'] or
+            root_plan['plan_sha256'] != context['plan_sha256']):
+        raise ValueError('native component source/plan binding conflicts')
+    templates = root_plan['metadata']['dynamic_templates']
+    if not any(isinstance(row.get('expansion_json'), dict) and
+               (row['expansion_json'].get('child_model'),
+                row['expansion_json'].get('child_mode'),
+                row['expansion_json'].get('child_stage')) == (model_id, mode, request.stage)
+               for row in templates):
+        raise ValueError('native child model/mode/stage is not bound by selected root expansion')
+
+    artifact_root = Path(context['artifact_root']).resolve()
+    output_dir = artifact_root / 'components' / request.component_id.replace(':', '-')
+    if not output_dir.resolve().is_relative_to(artifact_root):
+        raise ValueError('native child output escapes attempt artifacts')
+    if context.get('child_output_dir') and Path(context['child_output_dir']).resolve() != output_dir.resolve():
+        raise ValueError('native child output does not match stable component identity')
+    if context.get('child_id', request.component_id) != request.component_id:
+        raise ValueError('native component identity conflicts')
+    requested = deepcopy(payload['params'])
+    if model_id == 'boltzgen_child':
+        # Parent science is immutable; only native roster cardinality is partitioned.
+        # Keep original request identity distinct from the inherited effective view.
+        inherited = {key: deepcopy(value) for key, value in parent.params.items()
+                     if key.startswith('boltzgen_') and key not in
+                     {'boltzgen_num_designs', 'boltzgen_yaml_config', 'boltzgen_extra_params',
+                      'boltzgen_child_settings_json'}}
+        for key, value in inherited.items():
+            if key in requested and requested[key] != value:
+                raise ValueError('BoltzGen child setting conflicts with parent: ' + key)
+        from scripts.lib.boltzgen_inputs import input_identity, identity_digest
+        if not requested.get('boltzgen_prepared_identity') or input_identity(
+                requested['boltzgen_yaml_config']) != requested['boltzgen_prepared_identity']:
+            raise ValueError('BoltzGen prepared input identity changed')
+        if identity_digest(requested['boltzgen_prepared_identity']) != requested.get('boltzgen_prepared_sha256'):
+            raise ValueError('BoltzGen prepared identity digest conflicts')
+        total = parent.params.get('boltzgen_num_designs', 10)
+        per_child = parent.params.get('boltzgen_designs_per_job', 100)
+        index = requested.get('job_index')
+        count = (total + per_child - 1) // per_child
+        if (type(index) is not int or not 0 <= index < count or request.child_key != str(index) or
+                requested.get('total_jobs') != count or
+                requested.get('boltzgen_num_designs') != min(per_child, total - index * per_child) or
+                requested.get('num_designs') != requested.get('boltzgen_num_designs')):
+            raise ValueError('BoltzGen child roster conflicts with parent partition')
+        payload = deepcopy(payload)
+        payload['params'] = {**inherited, **requested}
+    if model_id == 'frustrampnn':
+        # The internal scheduler manifest/envelope is not a public JobCreate.
+        # Its canonical native adapter and compiler retain all byte/owner guards.
+        params = deepcopy(requested)
+        if 'frustrampnn_component_group' in params:
+            from scripts.run_frustrampnn_parent_fanout import prepare_runtime_child
+            params = prepare_runtime_child(payload, child_id=request.component_id, output_root=output_dir)
+    else:
+        from schemas import JobCreate
+        from routers.jobs import normalize_job_request
+        normalized = normalize_job_request(JobCreate.model_validate(payload),
+            native_entrypoint=MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((model_id, mode)))
+        revision = science.admission_revision(model_id, mode, parent=parent, scientific_child=True)
+        declaration = (compile_declaration(model_id, mode, normalized.params,
+            normalized.fampnn_analysis_overrides.model_dump() if normalized.fampnn_analysis_overrides else None,
+            parent=parent) if revision is not None else None)
+        if model_id == 'fampnn_child' and declaration and 'materialization' in declaration:
+            settings = declaration['materialization']['settings']
+            for key, value in settings.items():
+                if key in normalized.params and normalized.params[key] != value:
+                    raise ValueError(f'child {key} conflicts with parent declaration')
+            normalized.params.update(settings)
+            normalized.params['fampnn_constraint_mode'] = 'antibody'
+        params, provenance = science.admitted_payload(normalized.params, {}, revision)
+        if declaration is not None:
+            provenance['fampnn_analysis_declaration'] = declaration
+        params = science.workflow_params(SimpleNamespace(model_id=model_id, provenance=provenance), params)
+
+    resources = context['resources']
+    # MD analysis is natively CPU-only even when its root reserves a GPU.
+    cpu_only = (model_id, mode) == ('molecular_dynamics', 'analyze')
+    assigned = resources.get('gpu_id')
+    permitted = resources.get('gpu_ids') or ([] if assigned is None else [assigned])
+    pinned = payload.get('pinned_gpu')
+    if pinned is not None and (cpu_only or pinned not in permitted):
+        raise ValueError('native child GPU is outside the parent reservation')
+    requested_gpus = _parse_boltz_cp_gpu_ids(params.get('pinned_gpus'))
+    if any(gpu not in permitted for gpu in requested_gpus) or (cpu_only and requested_gpus):
+        raise ValueError('native child GPU set is outside the parent reservation')
+    if params.get('gpu_id') is not None and params['gpu_id'] not in permitted:
+        raise ValueError('native child GPU is outside the parent reservation')
+    if not cpu_only and assigned is not None:
+        gpu_id = pinned if pinned is not None else assigned
+        if params.get('gpu_id') not in (None, gpu_id):
+            raise ValueError('native child GPU conflicts with scheduler assignment')
+        params['gpu_id'] = gpu_id
+    native_runtime = context.get('native_runtime', parent.params)
+    execution_context = NativeCompilerExecutionContext(
+        gpu_id=None if cpu_only else params.get('gpu_id'),
+        gpu_ids=tuple(permitted),
+        anarcii_execution_mode=native_runtime.get('anarcii_execution_mode'),
+        anarcii_gpu_id=native_runtime.get('anarcii_gpu_id'))
+    invocation = compile_nextflow_invocation(model_id, mode, params, str(output_dir),
+        job_id=request.component_id, requested_params=requested, source_identity=source,
+        requested_identity_json=canonical_bytes(requested), execution_context=execution_context)
+
+    if invocation.execution_plan is None:
+        raise ValueError('native component compiler did not produce a selected plan')
+    metadata = invocation.execution_plan.metadata
+    if not metadata.dependency_closure_complete:
+        raise ValueError('native child dependency closure is unresolved: ' + '; '.join(
+            row.reason for row in metadata.blockers if row.field == 'dependency_closure'))
+    provisioned = {row['logical_id']: row for row in root_plan['metadata']['dependencies']}
+    for dependency in metadata.dependencies:
+        # Helpers are members of the same approved complete BMS source release,
+        # not individually acquired runtime assets (model_registry.py).
+        if dependency.kind == 'support_tool' and 'bms-source' in provisioned:
+            continue
+        bound = provisioned.get(dependency.logical_id)
+        if bound is None or (bound['kind'], bound['relative_path']) != (dependency.kind, dependency.relative_path):
+            raise ValueError('native child dependency not provisioned by root plan: ' + dependency.logical_id)
+    if context.get('child_working_directory'):
+        command = list(invocation.command)
+        command[command.index('-w') + 1] = str(Path(context['child_working_directory']) / 'work')
+        invocation = replace(invocation, command=tuple(command))
+    return invocation
+
+
+def compile_component_retry_invocation(context, *, component_id, operation_id,
+                                       generation, output_dir, working_directory,
+                                       spawn_receipt):
+    """Compile the native exact-set MD collector edge, never rerun preparation.
+
+    The shared control caller obtains spawn_receipt and replacement from the
+    native prepare_replica_retry adapter. Runtime owns replacement admission,
+    quiescence, lease renewal and immutable input materialization.
+    """
+    from copy import deepcopy
+    from dataclasses import replace
+    from component_runtime import GeneratedInput, SourceIdentity, canonical_bytes, digest
+
+    parent = deepcopy(context['parent'])
+    if (parent.get('model_id'), parent.get('mode')) != ('molecular_dynamics', 'simulate'):
+        raise ValueError('Component retry requires the supported MD orchestrator parent')
+    if parent.get('id') != context['root_job_id'] or not component_id or not operation_id:
+        raise ValueError('Component retry requires explicit root/component/operation identity')
+    if type(generation) is not int or generation < 1:
+        raise ValueError('Component retry requires a positive continuation generation')
+    plan = context['execution_plan']
+    if (plan['source_identity'] != context['source_identity'] or
+            plan['plan_sha256'] != context['plan_sha256']):
+        raise ValueError('Component retry source/plan binding conflicts')
+    root = Path(context['artifact_root']).resolve()
+    output = Path(output_dir)
+    work = Path(working_directory)
+    if (not output.is_absolute() or output.resolve() == root or
+            not output.resolve().is_relative_to(root) or not work.is_absolute() or
+            any(path.is_symlink() for path in (output, *output.parents, work, *work.parents))):
+        raise ValueError('Component retry requires fresh contained output and owned absolute work paths')
+    receipt = deepcopy(spawn_receipt)
+    if (not isinstance(receipt, dict) or receipt.get('schema') != 'bms.md.replica-spawn.v1'
+            or receipt.get('parent_job_id') != context['root_job_id']):
+        raise ValueError('Component retry requires the native parent-bound replica spawn receipt')
+    # Native adapter owns seed/roster validation; bind its complete bytes to this
+    # operation instead of reconstructing a second scientific request here.
+    edge_id = digest(dict(component_id=component_id, operation_id=operation_id,
+                          generation=generation, receipt=receipt))
+    prefix = output.resolve().relative_to(root)
+    receipt_relative = prefix / 'inputs' / ('md_retry_spawn_' + edge_id + '.json')
+    params = deepcopy(context.get('native_runtime', {}))
+    params.update(deepcopy(parent['params']))
+    for key in ('out_dir', 'job_id', 'resume_job_id', 'resume_source_dir',
+                'resume_requested_stage', 'resume_work_dir'):
+        params.pop(key, None)
+    params['md_retry_spawn_receipt'] = str(root / receipt_relative)
+    params['work_dir'] = str(work / 'work')
+    requested = deepcopy(parent.get('provenance', {}).get(
+        'core_protein_requested_params', parent['params']))
+    resources = context['resources']
+    gpu_id = resources.get('gpu_id')
+    gpu_ids = resources.get('gpu_ids') or ([] if gpu_id is None else [gpu_id])
+    native_runtime = context.get('native_runtime', parent['params'])
+    execution_context = NativeCompilerExecutionContext(gpu_id=gpu_id,
+        gpu_ids=tuple(gpu_ids),
+        anarcii_execution_mode=native_runtime.get('anarcii_execution_mode'),
+        anarcii_gpu_id=native_runtime.get('anarcii_gpu_id'))
+    invocation = compile_nextflow_invocation('molecular_dynamics', 'simulate', params,
+        str(output), job_id=context['root_job_id'], requested_params=requested,
+        requested_identity_json=canonical_bytes(requested),
+        source_identity=SourceIdentity(**context['source_identity']),
+        execution_context=execution_context)
+    generated = tuple(GeneratedInput((prefix / item.relative_path).as_posix(), item.payload)
+                      for item in invocation.generated_inputs)
+    return replace(invocation, generated_inputs=(
+        GeneratedInput(receipt_relative.as_posix(), canonical_bytes(receipt)), *generated))
+
+
+def compile_component_checkpoint_continuation(context, checkpoint, decision):
+    """Compile a selected native review edge without mutating retained authority."""
+    from copy import deepcopy
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from component_runtime import GeneratedInput, ResultReference, SourceIdentity, canonical_bytes
+    from routers.jobs import _native_gate_resume_params
+
+    if set(decision) != {"selected_artifacts"}:
+        raise ValueError("Checkpoint decision requires only explicit selected_artifacts; scientific overrides use native admission")
+    selected = decision["selected_artifacts"]
+    if (not isinstance(selected, list) or not selected or any(not isinstance(item, str) for item in selected)
+            or len(set(selected)) != len(selected)):
+        raise ValueError("Explicit nonempty unique review selection required")
+    body = checkpoint["checkpoint"]
+    if any(body.get(k) != context.get(k) for k in ("attempt_id", "target_id", "lease_id")):
+        raise ValueError("Checkpoint continuation attempt authority conflicts")
+    root = Path(context["artifact_root"])
+    refs = {r["relative_path"]: ResultReference(**r) for r in body["artifacts"]}
+    controls = [r for r in refs.values() if r.schema == "bms.stage-review.control.v1"]
+    if len(controls) != 1:
+        raise ValueError("Native gate control artifact required")
+    control = json.loads(controls[0].resolve(root).read_text())
+    stage = control["stage"]
+    if stage not in {"post_rfantibody", "post_fampnn", "post_caliby", "post_structure_validation",
+                     "post_boltzgen", "post_ppiflow_generator"}:
+        raise ValueError("This native gate has no supported checkpoint continuation policy")
+    selection_id = hashlib.sha256(canonical_bytes(dict(checkpoint=checkpoint["checkpoint_sha256"], decision=decision))).hexdigest()
+    directory = Path(".bms-review") / "selections" / selection_id
+    inputs = []
+    names = set()
+    for relative in selected:
+        reference = refs.get(relative)
+        if (reference is None or reference.schema not in {"bms.stage-review.candidate.v1", "bms.stage-review.raw.v1", "bms.stage-review.filtered.v1"}
+                or Path(relative).suffix.lower() not in {".pdb", ".cif"}):
+            raise ValueError("Selection contains a foreign or nonstructure review artifact")
+        name = Path(relative).name
+        if name in names:
+            raise ValueError("Selected native candidate filenames collide")
+        names.add(name)
+        inputs.append(GeneratedInput((directory / name).as_posix(), reference.resolve(root).read_bytes()))
+    parent = deepcopy(context["parent"])
+    if control.get('generation') and not control.get('continuation'):
+        raise ValueError('Retained generation is missing its native continuation authority')
+    if control.get('continuation'):
+        previous = control['continuation']
+        if not all(key in previous for key in ('model_id', 'mode', 'native_parameters')):
+            raise ValueError('Retained continuation requires native model/mode identity in the runtime edge')
+        parent.update(model_id=previous['model_id'], mode=previous['mode'], params=previous['native_parameters'])
+    params = deepcopy(parent["params"])
+    job = SimpleNamespace(**{**parent, "params": params, "awaiting_input": True,
+        "awaiting_stage": stage, "awaiting_payload": {"candidate_dir": str(root / directory)},
+        "output_dir": str(root)})
+    if stage in {'post_boltzgen', 'post_ppiflow_generator'}:
+        from routers.jobs import _native_checkpoint_domain_follow_on
+        request, manifest_path, manifest = _native_checkpoint_domain_follow_on(
+            parent, stage, root / directory, [refs[relative] for relative in selected])
+        inputs.append(GeneratedInput(manifest_path.relative_to(root).as_posix(), canonical_bytes(manifest)))
+        invocation = compile_nextflow_invocation(request.model_id, request.mode, request.params, str(root / directory / 'continuation'),
+            job_id=context['root_job_id'], requested_params=request.params,
+            source_identity=SourceIdentity(**context['source_identity']))
+        # Native generated files belong to this immutable edge, never the original inputs.
+        prefix = directory / 'continuation'
+        generated = tuple(GeneratedInput((prefix / item.relative_path).as_posix(), item.payload)
+                          for item in invocation.generated_inputs)
+        return replace(invocation, generated_inputs=tuple(inputs) + generated)
+    overrides, hint = _native_gate_resume_params(job, {})
+    params.update(overrides)
+    params.update(resume_job_id=context["root_job_id"], resume_source_dir=str(root),
+                  resume_requested_stage=hint, resume_work_dir=parent["params"].get("work_dir", "work"))
+    prefix = directory / 'continuation'
+    invocation = compile_nextflow_invocation(parent["model_id"], parent["mode"], params, str(root / prefix),
+        job_id=context["root_job_id"], requested_params=parent["params"],
+        source_identity=SourceIdentity(**context["source_identity"]))
+    generated = tuple(GeneratedInput((prefix / item.relative_path).as_posix(), item.payload)
+                      for item in invocation.generated_inputs)
+    return replace(invocation, generated_inputs=tuple(inputs) + generated)
+
+
+def compile_nextflow_invocation(
+    model_id: str,
+    mode: str,
+    params: Dict[str, Any],
+    output_dir: str,
+    job_id: Optional[str] = None,
+    *,
+    requested_params: Optional[Dict[str, Any]] = None,
+    source_identity=None,
+    requested_identity_json: bytes | None = None,
+    execution_context: NativeCompilerExecutionContext | None = None,
+):
+    """The existing native compiler, returning immutable values and argv together.
+
+    This is shared by preview, local/remote launch and saved-job prewarming;
+    transport adapters must not reconstruct its settings from rendered argv.
+    """
+    from component_runtime import NativeInvocation, GeneratedInput
+    from copy import deepcopy
+    requested_snapshot = deepcopy(params if requested_params is None else requested_params)
+    params = deepcopy(params)
+    if execution_context is not None:
+        if not isinstance(execution_context, NativeCompilerExecutionContext):
+            raise ValueError('native compiler requires typed execution context')
+        if params.get('gpu_id') not in (None, execution_context.gpu_id):
+            raise ValueError('native compiler GPU conflicts with reservation')
+        if execution_context.gpu_id is not None:
+            params['gpu_id'] = execution_context.gpu_id
+        params['anarcii_execution_mode'] = execution_context.anarcii_execution_mode
+        params.pop('anarcii_gpu_id', None)
+        if execution_context.anarcii_gpu_id is not None:
+            params['anarcii_gpu_id'] = execution_context.anarcii_gpu_id
+    native_parameters: Dict[str, Any] = {}
+    generated_inputs = []
+
+    def plan_input(path: Path, payload: bytes) -> None:
+        relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
+        generated_inputs.append(GeneratedInput(relative, payload))
+
+    def bind_fampnn_declaration(command, value) -> None:
+        # The same existing producer-owned biological declaration transport is
+        # used by public and selected-parent callers; never inline large JSON.
+        declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
+        declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
+        plan_input(declaration_path, declaration_bytes)
+        declaration_sha = hashlib.sha256(declaration_bytes).hexdigest()
+        command.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
+                        '--fampnn_analysis_declaration_sha256', declaration_sha])
+        native_parameters['fampnn_analysis_declaration_path'] = str(declaration_path)
+        native_parameters['fampnn_analysis_declaration_sha256'] = declaration_sha
+
+    def finish_command(command):
+        from dataclasses import replace
+        from component_runtime import SelectedExecutionPlan, SourceIdentity
+        from model_registry import selected_execution_metadata
+        from paths import get_code_root
+
+        invocation = NativeInvocation.capture(model_id=model_id, mode=mode,
+            command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
+            requested=requested_snapshot, effective=params,
+            native_parameters=native_parameters, entrypoint=workflow_entrypoint,
+            generated_inputs=generated_inputs)
+        # The Job owner already captures and subsequently rechecks its source.
+        # Reuse that immutable origin; never add a third Git probe or feed the
+        # metadata-only request identity into scientific legacy flags.
+        source = source_identity or SourceIdentity.from_checkout(get_code_root())
+        if requested_identity_json is not None:
+            invocation = replace(invocation, requested_json=requested_identity_json)
+        metadata_settings = _native_plan_metadata_settings(model_id, params)
+        plan = build_selected_execution_plan(model_id=model_id, mode=mode,
+            entrypoint=workflow_entrypoint, requested=invocation.requested_json,
+            effective=invocation.effective_json, native_parameters=invocation.native_parameters_json,
+            source_identity=source, metadata_settings=metadata_settings)
+        return replace(invocation, source_identity=source, execution_plan=plan)
+
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)
     # Controller execution metadata is not a scientific Nextflow parameter.
@@ -3503,7 +4831,10 @@ def build_nextflow_command(
         ]
         if job_id:
             command.extend(["--job_id", str(job_id)])
-        return command
+        native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
+            frustrampnn_batch_manifest_path=batch_manifest_path,
+            frustrampnn_physical_gpu_id=gpu_id)
+        return finish_command(command)
 
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
@@ -3567,7 +4898,12 @@ def build_nextflow_command(
             "--gpu_id", str(normalized_gpu_id),
             "--frustrampnn_physical_gpu_id", str(normalized_gpu_id),
         ])
-        return command
+        native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
+            run_frustrampnn=True, gpu_id=normalized_gpu_id,
+            frustrampnn_physical_gpu_id=normalized_gpu_id)
+        if job_id:
+            native_parameters['job_id'] = str(job_id)
+        return finish_command(command)
 
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
@@ -3589,6 +4925,28 @@ def build_nextflow_command(
         raise ValueError(
             "Protein Hunter is reserved for the de novo binder workflow and remains blocked until PAE is preserved and interface selection uses ipSAE"
         )
+
+    is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
+    definition = None
+    if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
+        raise ValueError('Unsupported public sequence-design model/mode')
+    if is_generic_sequence_command:
+        from model_registry import get_registry
+        # A replay may contain the preceding materialized settings path. This
+        # is compiler-owned transport, rebound below, never operator science.
+        params.pop('sequence_design_settings_path', None)
+        definition = get_registry().get_model(model_id)
+        if definition is None or not definition.enabled:
+            raise ValueError('Public sequence-design model is unavailable')
+        for key, value in (('sequence_design_engine', model_id), ('sequence_design_mode', mode)):
+            if key in params and params[key] != value:
+                raise ValueError('Sequence-design selection conflicts with its model/mode')
+            params[key] = value
+        for field in definition.params:
+            if field.default is not None:
+                params.setdefault(field.name, deepcopy(field.default))
+        if not params.get('input_pdb'):
+            raise ValueError('Public sequence design requires input_pdb')
 
     # DEBUG: Log all params to trace complex_components
     logger.info(f"build_nextflow_command received params keys: {list(params.keys())}")
@@ -3620,6 +4978,7 @@ def build_nextflow_command(
 
     # Model + mode to profile mapping (for API-driven jobs)
     model_mode_to_profile = {
+        **{pair: 'protein_sequence_design' for pair in PUBLIC_SEQUENCE_MODES},
         ('boltz2', 'predict'): 'boltz',
         ('boltz2', 'complex'): 'boltz',
         ('rf3', 'predict'): 'rf3',
@@ -3671,8 +5030,9 @@ def build_nextflow_command(
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
-        # Seeded PPIFlow generator
-        ('ppiflow', 'generator_backbone_refine'): 'boltz',
+        # Existing native generators, admitted through the antibody parent.
+        ('antibody_denovo', 'nanobody_binder'): 'boltzgen',
+        ('antibody_denovo', 'generator_backbone_refine'): 'boltz',
     }
 
     def resolve_antibody_validation_profile(default_profile: str) -> str:
@@ -3798,6 +5158,7 @@ def build_nextflow_command(
         explicit_data_root = str(get_data_root())
 
     explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
+
     explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
     explicit_msa_db = None if is_fastq_only_ont_command else (params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db()))
     explicit_msa_cache = None if is_fastq_only_ont_command else (params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir()))
@@ -3837,9 +5198,15 @@ def build_nextflow_command(
             "--out_dir", output_dir,
         ]
     
+    # Native workflows under workflows/ use the common source-root Groovy
+    # library, not workflows/lib. Carry it in the real shared invocation.
+    cmd.extend(['-lib', str(Path(explicit_code_root) / 'lib')])
+
     # Add job_id for spawn-wait-collect tracking
     if job_id:
         cmd.extend(["--job_id", job_id])
+        native_parameters['job_id'] = job_id
+    native_parameters['out_dir'] = output_dir
 
     # Force core path params so moved data/model drives are always honored.
     # Only apply defaults when caller didn't explicitly provide a value.
@@ -3854,7 +5221,12 @@ def build_nextflow_command(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if not is_fastq_only_ont_command:
+    if is_generic_sequence_command:
+        # No diffusion, prediction or hosted/local MSA stage is selected by the
+        # sequence-only wrapper. Do not demand their unselected input stores.
+        for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
+            explicit_path_defaults.pop(key, None)
+    if not is_fastq_only_ont_command and not is_generic_sequence_command:
         explicit_path_defaults.update({
             "msa_local_db": explicit_msa_db,
             "msa_cache_dir": explicit_msa_cache,
@@ -3862,6 +5234,38 @@ def build_nextflow_command(
     for key, value in explicit_path_defaults.items():
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
+            native_parameters[key] = str(value)
+
+    if is_generic_sequence_command:
+        assert definition is not None  # Resolved and checked above.
+        # Use Nextflow's native params document for typed science, including
+        # false/zero/empty strings. CLI empty values otherwise become flags.
+        # Paths stay outside this immutable document so shared placement can
+        # bind them without rewriting scientific settings or archived inputs.
+        science_keys = {field.name for field in definition.params
+                        if field.type not in {'file', 'directory'}} | {
+            'sequence_design_engine', 'sequence_design_mode', 'seqs_per_design',
+            'enable_fampnn_filter', 'fampnn_max_psce', 'fampnn_max_residue_psce',
+            'mpnn_max_score',
+        }
+        settings = {key: value for key, value in params.items() if key in science_keys}
+        settings_path = Path(output_dir) / '.sequence-design-settings.json'
+        plan_input(settings_path, json.dumps(settings, allow_nan=False, sort_keys=True).encode('utf-8'))
+        cmd.extend(['-params-file', str(settings_path),
+                    '--sequence_design_settings_path', str(settings_path)])
+        native_parameters.update(settings)
+        native_parameters['sequence_design_settings_path'] = str(settings_path)
+        for key, value in params.items():
+            if key in science_keys or value is None or value == '':
+                continue
+            if key == 'fampnn_analysis_declaration' and isinstance(value, dict):
+                bind_fampnn_declaration(cmd, value)
+                continue
+            if isinstance(value, (dict, list)):
+                raise ValueError('Unsupported nested sequence-design runtime parameter: ' + key)
+            cmd.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
+            native_parameters[key] = value
+        return finish_command(cmd)
 
     # Inject MSA GPU policy defaults when caller did not explicitly specify them.
     # Precedence:
@@ -3869,10 +5273,9 @@ def build_nextflow_command(
     # 2) persisted MSA Server Settings GPU pin
     # 3) scheduler global MSA preference list
     try:
-        from services.gpu_config import read_scheduler_config
-        from services.msa_server import read_server_settings
-
-        if is_fastq_only_ont_command:
+        if execution_context is not None:
+            scheduler_cfg, global_cfg, overrides_cfg, msa_server_settings = {}, {}, {}, {}
+        elif is_fastq_only_ont_command:
             scheduler_cfg = {}
             global_cfg = {}
             overrides_cfg = {}
@@ -3880,6 +5283,8 @@ def build_nextflow_command(
             params.pop("msa_preferred_gpus", None)
             params.pop("msa_excluded_gpus", None)
         else:
+            from services.gpu_config import read_scheduler_config
+            from services.msa_server import read_server_settings
             scheduler_cfg = read_scheduler_config() or {}
             global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
             overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
@@ -3965,7 +5370,7 @@ def build_nextflow_command(
     if is_fastq_only_ont_command:
         params.pop("anarcii_execution_mode", None)
         params.pop("anarcii_gpu_id", None)
-    else:
+    elif execution_context is None:
         try:
             from services.anarcii_runtime import (
                 get_default_anarcii_mode,
@@ -4117,6 +5522,7 @@ def build_nextflow_command(
         output_dir=output_dir,
         params=params,
         complex_components=complex_components,
+        write_input=plan_input,
     )
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
@@ -4134,7 +5540,11 @@ def build_nextflow_command(
             params['diffdock_ntp_type'] = params.pop('ntp_type')
     elif model_id == 'docking':
         params.setdefault('docking_engine', 'dual')
-    elif model_id == 'boltzgen':
+    elif model_id in {'boltzgen', 'boltzgen_child'} or (model_id == 'antibody_denovo' and mode == 'nanobody_binder'):
+        params.setdefault('diffusion_method', 'boltzgen')
+        if model_id == 'antibody_denovo':
+            from services.boltzgen_request_compatibility import compile_boltzgen_settings
+            params = compile_boltzgen_settings(params)
         # For BoltzGen: Apply all BoltzGen-specific parameter mappings
         # These were previously in global param_mapping and broke other workflows!
         if 'boltzgen_binding_site_residues' not in params:
@@ -4173,7 +5583,7 @@ def build_nextflow_command(
         for src_key, dest_key in boltzgen_mappings.items():
             if src_key in params:
                 params[dest_key] = params.pop(src_key)
-    elif model_id == 'ppiflow':
+    elif model_id == 'antibody_denovo' and mode == 'generator_backbone_refine':
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'ppiflow_generator'
         params.setdefault('stage_family', 'ppiflow')
@@ -4490,6 +5900,7 @@ def build_nextflow_command(
                 output_dir=output_dir,
                 params=params,
                 complex_components=complex_components,
+                write_input=plan_input,
             )
             if staged_bcp_input is not None:
                 params['bcp_input_path'] = str(staged_bcp_input)
@@ -4610,9 +6021,8 @@ def build_nextflow_command(
             params['esmf_model_id_or_path'] = default_model_id
         if complex_components:
             esmfold2_complex_path = Path(output_dir) / "esmfold2_complex_components.json"
-            esmfold2_complex_path.parent.mkdir(parents=True, exist_ok=True)
-            with esmfold2_complex_path.open("w", encoding="utf-8") as handle:
-                json.dump({"components": complex_components}, handle, indent=2)
+            plan_input(esmfold2_complex_path,
+                json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
             params['esmf_complex_components_file'] = str(esmfold2_complex_path)
             # The canonical structure launcher includes the primary protein in complex_components.
             # Passing both --esmf_sequence and a components file would duplicate chain IDs in the
@@ -4642,19 +6052,28 @@ def build_nextflow_command(
             params['rfd_mode'] = mode
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
-        # Ensure output directory exists
-        complex_json_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(complex_json_path, 'w') as f:
-            json.dump({"components": complex_components}, f, indent=2)
-        logger.info(f"Wrote complex definition to {complex_json_path}")
+        plan_input(complex_json_path,
+            json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+        logger.info(f"Compiled complex definition for {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
+        native_parameters['complex_json_path'] = str(complex_json_path)
 
     if sequence_batch_json_path:
         cmd.extend(["--sequence_batch_json_path", str(sequence_batch_json_path)])
+        native_parameters['sequence_batch_json_path'] = str(sequence_batch_json_path)
     if complex_batch_dir:
         cmd.extend(["--complex_batch_dir", str(complex_batch_dir)])
+        native_parameters['complex_batch_dir'] = str(complex_batch_dir)
     
     # Dynamic parameter passing
+    if params.get('diffusion_method') == 'boltzgen' and model_id != 'boltzgen_child':
+        # Complete parent settings, including empty/null values that legacy argv
+        # cannot encode. Spawn consumes this compiler-owned native projection.
+        params['boltzgen_child_settings_json'] = json.dumps({key: value for key, value in params.items()
+            if key.startswith('boltzgen_') and not key.endswith(('_path', '_dir')) and key not in
+            {'boltzgen_child_settings_json', 'boltzgen_extra_params', 'boltzgen_yaml_config',
+             'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
+            sort_keys=True, separators=(',', ':'))
     for key, value in params.items():
         # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
         # request-supplied component override through the generic parameter lane.
@@ -4677,17 +6096,14 @@ def build_nextflow_command(
             
             if isinstance(value, bool):
                 cmd.extend([f"--{nf_key}", str(value).lower()])
+                native_parameters[nf_key] = value
             elif isinstance(value, list):
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
+                native_parameters[nf_key] = list(value)
             elif isinstance(value, dict):
                 if key == 'fampnn_analysis_declaration':
-                    declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
-                    declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
-                    declaration_path.parent.mkdir(parents=True, exist_ok=True)
-                    declaration_path.write_bytes(declaration_bytes)
-                    cmd.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
-                                '--fampnn_analysis_declaration_sha256', hashlib.sha256(declaration_bytes).hexdigest()])
+                    bind_fampnn_declaration(cmd, value)
                 elif key == "frustrampnn_settings":
                     transport_value = dict(value)
                     protein_selection = transport_value.get("protein_selection")
@@ -4737,12 +6153,15 @@ def build_nextflow_command(
                             serialized.decode("utf-8"),
                         ]
                     )
+                    native_parameters['frustrampnn_settings_value_origin'] = settings_value_origin
+                    native_parameters[nf_key] = transport_value
                 else:
-                    # Unrelated nested parameters remain unsupported and are not
-                    # broadened into a generic JSON command-line transport.
+                    # Unsupported nested values are not broadened into generic
+                    # JSON transport or included in the native projection.
                     logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
+                native_parameters[nf_key] = value
 
     if params.get("run_frustrampnn") is True:
         component_gpu = params.get("gpu_id")
@@ -4751,8 +6170,9 @@ def build_nextflow_command(
                 "Enabled FrustraMPNN requires a scheduler-assigned physical GPU ID"
             )
         cmd.extend(["--frustrampnn_physical_gpu_id", str(component_gpu)])
+        native_parameters['frustrampnn_physical_gpu_id'] = int(str(component_gpu))
 
-    return cmd
+    return finish_command(cmd)
 
 
 def _pid_is_alive(pid: int) -> bool:

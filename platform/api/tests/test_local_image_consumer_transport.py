@@ -174,6 +174,102 @@ assert config.params.runtime_image_store.toString() == args[3]
     assert f"params.runtime_image_store = '{tmp_path}/store'" in selected.stdout
 
 
+def test_component_resource_native_nextflow_stub(monkeypatch, tmp_path):
+    """Real offline Nextflow stub: native setup, task binding and lifetime lock."""
+    import fcntl
+    import native_components
+    from scripts.lib.component_adapter import resource_bound_command
+
+    jar = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
+    assert jar and Path(jar).is_file(), 'Parent must stage the real Nextflow JAR'
+    assert os.environ.get('NXF_OFFLINE') == 'true'
+    monkeypatch.setenv('NXF_HOME', str(tmp_path / 'nextflow'))
+    name = 'ResourceSetupProbe'
+    authority = 'fixture/resource_setup.nf:' + name
+    # This same native expression is the fixture compiler's contract and the
+    # actual process directive. Do not pre-evaluate its input/params references.
+    setup = '''{ "export NATIVE_SETUP='${sample}:${params.suffix}'" }'''
+    monkeypatch.setitem(native_components.PROCESS_CONTRACTS, authority,
+                        (None, ('beforeScript ' + setup,)))
+    workflow = tmp_path / 'probe.nf'
+    workflow.write_text('''nextflow.enable.dsl=2
+params.suffix = 'native-param'
+params.lock_path = ''
+params.python = ''
+process ResourceSetupProbe {
+    executor 'local'
+    cpus 1
+    memory '64 MB'
+    beforeScript ''' + setup + '''
+    input:
+    val sample
+    output:
+    path 'harmless.txt'
+    script:
+    "exit 97" // Only the explicitly selected harmless stub may execute.
+    stub:
+    """
+    printf '%s\\n' "\\$NATIVE_SETUP" > harmless.txt
+    '${params.python}' - '${params.lock_path}' <<'PY'
+import fcntl, os, sys
+if sys.argv[1]:
+    assert os.readlink('/proc/self/fd/198') == sys.argv[1]
+    with open(sys.argv[1], 'a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError('Native task did not retain its lifecycle lock')
+PY
+    """
+}
+workflow { ResourceSetupProbe(Channel.of('task-input')) }
+''')
+    lock = tmp_path / 'compute.lock'
+    context = {
+        'resources': {'required': {'cpus': 1, 'memory_bytes': 268435456}},
+        'resource_lock_path': str(lock), 'working_directory': str(tmp_path),
+        'execution_plan': {'metadata': {'static_components': [{
+            'authority': authority, 'selection_json': {'native_process': name},
+            'resources_json': json.loads(__import__('native_components').native_resource_policy({})),
+        }]}},
+    }
+    outputs = []
+    for bound in (False, True):
+        run_dir = tmp_path / ('bound' if bound else 'native')
+        run_dir.mkdir()
+        command = ['java', '-jar', jar, '-log', str(run_dir / 'nextflow.log'),
+                   'run', str(workflow), '-stub-run', '-ansi-log', 'false',
+                   '-work-dir', str(run_dir / 'work'), '--python', sys.executable]
+        if bound:
+            command += ['--lock_path', str(lock)]
+            original = command.copy()
+            command = resource_bound_command(command, None, context, run_dir)
+            assert command[:-2] == original
+        result = subprocess.run(command, cwd=run_dir, capture_output=True,
+                                text=True, timeout=90)
+        (run_dir / 'stdout.txt').write_text(result.stdout)
+        (run_dir / 'stderr.txt').write_text(result.stderr)
+        log = run_dir / 'nextflow.log'
+        diagnostics = result.stdout + result.stderr + (log.read_text() if log.exists() else '')
+        assert result.returncode == 0, diagnostics
+        tasks = list((run_dir / 'work').glob('*/*/.command.run'))
+        assert len(tasks) == 1, diagnostics
+        runner = tasks[0].read_text()
+        assert "export NATIVE_SETUP='task-input:native-param'" in runner
+        if bound:
+            assert f'exec 198>{shlex.quote(str(lock))}' in runner
+            assert 'flock -x 198 || exit 1' in runner
+            assert runner.index('flock -x 198') < runner.index('export NATIVE_SETUP=')
+            assert lock.is_file()
+            with lock.open('a') as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        outputs.append((tasks[0].parent / 'harmless.txt').read_bytes())
+    assert outputs == [b'task-input:native-param\n'] * 2
+
+
 @pytest.mark.parametrize('module,process', [
     ('clone_validation.nf', 'CloneValidationAdapter'),
     ('construct_verify.nf', 'ConstructVerify'),

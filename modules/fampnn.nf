@@ -22,11 +22,11 @@ process PrepFAMPNN {
 
     script:
     // Design mode parameters with defaults
-    def designMode = params.antibody_design_mode ?: 'cdr_only'
-    def designLoops = params.antibody_design_loops ?: 'H1,H2,H3,L1,L2,L3'
+    def designMode = params.antibody_design_mode != null ? params.antibody_design_mode : 'cdr_only'
+    def designLoops = params.antibody_design_loops != null ? params.antibody_design_loops : 'H1,H2,H3,L1,L2,L3'
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
-    def antibodyChains = params.antibody_chains ?: 'H,L'
-    def constraintMode = (params.fampnn_constraint_mode ?: 'generic').toString().trim().toLowerCase()
+    def antibodyChains = params.antibody_chains != null ? params.antibody_chains : 'H,L'
+    def constraintMode = (params.fampnn_constraint_mode != null ? params.fampnn_constraint_mode : 'generic').toString().trim().toLowerCase()
     def useAntibodyConstraints = ['antibody', 'cdr', 'cdr_only', 'antibody_cdr', 'antibody_constraints'].contains(constraintMode)
 
     // Parse rfantibody_design_loops_custom if available by removing brackets
@@ -38,6 +38,16 @@ process PrepFAMPNN {
     def customCdrFlag = customCdrPositions ? "--cdr_positions \"${customCdrPositions}\"" : ""
     def extraFixedJson = params.manual_mutation_fixed_positions_json ? " \\\\\n        --extra_fixed_positions_json \\\"${params.manual_mutation_fixed_positions_json}\\\"" : ""
 
+    def genericRequest = params.get('sequence_design_engine') == 'fampnn'
+    def genericSelection = ['sequence_design_mode', 'design_chain', 'target_chain', 'fixed_positions', 'fampnn_fix_target_sidechains'].collectEntries { key -> [(key): params.get(key)] }
+    if (genericRequest && genericSelection.design_chain == null) {
+        genericSelection.design_chain = 'A'
+    }
+    def genericBase64 = groovy.json.JsonOutput.toJson(genericSelection).getBytes('UTF-8').encodeBase64().toString()
+    def genericFlags = genericRequest ? "--request_base64 '${genericBase64}' --prepared_dir fampnn_input" : ''
+    if (genericRequest && useAntibodyConstraints) {
+        throw new IllegalArgumentException('Generic sequence design cannot use antibody constraints')
+    }
     def roleProofFlag = useAntibodyConstraints && params.get('core_protein_scientific_contract') != null ? '--require_role_provenance --prepared_dir fampnn_input' : ''
     def constraintCmd = useAntibodyConstraints
         ? """
@@ -58,7 +68,7 @@ process PrepFAMPNN {
     # Generate generic constraints (no fixed residues)
     python /scripts/prep_fampnn_constraints_generic.py \\
         --input_dir "./" \\
-        --out_csv "fampnn.csv"
+        --out_csv "fampnn.csv" ${genericFlags}
     """
 
     """
@@ -68,7 +78,7 @@ process PrepFAMPNN {
     # Restore missing side-chains required by FAMPNN    
     python /scripts/prep_fampnn_designs.py \\
         --input_dir "./" \\
-        --out_dir "fampnn_input" ${params.get('core_protein_scientific_contract') != null ? '--publish_identity' : ''}
+        --out_dir "fampnn_input" ${genericRequest ? '--generic_identity' : ''} ${params.get('core_protein_scientific_contract') != null ? '--publish_identity' : ''}
     
     ${constraintCmd}
 
@@ -97,6 +107,9 @@ process RunFAMPNN {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
+    publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "fampnn_output", saveAs: { fn -> "raw" }
+    publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "fampnn_metadata_*.jsonl"
+
     input:
     tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)
     val analysis_chain_id
@@ -104,13 +117,14 @@ process RunFAMPNN {
 
     output:
     tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons
+    path "fampnn_output", emit: raw
     path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq
     path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true
     path "*.log"
 
     script:
-    def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
-    def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
+    def checkpointPreset = (params.fampnn_checkpoint != null ? params.fampnn_checkpoint : 'fampnn_0_0.pt').toString().trim()
+    def checkpointOverride = (params.fampnn_checkpoint_path != null ? params.fampnn_checkpoint_path : '').toString().trim()
     def checkpointMap = [
         'fampnn_0_0.pt': '/app/fampnn/weights/fampnn_0_0.pt',
         'fampnn_0_3.pt': '/app/fampnn/weights/fampnn_0_3.pt',
@@ -120,6 +134,7 @@ process RunFAMPNN {
     if (!checkpointPath) {
         throw new IllegalArgumentException("FAMPNN checkpoint not configured. Set params.fampnn_checkpoint or params.fampnn_checkpoint_path.")
     }
+    def extraBase64 = (params.get('fampnn_extra_config') != null ? params.get('fampnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     def strictAnalysis = params.get('core_protein_scientific_contract') != null
     def deferredAnalysis = strictAnalysis && analysis_contract.declaration instanceof Map
     if (strictAnalysis && (analysis_contract.core_protein_scientific_contract != 1 || (!(analysis_contract.policy instanceof Map) && !deferredAnalysis))) {
@@ -134,26 +149,29 @@ process RunFAMPNN {
     def analysisFlags = strictAnalysis ? '--core-protein-scientific-contract 1 --analysis-policy fampnn_analysis_policy.json --source-pdb-dir . --candidate-pdb-dir fampnn_output/samples' : ''
     def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : '/app/fampnn/fampnn/inference/seq_design.py'
     """
+    # Raw config remains argv data, never shell syntax or command substitution.
+    python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["batch_size", "checkpoint_path", "exclude_cys", "fixed_pos_csv", "num_seqs_per_pdb", "pdb_dir", "pdb_key_list", "presort_by_length", "psce_threshold", "temperature", "seq_only", "repack_last", "timestep_schedule.num_steps", "out_dir"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "fampnn"}' > native_extra_args.bin
+    mapfile -d '' -t native_extra_args < native_extra_args.bin
     mkdir -p results
     ${policySetup}
 
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with defaultdict metadata.
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 python ${nativeLauncher} \\
-        batch_size=${params.fampnn_batch_size ?: 16} \\
+        batch_size=${params.fampnn_batch_size != null ? params.fampnn_batch_size : 16} \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
         fixed_pos_csv=${csv} \\
-        num_seqs_per_pdb=${params.seqs_per_design ?: 8} \\
+        num_seqs_per_pdb=${params.seqs_per_design != null ? params.seqs_per_design : 8} \\
         pdb_dir="./" \\
         presort_by_length=true \\
-        psce_threshold=${params.fampnn_psce_threshold ?: 0.3}  \\
-        temperature=${params.fampnn_temperature ?: 0.1} \\
-        seq_only=${params.fampnn_seq_only ?: false} \\
-        repack_last=${params.fampnn_repack_last ?: true} \\
-        timestep_schedule.num_steps=${params.fampnn_num_steps ?: 100} \\
+        psce_threshold=${params.fampnn_psce_threshold != null ? params.fampnn_psce_threshold : 0.3}  \\
+        temperature=${params.fampnn_temperature != null ? params.fampnn_temperature : 0.1} \\
+        seq_only=${params.fampnn_seq_only != null ? params.fampnn_seq_only : false} \\
+        repack_last=${params.fampnn_repack_last != null ? params.fampnn_repack_last : true} \\
+        timestep_schedule.num_steps=${params.fampnn_num_steps != null ? params.fampnn_num_steps : 100} \\
         out_dir="fampnn_output" \\
-        ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \\
+        "\${native_extra_args[@]}" \\
         2>&1 | tee fampnn_${task.index}.log
 
     ${bindNativePolicy}
@@ -181,8 +199,8 @@ process RunFAMPNN {
             --sample-pkl-dir "fampnn_output/sample_pkls" \\
             --out-jsonl "fampnn_seq_prob_metrics_${batch_id}.jsonl" \\
             --out-csv "fampnn_seq_prob_metrics_${batch_id}.csv" \\
-            --mutation-top-n ${strictAnalysis && params.fampnn_mutation_top_n != null ? params.fampnn_mutation_top_n : (params.fampnn_mutation_top_n ?: 25)} \\
-            --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta ?: 0.0} ${analysisFlags}
+            --mutation-top-n ${strictAnalysis && params.fampnn_mutation_top_n != null ? params.fampnn_mutation_top_n : (params.fampnn_mutation_top_n != null ? params.fampnn_mutation_top_n : 25)} \\
+            --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta != null ? params.fampnn_mutation_min_log_odds_delta : 0.0} ${analysisFlags}
     else
         printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
     fi

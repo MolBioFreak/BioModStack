@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Job
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.ont_ngs_contract import resolve_ont_workflow_alias
 from services.resource_usage_evidence import (
     ResourceUsageEvidenceError,
     attach_resource_usage_receipt,
@@ -74,6 +75,8 @@ def is_ont_fastq_qc_job(job: Job) -> bool:
     from services.ont_ngs_contract import resolve_ont_workflow_alias
 
     params = job.params if isinstance(job.params, dict) else {}
+    # Typed submission preserves the requested alias alongside canonical IDs.
+    # Compare their existing registry identities, not their display spelling.
     workflow_values = {
         resolve_ont_workflow_alias(str(params[key]).strip())
         for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
@@ -99,8 +102,10 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
     """Return whether one Job is the bounded external move-BAM alignment lane."""
 
     params = job.params if isinstance(job.params, dict) else {}
+    # Typed submission preserves the requested alias alongside canonical IDs.
+    # Compare their existing registry identities, not their display spelling.
     workflow_values = {
-        str(params[key]).strip()
+        resolve_ont_workflow_alias(str(params[key]).strip())
         for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
         if params.get(key) is not None and str(params[key]).strip()
     }
@@ -119,6 +124,140 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
         and isinstance(params.get("source_external_move_registration_receipt_id"), str)
         and bool(params.get("source_external_move_registration_receipt_id"))
     )
+
+
+def ont_native_completion_path(job: Any) -> str:
+    """Select the existing local native owner, not a remote scientific recipe.
+
+    Pooled assignment has a dedicated atomic review submission, not the ordinary
+    NGS Job lifecycle. Instrument/raw-signal control is not admitted by this
+    selector; ordinary Nextflow launch admission remains with its existing owner.
+    """
+    from services.ont_ngs_contract import get_ont_workflow_spec
+
+    params = job.params if isinstance(job.params, dict) else {}
+    workflows = {
+        resolve_ont_workflow_alias(str(params[key]).strip())
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    inputs = {
+        str(params[key]).strip()
+        for key in ("ont_input_mode", "input_mode")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    if (str(job.model_id or "").strip().lower() != "nanopore"
+            or len(workflows) != 1 or len(inputs) != 1):
+        raise OntNgsCompletionError("NGS completion workflow/input identities conflict or are absent")
+    workflow = next(iter(workflows))
+    try:
+        spec = get_ont_workflow_spec(workflow)
+    except KeyError as exc:
+        raise OntNgsCompletionError("NGS completion workflow is not registered") from exc
+    if workflow == "ont_pooled_reference_assignment" or next(iter(inputs)) not in spec.input_modes:
+        raise OntNgsCompletionError("NGS completion requires an ordinary supported Job input mode")
+    if is_ont_fastq_qc_job(job):
+        return "fastq_qc"
+    if is_ont_signal_alignment_job(job):
+        return "signal_alignment"
+    return "shared_native_import"
+
+
+async def validate_and_prepare_remote_ont_completion(
+    job: Any, *, attempt_id: str, output_root: Path, manifest: Any,
+    resource_usage_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate received native evidence before staging the caller's publication.
+
+    The executor owns manifest authentication, incoming-generation custody and the
+    database/publication journal transaction. No commits or remote operations occur
+    here; failure leaves the attached Job untouched. Presentation is on demand.
+    A shared_native_import result is NOT scientific completion: after publication
+    the executor must call finalize_successful_job in its existing transaction
+    path, exactly as local Nextflow does for these ordinary modes.
+    """
+    from types import SimpleNamespace
+    from services.ont_submission_trust import verify_launch_input_snapshots
+    from services.remote_stage_receipts import (
+        canonical_bytes, project_remote_stage_terminals, validate_remote_stage_receipts,
+    )
+    from services.resource_usage_evidence import (
+        GLOBAL_RESOURCE_ADMISSION_PARAM, REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA,
+        validate_producer_resource_usage_receipt,
+    )
+    if (not getattr(job, "execution_target_id", None)
+            or getattr(job, "remote_attempt_id", None) != attempt_id
+            or getattr(job, "nextflow_run_id", None) != f"remote:{attempt_id}"
+            or getattr(job, "remote_state", None) != "returning"):
+        raise OntNgsCompletionError("NGS return lost current attempt authority")
+    completion_path = ont_native_completion_path(job)
+    persisted_root = resolve_persisted_job_result_root(job)
+    root = Path(output_root)
+    if not root.is_absolute() or root != root.resolve() or not root.is_dir():
+        raise OntNgsCompletionError("NGS incoming generation must be a real confined directory")
+    receipts = await run_in_threadpool(
+        validate_remote_stage_receipts, output_root=root, job_id=str(job.id),
+        attempt_id=attempt_id, manifest=manifest,
+    )
+    terminals = project_remote_stage_terminals(receipts=receipts, persisted_result_root=persisted_root)
+    provenance = dict(job.provenance or {})
+    provenance.pop("result_integrity", None)
+    # The incoming generation has its own receipt set; retained historical stages
+    # are not evidence for this attempt. The publication journal retains old data.
+    provenance["stage_terminal_states"] = terminals
+    provenance["remote_stage_receipts"] = {
+        "schema": "bms.remote-stage-receipt.v1", "attempt_id": attempt_id,
+        "job_id": str(job.id),
+        "receipts_sha256": hashlib.sha256(canonical_bytes(receipts)).hexdigest(),
+    }
+    staged = SimpleNamespace(
+        id=job.id, model_id=job.model_id, params=dict(job.params or {}),
+        provenance=provenance, output_dir=job.output_dir,
+        child_output_dir=getattr(job, "child_output_dir", None),
+        execution_target_id=job.execution_target_id, remote_attempt_id=attempt_id,
+        status="completed",
+    )
+    await run_in_threadpool(verify_launch_input_snapshots, staged.params)
+    original_params = staged.params
+    try:
+        if (not isinstance(resource_usage_receipt, Mapping)
+                or resource_usage_receipt.get("schema") != REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA):
+            raise ResourceUsageEvidenceError("remote resource observations are unavailable")
+        staged.params = attach_resource_usage_receipt(staged.params, resource_usage_receipt)
+        handoff = staged.params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
+        if not isinstance(handoff, Mapping):
+            raise ResourceUsageEvidenceError("NGS return has no persisted resource admission")
+        await run_in_threadpool(validate_producer_resource_usage_receipt, staged, handoff)
+    except (ResourceUsageEvidenceError, TypeError, ValueError):
+        # Never accept unbound observations or make their absence science failure.
+        staged.params = original_params
+        resource_usage_receipt = None
+    if completion_path == "shared_native_import":
+        # Native stage declarations are authenticated above, not manufactured from
+        # exit status. The ordinary importer still owns terminal success/failure.
+        job.params = staged.params
+        job.provenance = staged.provenance
+        job.completed_stages = [stage for stage, terminal in terminals.items()
+                                if terminal["status"] == "complete"]
+        job.stage_outputs = {stage: list(terminal["outputs"])
+                             for stage, terminal in terminals.items()}
+        return {"completion_path": completion_path, "state": "pending_native_import"}
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open(root, flags)
+    try:
+        pinned = Path(f"/proc/self/fd/{descriptor}")
+        validator = (validate_and_prepare_ont_fastq_qc_completion if completion_path == "fastq_qc"
+                     else validate_and_prepare_ont_signal_alignment_completion)
+        result = await validator(staged, resource_usage_receipt=resource_usage_receipt,
+                                 pinned_result_root=pinned)
+        if root.stat().st_ino != os.fstat(descriptor).st_ino or root.stat().st_dev != os.fstat(descriptor).st_dev:
+            raise OntNgsCompletionError("NGS incoming generation changed during validation")
+    finally:
+        os.close(descriptor)
+    for name in ("params", "provenance", "completed_stages", "stage_outputs", "status",
+                 "queue_status", "paused", "current_stage", "stage_progress", "error_message"):
+        setattr(job, name, getattr(staged, name))
+    return {**result, "completion_path": completion_path}
 
 
 async def validate_and_prepare_ont_signal_alignment_completion(

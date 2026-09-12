@@ -490,6 +490,12 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(cm_router, "get_results_dir", lambda: tmp_path / "results")
+    # This submission test needs a regular installed-name runtime leaf; it does
+    # not execute a container or claim scientific runtime qualification.
+    containers = tmp_path / "containers"
+    containers.mkdir()
+    (containers / "frustrampnn.sif").write_bytes(b"isolated runtime presence fixture")
+    monkeypatch.setattr(cm_router, "get_container_dir", lambda: containers)
     request = Request({
         "type": "http", "method": "POST", "scheme": "http",
         "path": "/api/conformational-mapping/sources", "query_string": b"",
@@ -523,6 +529,36 @@ async def test_local_application_upload_and_submit_materializes_snapshot_and_job
             "analysis_policy": cm_router._canonical_analysis_policy(),
             "frustrampnn_settings": operator_settings,
         })
+        from services.nextflow import compile_native_workflow_provision_request
+        from services.remote_execution.contracts import WorkflowProvisionSelection
+        from services.remote_execution import bundle
+        monkeypatch.setattr(bundle, "current_source_identity", lambda: ("a" * 40, "b" * 40))
+        selection = WorkflowProvisionSelection(kind="workflow", workflow_request={
+            "workflow_type": "conformational_mapping", "request": body})
+        before = {str(path): path.read_bytes() for path in (tmp_path / "data").rglob("*") if path.is_file()}
+        plan = await compile_native_workflow_provision_request(selection.workflow_request, request, session)
+        assert plan.model_id == "conformational_mapping"
+        assert not hasattr(plan, "command")
+        assert json.loads(plan.requested_json) == body.model_dump(mode="json")
+        assert json.loads(plan.effective_json)["cm_request"]["frustrampnn_settings"] == {
+            **operator_settings, "settings_value_origin": "operator_request"}
+        assert json.loads(plan.native_parameters_json)["input_bindings"][0]["sha256"] == hashlib.sha256(MMCIF).hexdigest()
+        assert await session.scalar(select(func.count()).select_from(Job)) == 0
+        assert not (tmp_path / "results").exists()
+        assert before == {str(path): path.read_bytes() for path in (tmp_path / "data").rglob("*") if path.is_file()}
+        request.state.authenticated_principal = {"subject": "different-operator", "roles": ["operator"]}
+        from fastapi import HTTPException
+        with monkeypatch.context() as auth:
+            auth.setattr(cm_router, "_authorization_enabled", lambda: True)
+            with pytest.raises(HTTPException) as denied:
+                await compile_native_workflow_provision_request(selection.workflow_request, request, session)
+            assert denied.value.status_code == 403
+            request.state.authenticated_principal = {"subject": cm_router._PERSONAL_WORKFLOW_PRINCIPAL, "roles": ["operator"]}
+            authorized = await compile_native_workflow_provision_request(selection.workflow_request, request, session)
+            assert authorized.plan_sha256 == plan.plan_sha256
+        replay = WorkflowProvisionSelection.model_validate_json(selection.model_dump_json())
+        assert replay.model_dump() == selection.model_dump()
+        request.state.authenticated_principal = {"subject": "test-operator", "roles": ["operator"]}
         response = Response()
         receipt = await cm_router.submit_request(body, request, response, session)
         assert receipt["status"] == "queued"

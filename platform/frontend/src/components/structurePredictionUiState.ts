@@ -29,7 +29,7 @@ export interface StructurePredictorOption {
 }
 
 export interface ResolvedStructurePredictorSelection {
-    requestedSelection: StructurePredictorRequest;
+    requestedSelection: string;
     canonicalSelection: StructurePredictorSelection;
     families: StructurePredictorFamily[];
     valid: boolean;
@@ -395,7 +395,7 @@ export const isLegacyStructurePredictorSelection = (
     return normalized === 'rf3' || normalized === 'both' || normalized === 'all';
 };
 
-const toPredictorSelection = (value: string | null | undefined): StructurePredictorRequest => {
+const toPredictorSelection = (value: string | null | undefined): string => {
     const normalized = String(value || '').trim().toLowerCase();
     if (isLegacyStructurePredictorSelection(normalized)) {
         return normalized;
@@ -403,7 +403,7 @@ const toPredictorSelection = (value: string | null | undefined): StructurePredic
     if (normalized === 'boltz_api' || normalized === 'fold_cp' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'boltz_protenix') {
         return normalized;
     }
-    return 'boltz';
+    return normalized === 'boltz2' || !normalized ? 'boltz' : normalized;
 };
 
 export const getStructurePredictorOptions = (mode: StructurePredictionMode): StructurePredictorOption[] => (
@@ -415,6 +415,15 @@ export const resolveStructurePredictorSelection = (
     selection: StructurePredictorSelection | string | null | undefined,
 ): ResolvedStructurePredictorSelection => {
     const requestedSelection = toPredictorSelection(selection);
+
+    if (!['boltz', 'boltz_api', 'fold_cp', 'protenix', 'esmfold2', 'boltz_protenix', 'rf3', 'both', 'all'].includes(requestedSelection)) {
+        return { requestedSelection, canonicalSelection: 'boltz', families: [], valid: false,
+            error: `Unknown saved predictor ${requestedSelection}. Select a supported predictor explicitly.` };
+    }
+    if (mode !== 'complex' && requestedSelection === 'boltz_protenix') {
+        return { requestedSelection, canonicalSelection: 'boltz_protenix', families: [], valid: false,
+            error: 'Boltz + Protenix requires complex mode. The saved ensemble was not replaced.' };
+    }
 
     if (isLegacyStructurePredictorSelection(requestedSelection)) {
         return {

@@ -120,6 +120,79 @@ def summarize_backbones(directory: Path | None, patterns: list[str], preview_lim
     }
 
 
+def open_component_gate(runtime, *, job_id: str, stage: str, payload: dict,
+                        directories: dict[str, Path | None], payload_path: Path | None = None) -> dict:
+    """Retain only the declared native review projection in the shared journal."""
+    import hashlib
+    from component_runtime import ResultReference, canonical_bytes, durable_write
+
+    if job_id != runtime.root_job_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", stage):
+        raise ValueError("gate must belong to the component root and a named native stage")
+    checkpoint_id = f"{job_id}:{stage}"
+    generation = int((runtime.root_state() or {}).get("generation", 0))
+    if generation:
+        checkpoint_id += f":{generation}"
+    root = runtime.artifact_root.resolve()
+    projection = root / ".bms-review" / hashlib.sha256(checkpoint_id.encode()).hexdigest()
+    references = []
+
+    def retain(path: Path, role: str, name: str) -> None:
+        data = path.resolve(strict=True).read_bytes()
+        destination = projection / role / name
+        if destination.exists() and destination.read_bytes() != data:
+            raise ValueError("immutable review projection conflicts")
+        durable_write(destination, data)
+        references.append(ResultReference(component_id=job_id,
+            relative_path=destination.relative_to(root).as_posix(),
+            sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data),
+            schema="bms.stage-review." + role + ".v1"))
+
+    for role, directory in directories.items():
+        if directory is not None:
+            files = sorted({p.resolve() for pattern in ("*.pdb", "*.cif", "*.json", "*.csv", "*.tsv")
+                            for p in directory.glob(pattern) if p.is_file()})
+            for path in files:
+                retain(path, role, path.name)
+    if payload_path is not None:
+        retain(payload_path, "native-payload", payload_path.name)
+    annotation = Path(f"gate_{stage}_annotations.json")
+    if annotation.is_file() and (payload_path is None or annotation.resolve() != payload_path.resolve()):
+        retain(annotation, "annotations", annotation.name)
+    if not references:
+        raise ValueError("gate requires actual declared review artifacts")
+    # This is a derived control projection; native source JSON remains unchanged.
+    edge = (runtime.root_state() or {}).get('continuation_edge')
+    continuation = ({key: edge[key] for key in ('model_id', 'mode', 'native_parameters') if key in edge}
+                    if edge else None)
+    metadata = canonical_bytes(dict(stage=stage, payload=payload, continuation=continuation, generation=generation))
+    metadata_path = projection / "gate-payload.json"
+    if metadata_path.exists() and metadata_path.read_bytes() != metadata:
+        raise ValueError("immutable gate payload conflicts")
+    durable_write(metadata_path, metadata)
+    references.append(ResultReference(component_id=job_id,
+        relative_path=metadata_path.relative_to(root).as_posix(),
+        sha256=hashlib.sha256(metadata).hexdigest(), size_bytes=len(metadata),
+        schema="bms.stage-review.control.v1"))
+    return runtime.checkpoint(checkpoint_id, component_ids=[job_id], artifacts=references)
+
+
+def component_checkpoint_projection(runtime) -> list[dict]:
+    """Minimal host control metadata, never a full result retrieval or import."""
+    from component_runtime import ResultReference
+    projected = []
+    for status in runtime.pending_checkpoints():
+        checkpoint = status["checkpoint"]
+        controls = [r for r in checkpoint["artifacts"] if r["schema"] == "bms.stage-review.control.v1"]
+        if len(controls) != 1:
+            raise ValueError("native checkpoint requires one bound gate control projection")
+        control = json.loads(ResultReference(**controls[0]).resolve(runtime.artifact_root).read_text())
+        projected.append(dict(checkpoint_id=checkpoint["checkpoint_id"],
+            checkpoint_sha256=status["checkpoint_sha256"], stage=control["stage"],
+            attempt_id=runtime.attempt_id, target_id=runtime.target_id, lease_id=runtime.lease_id,
+            artifacts=checkpoint["artifacts"]))
+    return projected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Open an interactive stage gate")
     parser.add_argument("--job_id", required=True)
@@ -168,15 +241,24 @@ def main() -> int:
             raise ValueError(f"Expected JSON object in {payload_path}")
         payload.update(extra_payload)
 
-    response = requests.post(
-        f"{args.api_url}/api/jobs/{args.job_id}/stage-gates/{args.stage}/open",
-        json={"payload": payload},
-        timeout=30,
-    )
-    response.raise_for_status()
+    sys.path.insert(0, str(CODE_ROOT))
+    from scripts.lib.component_adapter import runtime_from_environment
+    runtime = runtime_from_environment()
+    if runtime is not None:
+        result = open_component_gate(runtime, job_id=args.job_id, stage=args.stage, payload=payload,
+            directories={"candidate": candidate_dir, "raw": raw_dir, "filtered": filtered_dir},
+            payload_path=Path(args.payload_json).resolve() if args.payload_json else None)
+    else:
+        response = requests.post(
+            f"{args.api_url}/api/jobs/{args.job_id}/stage-gates/{args.stage}/open",
+            json={"payload": payload},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
 
     output_path = Path(args.output)
-    output_path.write_text(json.dumps(response.json(), indent=2))
+    output_path.write_text(json.dumps(result, indent=2))
     print(output_path.read_text())
     return 0
 

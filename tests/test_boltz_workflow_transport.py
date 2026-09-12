@@ -61,7 +61,9 @@ def test_literal_owner_to_sqlite(tmp_path, owner, marked):
         artifact.write_text(json.dumps(wire, sort_keys=True, separators=(',', ':')))
         env = dict(os.environ, BMS_TEST_BOLTZ_WIRE=str(artifact),
             BMS_TEST_BOLTZ_WIRE_SHA256=hashlib.sha256(artifact.read_bytes()).hexdigest())
-        result = subprocess.run(['pnpm', 'exec', 'vitest', 'run', '--config', 'vitest.md.config.ts',
+        vitest = ROOT / 'platform/frontend/node_modules/vitest/vitest.mjs'
+        assert vitest.is_file(), 'locked frontend dependencies are required; no package-manager downloads'
+        result = subprocess.run([shutil.which('node') or 'node', str(vitest), 'run', '--config', 'vitest.md.config.ts',
             'tests/vitest/publishedBoltzPaeMounted.test.tsx', 'tests/vitest/publishedBoltzNativeMounted.test.tsx'], cwd=ROOT / 'platform/frontend',
             env=env, capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, result.stdout + result.stderr

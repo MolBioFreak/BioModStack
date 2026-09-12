@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -74,19 +76,39 @@ def run_openmm_job(
     allocation = assert_single_cuda_device(config)
     openmm, app, unit, Platform, Integrator, Barostat, version = _require_openmm_cuda()
 
+    preparation_artifacts: dict[str, Path] = {}
     if config.get("schema") == "bms.md.job.v2":
         if preparation_bundle is None:
             raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
         from .chemistry.prepare import verify_preparation_bundle
         chemistry = config.get("chemistry") or {}
-        verify_preparation_bundle(
+        preparation_manifest = verify_preparation_bundle(
             preparation_bundle,
             expected_profile_id=chemistry.get("profile_id"),
             expected_profile_sha256=chemistry.get("profile_sha256"),
         )
-        coordinates = Path(preparation_bundle) / "system.gro"
-        topology = Path(preparation_bundle) / "system.top"
-        closure: Mapping[str, Any] | None = {"root": str(Path(preparation_bundle).resolve()), "runtime_includes": []}
+        private_bundle = output_dir / "preparation"
+        if not private_bundle.exists():
+            private_bundle.mkdir()
+            for record in preparation_manifest["files"]:
+                shutil.copy2(Path(preparation_bundle) / record["path"], private_bundle / record["path"])
+            shutil.copy2(Path(preparation_bundle) / "preparation_manifest.json", private_bundle / "preparation_manifest.json")
+        consumed = verify_preparation_bundle(
+            private_bundle,
+            expected_profile_id=chemistry.get("profile_id"),
+            expected_profile_sha256=chemistry.get("profile_sha256"),
+        )
+        if consumed["bundle_sha256"] != preparation_manifest["bundle_sha256"]:
+            raise ValueError("OpenMM private preparation bundle identity mismatch")
+        preparation_artifacts = {
+            f"preparation_{index}": private_bundle / record["path"]
+            for index, record in enumerate(consumed["files"])
+            if record["path"] not in {"system.gro", "system.top"}
+        }
+        preparation_artifacts["preparation_manifest"] = private_bundle / "preparation_manifest.json"
+        coordinates = private_bundle / "system.gro"
+        topology = private_bundle / "system.top"
+        closure: Mapping[str, Any] | None = {"root": str(private_bundle), "runtime_includes": []}
     else:
         coordinates = _resolve(str(config["input"]["coordinates"]), config_path)
         topology = _resolve(str(config["input"]["topology"]), config_path)
@@ -122,7 +144,8 @@ def run_openmm_job(
         rigidWater=True,
     )
     system.addForce(Barostat(pressure * unit.bar, temperature * unit.kelvin, 25))
-    integrator = Integrator(temperature * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds)
+    timestep_ps = float(production["timestep_fs"]) / 1000.0
+    integrator = Integrator(temperature * unit.kelvin, 1.0 / unit.picosecond, timestep_ps * unit.picoseconds)
     integrator.setRandomNumberSeed(replica_seed(config["random_seed"], replica_index))
     platform = Platform.getPlatformByName("CUDA")
     simulation = app.Simulation(
@@ -156,7 +179,7 @@ def run_openmm_job(
             append=checkpoint.is_file(),
         )
     )
-    simulation.reporters.append(app.CheckpointReporter(str(checkpoint), energy_interval))
+    checkpoint_seconds = float(production["checkpoint_interval_minutes"]) * 60.0
 
     if checkpoint.is_file():
         simulation.loadCheckpoint(str(checkpoint))
@@ -171,8 +194,16 @@ def run_openmm_job(
     ledger = StageLedger(output_dir / "stage_state.json")
     ledger.mark_running("production", ["openmm", "CUDA", "production", str(remaining)])
     try:
-        if remaining:
-            simulation.step(remaining)
+        checkpoint_at = time.monotonic() + checkpoint_seconds
+        while remaining:
+            # Observe wall-clock checkpoint cadence at bounded reporting steps;
+            # energy reporting frequency is not the requested checkpoint period.
+            steps = min(remaining, energy_interval)
+            simulation.step(steps)
+            remaining -= steps
+            if time.monotonic() >= checkpoint_at:
+                simulation.saveCheckpoint(str(checkpoint))
+                checkpoint_at = time.monotonic() + checkpoint_seconds
         simulation.saveCheckpoint(str(checkpoint))
         simulation.saveState(str(state_xml))
         state = simulation.context.getState(getPositions=True)
@@ -193,6 +224,7 @@ def run_openmm_job(
         engine_version=version,
         platform="CUDA",
         artifacts={
+            **preparation_artifacts,
             "normalized_config": normalized,
             "topology": topology,
             "input_coordinates": coordinates,
@@ -223,7 +255,7 @@ def run_openmm_job(
         "semantic_role": "representative_structure",
         "selection_method": "completed_production_final_coordinates",
         "source_frame": target_steps // interval - 1 if target_steps % interval == 0 else None,
-        "time_ps": target_steps * 0.002,
+        "time_ps": target_steps * timestep_ps,
         "source_trajectory_sha256": manifest["artifacts"]["trajectory"]["sha256"],
     })
     manifest_path = output_dir / "manifest.json"

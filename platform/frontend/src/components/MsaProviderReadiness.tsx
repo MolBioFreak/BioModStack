@@ -10,7 +10,7 @@ export interface MsaProviderSetup {
         configured: boolean;
         credential_configured: boolean | null;
         authentication: 'not_required' | 'not_checked' | 'valid' | 'invalid';
-        live_acceptance: 'not_run' | 'passed' | 'failed';
+        live_acceptance: 'not_checked_by_setup';
         blockers: string[];
     }>;
 }

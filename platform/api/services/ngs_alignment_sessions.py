@@ -423,6 +423,46 @@ def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256:
         source.close()
 
 
+def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
+    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
+    source = _open_regular_file_no_symlinks(path)
+    snapshot = tempfile.TemporaryFile(mode="w+b")
+    try:
+        before = os.fstat(source.fileno())
+        if before.st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
+        try:
+            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
+        except OSError:
+            copied = 0
+            while copied <= expected_size:
+                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+                if not chunk:
+                    break
+                snapshot.write(chunk)
+                copied += len(chunk)
+        snapshot.seek(0)
+        if os.fstat(snapshot.fileno()).st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
+            digest.update(chunk)
+            size += len(chunk)
+        if size != expected_size or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+        snapshot.flush()
+        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
+        snapshot.close()
+        return readonly
+    except BaseException:
+        snapshot.close()
+        raise
+    finally:
+        source.close()
+
+
 def open_verified_artifact_snapshot(
     path: Path,
     *,

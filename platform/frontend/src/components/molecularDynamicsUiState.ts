@@ -1,3 +1,5 @@
+import type { ExecutionPolicy } from '../lib/executionPolicy';
+
 export type MolecularDynamicsEngine = 'gromacs' | 'openmm';
 export {
     buildMolecularDynamicsHandoffInitialValues,
@@ -211,6 +213,8 @@ export interface MolecularDynamicsRequestedSettings {
 }
 
 export interface MolecularDynamicsLaunchIntent {
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
     schema_version: 'bms.md.launch-intent.v1';
     name: string;
     source_ref: MolecularDynamicsStartingStructureRef;
@@ -223,6 +227,8 @@ export interface MolecularDynamicsLaunchIntent {
 }
 
 export interface MolecularDynamicsLaunchPreview {
+    execution_target_id: string | null;
+    execution_policy: ExecutionPolicy;
     schema_version: 'bms.md.launch-preview.v1';
     source: MolecularDynamicsStartingStructureInspection['identity'] & {
         source_ref: MolecularDynamicsStartingStructureRef;
@@ -691,7 +697,15 @@ export const parseMolecularDynamicsLaunchPreview = (
 ): MolecularDynamicsLaunchPreview => {
     const contract = 'launch preview';
     const root = wireRecord(value, contract);
-    exactWireKeys(root, ['schema_version', 'source', 'chemistry', 'requested_settings', 'effective_request', 'warnings', 'blockers', 'preview_digest'], contract);
+    exactWireKeys(root, ['schema_version', 'execution_target_id', 'execution_policy', 'source', 'chemistry', 'requested_settings', 'effective_request', 'warnings', 'blockers', 'preview_digest'], contract);
+    if (root.execution_target_id !== null && (typeof root.execution_target_id !== 'string' || !root.execution_target_id.trim())) throw new Error(`Invalid ${contract} placement.`);
+    const policy = wireRecord(root.execution_policy, contract);
+    exactWireKeys(policy, ['remote_result_policy'], contract);
+    if (policy.remote_result_policy !== 'manual' && policy.remote_result_policy !== 'automatic') throw new Error(`Invalid ${contract} return policy.`);
+    if (expectedIntent && (root.execution_target_id !== (expectedIntent.execution_target_id ?? null)
+        || policy.remote_result_policy !== (expectedIntent.execution_policy?.remote_result_policy ?? 'manual'))) {
+        throw new Error('Launch preview changed the requested execution target or return policy.');
+    }
     if (root.schema_version !== 'bms.md.launch-preview.v1' || !SHA256_RE.test(String(root.preview_digest))) throw new Error(`Invalid ${contract} response.`);
     const source = wireRecord(root.source, contract);
     exactWireKeys(source, ['source_ref', 'label', 'format', 'size_bytes', 'sha256', 'pdb_id', 'producer_job_id', 'design_id'], contract);
@@ -775,12 +789,16 @@ export const buildMolecularDynamicsLaunchIntent = ({
     profile,
     catalogDigest,
     launchContextId,
+    execution_target_id = null,
+    execution_policy = { remote_result_policy: 'manual' },
 }: {
     form: MolecularDynamicsForm;
     source: Pick<MolecularDynamicsStartingStructureInspection, 'source_ref' | 'identity'>;
     profile: MolecularDynamicsChemistryProfile;
     catalogDigest: string;
     launchContextId?: string | null;
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
 }): MolecularDynamicsLaunchIntent => {
     if (!form.jobName.trim()) throw new Error('Job name is required.');
     if (!SHA256_RE.test(source.identity.sha256)) throw new Error('Inspected starting-structure SHA-256 is invalid.');
@@ -794,6 +812,8 @@ export const buildMolecularDynamicsLaunchIntent = ({
     if (errors.length) throw new Error(errors.join(' '));
     return {
         schema_version: 'bms.md.launch-intent.v1',
+        execution_target_id,
+        execution_policy,
         name: form.jobName.trim(),
         source_ref: { ...source.source_ref },
         expected_source_sha256: source.identity.sha256,

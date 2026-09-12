@@ -135,6 +135,24 @@ PY
         DATA_ARG="\$TASK_ROOT/staged_input/\$staged_file"
     fi
 
+    # Only the invocation-private copy is adapted. Original configs stay sealed.
+    if [ -n "\${BMS_PORTABLE_INPUT_BINDINGS:-}" ] && [ "\$INPUT_FORMAT" = "config_files" ]; then
+        python3 - "\$CODE_ROOT" "\$DATA_ARG" ${inputConfigPath} <<'PY'
+import sys
+from pathlib import Path
+import yaml
+sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts'))
+from lib.portable_inputs import bind_native_document
+root, original = Path(sys.argv[2]), Path(sys.argv[3]).resolve()
+files = sorted(root.rglob('*.yaml')) + sorted(root.rglob('*.yml')) if root.is_dir() else [root]
+for path in files:
+    owner = original / path.relative_to(root) if root.is_dir() else original
+    document = yaml.safe_load(path.read_text())
+    bound = bind_native_document(document, 'boltz-yaml', owner=owner)
+    path.write_text(yaml.safe_dump(bound, sort_keys=False))
+PY
+    fi
+
     mkdir -p "\$TASK_ROOT/tmp_home" "\$TASK_ROOT/tmp_cache"
     export HOME="\$TASK_ROOT/tmp_home"
     export XDG_CACHE_HOME="\$TASK_ROOT/tmp_cache"
@@ -145,7 +163,37 @@ PY
     export PYTHONPATH="\$REPO_PATH/src\${PYTHONPATH:+:\$PYTHONPATH}"
 
     if [ "\$USE_MSA" = "true" ] && [ "\$INPUT_FORMAT" = "config_files" ]; then
-        python3 "\$CODE_ROOT/scripts/resolve_boltz_msa_bundle.py" "\$DATA_ARG"
+        python3 - "\$CODE_ROOT" "\$DATA_ARG" <<'PY'
+import sys
+import hashlib
+import shutil
+from pathlib import Path
+import yaml
+sys.path.insert(0, sys.argv[1])
+from biomodstack_boltz_msa import resolve_boltz_config
+root = Path(sys.argv[2])
+files = sorted(root.rglob('*.yaml')) + sorted(root.rglob('*.yml')) if root.is_dir() else [root]
+package_root = root if root.is_dir() else root.parent
+for path in files:
+    # External typed bindings were verified above. Give the existing native
+    # validator a contained task-private alignment, not an emulated host root.
+    document = yaml.safe_load(path.read_text())
+    for entry in document.get('sequences', []):
+        protein = entry.get('protein', {})
+        value = protein.get('msa')
+        if value and value != 'empty':
+            source = Path(value)
+            source = (source if source.is_absolute() else path.parent / source).resolve()
+            if not source.is_relative_to(package_root.resolve()):
+                data = source.read_bytes()
+                target = package_root / '.portable-msa' / (hashlib.sha256(data).hexdigest() + source.suffix)
+                target.parent.mkdir(exist_ok=True)
+                target.write_bytes(data)
+                protein['msa'] = str(target.resolve())
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    bound = resolve_boltz_config(path, root=package_root)
+    path.write_text(yaml.safe_dump(bound, sort_keys=False))
+PY
     fi
 
     cd "\$REPO_PATH"

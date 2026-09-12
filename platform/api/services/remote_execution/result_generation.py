@@ -53,7 +53,11 @@ def move(source: Path, destination: Path) -> None:
 
 
 def output_path(job) -> Path:
-    return checked(Path(str(job.child_output_dir or job.output_dir)))
+    # A native continuation selects a collector subtree, not a second return
+    # store. Keep the generation journal bound to the original envelope root.
+    receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+    bound = receipt.get('local_result_root') if job.execution_target_id else None
+    return checked(Path(str(bound or job.child_output_dir or job.output_dir)))
 
 
 def identity(job, digest: str) -> dict:
@@ -180,6 +184,7 @@ def recover(job) -> bool:
             _checkpoint("rollback_prior")
         if record["had_prior"] and not output.exists():
             raise GenerationError("Prior output missing during publication recovery")
+
     journal.unlink()
     sync_dir(journal.parent)
     return True

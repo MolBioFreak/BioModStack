@@ -1,4 +1,5 @@
 import type { Job } from './api';
+import { normalizeResultPolicy } from './executionPolicy';
 
 export function normalizeNanoporeCloneState(job: Job | null): Record<string, unknown> | undefined {
     if (!job) return undefined;
@@ -30,6 +31,10 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
                                 ? 'duplex'
                                 : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : 'dna'));
     return {
+        execution_target_id: job.execution_target_id ?? null,
+        execution_policy: job.execution_policy ?? {
+            remote_result_policy: normalizeResultPolicy(p.remote_result_policy),
+        },
         selectedWorkflow,
         ontWorkflowId: workflowId,
         jobName: job.name,

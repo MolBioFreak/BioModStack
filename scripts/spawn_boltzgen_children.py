@@ -23,6 +23,8 @@ from child_job_utils import (
     fetch_children_status,
     find_existing_child,
     preferred_child_gpu,
+    component_runtime_enabled,
+    submit_child_job,
 )
 
 
@@ -48,6 +50,8 @@ def check_existing_children(parent_job_id: str, stage: str, api_url: str, batch_
         return all_done, completed_children, data
         
     except Exception as e:
+        if component_runtime_enabled():
+            raise
         print(f"[SPAWN-BOLTZGEN] Warning: Failed to check existing children: {e}", file=sys.stderr)
         return False, [], {}
 
@@ -80,7 +84,12 @@ def spawn_boltzgen_jobs(
         params_json: Additional parameters as JSON string
         api_url: API base URL
     """
-    # Calculate number of jobs needed
+    use_runtime = component_runtime_enabled()
+    # Preserve native partition order; never let parent totals overwrite it.
+    if total_designs < 1 or designs_per_job < 1:
+        raise ValueError('BoltzGen design counts must be positive')
+    from lib.boltzgen_inputs import input_identity, identity_digest
+    prepared_identity = input_identity(yaml_config_path)
     num_jobs = ceil(total_designs / designs_per_job)
     
     # =========================================================================
@@ -112,8 +121,10 @@ def spawn_boltzgen_jobs(
     if params_json:
         try:
             extra_params = json.loads(params_json)
-        except json.JSONDecodeError:
-            print(f"[SPAWN-BOLTZGEN] Warning: Failed to parse params_json", file=sys.stderr)
+        except json.JSONDecodeError as exc:
+            raise ValueError('Invalid BoltzGen parent settings JSON') from exc
+        if not isinstance(extra_params, dict):
+            raise ValueError('BoltzGen parent settings must be an object')
     
     created = []
     failed = 0
@@ -161,12 +172,15 @@ def spawn_boltzgen_jobs(
             "model_id": "boltzgen_child",
             "mode": mode,
             "params": {
+                **extra_params,
                 "boltzgen_num_designs": job_designs,
+                "num_designs": job_designs,
+                "boltzgen_prepared_identity": prepared_identity,
+                "boltzgen_prepared_sha256": identity_digest(prepared_identity),
                 "boltzgen_yaml_config": yaml_config_path,
                 "target_pdb": target_pdb_path,
                 "job_index": i,
                 "total_jobs": num_jobs,
-                **extra_params
             },
             "parent_job_id": parent_job_id,
             "batch_id": parent_job_id,
@@ -176,14 +190,24 @@ def spawn_boltzgen_jobs(
             "sequence_length": 150,  # Approximate scaffold length for VRAM calculation
         }
         effective_pinned_gpu = preferred_child_gpu(existing_child)
+        # Native child schema uses the unprefixed design count and lineage too.
+        job_data["params"].setdefault("num_designs", job_data["params"]["boltzgen_num_designs"])
+        job_data["params"]["parent_job_id"] = parent_job_id
         if effective_pinned_gpu is not None:
             job_data["pinned_gpu"] = effective_pinned_gpu
+        if existing_kind == "failed" and use_runtime:
+            raise RuntimeError("failed component requires explicit attempt recovery before resubmission")
         if existing_kind == "failed":
             job_data["params"] = apply_child_resume_params(job_data["params"], existing_child)
             resumed += 1
             print(f"[SPAWN-BOLTZGEN] RESUME: Relaunching failed child with Nextflow resume: {child_name}")
         
         try:
+            if use_runtime:
+                job_id = submit_child_job(job_data, parent_job_id=parent_job_id,
+                                          stage="boltzgen", child_key=str(i), required=False)
+                created.append({"job_id": job_id, "designs": job_designs, "index": i})
+                continue
             resp = requests.post(
                 f"{api_url}/api/jobs",
                 json=job_data,
@@ -215,7 +239,9 @@ def spawn_boltzgen_jobs(
         "total_designs": total_designs,
         "designs_per_job": designs_per_job,
         "num_jobs": num_jobs,
-        "child_jobs": created
+        "child_jobs": created,
+        "parent_job_id": parent_job_id,
+        "children": [{"id": child["job_id"]} for child in created]
     }
     
     print(f"[SPAWN-BOLTZGEN] Complete: {len(created)} jobs created, {failed} failed")

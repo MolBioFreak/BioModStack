@@ -95,32 +95,62 @@ def resolve_alignments(root: Path, manifest: dict, *, sequences: dict, settings:
     return resolved
 
 
-def hydrate_prepared_protenix_task(payload: list, source: Path, manifest_sha256: str) -> list:
-    """Consume one controller-prepared sequence in a relocated worker task.
+def _protenix_task_identity(task: dict) -> list:
+    """Ordered native entity identities; task names/seeds are replica metadata."""
+    identities = []
+    for wrapper in task.get('sequences', []):
+        if 'proteinChain' not in wrapper:
+            identities.append(wrapper)
+            continue
+        chain = wrapper['proteinChain']
+        identity = {key: value for key, value in chain.items()
+                    if key not in {'pairedMsaPath', 'unpairedMsaPath', 'msa',
+                                   'templatesPath', 'templatePath'}}
+        identity.setdefault('count', 1)
+        identities.append({'proteinChain': identity})
+    return identities
 
-    Keep the worker's name, seeds, template paths and inference metadata. Only
-    alignment paths are injected. Parallel replicas may have different names.
+
+def hydrate_prepared_protenix_task(payload: list, source: Path, manifest_sha256: str) -> list:
+    """Bind a native task or batch to the sealed controller roster, without network I/O.
+
+    Only alignment paths change. Ordered native entity IDs/counts/sequences and
+    nonprotein entities must match. Batch subsets require exact native task names;
+    duplicate names/rosters are ambiguous, never a first-match or sequence join.
+    A single prepared task permits replica renaming after exact entity matching.
     """
+    import copy
     raw = (source / 'msa-inputs.json').read_bytes()
     if not manifest_sha256 or digest(raw) != manifest_sha256:
         raise ValueError('Prepared MSA manifest digest mismatch')
     manifest = json.loads(raw)
     prepared = manifest['model_input']
-    if (len(prepared) != 1 or len(prepared[0]['sequences']) != 1 or
-            'proteinChain' not in prepared[0]['sequences'][0]):
-        raise ValueError('Prepared MSA remote consumer requires one protein sequence')
-    native = prepared[0]['sequences'][0]['proteinChain']
-    sequence = native['sequence']
-    paths = resolve_alignments(source, manifest, sequences={'0:0': sequence}, settings=manifest['settings'])
-    if len(payload) != 1 or len(payload[0].get('sequences', [])) != 1:
-        raise ValueError('Prepared MSA task shape does not match controller input')
-    chain = payload[0]['sequences'][0].get('proteinChain', {})
-    if chain.get('sequence') != sequence or chain.get('count', 1) != native.get('count', 1):
-        raise ValueError('Prepared MSA task sequence/count does not match controller input')
-    for role, key in [('paired', 'pairedMsaPath'), ('unpaired', 'unpairedMsaPath')]:
-        if ('0:0', role) in paths:
-            chain[key] = str(paths['0:0', role])
-        else:
-            chain.pop(key, None)
-    chain.pop('msa', None)
-    return payload
+    sequences = {f'{task_index}:{chain_index}': wrapper['proteinChain']['sequence']
+                 for task_index, task in enumerate(prepared)
+                 for chain_index, wrapper in enumerate(task.get('sequences', []))
+                 if 'proteinChain' in wrapper}
+    paths = resolve_alignments(source, manifest, sequences=sequences, settings=manifest['settings'])
+    result = copy.deepcopy(payload)
+    used = set()
+    for task in result:
+        candidates = [i for i, native in enumerate(prepared)
+                      if _protenix_task_identity(task) == _protenix_task_identity(native)
+                      and (len(prepared) == 1 or
+                           (task.get('name') and task.get('name') == native.get('name')))]
+        if len(candidates) != 1 or candidates[0] in used:
+            raise ValueError('Prepared MSA task identity is missing, ambiguous, or does not match controller input')
+        index = candidates[0]
+        used.add(index)
+        for chain_index, wrapper in enumerate(task.get('sequences', [])):
+            if 'proteinChain' not in wrapper:
+                continue
+            chain = wrapper['proteinChain']
+            for role, key in [('paired', 'pairedMsaPath'), ('unpaired', 'unpairedMsaPath')]:
+                path = paths.get((f'{index}:{chain_index}', role))
+                if chain.get(key):
+                    supplied = validate_a3m(Path(chain[key]), chain['sequence'])
+                    if path is None or supplied != path.read_bytes():
+                        raise ValueError('Supplied native MSA conflicts with prepared chain/role')
+                elif path is not None:
+                    chain[key] = str(path)
+    return result

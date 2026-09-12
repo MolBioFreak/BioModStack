@@ -47,16 +47,19 @@ def _parse_loop_length_spec(raw: Any, fallback_length: int) -> str:
     if ".." in normalized:
         left, right = normalized.split("..", 1)
         try:
-            minimum = max(1, int(left))
-            maximum = max(minimum, int(right))
-            return f"{minimum}..{maximum}"
-        except (TypeError, ValueError):
-            return f"{fallback_length}"
+            minimum, maximum = int(left), int(right)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid requested CDR length range: {text}") from exc
+        if minimum < 1 or maximum < minimum:
+            raise ValueError(f"Invalid requested CDR length range: {text}")
+        return f"{minimum}..{maximum}"
     try:
-        value = max(1, int(normalized))
-        return f"{value}"
-    except (TypeError, ValueError):
-        return f"{fallback_length}"
+        value = int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid requested CDR length: {text}") from exc
+    if value < 1:
+        raise ValueError(f"Invalid requested CDR length: {text}")
+    return f"{value}"
 
 
 def _loop_specs_from_annotation(annotation: Any, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -196,11 +199,12 @@ async def resolve_nanobody_scaffold_specs(params: dict[str, Any]) -> tuple[list[
         try:
             existing = params["boltzgen_nanobody_scaffold_specs"]
             if isinstance(existing, str):
-                return json.loads(existing), []
+                existing = json.loads(existing)
             if isinstance(existing, list):
                 return deepcopy(existing), []
-        except Exception as exc:
-            logger.warning("Failed to parse existing BoltzGen scaffold specs: %s", exc)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid requested BoltzGen scaffold specs") from exc
+        raise ValueError("Requested BoltzGen scaffold specs must be a list")
 
     if not params.get("boltzgen_use_framework_template", False):
         return [], []
@@ -215,12 +219,10 @@ async def resolve_nanobody_scaffold_specs(params: dict[str, Any]) -> tuple[list[
     if source == "default_ensemble":
         for pdb_code in DEFAULT_NANOBODY_ENSEMBLE:
             spec = await _ensure_sabdab_scaffold(pdb_code, params)
-            if spec:
-                specs.append(spec)
-        if specs:
-            notes.append(f"BoltzGen scaffold ensemble resolved to {len(specs)} curated nanobody scaffolds")
-        else:
-            notes.append("BoltzGen default scaffold ensemble could not be resolved; falling back to sequence template mode")
+            if spec is None:
+                raise ValueError(f"Requested BoltzGen scaffold ensemble member {pdb_code} could not be resolved")
+            specs.append(spec)
+        notes.append(f"BoltzGen scaffold ensemble resolved to {len(specs)} curated nanobody scaffolds")
         return specs, notes
 
     if source == "selected_scaffold":
@@ -234,6 +236,7 @@ async def resolve_nanobody_scaffold_specs(params: dict[str, Any]) -> tuple[list[
             if spec:
                 notes.append(f"BoltzGen scaffold resolved from local framework {Path(framework_path).name}")
                 return [spec], notes
+            raise ValueError("Requested local BoltzGen scaffold could not be resolved")
 
         pdb_code = _coerce_nonempty_text((sabdab_framework or {}).get("pdbCode"))
         if pdb_code:
@@ -242,11 +245,9 @@ async def resolve_nanobody_scaffold_specs(params: dict[str, Any]) -> tuple[list[
                 notes.append(f"BoltzGen scaffold resolved from SAbDab framework {pdb_code}")
                 return [spec], notes
 
-        notes.append("BoltzGen selected-scaffold mode requested without a resolvable scaffold; falling back to sequence template mode")
-        return [], notes
+        raise ValueError("BoltzGen selected-scaffold mode requires a resolvable scaffold")
 
-    notes.append(f"Unknown BoltzGen scaffold source '{source}'; falling back to sequence template mode")
-    return [], notes
+    raise ValueError(f"Unknown BoltzGen scaffold source '{source}'")
 
 
 async def prepare_boltzgen_params_for_launch(params: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:

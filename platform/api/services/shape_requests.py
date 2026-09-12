@@ -8,13 +8,14 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Literal
+from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from database import ShapeDesignGeometry, ShapeDesignRequest
+from schemas import ExecutionPolicy
 from services.shape_resources import _publish
 
 
@@ -94,8 +95,73 @@ class ShapeRequestError(ValueError):
         self.code = code
 
 
+# Capability projection only: definitions, bounds and defaults stay global.
+_SEQUENCE_SETTING_KEYS = {
+    "proteinmpnn": ("mpnn_temperature", "mpnn_omitAAs", "mpnn_checkpoint_type",
+                   "mpnn_checkpoint_model", "mpnn_backbone_noise"),
+    "fampnn": ("fampnn_temperature", "fampnn_seq_only", "fampnn_repack_last",
+              "fampnn_num_steps", "fampnn_batch_size", "fampnn_exclude_cys",
+              "fampnn_psce_threshold"),
+}
+
+
+def sequence_settings_definition(engine: str, sequence_count: int = 1) -> dict[str, Any]:
+    from model_registry import get_registry
+
+    if engine not in _SEQUENCE_SETTING_KEYS:
+        raise ShapeRequestError("sequence_engine_invalid", "unsupported Shape sequence engine")
+    model = get_registry().get_internal_model_definition(engine)
+    if model is None or not model.enabled:
+        raise ShapeRequestError("sequence_engine_unavailable", "Shape sequence model is unavailable")
+    by_name = {param.name: param for param in model.params}
+    params = [by_name[key].model_dump(mode="json") for key in _SEQUENCE_SETTING_KEYS[engine]]
+    definition = {"engine": engine, "model_version": model.version, "params": params}
+    initial_values = {param["name"]: param["default"] for param in params}
+    contextual_defaults = {}
+    if engine == "fampnn":
+        # Preserve the existing direct Shape lane, not the general FAMPNN
+        # workflow defaults. These are visible, editable initial values only.
+        contextual_defaults = {
+            "fampnn_seq_only": True,
+            "fampnn_repack_last": False,
+            "fampnn_exclude_cys": False,
+            "fampnn_batch_size": sequence_count,
+        }
+        initial_values.update(contextual_defaults)
+    return {
+        **definition,
+        "schema_sha256": hashlib.sha256(_canonical_json(definition)).hexdigest(),
+        "initial_values": initial_values,
+        "contextual_defaults": contextual_defaults,
+        "contextual_default_reason": "Preserve existing Shape direct sequence lane behavior; operator values take precedence.",
+    }
+
+
+def _sequence_settings(engine: str, requested: Mapping[str, object], sequence_count: int) -> tuple[dict[str, object], dict[str, object]]:
+    from model_registry import get_registry
+
+    definition = sequence_settings_definition(engine, sequence_count)
+    if set(requested) - set(_SEQUENCE_SETTING_KEYS[engine]):
+        raise ValueError("unsupported Shape sequence setting for selected engine")
+    effective = dict(definition["initial_values"])
+    effective.update(requested)
+    # The backbone is produced internally, not an operator-selected input.
+    errors = get_registry().validate_job_params(engine, "design", {"input_pdb": "shape_backbone.pdb", **effective})
+    if errors:
+        raise ValueError("; ".join(errors))
+    return effective, {
+        **{key: definition[key] for key in ("engine", "model_version", "schema_sha256")},
+        "initial_values": definition["initial_values"],
+        "contextual_defaults": definition["contextual_defaults"],
+        "contextual_default_reason": definition["contextual_default_reason"],
+    }
+
+
 class SubmittedShapeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
     client_request_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]*$")
@@ -112,6 +178,7 @@ class SubmittedShapeRequest(BaseModel):
     sequence_policy: Literal["auto", "skip", "external"] = "auto"
     sequence_engine: Literal["proteinmpnn", "fampnn"] | None = None
     sequence_engines: tuple[Literal["proteinmpnn", "fampnn"], ...] = ()
+    sequence_settings: dict[str, StrictBool | StrictInt | StrictFloat | StrictStr] = Field(default_factory=dict)
     predictor: Literal["esmfold2"] = "esmfold2"
     validator_suite: tuple[Literal["boltz2", "esmfold2", "protenix_v2"], ...] = (
         "boltz2",
@@ -144,6 +211,11 @@ class SubmittedShapeRequest(BaseModel):
             raise ValueError("sequence_policy=external requires sequences_per_backbone > 0")
         if any(engine not in {"proteinmpnn", "fampnn"} for engine in self.sequence_engines):
             raise ValueError("only ProteinMPNN and FAMPNN are supported for Shape sequence design")
+        if self.sequence_policy == "skip" or self.sequences_per_backbone == 0:
+            if self.sequence_settings:
+                raise ValueError("sequence settings require an enabled sequence lane")
+        else:
+            _sequence_settings(self.sequence_engine or "proteinmpnn", self.sequence_settings, self.sequences_per_backbone)
         return self
 
 
@@ -227,8 +299,16 @@ async def materialize_shape_request(
     if length_policy.get("allocation_policy_sha256") not in {None, allocation_policy_sha256}:
         raise ShapeRequestError("allocation_policy_hash_mismatch", "Shape allocation policy hash does not match the canonical registry")
     length_policy["allocation_policy_sha256"] = allocation_policy_sha256
+    effective_settings, settings_identity = ({}, None)
+    if submitted.sequence_policy != "skip" and submitted.sequences_per_backbone > 0:
+        effective_settings, settings_identity = _sequence_settings(
+            submitted.sequence_engine or "proteinmpnn", submitted.sequence_settings, submitted.sequences_per_backbone
+        )
     spec = {
         "schema": "bms_shape_design_request_v2",
+        "requested_sequence_settings": dict(submitted.sequence_settings),
+        "sequence_settings": effective_settings,
+        "sequence_settings_identity": settings_identity,
         "request_id": f"shape_{submitted.client_request_id}",
         "geometry_id": geometry.geometry_id,
         "geometry_sha256": geometry.geometry_sha256,
@@ -358,6 +438,9 @@ def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedSha
         "shape_sequences_per_backbone": row.request_spec["sequences_per_backbone"],
         "shape_sequence_policy": row.request_spec["sequence_policy"],
         "shape_sequence_engine": row.request_spec.get("sequence_engine"),
+        "shape_sequence_settings": row.request_spec.get("sequence_settings", {}),
+        "shape_requested_sequence_settings": row.request_spec.get("requested_sequence_settings", {}),
+        "shape_sequence_settings_identity": row.request_spec.get("sequence_settings_identity"),
         "shape_validator_suite": ",".join(row.request_spec["validator_suite"]),
         "shape_seed": row.request_spec["seed"],
         "shape_generator": "rfd3",

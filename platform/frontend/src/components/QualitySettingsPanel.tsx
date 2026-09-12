@@ -2294,13 +2294,11 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     type="checkbox"
                                     checked={settings.boltz_max_binder_rmsd !== null || settings.boltz_min_ptm_interface !== null}
                                     onChange={(e) => {
-                                        if (e.target.checked) {
-                                            updateSetting('boltz_max_binder_rmsd', 2.0);
-                                            updateSetting('boltz_min_ptm_interface', 0.5);
-                                        } else {
-                                            updateSetting('boltz_max_binder_rmsd', null);
-                                            updateSetting('boltz_min_ptm_interface', null);
-                                        }
+                                        onSettingsChange({
+                                            ...settings,
+                                            boltz_max_binder_rmsd: e.target.checked ? (settings.boltz_max_binder_rmsd ?? 2.0) : null,
+                                            boltz_min_ptm_interface: e.target.checked ? (settings.boltz_min_ptm_interface ?? 0.5) : null,
+                                        });
                                     }}
                                     className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-orange-600 focus:ring-orange-500"
                                 />

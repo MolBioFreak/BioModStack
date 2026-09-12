@@ -77,3 +77,41 @@ def test_annotate_and_update_designs_passes_detected_antibody_chain_hints(monkey
         }
 
     asyncio.run(_run())
+
+
+def test_native_cdr_annotation_retains_source_and_chain_hints(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    scripts = API_ROOT.parents[1] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    from trigger_anarcii_annotation import annotate_candidates
+    from services.cdr_annotator import CDRAnnotation
+    pdb = tmp_path / "candidate.pdb"
+    pdb.write_text("MODEL\nENDMDL\n")
+    seen = {}
+
+    def native(paths, batch_size, preferred_chains_by_path):
+        seen.update(paths=paths, batch_size=batch_size, chains=preferred_chains_by_path)
+        return {str(pdb): CDRAnnotation(antibody_type="vhh", binder_length=120)}
+
+    monkeypatch.setattr("services.cdr_annotator.batch_annotate_pdbs", native)
+    output = tmp_path / "annotations.json"
+    hints = {str(pdb): {"H": "E"}}
+    result = annotate_candidates([tmp_path], output, job_id="root", batch_size=23,
+                                 preferred_chains_by_path=hints)
+    assert seen == {"paths": [str(pdb)], "batch_size": 23, "chains": hints}
+    assert result["annotations"][0]["source_sha256"] == hashlib.sha256(pdb.read_bytes()).hexdigest()
+    assert json.loads(output.read_text())["status"] == "complete"
+
+
+def test_native_cdr_annotation_cannot_silently_skip_missing(tmp_path, monkeypatch):
+    import pytest
+    import json
+    monkeypatch.syspath_prepend(str(API_ROOT.parents[1] / "scripts"))
+    from trigger_anarcii_annotation import annotate_candidates
+    (tmp_path / "candidate.pdb").write_text("MODEL\nENDMDL\n")
+    monkeypatch.setattr("services.cdr_annotator.batch_annotate_pdbs", lambda *a, **kw: {})
+    output = tmp_path / "annotations.json"
+    with pytest.raises(RuntimeError, match="missing"):
+        annotate_candidates([tmp_path], output, job_id="root")
+    assert json.loads(output.read_text())["status"] == "incomplete"

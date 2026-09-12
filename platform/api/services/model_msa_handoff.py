@@ -45,9 +45,9 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
         key: result.get(key) for key in ('provider', 'request_digest', 'provenance', 'cache_hit')
     }, sort_keys=True, indent=2))
     paired = {i: a3m_rows(p.read_bytes()) for (i, role), p in paths.items() if role == 'paired'}
+    if paired and (len(paired) != len(sequences) or len({len(rows) for rows in paired.values()}) != 1):
+        raise ValueError('Paired alignments require equal row counts for every requested chain')
     if any(len(rows) > 1 for rows in paired.values()):
-        if len(paired) != len(sequences) or len({len(rows) for rows in paired.values()}) != 1:
-            raise ValueError('Paired alignments require equal row counts for every requested chain')
         outputs = []
         for index in range(len(sequences)):
             target = destination / f'chain-{index}.csv'
@@ -64,18 +64,25 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
     return [paths[index, 'unpaired'] for index in range(len(sequences))]
 
 
-def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
+def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native_invocation=None, roster=None) -> dict:
     """Return native launch parameters, calling the shared controller at most once.
 
-    Invoked on BMS before command compilation/input sealing for both local and
-    remote jobs. destination must be in managed input/result storage.
+    Invoked by BMS launch preparation before immutable bundle/input sealing.
+    Protenix supplies its once-compiled native input roster here; its finalized
+    invocation is reused. destination must be in managed input/result storage.
     """
     model_id = model_id.lower()
     effective = copy.deepcopy(params)
+    if native_invocation is not None and model_id in {'protenix', 'boltz2', 'boltz_cp_experimental'}:
+        if native_invocation.model_id != model_id:
+            raise ValueError('MSA native invocation model mismatch')
+        effective.update(copy.deepcopy(native_invocation.native_parameters))
     if model_id == 'protenix':
-        if not enabled(params.get('protenix_use_msa'), True) or params.get('protenix_msa_backend') in {'none', 'esm'}:
+        if not enabled(effective.get('protenix_use_msa'), True) or effective.get('protenix_msa_backend') in {'none', 'esm'}:
             return effective
         from services.msa_preparation import prepare_remote_protenix_inputs
+        # Compiled complex/batch products take precedence in the shared native
+        # adapter. Preserve their paths/names and the caller's request object.
         effective.setdefault('sequence_input', effective.get('sequence', ''))
         prepare_remote_protenix_inputs(effective, destination)
         effective['protenix_prepared_msa_dir'] = str(destination.resolve())
@@ -95,6 +102,10 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
         # not an automatic-search switch. Preserve that native input contract;
         # do not silently turn sequence-only inference into MSA inference.
         return effective
+    if model_id == 'boltz2' and (roster is not None or native_invocation is not None
+            or effective.get('complex_json_path') or effective.get('sequence_batch_json_path')
+            or ':' in str(effective.get('sequence_input') or effective.get('sequence') or '')):
+        return prepare_boltz_roster(effective, destination, roster=roster)
     components = effective.get('complex_components')
     if isinstance(components, str):
         components = json.loads(components)
@@ -115,6 +126,7 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
             return effective
         missing = [{'sequence': sequence}]
     if missing:
+        _validate_partial_group(proteins, missing, effective)
         sequences = [str(c['sequence']).strip() for c in missing]
         if any(not s or ':' in s for s in sequences):
             raise ValueError('MSA preparation requires explicit per-chain protein sequences')
@@ -130,31 +142,179 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path) -> dict:
     return effective
 
 
-def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
-    """Package supplied native YAML with portable relative alignment paths."""
-    import yaml
-    source = Path(params.get('bcp_input_path') or params['input_path'])
-    if source.is_dir() and (source / 'input.yaml').is_file():
-        source = source / 'input.yaml'
-    if not source.is_file() or source.suffix not in {'.yaml', '.yml'}:
-        raise ValueError('Controller Boltz-CP MSA preparation currently requires one native YAML config')
-    payload = yaml.safe_load(source.read_text())
-    proteins = [entry['protein'] for entry in payload['sequences'] if 'protein' in entry]
-    missing = [p for p in proteins if not p.get('msa') or p['msa'] == 'empty']
-    destination.mkdir(parents=True, exist_ok=True)
+def _validate_partial_group(proteins: list, missing: list, params: dict) -> None:
+    if not proteins or not missing or len(missing) == len(proteins):
+        return
+    from biomodstack_msa_api import validate_settings
+    from services.msa_provider_setup import selected_provider, provider_settings
+    scientific = validate_settings(selected_provider(params), provider_settings(params))
+    if scientific['pairing_mode'] != 'unpaired':
+        raise ValueError('Cannot combine supplied and generated paired groups without shared pairing identity')
+
+
+def _prepare_proteins(proteins, params, destination, *, model_id, base):
+    """One native task is one provider pairing operation; empty is not supplied."""
+    active = [p for p in proteins if p.get('msa') != 'empty']
+    missing = [p for p in active if not p.get('msa')]
+    _validate_partial_group(active, missing, params)
+    for protein in active:
+        if protein.get('msa'):
+            source = Path(protein['msa'])
+            source = source if source.is_absolute() else base / source
+            validate_boltz_msa(source, protein['sequence'])
+            protein['msa'] = str(source.resolve())
+    receipt = {'backend': 'supplied'}
     if missing:
         from services.msa_preparation import prepare_model_msa
         sequences = [p['sequence'] for p in missing]
-        paths = native_alignments(prepare_model_msa(sequences=sequences, params=params), sequences, destination / 'alignments', model_id='boltz_cp_experimental')
+        if any(not s or ':' in s for s in sequences):
+            raise ValueError('MSA preparation requires explicit per-chain protein sequences')
+        result = prepare_model_msa(sequences=sequences, params=params)
+        paths = native_alignments(result, sequences, destination, model_id=model_id)
         for protein, path in zip(missing, paths):
             protein['msa'] = str(path)
-    for index, protein in enumerate(proteins):
-        path = Path(protein['msa'])
-        if not path.is_absolute():
-            path = source.parent / path
-        data = validate_boltz_msa(path, protein['sequence'])
-        relative = f'chain-{index}.csv' if path.suffix.lower() == '.csv' else f'chain-{index}.a3m'
-        (destination / relative).write_bytes(data)
-        protein['msa'] = relative
-    (destination / 'input.yaml').write_text(yaml.safe_dump(payload, sort_keys=False))
-    return {**params, 'bcp_input_path': str(destination.resolve())}
+        receipt = {key: result.get(key) for key in ('provider', 'request_digest', 'provenance', 'cache_hit')}
+    return receipt
+
+
+def _seal_native_alignment(protein, root):
+    if protein.get('msa') == 'empty':
+        return {'mode': 'empty'}
+    source = Path(protein['msa'])
+    data = validate_boltz_msa(source, protein['sequence'])
+    sha = digest(data)
+    relative = f'alignments/{sha}' + ('.csv' if source.suffix.lower() == '.csv' else '.a3m')
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {'mode': 'artifact', 'path': relative, 'sha256': sha, 'size_bytes': len(data),
+            'format': 'csv' if relative.endswith('.csv') else 'a3m',
+            'sequence_sha256': digest(protein['sequence'].encode())}
+
+
+def _boltz_roster(params):
+    """Read compiler materializations, not a second request or argv compiler."""
+    batch = params.get('sequence_batch_json_path')
+    if batch:
+        entries = json.loads(Path(batch).read_text())
+        if not isinstance(entries, list) or not entries:
+            raise ValueError('Empty native Boltz batch')
+        tasks = []
+        for entry in entries:
+            if params.get('complex_batch_dir'):
+                source = Path(entry['complex_json'])
+                payload = json.loads(source.read_text())
+                tasks.append({**entry, 'components': payload['components'], 'source_path': str(source)})
+            else:
+                # Same explicit-ID authority as normalizeProteinDesignSequenceBatchEntries.
+                ids = [str(entry[k]).strip() if entry[k] is not None else ''
+                       for k in ('producer_artifact_id', 'entry_id', 'id') if k in entry]
+                if ids and (not all(ids) or len(set(ids)) != 1):
+                    raise ValueError('Native sequence batch explicit IDs must agree')
+                tasks.append({**copy.deepcopy(entry), 'name': ids[0] if ids else str(entry.get('name') or '').strip(),
+                              'metadata': copy.deepcopy(entry)})
+        return tasks
+    source = params.get('complex_json_path')
+    name = params.get('sequence_name') or ('complex_pred' if source else 'predicted')
+    if source:
+        task = {'name': name, 'components': json.loads(Path(source).read_text())['components'], 'source_path': source}
+    elif params.get('complex_components'):
+        components = params['complex_components']
+        task = {'name': name, 'components': json.loads(components) if isinstance(components, str) else components}
+    else:
+        task = {'name': name, 'sequence': params.get('sequence_input') or params.get('sequence')}
+    count = int(params.get('num_parallel_jobs', 1))
+    if not 1 <= count <= 10000:
+        raise ValueError('Boltz task count outside bound')
+    return [{**copy.deepcopy(task), 'name': f'{name}_job{i}' if count > 1 else name} for i in range(count)]
+
+
+def prepare_boltz_roster(params, destination, *, roster=None):
+    """Seal ordered task/chain artifacts; keep native input documents immutable."""
+    import re
+    tasks = copy.deepcopy(roster if roster is not None else _boltz_roster(params))
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 10000:
+        raise ValueError('Invalid native Boltz task roster')
+    names = [task.get('name') for task in tasks]
+    if any(not isinstance(n, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', n) for n in names) or len(set(names)) != len(names):
+        raise ValueError('Native Boltz task names must be safe and unique')
+    sealed = []
+    for task_index, task in enumerate(tasks):
+        base = Path(task['source_path']).parent if task.get('source_path') else Path.cwd()
+        if 'components' in task:
+            proteins = []
+            for index, component in enumerate(task['components']):
+                kind = component.get('type', 'protein')
+                if kind not in {'protein', 'peptide'}:
+                    continue
+                sequence = component.get('sequence', '').upper()
+                chain_id = component.get('id', 'A')
+                # Exact native complex peptide policy; never search these chains.
+                msa = 'empty' if kind == 'peptide' and len(sequence) < 30 else component.get('msa_path')
+                proteins.append({'id': chain_id if isinstance(chain_id, list) else [chain_id],
+                                 'sequence': sequence, 'msa': msa, 'component_index': index})
+        else:
+            sequence = str(task.get('sequence') or '').strip()
+            proteins = [{'id': [chr(ord('A') + i)], 'sequence': s.strip(),
+                         'msa': params.get('msa_path')} for i, s in enumerate(sequence.split(':'))]
+        receipt = _prepare_proteins(proteins, params, destination / 'operations' / str(task_index), model_id='boltz2', base=base)
+        chains = []
+        for index, protein in enumerate(proteins):
+            artifact = _seal_native_alignment(protein, destination)
+            chains.append({**{k: v for k, v in protein.items() if k != 'msa'}, 'chain_index': index,
+                           'logical_id': f'{task_index}:{index}', 'alignment': artifact})
+        sealed.append({'name': task['name'], 'task_index': task_index, 'native_task': task,
+                       'chains': chains, 'provenance': receipt})
+    manifest = {'schema': 'bms.boltz-msa-inputs.v1', 'tasks': sealed,
+                'settings': {k: v for k, v in params.items() if k.startswith(('msa_', 'colabfold_', 'boltz_'))
+                             and not k.endswith(('_path', '_dir'))}}
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / 'msa-inputs.json'
+    path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
+    return {**params, 'boltz_prepared_msa_dir': str(destination.resolve()),
+            'boltz_prepared_msa_sha256': digest(path.read_bytes())}
+
+
+def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
+    """Package every native config separately, retaining file and chain identity."""
+    import yaml
+    if params.get('bcp_input_format', 'config_files') != 'config_files':
+        return copy.deepcopy(params)
+    source = Path(params.get('bcp_input_path') or params['input_path']).resolve()
+    files = sorted(source.rglob('*.yaml')) + sorted(source.rglob('*.yml')) if source.is_dir() else [source]
+    if not files or any(not p.is_file() or p.suffix not in {'.yaml', '.yml'} for p in files):
+        raise ValueError('Boltz-CP config_files requires native YAML configs')
+    base = source if source.is_dir() else source.parent
+    configs = []
+    # Validate every declared config before any provider operation.
+    for path in files:
+        if not path.resolve().is_relative_to(base):
+            raise ValueError('Boltz-CP config escapes input root')
+        payload = yaml.safe_load(path.read_text())
+        if not isinstance(payload, dict) or not isinstance(payload.get('sequences'), list):
+            raise ValueError('Invalid native Boltz-CP config')
+        proteins = [entry['protein'] for entry in payload['sequences'] if 'protein' in entry]
+        configs.append((path, payload, proteins))
+    records = []
+    for index, (path, payload, proteins) in enumerate(configs):
+        receipt = _prepare_proteins(proteins, params, destination / 'operations' / str(index),
+                                    model_id='boltz_cp_experimental', base=path.parent)
+        relative = path.relative_to(base) if source.is_dir() else Path(path.name)
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        chains = []
+        for chain_index, protein in enumerate(proteins):
+            artifact = _seal_native_alignment(protein, destination)
+            if artifact['mode'] != 'empty':
+                import os
+                protein['msa'] = os.path.relpath(destination / artifact['path'], target.parent)
+            chains.append({'chain_index': chain_index, 'id': protein['id'], 'sequence': protein['sequence'],
+                           'alignment': artifact})
+        target.write_text(yaml.safe_dump(payload, sort_keys=False))
+        records.append({'path': str(relative), 'source_sha256': digest(path.read_bytes()),
+                        'sha256': digest(target.read_bytes()), 'chains': chains, 'provenance': receipt})
+    manifest = {'schema': 'bms.boltz-cp-msa-inputs.v1', 'configs': records}
+    manifest_path = destination / 'msa-inputs.json'
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
+    return {**params, 'bcp_input_path': str(destination.resolve()),
+            'boltz_prepared_msa_sha256': digest(manifest_path.read_bytes())}

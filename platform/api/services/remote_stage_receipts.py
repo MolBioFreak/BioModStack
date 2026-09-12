@@ -71,12 +71,33 @@ def _filename(payload: dict) -> str:
 
 def write_remote_stage_receipt(*, job_id: str, stage: str, status: str,
                                outputs: list[str], job_root_relative: bool = False) -> Path:
-    if os.environ.get("BMS_REMOTE_EXECUTION") != "1":
-        raise ValueError("remote stage writer requires remote execution")
-    attempt_id = os.environ.get("BMS_REMOTE_ATTEMPT_ID", "")
-    if job_id != os.environ.get("BMS_REMOTE_JOB_ID"):
-        raise ValueError("remote stage reporter job mismatch")
-    raw_root = os.environ.get("BMS_REMOTE_OUTPUT_ROOT", "")
+    if "BMS_COMPONENT_CONTEXT" in os.environ:
+        # The immutable attempt context and ledger remain the identity authority;
+        # per-process variables select only the current root or known child.
+        import sys
+        scripts = str(Path(__file__).resolve().parents[3] / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from lib.component_adapter import runtime_from_environment
+        runtime = runtime_from_environment()
+        runtime.check_active()
+        if job_id != os.environ.get("BMS_COMPONENT_JOB_ID"):
+            raise ValueError("component stage reporter job mismatch")
+        raw_root = os.environ.get("BMS_COMPONENT_OUTPUT_DIR", "")
+        expected = (runtime.context.get('parent', {}).get('output_dir', runtime.artifact_root) if job_id == runtime.root_job_id
+                    else runtime.native_parent(job_id)["output_dir"])
+        if not raw_root or Path(raw_root).resolve() != Path(expected).resolve():
+            raise ValueError("component stage output binding mismatch")
+        if not Path(raw_root).resolve().is_relative_to(runtime.artifact_root.resolve()):
+            raise ValueError("component stage output escapes attempt artifacts")
+        attempt_id = runtime.attempt_id
+    else:
+        if os.environ.get("BMS_REMOTE_EXECUTION") != "1":
+            raise ValueError("remote stage writer requires remote execution")
+        attempt_id = os.environ.get("BMS_REMOTE_ATTEMPT_ID", "")
+        if job_id != os.environ.get("BMS_REMOTE_JOB_ID"):
+            raise ValueError("remote stage reporter job mismatch")
+        raw_root = os.environ.get("BMS_REMOTE_OUTPUT_ROOT", "")
     root = Path(raw_root)
     if not raw_root or not root.is_absolute() or str(root.resolve()) != raw_root:
         raise ValueError("remote stage output root must be trusted and absolute")
@@ -155,6 +176,32 @@ def validate_remote_stage_receipts(*, output_root: Path, job_id: str,
     if any(p["stage"] not in terminals for p in receipts):
         raise ValueError("remote stage has no terminal receipt")
     return receipts
+
+
+def project_remote_stage_terminals(
+    *, receipts: list[dict], persisted_result_root: Path,
+) -> dict[str, dict[str, Any]]:
+    """Project verified native declarations without inventing lifecycle success.
+
+    Callers must first validate_remote_stage_receipts against the received manifest.
+    This is a format adapter only: each native completion owner still validates its
+    exact ordered terminal/output contract before applying any Job mutation.
+    """
+    root = Path(persisted_result_root)
+    if not root.is_absolute():
+        raise ValueError("native stage projection requires an absolute persisted root")
+    terminals: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        if receipt["status"] == "start":
+            continue
+        stage = receipt["stage"]
+        if stage in terminals:
+            raise ValueError("duplicate remote native stage terminal")
+        terminals[stage] = {
+            "status": receipt["status"],
+            "outputs": [str(root / relative_output(value)) for value in receipt["outputs"]],
+        }
+    return terminals
 
 
 async def apply_remote_stage_receipts(*, session: Any, job: Any, attempt_id: str,

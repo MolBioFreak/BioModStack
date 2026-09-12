@@ -6,6 +6,11 @@ import shutil
 from pathlib import Path
 import json
 try:
+    from scripts.lib.boltzgen_native import protocol_from_entities, selected_checkpoint_members
+except ModuleNotFoundError:
+    # Direct CLI inside /scripts; package imports use the same source helper.
+    from lib.boltzgen_native import protocol_from_entities, selected_checkpoint_members
+try:
     import gemmi
 except ImportError:
     gemmi = None
@@ -270,37 +275,8 @@ def auto_detect_protocol(config_path: str) -> str:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        entities = config.get('entities', [])
-        
-        has_dna = False
-        has_rna = False
-        has_ligand = False
-        has_protein = False
-        
-        for entity in entities:
-            if 'dna' in entity:
-                has_dna = True
-            elif 'rna' in entity:
-                has_rna = True
-            elif 'ligand' in entity:
-                has_ligand = True
-            elif 'protein' in entity:
-                has_protein = True
-        
-        # Determine protocol based on entity types
-        if has_dna or has_rna:
-            # DNA/RNA targets use protein-anything
-            protocol = "protein-anything"
-            print(f"Auto-detected protocol: {protocol} (DNA/RNA target detected)")
-        elif has_ligand:
-            # Small molecule targets use protein-small_molecule
-            protocol = "protein-small_molecule"
-            print(f"Auto-detected protocol: {protocol} (ligand target detected)")
-        else:
-            # Default for protein-only
-            protocol = "protein-anything"
-            print(f"Auto-detected protocol: {protocol} (protein target)")
-        
+        protocol = protocol_from_entities(config.get('entities', []))
+        print(f"Auto-detected protocol: {protocol}")
         return protocol
         
     except Exception as e:
@@ -342,6 +318,12 @@ def main():
     parser.add_argument("--inverse_fold_num_sequences", type=int, default=None,
                         help="Number of sequences per backbone")
     
+    # Checkpoint paths are runtime placement, not scientific overrides.
+    parser.add_argument("--design_checkpoints", nargs='+', default=None)
+    parser.add_argument("--inverse_fold_checkpoint", default=None)
+    parser.add_argument("--folding_checkpoint", default=None)
+    parser.add_argument("--affinity_checkpoint", default=None)
+    parser.add_argument("--moldir", default=None)
     # Checkpoint and pipeline control parameters (new)
     parser.add_argument("--checkpoint_mode", type=str, default=None,
                         choices=['diverse', 'adherence'],
@@ -406,9 +388,9 @@ def main():
             cmd += f" --diffusion_batch_size {args.diffusion_batch_size}"
 
         # Add diffusion parameters if specified
-        if args.step_scale:
+        if args.step_scale is not None:
             cmd += f" --step_scale {args.step_scale}"
-        if args.noise_scale:
+        if args.noise_scale is not None:
             cmd += f" --noise_scale {args.noise_scale}"
         
         # Add inverse folding parameters if specified
@@ -417,14 +399,30 @@ def main():
         if args.inverse_fold_num_sequences:
             cmd += f" --inverse_fold_num_sequences {args.inverse_fold_num_sequences}"
         
-        # Add checkpoint mode if using single checkpoint
-        if args.checkpoint_mode:
-            # Map our mode names to checkpoint paths
+        # Explicit placement must not be combined with a second mode selector.
+        import shlex
+        if args.design_checkpoints and args.checkpoint_mode:
+            parser.error('--design_checkpoints and --checkpoint_mode are mutually exclusive')
+        active_members = selected_checkpoint_members(
+            protocol, args.checkpoint_mode or 'both', args.skip_inverse_folding)
+        if args.design_checkpoints:
+            cmd += ' --design_checkpoints ' + shlex.join(args.design_checkpoints)
+        elif args.checkpoint_mode:
+            # Preserve the existing direct-wrapper mode aliases.
             checkpoint_map = {
                 'diverse': 'huggingface:boltzgen/boltzgen1_diverse:boltzgen1_diverse.ckpt',
                 'adherence': 'huggingface:boltzgen/boltzgen1_adherence:boltzgen1_adherence.ckpt'
             }
             cmd += f" --design_checkpoints {checkpoint_map[args.checkpoint_mode]}"
+        for option, member in (
+            ('inverse_fold_checkpoint', 'boltzgen1_ifold.ckpt'),
+            ('folding_checkpoint', 'boltz2_conf_final.ckpt'),
+            ('affinity_checkpoint', 'boltz2_aff.ckpt'),
+            ('moldir', None),
+        ):
+            value = getattr(args, option)
+            if value and (member is None or member in active_members):
+                cmd += f' --{option} ' + shlex.quote(value)
         
         # Skip inverse folding if requested
         if args.skip_inverse_folding:

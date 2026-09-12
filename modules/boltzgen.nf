@@ -24,7 +24,7 @@ process PrepBoltzGenInput {
     path target_pdb
 
     output:
-    path "boltzgen_input.yaml", emit: yaml
+    path "boltzgen_prepared", emit: yaml
 
     script:
     def nanobodyScaffoldSpecs = params.get('boltzgen_nanobody_scaffold_specs')
@@ -68,6 +68,8 @@ process PrepBoltzGenInput {
     # The prep_boltzgen.py script validates structure internally
     echo "BoltzGen YAML prepared: boltzgen_input.yaml"
     cat boltzgen_input.yaml
+    python3 ${params.code_root}/scripts/lib/boltzgen_inputs.py \
+        --config boltzgen_input.yaml --output boltzgen_prepared
     """
 }
 
@@ -77,9 +79,9 @@ process RunBoltzGen {
     publishDir "${params.out_dir}/run/boltzgen", mode: 'copy', pattern: "*.log"
     // Wrapper outputs converted PDBs + JSONs to output/designs/
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
     // Also capture batch metadata if available
     publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/**/all_designs_metrics.csv", saveAs: { filename -> filename.split('/')[-1] }
 
@@ -95,34 +97,46 @@ process RunBoltzGen {
     def numDesigns = params.get('boltzgen_num_designs') ?: 10
     def diffusionBatchSize = params.get('boltzgen_diffusion_batch_size') ?: params.get('boltzgen_batch_size') ?: 1
     def protocol = params.get('boltzgen_protocol') ?: 'auto'
-    def stepScale = params.get('boltzgen_step_scale') ?: ''
-    def noiseScale = params.get('boltzgen_noise_scale') ?: ''
+    def stepScale = params.get('boltzgen_step_scale')
+    def noiseScale = params.get('boltzgen_noise_scale')
     def inverseFoldAvoid = params.get('boltzgen_inverse_fold_avoid') ?: ''
     def inverseFoldNumSeqs = params.get('boltzgen_inverse_fold_num_sequences') ?: ''
-    def checkpointMode = params.get('boltzgen_checkpoint_mode') ?: ''
+    def checkpointMode = params.get('boltzgen_checkpoint_mode') ?: 'both'
+    // Runtime placement only: keep the installed CLI's diverse/adherence order
+    // and fractions, but consume the exact shared-cache materialized members.
+    def checkpointVariants = checkpointMode == 'both' ? ['diverse', 'adherence'] : [checkpointMode]
+    def checkpointPaths = checkpointVariants.collect { "/weights/boltzgen/boltzgen1_${it}.ckpt" }.join(' ')
     def skipInverseFolding = params.get('boltzgen_skip_inverse_folding') ?: false
     def reuseExisting = params.get('boltzgen_reuse') ?: false
     // Handle both single config and batch of configs
-    def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" : "--config ${yaml_configs}"
+    def preparedDirectory = !(yaml_configs instanceof List) && yaml_configs.isDirectory()
+    def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" :
+        (preparedDirectory ? '--config boltzgen_input.yaml' : "--config ${yaml_configs}")
     """
-    # Run BoltzGen with wrapper that handles CIF->PDB conversion and batch processing
-    
+    # Work beside the original YAML so its unchanged relative inputs resolve.
+    task_dir=\$(pwd)
+    ${preparedDirectory ? "cd '${yaml_configs}'" : ''}
+    ${params.get('boltzgen_prepared_sha256') ? "python3 ${params.code_root}/scripts/lib/boltzgen_inputs.py --config " + (preparedDirectory ? 'boltzgen_input.yaml' : yaml_configs) + " --expected-sha256 ${params.boltzgen_prepared_sha256}" : ''}
     python3 /scripts/run_boltzgen_wrapper.py \\
         ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1" : ''} \\
         ${configArg} \\
-        --out_dir output \\
+        --out_dir "\$task_dir/output" \\
         --num_designs ${numDesigns} \\
         ${diffusionBatchSize > 1 ? "--diffusion_batch_size ${diffusionBatchSize}" : ""} \\
         --protocol ${protocol} \\
-        ${stepScale ? "--step_scale ${stepScale}" : ''} \\
-        ${noiseScale ? "--noise_scale ${noiseScale}" : ''} \\
+        ${stepScale != null ? "--step_scale ${stepScale}" : ''} \\
+        ${noiseScale != null ? "--noise_scale ${noiseScale}" : ''} \\
         ${inverseFoldAvoid ? "--inverse_fold_avoid '${inverseFoldAvoid}'" : ''} \\
         ${inverseFoldNumSeqs ? "--inverse_fold_num_sequences ${inverseFoldNumSeqs}" : ''} \\
-        ${checkpointMode && checkpointMode != 'both' ? "--checkpoint_mode ${checkpointMode}" : ''} \\
+        --design_checkpoints ${checkpointPaths} \\
+        --inverse_fold_checkpoint /weights/boltzgen/boltzgen1_ifold.ckpt \\
+        --folding_checkpoint /weights/boltzgen/boltz2_conf_final.ckpt \\
+        --affinity_checkpoint /weights/boltzgen/boltz2_aff.ckpt \\
+        --moldir /weights/boltzgen/mols.zip \\
         ${skipInverseFolding ? "--skip_inverse_folding" : ''} \\
         ${reuseExisting ? "--reuse" : ''} \\
         ${params.get('boltzgen_extra_config') ?: ''} \\
-        2>&1 | tee boltzgen.log
+        2>&1 | tee "\$task_dir/boltzgen.log"
     """
 }
 
@@ -147,13 +161,12 @@ process FilterBoltzGen {
     path "*.log"
 
     script:
-    // Only marked future attempts use strict zero-preserving transport.
-    def strictEvidence = params.get('core_protein_scientific_contract') == 1
-    def minPlddt = strictEvidence ? params.get('boltzgen_min_plddt') : (params.get('boltzgen_min_plddt') ?: null)
-    def minConfScore = strictEvidence ? params.get('boltzgen_min_conf_score') : (params.get('boltzgen_min_conf_score') ?: null)
-    def maxRmsd = strictEvidence ? (params.get('boltzgen_refolding_rmsd_threshold') != null ? params.get('boltzgen_refolding_rmsd_threshold') : params.get('boltzgen_max_rmsd')) : (params.get('boltzgen_refolding_rmsd_threshold') ?: params.get('boltzgen_max_rmsd') ?: null)
-    def budget = strictEvidence ? params.get('boltzgen_budget') : (params.get('boltzgen_budget') ?: null)
-    def alpha = strictEvidence && params.get('boltzgen_alpha') != null ? params.get('boltzgen_alpha') : (params.get('boltzgen_alpha') ?: '0.01')
+    // Zero is an explicit scientific setting, not a missing value.
+    def minPlddt = params.get('boltzgen_min_plddt')
+    def minConfScore = params.get('boltzgen_min_conf_score')
+    def maxRmsd = params.get('boltzgen_refolding_rmsd_threshold') != null ? params.get('boltzgen_refolding_rmsd_threshold') : params.get('boltzgen_max_rmsd')
+    def budget = params.get('boltzgen_budget')
+    def alpha = params.get('boltzgen_alpha') != null ? params.get('boltzgen_alpha') : '0.01'
     def filterBiased = params.containsKey('boltzgen_filter_biased') ? (params.get('boltzgen_filter_biased') != false) : true
     def metricsOverride = params.get('boltzgen_metrics_override') ?: ''
     def additionalFilters = params.get('boltzgen_additional_filters') ?: ''
@@ -213,8 +226,24 @@ process SpawnBoltzGenJobs {
     path "spawn_boltzgen.log"
 
     script:
-    def extraParams = params.get('boltzgen_extra_params')
-    def paramsJson = extraParams ? "'${extraParams}'" : "'{}'"
+    // Capture all applicable selected settings, including the parent's filters.
+    // Child entrypoint applies generation only; global selection stays here.
+    def selected = params.findAll { key, value -> key.startsWith('boltzgen_') &&
+        !(key in ['boltzgen_extra_params', 'boltzgen_yaml_config', 'boltzgen_child_settings_json']) }
+    if (params.get('boltzgen_child_settings_json')) {
+        selected.putAll(new groovy.json.JsonSlurper().parseText(params.boltzgen_child_settings_json))
+    }
+    def extra = params.get('boltzgen_extra_params')
+    if (extra) {
+        def legacy = extra instanceof Map ? extra : new groovy.json.JsonSlurper().parseText(extra.toString())
+        legacy.each { key, value ->
+            if (selected.containsKey(key) && selected[key] != value) {
+                error('BoltzGen extra settings conflict with selected parent: ' + key)
+            }
+            selected[key] = value
+        }
+    }
+    def paramsJson = "'" + groovy.json.JsonOutput.toJson(selected).replace("'", "'\"'\"'") + "'"
     """
     python3 ${params.code_root}/scripts/spawn_boltzgen_children.py \\
         --parent_job_id "${parent_job_id}" \\
@@ -263,9 +292,9 @@ process CollectBoltzGenOutputs {
     label 'process_low'
 
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.pdb"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.json"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.{json,npz,csv}"
     publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "collection_manifest.json"
 
     input:
@@ -273,7 +302,7 @@ process CollectBoltzGenOutputs {
 
     output:
     path "collected/*.pdb", emit: pdbs, optional: true
-    path "collected/*.json", emit: jsons, optional: true
+    path "collected/*.{json,npz,csv}", emit: jsons, optional: true
     path "collection_manifest.json", emit: manifest
 
     script:
@@ -288,7 +317,11 @@ process CollectBoltzGenOutputs {
         data = json.load(f)
     
     child_dirs = data.get("child_output_dirs", [])
-    
+    import sys
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from child_job_utils import complete_native_collection
+    accepted = {directory: [] for directory in child_dirs}
+
     Path("collected").mkdir(exist_ok=True)
     
     collected_pdbs = []
@@ -311,16 +344,46 @@ process CollectBoltzGenOutputs {
                 if not dest.exists():
                     shutil.copy(pdb, dest)
                     collected_pdbs.append(str(dest))
+                    accepted[child_dir].append(pdb)
                     print(f"Collected: {pdb} -> {dest}")
             
             for js in search_path.glob("confidence_*.json"):
-                dest = Path("collected") / f"job{job_idx}_{js.name}"
+                dest = Path("collected") / f"confidence_job{job_idx}_{js.name[len('confidence_'):]}"
                 if not dest.exists():
-                    shutil.copy(js, dest)
+                    # Derived cohort identity; original child sidecars remain immutable.
+                    import hashlib
+                    raw = js.read_bytes()
+                    payload = json.loads(raw)
+                    native_id = js.stem[len('confidence_'):]
+                    candidate_id = f"job{job_idx}_{native_id}"
+                    if payload.get('design_id', native_id) != native_id:
+                        raise ValueError('foreign BoltzGen child metadata identity')
+                    payload['design_id'] = candidate_id
+                    payload['collection_source'] = {'path': js.relative_to(dir_path).as_posix(), 'sha256': hashlib.sha256(raw).hexdigest(),
+                                                    'native_candidate_id': native_id}
+                    native = payload.get('native_scalar_source')
+                    if native is not None:
+                        if native['candidate_id'] != native_id:
+                            raise ValueError('foreign BoltzGen native scalar candidate')
+                        artifact = native['artifact']
+                        if Path(artifact['path']).name != artifact['path']:
+                            raise ValueError('BoltzGen scalar input escapes child publication')
+                        source = js.parent / artifact['path']
+                        if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != artifact['sha256']:
+                            raise ValueError('BoltzGen native scalar bytes changed')
+                        native_name = f"job{job_idx}_{source.name}"
+                        shutil.copyfile(source, Path('collected') / native_name)
+                        native['candidate_id'] = candidate_id
+                        artifact['path'] = native_name
+                        accepted[child_dir].append(source)
+                    dest.write_text(json.dumps(payload, allow_nan=False))
                     collected_jsons.append(str(dest))
-    
+                    accepted[child_dir].append(js)
+
+    collection = complete_native_collection(data, accepted, authority='modules/boltzgen.nf:CollectBoltzGenOutputs')
     # Write manifest
     manifest = {
+        "component_collection": collection,
         "children_processed": len(child_dirs),
         "pdbs_collected": len(collected_pdbs),
         "jsons_collected": len(collected_jsons),
@@ -362,15 +425,8 @@ process AggregateBoltzGenResults {
     
     echo "Found \$PDB_COUNT PDBs and \$JSON_COUNT JSONs"
     
-    # Trigger result ingestion
-    if [ \$PDB_COUNT -gt 0 ]; then
-        echo "Triggering result ingestion..."
-        python3 ${params.code_root}/scripts/result_ingester.py \\
-            --job_id "${parent_job_id}" \\
-            --results_dir "${params.out_dir}" \\
-            --api_url "${params.api_url}" \\
-            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
-    fi
+    # Native computation emits bytes only. Shared controller publication owns
+    # database ingestion after authorized return (also for Local placement).
     
     # Create aggregation report
     cat > aggregation_report.json <<EOF
@@ -379,7 +435,7 @@ process AggregateBoltzGenResults {
     "total_pdbs": \$PDB_COUNT,
     "total_jsons": \$JSON_COUNT,
     "status": "complete",
-    "ingestion_triggered": true
+    "ingestion_triggered": false
 }
 EOF
 

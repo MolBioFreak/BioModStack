@@ -77,6 +77,173 @@ async def source(store, target=None, model='boltz2', **extra):
 
 
 @pytest.mark.asyncio
+async def test_local_checkpoint_queues_claims_and_reuses_retained_owner(store, monkeypatch):
+    import json
+    from dataclasses import replace
+    from component_runtime import ComponentRuntime, SourceIdentity, NativeInvocation
+    from services import nextflow, gpu_orchestrator
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    from scripts.open_stage_gate import open_component_gate, component_checkpoint_projection
+    factory, client, root = store
+    original = await source(store, model='antibody_design', mode='denovo', status='awaiting_input', awaiting_input=True)
+    output = Path(original['output_dir'])
+    candidates = root / 'candidates'
+    candidates.mkdir()
+    (candidates / 'one.pdb').write_text('native selected bytes')
+    identity = SourceIdentity('a'*40, 'b'*40)
+    monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda root: identity)
+    context = dict(attempt_id='attempt', root_job_id='source', target_id='local', lease_id='old-lease',
+        artifact_root=str(output), ledger_path=str(root / 'ledger.sqlite'), source_identity=identity.__dict__,
+        resources={'gpu_id': 3, 'gpu_ids': [3]}, parent=dict(id='source', model_id='antibody_design', mode='denovo', params={}, output_dir=str(output)))
+    path = root / 'context.json'
+    path.write_text(json.dumps(context))
+    runtime = ComponentRuntime(root / 'ledger.sqlite', artifact_root=output, attempt_id='attempt',
+        root_job_id='source', target_id='local', lease_id='old-lease', source_identity=identity.__dict__)
+    checkpoint = open_component_gate(runtime, job_id='source', stage='post_fampnn', payload={}, directories={'candidate': candidates})
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    runtime.claim_root(owner_id='prior', boot_id=boot)
+    runtime.set_root_state('paused', owner_id='prior', boot_id=boot, quiescent=True)
+    async with factory() as session:
+        job = await session.get(Job, 'source')
+        job.params = {}
+        job.provenance = {'component_context_path': str(path)}
+        job.awaiting_payload = {'component_checkpoint': component_checkpoint_projection(runtime)[0]}
+        await session.commit()
+    def native(model, mode, params, output, **kwargs):
+        return replace(NativeInvocation.capture(model_id=model, mode=mode, command=['true'],
+            requested=params, effective=params, native_parameters={**params, "out_dir": str(output)}, entrypoint='fixture.nf'), source_identity=identity)
+    monkeypatch.setattr(nextflow, 'compile_nextflow_invocation', native)
+    # This fixture owns queue/lease handoff; native capacity is tested separately.
+    monkeypatch.setattr(nextflow, 'component_checkpoint_resources', lambda invocation, context: context['resources'])
+    decision = {'selected_artifacts': [r['relative_path'] for r in checkpoint['checkpoint']['artifacts'] if r['relative_path'].endswith('.pdb')]}
+    payload = dict(checkpoint_id='source:post_fampnn', checkpoint_sha256=checkpoint['checkpoint_sha256'], checkpoint_decision=decision)
+    response = await client.post('/jobs/source/resume', json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()['state'] == 'queued'
+    assert runtime.root_state()['state'] == 'paused'  # API is not an execution owner.
+    assert (await client.post('/jobs/source/resume', json=payload)).status_code == 409
+    async with factory() as session:
+        job = await session.get(Job, 'source')
+        assert await gpu_orchestrator._claim_job_for_gpu(session, job, 3, 1024) is not None
+        await session.commit()
+        pending = job.provenance['component_checkpoint_resume']
+        assert pending['continuation_lease_id'] != 'old-lease'
+        invocation = nextflow.compile_component_checkpoint_continuation(context, checkpoint, decision)
+        environment = {}
+        command = nextflow._component_launch_command(invocation, job, ['never-original'], environment, attempt=1, output_dir=output)
+        assert command[-1] == str(path)
+        assert environment['BMS_COMPONENT_CONTEXT'] == str(path)
+        assert runtime.root_state()['state'] == 'resume_ready'
+        assert path.read_text() == json.dumps(context)
+        assert (output / 'sentinel').read_text() == 'immutable artifact'
+
+
+@pytest.mark.asyncio
+async def test_explicit_review_retrieval_uses_only_checkpoint_files(store, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from services.remote_execution import executor
+    from services.remote_execution.contracts import RemoteAttemptStatus
+    await source(store, 'vast:new', status='awaiting_input', awaiting_input=True, remote_attempt_id='attempt')
+    factory, client, root = store
+    data = b'retained selected structure'
+    reference = dict(component_id='source', relative_path='.bms-review/bound/one.pdb',
+                     sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data), schema='bms.stage-review.candidate.v1')
+    checkpoint = dict(checkpoint_id='source:review', checkpoint_sha256='c'*64, stage='review',
+        attempt_id='attempt', target_id='vast:new', lease_id='lease', artifacts=[reference])
+    async with factory() as session:
+        job = await session.get(Job, 'source')
+        job.awaiting_payload = {'component_checkpoint': checkpoint}
+        await session.commit()
+    observed = RemoteAttemptStatus(job_id='source', attempt_id='attempt', state='awaiting_input',
+        boot_id='boot', quiescent=True, checkpoints=[checkpoint])
+    async def observe(*args):
+        return observed
+    monkeypatch.setattr(executor, 'remote_status', observe)
+    monkeypatch.setattr(executor, '_connection_for_attempt', lambda *args: (SimpleNamespace(), '/owned/attempt'))
+    copied = []
+    async def transfer(connection, source, destination, paths, **kwargs):
+        copied.extend(paths)
+        target = destination / reference['relative_path']
+        target.parent.mkdir(parents=True)
+        target.write_bytes(data)
+    monkeypatch.setattr(executor, 'rsync_selected_from_remote', transfer)
+    monkeypatch.setattr(jobs, 'to_allowed_relative', lambda path: str(path))
+    assert (await client.get('/jobs/source/structure-files')).status_code == 200
+    assert not copied
+    response = await client.get('/jobs/source/structure-files', params={'checkpoint_sha256': 'c'*64})
+    assert response.status_code == 200, response.text
+    assert copied == [reference['relative_path']]
+    assert response.json()['count'] == 1
+    assert Path(response.json()['structures'][0]['path']).read_bytes() == data
+    async with factory() as session:
+        assert (await session.get(Job, 'source')).status == 'awaiting_input'
+
+
+@pytest.mark.asyncio
+async def test_remote_checkpoint_observation_projects_review_and_releases_only_idle_lease(store, monkeypatch):
+    from services.remote_execution import executor
+    from services.remote_execution.contracts import RemoteAttemptStatus
+    await source(store, 'vast:new', status='running', remote_attempt_id='attempt',
+                 nextflow_run_id='remote:attempt', remote_state='running')
+    factory, _, _ = store
+    checkpoint = dict(checkpoint_id='source:review', checkpoint_sha256='c' * 64, stage='review',
+        attempt_id='attempt', target_id='vast:new', lease_id='lease', artifacts=[{'relative_path': 'review.pdb'}])
+    observed = RemoteAttemptStatus(attempt_id='attempt', job_id='source', state='awaiting_input',
+                                   boot_id='boot', quiescent=False, checkpoints=[checkpoint])
+    async def remote_status(*args):
+        return observed
+    async def no_recovery(*args):
+        return None
+    monkeypatch.setattr(executor, 'remote_status', remote_status)
+    monkeypatch.setattr(executor, '_recover_result_generation', no_recovery)
+    async with factory() as session:
+        job = await session.get(Job, 'source')
+        job.queue_status = 'running'
+        target = await session.get(ExecutionTarget, 'vast:new')
+        target.leased_job_id = 'source'
+        await session.commit()
+        assert not await executor._reconcile_remote_job_owned(session, job)
+        target = await session.get(ExecutionTarget, 'vast:new')
+        assert target.leased_job_id == 'source'
+        observed.quiescent = True
+        job = await session.get(Job, 'source')
+        assert await executor._reconcile_remote_job_owned(session, job)
+        await session.refresh(job)
+        await session.refresh(target)
+        assert job.status == 'awaiting_input' and job.remote_state == 'awaiting_input'
+        assert job.awaiting_payload['component_checkpoints'] == [checkpoint]
+        assert job.remote_attempt_id == 'attempt' and job.completed_at is None
+        assert target.leased_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_component_checkpoint_resume_requires_binding_and_never_fakes_continuation(store, monkeypatch):
+    checkpoint = dict(checkpoint_id="source:review", checkpoint_sha256="c" * 64,
+                      attempt_id="attempt", target_id="vast:new", lease_id="lease", artifacts=[{}])
+    await source(store, "vast:new", status="awaiting_input", awaiting_input=True,
+                 awaiting_stage="review", awaiting_payload={"component_checkpoint": checkpoint})
+    factory, client, _ = store
+    assert (await client.post('/jobs/source/resume', json={})).status_code == 422
+    payload = dict(checkpoint_id=checkpoint["checkpoint_id"], checkpoint_sha256="c" * 64,
+                   checkpoint_decision={"continue": True})
+    assert (await client.post('/jobs/source/resume', json=dict(payload, execution_target_id=None))).status_code == 422
+    from services.remote_execution import executor
+    called = []
+    async def preflight(session, job, bound, decision):
+        called.append(bound)
+        raise executor.RemoteExecutionError("Native checkpoint continuation compiler/claim authority is not yet connected")
+    monkeypatch.setattr(executor, 'request_remote_checkpoint_resume', preflight)
+    response = await client.post('/jobs/source/resume', json=payload)
+    assert response.status_code == 409 and "compiler/claim" in response.text
+    assert called == [checkpoint]
+    async with factory() as session:
+        job = await session.get(Job, 'source')
+        assert job.awaiting_input and job.awaiting_payload["component_checkpoint"] == checkpoint
+        assert len((await session.execute(select(Job))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('old,target,model', [(None, 'vast:new', 'boltz2'),
     ('vast:old', None, 'protenix'), ('vast:old', 'vast:new', 'protenix'),
     ('vast:old', 'vast:new', 'esmfold2')])
@@ -179,15 +346,36 @@ async def test_same_worker_source_drift_admits_current_fresh_bundle(store, monke
     async with factory() as session:
         successor = await session.get(Job, response.json()['new_job_id'])
         target = await session.get(ExecutionTarget, 'vast:new')
+        from dataclasses import replace
+        from component_runtime import SourceIdentity
+        from services import nextflow
+
+        monkeypatch.setattr(nextflow, 'resolve_nextflow_executable', lambda: 'nextflow')
+        source_identity = SourceIdentity.from_checkout(repo)
+        invocation = nextflow.compile_nextflow_invocation(
+            successor.model_id, successor.mode, successor.params,
+            successor.output_dir, successor.id,
+            requested_params=(successor.provenance or {}).get('core_protein_requested_params'),
+        )
+        assert SourceIdentity.from_checkout(repo) == source_identity
+        invocation = replace(invocation, source_identity=source_identity)
+        invocation.materialize_inputs(Path(successor.output_dir))
+        assert invocation.source_identity == SourceIdentity(*current)
+        for item in invocation.generated_inputs:
+            assert (Path(successor.output_dir) / item.relative_path).read_bytes() == item.payload
         # Stop only AFTER the real equality fence, git archive and safe extraction.
         # No dependency discovery, runtime assets, transport or scientific execution.
         class ArchiveBoundaryReached(Exception):
             pass
-        def stop_after_archive(*_args):
+        def stop_after_archive(model_id, mode, command, *, native_invocation):
+            assert (model_id, mode) == (successor.model_id, successor.mode)
+            assert native_invocation is invocation
+            assert command == list(invocation.command)
             raise ArchiveBoundaryReached()
         monkeypatch.setattr(bundle, 'compile_remote_dependencies', stop_after_archive)
         with pytest.raises(ArchiveBoundaryReached):
-            bundle.prepare_remote_bundle(job=successor, target=target, command=['nextflow'])
+            bundle.prepare_remote_bundle(job=successor, target=target,
+                command=list(invocation.command), native_invocation=invocation)
         archives = list((root / 'remote-execution' / 'staging').glob('*/source/.bms-source.tar'))
         assert len(archives) == 1
         with tarfile.open(archives[0]) as archive:

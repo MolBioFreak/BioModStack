@@ -2,11 +2,14 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import asyncio
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from database import Base, Job, ExecutionTarget
+from component_runtime import NativeInvocation, SourceIdentity
 from services.remote_execution import executor as ex
 from services.remote_execution.contracts import RemoteAttemptStatus
 
@@ -32,6 +35,15 @@ async def store(tmp_path, monkeypatch):
     await engine.dispose()
 
 
+def lifecycle_invocation(command):
+    """Typed handoff for mocked lifecycle commands, not a science compiler probe."""
+    return NativeInvocation(
+        model_id="boltz2", mode="predict", command=tuple(command),
+        requested_json=b"{}", effective_json=b"{}", native_parameters_json=b"{}",
+        source_identity=SourceIdentity("a" * 40, "b" * 40),
+    )
+
+
 async def preparing(store):
     async with store() as s:
         job = await s.get(Job, "job")
@@ -49,8 +61,9 @@ async def test_prebundle_failure_terminalizes_once_and_releases(store, monkeypat
         raise ex.ExecutionTargetError("deterministic preflight failure")
     monkeypatch.setattr(ex, "get_ready_target", unavailable)
     async with store() as s:
-        with pytest.raises(ex.RemoteExecutionError):
-            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["false"])
+        with pytest.raises(ex.RemoteExecutionError, match="deterministic preflight failure"):
+            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["false"],
+                                       native_invocation=lifecycle_invocation(["false"]))
     async with store() as s:
         job = await s.get(Job, "job")
         assert (job.status, job.queue_status) == ("failed", "failed")
@@ -79,8 +92,9 @@ async def test_delayed_preflight_failure_cannot_touch_new_authority(store, monke
         raise ex.ExecutionTargetError("old launch failed")
     monkeypatch.setattr(ex, "get_ready_target", unavailable)
     async with store() as s:
-        with pytest.raises(ex.RemoteExecutionError):
-            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["false"])
+        with pytest.raises(ex.RemoteExecutionError, match="old launch failed"):
+            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["false"],
+                                       native_invocation=lifecycle_invocation(["false"]))
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.error_message is None
@@ -112,10 +126,21 @@ async def test_start_receipt_publication_is_claim_fenced(store, monkeypatch, com
     monkeypatch.setattr(ex, "_worker_argv", lambda _, command, *__: [command])
     monkeypatch.setattr(ex, "_remote_receipt", lambda b, t, **kw: {"attempt_id": b.attempt_id, "state": kw["state"]})
     bundle = SimpleNamespace(attempt_id="attempt", envelope_sha256="hash", remote_attempt_dir="/attempt",
-                             envelope=SimpleNamespace(source_revision="rev", source_tree="tree"))
+                             envelope=SimpleNamespace(source_revision="rev", source_tree="tree", environment={'BMS_TARGET_RESOURCES': '{"required":{"cpus":1,"memory_bytes":1,"scratch_bytes":0},"gpu_ids":[0]}' }))
     monkeypatch.setattr(ex, "prepare_remote_bundle", lambda **_: bundle)
+    # Resource admission is independently covered; exercise the publication fence.
+    from services.remote_execution import targets, bundle as bundle_module
+    monkeypatch.setattr(bundle_module, 'bind_resource_admission', lambda value, admission: value)
+    async def admitted(target, **requirements):
+        return {'schema': 'bms.target-resource-admission.v1', 'execution_target_id': target.id,
+                'required': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
+                'available': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
+                'devices': [{'gpu_index': 0, 'gpu_uuid': 'fixture-gpu'}]}
+    monkeypatch.setattr(targets, 'admit_target_resources', admitted)
+    run_entered = []
     async def run(_, command, **__):
         if command == ["run"]:
+            run_entered.append(command)
             async with store() as other:
                 job = await other.get(Job, "job")
                 assert (job.status, job.queue_status, job.started_at) == ("queued", "preparing", None)
@@ -140,9 +165,11 @@ async def test_start_receipt_publication_is_claim_fenced(store, monkeypatch, com
     monkeypatch.setattr(ex, "run_remote", run)
     async with store() as s:
         try:
-            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["true"])
+            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["true"],
+                                       native_invocation=lifecycle_invocation(["true"]))
         except ex.RemoteExecutionError:
             assert competing is not None
+    assert run_entered == [["run"]]
     async with store() as s:
         job = await s.get(Job, "job")
         assert job.status == ("running" if competing in {None, "callback"} else "cancelled" if competing == "cancelled" else "queued")
@@ -214,7 +241,7 @@ async def test_prepared_resume_cancellation_during_run_wins(store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_production_poller_recovers_terminal_lease_without_remote_io(store, monkeypatch):
+async def test_production_poller_retains_terminal_lease_without_quiescence(store, monkeypatch):
     from services.gpu_orchestrator import GPUOrchestrator
     async with store() as s:
         job = await s.get(Job, "job")
@@ -223,11 +250,12 @@ async def test_production_poller_recovers_terminal_lease_without_remote_io(store
     async def forbidden(*_):
         raise AssertionError("terminal recovery must not contact the provider")
     monkeypatch.setattr(ex, "remote_status", forbidden)
-    poller = GPUOrchestrator.__new__(GPUOrchestrator)
-    poller.db_session_factory = store
+    poller = GPUOrchestrator(store, lambda: [], lambda **kwargs: None)
     await poller.check_job_completions()
+    await asyncio.gather(*poller._remote_reconciliation_tasks.values())
+    await poller.stop()
     async with store() as s:
-        assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
+        assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
         assert (await s.get(Job, "job")).status == "completed"
 
 
@@ -240,9 +268,10 @@ async def test_production_poller_includes_preparing_claims(store, monkeypatch):
         seen.append(job.id)
         return False
     monkeypatch.setattr(ex, "reconcile_remote_job", reconcile)
-    poller = GPUOrchestrator.__new__(GPUOrchestrator)
-    poller.db_session_factory = store
+    poller = GPUOrchestrator(store, lambda: [], lambda **kwargs: None)
     await poller.check_job_completions()
+    await asyncio.gather(*poller._remote_reconciliation_tasks.values())
+    await poller.stop()
     assert seen == ["job"]
 
 
@@ -281,8 +310,8 @@ async def test_nextflow_handoff_preserves_preparing_and_terminalizes_compile_fai
     def command(*_, **__):
         if failure:
             raise ValueError("invalid immutable command")
-        return ["true"]
-    monkeypatch.setattr(nf, "build_nextflow_command", command)
+        return lifecycle_invocation(["true"])
+    monkeypatch.setattr(nf, "compile_job_nextflow_invocation", command)
     await nf.launch_nextflow_job("job", "boltz2", "predict", {}, "/unused")
     async with store() as s:
         job = await s.get(Job, "job")
@@ -528,8 +557,9 @@ async def test_uncertain_attempt_cannot_reenter_launch_or_prestart_failure(store
         raise ex.ExecutionTargetError("must not stage a successor")
     monkeypatch.setattr(ex, "get_ready_target", target)
     async with store() as s:
-        with pytest.raises(ex.RemoteExecutionError):
-            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["true"])
+        with pytest.raises(ex.RemoteExecutionError, match="fresh durable preparing claim"):
+            await ex.launch_remote_job(s, await s.get(Job, "job"), command=["true"],
+                                       native_invocation=lifecycle_invocation(["true"]))
     assert calls == []
     async with store() as s:
         job = await s.get(Job, "job")
@@ -538,8 +568,89 @@ async def test_uncertain_attempt_cannot_reenter_launch_or_prestart_failure(store
         assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conflict", [None, "source", "lease", "device"])
+async def test_fresh_admission_and_start_share_one_publication(store, monkeypatch, conflict):
+    import json
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from services.remote_execution import targets, bundle as bundle_module
+
+    await preparing(store)
+    async def ready(session, *_):
+        return await session.get(ExecutionTarget, "target")
+    async def noop(*_, **__):
+        pass
+    monkeypatch.setattr(ex, "get_ready_target", ready)
+    monkeypatch.setattr(ex.RemoteConnection, "from_target", lambda *_: None)
+    monkeypatch.setattr(ex, "_verify_remote_runner", noop)
+    monkeypatch.setattr(ex, "_stage_bundle", noop)
+    monkeypatch.setattr(ex, "_archive_envelope", lambda *_: None)
+    monkeypatch.setattr(ex, "_cleanup_local_bundle", lambda *_: None)
+    monkeypatch.setattr(ex, "_worker_argv", lambda connection, command, *_: [command])
+    bundle = SimpleNamespace(attempt_id="attempt", envelope_sha256="c" * 64,
+        remote_attempt_dir="/attempt", envelope=SimpleNamespace(
+            source_revision="a" * 40, source_tree="b" * 40,
+            environment={"BMS_TARGET_RESOURCES": json.dumps({
+                "required": {"cpus": 1, "memory_bytes": 1, "scratch_bytes": 0}, "gpu_ids": [0]})}))
+    monkeypatch.setattr(ex, "prepare_remote_bundle", lambda **_: bundle)
+    monkeypatch.setattr(bundle_module, "bind_resource_admission", lambda value, admission: value)
+    monkeypatch.setattr(ex, "_remote_receipt", lambda b, t, **kw: {
+        "state": kw["state"], "lease_acquired_at": t.lease_acquired_at.isoformat()})
+    admissions = []
+    async def admit(target, **requirements):
+        value = {"devices": [{"gpu_index": 0, "gpu_uuid": "original"}],
+                 "observed_at": str(len(admissions))}
+        admissions.append(value)
+        if len(admissions) == 2:
+            if conflict == "device":
+                value["devices"][0]["gpu_uuid"] = "replacement"
+            elif conflict in {"source", "lease"}:
+                async with store() as concurrent:
+                    if conflict == "source":
+                        (await concurrent.get(Job, "job")).execution_source_tree = "d" * 40
+                    else:
+                        (await concurrent.get(ExecutionTarget, "target")).lease_acquired_at = datetime.utcnow() + timedelta(seconds=1)
+                    await concurrent.commit()
+        return value
+    monkeypatch.setattr(targets, "admit_target_resources", admit)
+    publications, commands = [], []
+    publish = ex._publish_remote_transition
+    async def record_publication(session, job, values, **kwargs):
+        publications.append(values)
+        return await publish(session, job, values, **kwargs)
+    monkeypatch.setattr(ex, "_publish_remote_transition", record_publication)
+    async def remote(connection, argv, **kwargs):
+        commands.append(argv[0])
+        if argv[0] == "run":
+            async with store() as observer:
+                current = await observer.get(Job, "job")
+                assert current.remote_state == "launch_requested"
+                assert current.provenance["remote_execution_assignment"]["resources"]["admission"] == admissions[-1]
+            return SimpleNamespace(stdout=receipt(state="running").model_dump_json())
+        return SimpleNamespace(stdout="")
+    monkeypatch.setattr(ex, "run_remote", remote)
+    async with store() as session:
+        if conflict:
+            with pytest.raises(ex.RemoteExecutionError, match="changed|superseded"):
+                await ex.launch_remote_job(session, await session.get(Job, "job"),
+                    command=["true"], native_invocation=lifecycle_invocation(["true"]))
+        else:
+            assert await ex.launch_remote_job(session, await session.get(Job, "job"),
+                command=["true"], native_invocation=lifecycle_invocation(["true"])) == "remote:attempt"
+    assert len(admissions) == 2
+    assert ("run" in commands) == (conflict is None)
+    # Fresh admission must not create a separately committed intermediate state.
+    assert all(set(values) != {"provenance"} for values in publications)
+    if conflict in {"source", "lease"}:
+        async with store() as session:
+            assert (await session.get(ExecutionTarget, "target")).leased_job_id == "job"
+            assert (await session.get(Job, "job")).remote_state == "staging"
+
+
 def receipt(state="succeeded", job_id="job", attempt_id="attempt"):
     return RemoteAttemptStatus(job_id=job_id, attempt_id=attempt_id, state=state,
+                               boot_id="test-boot", quiescent=True,
                                exit_code=0, started_at=datetime.utcnow(), completed_at=datetime.utcnow())
 
 
@@ -573,3 +684,78 @@ async def test_wrong_cancel_receipt_is_not_confirmation(store, monkeypatch):
     monkeypatch.setattr(ex, "run_remote", run)
     async with store() as s:
         assert not await ex.cancel_remote_job(await s.get(Job, "job"))
+
+
+@pytest.mark.asyncio
+async def test_terminal_without_quiescence_retains_target_lease(store, monkeypatch):
+    async def status(*_):
+        return receipt("cancelled").model_copy(update={"quiescent": False})
+    monkeypatch.setattr(ex, "remote_status", status)
+    async with store() as s:
+        job = await s.get(Job, "job")
+        job.queue_status = "cancelling"
+        await s.commit()
+        assert not await ex.reconcile_remote_job(s, job)
+    async with store() as s:
+        assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
+        assert (await s.get(Job, "job")).queue_status == "cancelling"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [False, True])
+async def test_bulk_cancel_uses_owned_quiescence_and_attempt_cas(store, monkeypatch, replacement):
+    from routers.queue import cancel_all_queued
+    from services import job_control
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.queue_status = "paused"
+        await session.commit()
+    async def stop(run_id):
+        assert run_id == "remote:attempt"
+        if replacement:
+            async with store() as other:
+                job = await other.get(Job, "job")
+                job.remote_attempt_id = "successor"
+                await other.commit()
+        return True
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", stop)
+    async with store() as session:
+        if replacement:
+            with pytest.raises(HTTPException) as error:
+                await cancel_all_queued(session)
+            assert error.value.status_code == 409
+        else:
+            result = await cancel_all_queued(session)
+            assert result["cancelled_count"] == 1
+    async with store() as session:
+        target = await session.get(ExecutionTarget, "target")
+        job = await session.get(Job, "job")
+        assert target.leased_job_id == ("job" if replacement else None)
+        assert job.remote_attempt_id == ("successor" if replacement else "attempt")
+
+
+def test_existing_attempt_control_ignores_new_admission_readiness():
+    target = ExecutionTarget(id="target", provider="vast", provider_instance_id="1",
+                             host="worker", port=22, username="root", remote_root="/worker",
+                             state="inactive", active=False, capabilities={})
+    job = Job(id="job", remote_attempt_id="attempt", provenance={"remote_execution_receipt": {
+        "attempt_id": "attempt", "execution_target_id": "target", "ssh_host": "worker",
+        "remote_root": "/retained", "remote_attempt_dir": "/retained/attempts/attempt"}})
+    connection, path = ex._connection_for_attempt(target, job)
+    assert connection.remote_root == "/retained" and path == "/retained/attempts/attempt"
+    target.host = "replacement"
+    with pytest.raises(ex.RemoteExecutionError, match="identity changed"):
+        ex._connection_for_attempt(target, job)
+
+
+@pytest.mark.asyncio
+async def test_reacquired_lease_epoch_blocks_old_attempt_release(store):
+    async with store() as s:
+        job = await s.get(Job, "job")
+        target = await s.get(ExecutionTarget, "target")
+        job.provenance = {"remote_execution_receipt": {
+            "lease_acquired_at": (target.lease_acquired_at - timedelta(seconds=1)).isoformat()}}
+        await s.commit()
+        assert not await ex._finish_remote_cancellation(s, job, receipt("cancelled"))
+    async with store() as s:
+        assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"

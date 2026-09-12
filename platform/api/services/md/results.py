@@ -54,6 +54,55 @@ def _replica_protocol_matches(
 ) -> bool:
     if observed == requested:
         return True
+    if requested.get("schema") == "bms.md.job.v1" and isinstance(observed, Mapping):
+        # v1 has the same immutable snapshot identities as the verified-copy
+        # reader. Only placement fields may differ; protocol/settings may not.
+        wanted = requested.get("input")
+        actual = observed.get("input")
+        if not isinstance(wanted, Mapping) or not isinstance(actual, Mapping):
+            return False
+        normalized = dict(actual)
+        for field in ("structure", "coordinates", "topology"):
+            if wanted.get(field) == actual.get(field):
+                continue
+            digest, size = wanted.get(field + "_sha256"), wanted.get(field + "_bytes")
+            if (not isinstance(wanted.get(field), str) or not wanted[field]
+                    or not isinstance(actual.get(field), str) or not actual[field]
+                    or not isinstance(digest, str) or SHA256.fullmatch(digest) is None
+                    or type(size) is not int or size < 1
+                    or actual.get(field + "_sha256") != digest
+                    or type(actual.get(field + "_bytes")) is not int
+                    or actual.get(field + "_bytes") != size):
+                return False
+            normalized[field] = wanted[field]
+        wanted_closure, actual_closure = wanted.get("topology_closure"), actual.get("topology_closure")
+        if wanted_closure != actual_closure:
+            if not isinstance(wanted_closure, Mapping) or not isinstance(actual_closure, Mapping):
+                return False
+            members = wanted_closure.get("files")
+            if (not isinstance(members, list) or not members
+                    or not isinstance(wanted_closure.get("root"), str)
+                    or not isinstance(actual_closure.get("root"), str)):
+                return False
+            for member in members:
+                if (not isinstance(member, Mapping) or not isinstance(member.get("path"), str)
+                        or PurePosixPath(member["path"]).is_absolute() or ".." in PurePosixPath(member["path"]).parts
+                        or not isinstance(member.get("sha256"), str) or SHA256.fullmatch(member["sha256"]) is None
+                        or type(member.get("bytes")) is not int or member["bytes"] < 0):
+                    return False
+            normalized["topology_closure"] = {**actual_closure, "root": wanted_closure["root"]}
+        relocated = {**observed, "input": normalized}
+        if relocated == requested:
+            return True
+        execution = requested.get("execution")
+        if not isinstance(execution, Mapping) or not isinstance(execution.get("gpu_id"), str):
+            return False
+        # The replica module exposes one scheduler-selected device as CUDA 0.
+        # No v2 preparation-policy override is valid for a v1 protocol.
+        return relocated == {
+            **requested,
+            "execution": {**execution, "gpu_id": "0", "scheduler_gpu_id": execution["gpu_id"]},
+        }
     if requested.get("schema") != "bms.md.job.v2" or not isinstance(observed, Mapping):
         return False
     if observed.get("schema") != "bms.md.job.v2":
@@ -755,6 +804,8 @@ def completion_barrier(job: MDJobRecord) -> dict[str, Any]:
 def apply_completion_barrier(job: MDJobRecord) -> dict[str, Any]:
     snapshot = completion_barrier(job)
     provenance = dict(getattr(job, "provenance", None) or {})
+    completed_at = (getattr(job, "completed_at", None)
+                    if provenance.get("md") == snapshot else None)
     provenance["md"] = snapshot
     setattr(job, "provenance", provenance)
     setattr(job, "status", "completed")
@@ -762,7 +813,7 @@ def apply_completion_barrier(job: MDJobRecord) -> dict[str, Any]:
     setattr(job, "current_stage", "Complete")
     setattr(job, "stage_progress", None)
     setattr(job, "error_message", None)
-    setattr(job, "completed_at", datetime.utcnow())
+    setattr(job, "completed_at", completed_at or datetime.utcnow())
     return snapshot
 
 

@@ -126,12 +126,16 @@ def _checkpoint_receipt(
     raw_path = payload.get("checkpoint_path")
     if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint path must be relative")
+    if raw_path != "production/production.cpt":
+        raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD pause requires the canonical production checkpoint")
     checkpoint = (receipt_path.parent / raw_path).resolve(strict=True)
     try:
         checkpoint.relative_to(root)
         relative_path = checkpoint.relative_to(receipt_path.parent).as_posix()
     except ValueError as exc:
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint escapes worker root") from exc
+    if relative_path != raw_path:
+        raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD production checkpoint path was redirected")
     if checkpoint.is_symlink() or not checkpoint.is_file():
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint is not a regular file")
     data = checkpoint.read_bytes()

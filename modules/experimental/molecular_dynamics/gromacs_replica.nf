@@ -21,7 +21,18 @@ process MD_GROMACS_REPLICA {
     export BMS_FEATURE_MOLECULAR_DYNAMICS="\${BMS_FEATURE_MOLECULAR_DYNAMICS:-0}"
     export CUDA_VISIBLE_DEVICES="${params.gpu_id}"
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    runtime_gpu_offload="\$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["preparation"]["gromacs_gpu_offload"])' ${preparation_bundle}/preparation_manifest.json)"
+    runtime_gpu_offload="\$(python3 - '${normalized_config}' '${preparation_bundle}' <<'PY'
+import json
+import sys
+from pathlib import Path
+config = json.loads(Path(sys.argv[1]).read_text())
+if config['schema'] == 'bms.md.job.v2':
+    manifest = json.loads((Path(sys.argv[2]) / 'preparation_manifest.json').read_text())
+    print(manifest['preparation']['gromacs_gpu_offload'])
+else:
+    print(config['execution']['gpu_offload'])
+PY
+    )"
     python3 -m scripts.bms_md.cli validate \
       --config ${normalized_config} \
       --gpu-id 0 \

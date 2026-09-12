@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-import requests
+# HTTP dependencies are needed only for the local API reporter.
 
 # Allow importing platform/api/paths.py when run from workflow sandboxes.
 CODE_ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +67,7 @@ def main() -> None:
     parser.add_argument("outputs", nargs="*", help="List of output file paths")
 
     args = parser.parse_args()
-    if os.environ.get("BMS_REMOTE_EXECUTION") == "1":
+    if "BMS_COMPONENT_CONTEXT" in os.environ or os.environ.get("BMS_REMOTE_EXECUTION") == "1":
         from services.remote_stage_receipts import write_remote_stage_receipt
         try:
             write_remote_stage_receipt(
@@ -79,6 +79,7 @@ def main() -> None:
             sys.exit(1)
         print(f"Recorded remote stage {args.stage} {args.status}")
         return
+    import requests
     normalizer = (
         normalize_job_root_relative_output
         if args.job_root_relative

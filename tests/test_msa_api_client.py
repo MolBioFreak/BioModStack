@@ -74,7 +74,28 @@ def setup(tmp_path):
 
 
 def client(tmp_path, transport, **kwargs):
-    return api.MSAClient(config=api.ClientConfig(controller_root=tmp_path / "authority",
+    class QualifiedFixtureClient(api.MSAClient):
+        """Exercise offline ColabFold fixtures through the real controller gate."""
+        def prepare_msa(self, **args):
+            run = super().prepare_msa
+            if args['provider'] != 'colabfold_api' or args.get('cache_only'):
+                return run(**args)
+            try:
+                return run(**{**args, 'cache_only': True})
+            except api.MSACacheMiss:
+                pass
+            from biomodstack_msa_controller import prepare
+            config = tmp_path / 'fixture-controller.json'
+            config.write_text(json.dumps({'role': 'msa_controller',
+                'machine_id': Path('/etc/machine-id').read_text().strip(),
+                'qualified_single_egress': True,
+                'egress_identity': 'offline-fixture-not-network-proof',
+                'state_dir': str(tmp_path / 'qualified-controller')}))
+            _, digest = self._identity(args['sequences'], args['provider'], args['settings'])
+            request = {'request_digest': digest, 'cache_root': str(args['cache_root'])}
+            return prepare(config, request, lambda: run(**args), resume_same_request=True)
+
+    return QualifiedFixtureClient(config=api.ClientConfig(controller_root=tmp_path / "authority",
                                                 poll_seconds=0, **kwargs),
                          transport=transport, sleep=lambda _: None)
 
@@ -92,6 +113,90 @@ def cf_args(setup, **settings):
 def cf_success(sequences=None, role="unpaired", use_env=True, remote_id="fixture-ticket"):
     return [response({"id": remote_id, "status": "PENDING"}), response({"status": "COMPLETE"}),
             response(archive(sequences=sequences, role=role, use_env=use_env))]
+
+
+@pytest.mark.parametrize('status', [408, 429, 500, 502, 503, 504])
+@pytest.mark.parametrize('attempts', [1, 3])
+def test_exhausted_safe_get_retains_ticket_and_recovers(tmp_path, setup, status, attempts):
+    transport = FixtureHTTP(response('fixture-job'), *[response(b'', status) for _ in range(attempts)])
+    with pytest.raises(api.PendingMSA) as pending:
+        client(tmp_path, transport, safe_attempts=attempts).prepare_msa(**setup)
+    operation = pending.value.operation
+    assert operation['provider'] == 'neurosnap_api'
+    assert operation['tickets'] == {'unpaired': {'phase': 'polling', 'remote_id': 'fixture-job'}}
+    assert len(operation['request_digest']) == 64
+    assert operation['retry_after_seconds'] == 0
+    assert FIXTURE_KEY not in json.dumps(operation) and SEQ not in json.dumps(operation)
+    assert len(transport.calls) == attempts + 1
+    recovery = FixtureHTTP(*ns_success()[1:])
+    assert client(tmp_path, recovery).prepare_msa(**setup)['artifacts']
+    assert all(method == 'GET' for method, _, _ in recovery.calls)
+
+
+@pytest.mark.parametrize('date_header', [False, True])
+@pytest.mark.parametrize('attempts', [1, 3])
+def test_final_safe_get_retry_after_preserves_delay(tmp_path, setup, monkeypatch, date_header, attempts):
+    from datetime import datetime, timezone
+    from email.utils import format_datetime
+    now = datetime(2026, 9, 11, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    monkeypatch.setattr(api, 'datetime', Clock)
+    header = format_datetime(now.replace(second=45), usegmt=True) if date_header else '45'
+    transport = FixtureHTTP(response('fixture-job'), *[response(b'', 503) for _ in range(attempts - 1)],
+                            response(b'', 429, header))
+    with pytest.raises(api.PendingMSA) as pending:
+        client(tmp_path, transport, safe_attempts=attempts).prepare_msa(**setup)
+    assert pending.value.operation['retry_after_seconds'] == 45
+    assert pending.value.operation['tickets']['unpaired']['remote_id'] == 'fixture-job'
+    assert len(transport.calls) == attempts + 1
+
+
+@pytest.mark.parametrize('signed', [False, True])
+def test_requests_transport_loss_is_pending_and_resumes(tmp_path, setup, monkeypatch, signed):
+    import requests
+    class Session:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def request(self, *args, **kwargs):
+            raise requests.ConnectionError('fixture sensitive transport details')
+    monkeypatch.setattr(requests, 'Session', Session)
+    class Transport(FixtureHTTP):
+        def request(self, method, url, **kwargs):
+            if not self.responses:
+                self.calls.append((method, url, kwargs))
+                return api.RequestsTransport().request(method, url, **kwargs)
+            return super().request(method, url, **kwargs)
+    replies = (ns_success('native.a3m')[:-1] + [api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL)]
+               if signed else [response('fixture-job')])
+    transport = Transport(*replies)
+    with pytest.raises(api.PendingMSA) as pending:
+        client(tmp_path, transport, safe_attempts=1).prepare_msa(**setup)
+    assert pending.value.operation['tickets']['unpaired'] == {
+        'phase': 'complete' if signed else 'polling', 'remote_id': 'fixture-job'}
+    assert 'sensitive' not in str(pending.value)
+    assert FIXTURE_KEY not in json.dumps(pending.value.operation)
+    if signed:
+        assert transport.calls[-1][2]['headers'] == {}
+        assert 'X-Amz-Signature' not in json.dumps(pending.value.operation)
+    recovery = FixtureHTTP(*(ns_success()[2:] if signed else ns_success()[1:]))
+    assert client(tmp_path, recovery).prepare_msa(**setup)['artifacts']
+    assert all(method == 'GET' for method, _, _ in recovery.calls)
+    for path in setup['cache_root'].rglob('*.json'):
+        assert FIXTURE_KEY not in path.read_text() and 'X-Amz-Signature' not in path.read_text()
+
+
+@pytest.mark.parametrize('failure', [response(b'', 401), api.MSAAPIError('unsafe response'), response(b'x' * 101)])
+def test_unsafe_get_is_error_not_pending(tmp_path, setup, failure):
+    transport = FixtureHTTP(response('fixture-job'), failure)
+    with pytest.raises(api.MSAAPIError) as error:
+        client(tmp_path, transport, max_bytes=100).prepare_msa(**setup)
+    assert not isinstance(error.value, api.PendingMSA)
+    assert len(transport.calls) == 2
 
 
 def test_neurosnap_multipart_native_artifact_and_durable_id(tmp_path, setup):
@@ -311,8 +416,10 @@ def test_safe_retry_and_download_restart_reuse_id(tmp_path, setup):
 
 def test_retry_after_not_truncated_into_early_retry(tmp_path, setup):
     first = FixtureHTTP(response("fixture-job"), response(b"", 429, "600"))
-    with pytest.raises(api.PendingMSA, match="Retry-After"):
+    with pytest.raises(api.PendingMSA, match="Retry-After") as pending:
         client(tmp_path, first).prepare_msa(**setup)
+    assert pending.value.operation["retry_after_seconds"] == 600
+    assert pending.value.operation["tickets"]["unpaired"]["remote_id"] == "fixture-job"
     assert len(first.calls) == 2
 
 
@@ -411,10 +518,11 @@ def test_paired_poll_restart_does_not_resubmit_unpaired(tmp_path, setup):
     first = FixtureHTTP(*cf_success([SEQ, SEQ2]), response({"id": "pair-ticket"}), response({"status": "RUNNING"}))
     with pytest.raises(api.PendingMSA):
         client(tmp_path, first, max_polls=1).prepare_msa(**args)
-    second = FixtureHTTP(response(archive(sequences=[SEQ, SEQ2])), response({"status": "COMPLETE"}),
+    second = FixtureHTTP(response({"status": "COMPLETE"}),
                          response(archive(sequences=[SEQ, SEQ2], role="paired")))
     assert len(client(tmp_path, second).prepare_msa(**args)["artifacts"]) == 4
     assert all(method == "GET" for method, _, _ in second.calls)
+    assert not any('/result/download/fixture-ticket' in url for _, url, _ in second.calls)
 
 
 def test_cancel_explicit_once_then_terminal_reconciliation(tmp_path, setup):
@@ -631,8 +739,160 @@ def test_neurosnap_unsafe_signed_redirect_never_followed(tmp_path, location):
     assert len(transport.calls) == 1
 
 
+def test_colabfold_unqualified_client_denied_before_ticket(tmp_path, setup):
+    transport = FixtureHTTP()
+    raw = api.MSAClient(config=api.ClientConfig(controller_root=tmp_path / 'authority'), transport=transport)
+    with pytest.raises(RuntimeError, match='controller-only'):
+        raw.prepare_msa(**cf_args(setup))
+    assert not transport.calls
+    assert not list(setup['cache_root'].rglob('state.json'))
+    assert not (tmp_path / 'authority').exists()
+
+
+def test_colabfold_verified_replay_needs_no_authority(tmp_path, setup, monkeypatch):
+    args = cf_args(setup)
+    first = client(tmp_path, FixtureHTTP(*cf_success())).prepare_msa(**args)
+    raw = api.MSAClient(transport=FixtureHTTP())
+    monkeypatch.setattr(raw, '_authority', lambda *a: pytest.fail('submission authority'))
+    monkeypatch.setattr(api, '_credential', lambda *a: pytest.fail('credential access'))
+    for cache_only in (False, True):
+        replay = raw.prepare_msa(**{**args, 'credential_file': tmp_path / 'absent'}, cache_only=cache_only)
+        assert replay['cache_hit'] and replay['artifacts'] == first['artifacts']
+    Path(first['artifacts'][0]['path']).write_bytes(b'corrupt')
+    with pytest.raises(api.MSAAPIError, match='hash'):
+        raw.prepare_msa(**args, cache_only=True)
+
+
+def test_colabfold_controller_restart_same_ticket(tmp_path, setup):
+    args = cf_args(setup)
+    first = FixtureHTTP(response({'id': 'durable-ticket'}), response({'status': 'RUNNING'}))
+    with pytest.raises(api.PendingMSA) as pending:
+        client(tmp_path, first, max_polls=1).prepare_msa(**args)
+    assert pending.value.operation['tickets'] == {'unpaired': {'phase': 'polling', 'remote_id': 'durable-ticket'}}
+    active = tmp_path / 'qualified-controller' / 'active.json'
+    assert json.loads(active.read_text())['status'] == 'pending'
+    with pytest.raises(api.ReconciliationRequired):
+        client(tmp_path, FixtureHTTP()).prepare_msa(**cf_args(setup, use_env=False))
+    resumed = FixtureHTTP(response({'status': 'COMPLETE'}), response(archive()))
+    result = client(tmp_path, resumed).prepare_msa(**args)
+    assert result['artifacts'] and not active.exists()
+    assert all(method == 'GET' and 'durable-ticket' in url for method, url, _ in resumed.calls)
+    assert sum(method == 'POST' for method, _, _ in first.calls) == 1
+
+
+def test_colabfold_controller_ambiguous_post_never_resubmits(tmp_path, setup):
+    first = FixtureHTTP(TimeoutError('private response'))
+    args = cf_args(setup)
+    with pytest.raises(api.ReconciliationRequired, match='never automatically resubmit'):
+        client(tmp_path, first).prepare_msa(**args)
+    retry = FixtureHTTP()
+    with pytest.raises(api.ReconciliationRequired, match='no durable remote ID'):
+        client(tmp_path, retry).prepare_msa(**args)
+    assert len(first.calls) == 1 and not retry.calls
+    state = json.loads((tmp_path / 'qualified-controller' / 'active.json').read_text())
+    assert state['status'] == 'blocked_reconciliation'
+    assert 'private response' not in json.dumps(state)
+
+
+def test_colabfold_controller_download_interruption_reuses_completed_ticket(tmp_path, setup):
+    first = FixtureHTTP(response({'id': 'durable-ticket'}), response({'status': 'COMPLETE'}), KeyboardInterrupt())
+    args = cf_args(setup)
+    with pytest.raises(KeyboardInterrupt):
+        client(tmp_path, first).prepare_msa(**args)
+    resumed = FixtureHTTP(response(archive()))
+    result = client(tmp_path, resumed).prepare_msa(**args)
+    assert result['artifacts']
+    assert [(method, url) for method, url, _ in resumed.calls] == [
+        ('GET', 'https://api.colabfold.com/result/download/durable-ticket')]
+    assert len([call for call in first.calls if call[0] == 'POST']) == 1
+
+
+def test_colabfold_controller_poll_interruption_reuses_durable_ticket(tmp_path, setup):
+    first = FixtureHTTP(response({'id': 'durable-ticket'}), KeyboardInterrupt())
+    args = cf_args(setup)
+    with pytest.raises(KeyboardInterrupt):
+        client(tmp_path, first).prepare_msa(**args)
+    resumed = FixtureHTTP(response({'status': 'COMPLETE'}), response(archive()))
+    assert client(tmp_path, resumed).prepare_msa(**args)['artifacts']
+    assert all(method == 'GET' and 'durable-ticket' in url for method, url, _ in resumed.calls)
+    assert len([call for call in first.calls if call[0] == 'POST']) == 1
+
+
+def test_pending_projection_is_optional_redacted_and_detached():
+    assert api.PendingMSA('legacy').operation is None
+    state = {'provider': 'colabfold_api', 'request_digest': 'a' * 64,
+             'identity': {'sequences': ['PRIVATE']}, 'cache_entry': '/private',
+             'headers': {'key': 'PRIVATE'}, 'retry_after_seconds': 600,
+             'tickets': {'unpaired': {'phase': 'polling', 'remote_id': 'fixture-id',
+                                      'response': 'PRIVATE'}}}
+    pending = api.PendingMSA('pending', operation=state)
+    state['tickets']['unpaired']['remote_id'] = 'changed'
+    assert pending.operation == {'provider': 'colabfold_api', 'request_digest': 'a' * 64,
+        'retry_after_seconds': 600,
+        'tickets': {'unpaired': {'phase': 'polling', 'remote_id': 'fixture-id'}}}
+    assert 'PRIVATE' not in json.dumps(pending.operation)
+
+
 def test_signed_storage_second_redirect_is_not_followed(tmp_path):
     transport = FixtureHTTP(api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL), api.HTTPResponse(307, b'', location=SIGNED_FIXTURE_URL))
     with pytest.raises(api.MSAAPIError, match='HTTP 307'):
         client(tmp_path, transport)._http('neurosnap_api', '/job/file/fixture-job/out/native.a3m', {'X-API-KEY': FIXTURE_KEY})
     assert len(transport.calls) == 2
+
+@pytest.mark.parametrize("existing_root", [False, True])
+def test_cache_only_miss_creates_no_storage(tmp_path, setup, existing_root):
+    cache = setup['cache_root']
+    if existing_root:
+        cache.mkdir(mode=0o700)
+    before = set(tmp_path.rglob('*'))
+    transport = FixtureHTTP()
+    with pytest.raises(api.MSACacheMiss):
+        client(tmp_path, transport).prepare_msa(**setup, cache_only=True)
+    assert set(tmp_path.rglob('*')) == before
+    assert not transport.calls
+
+
+def test_readonly_cache_corruption_is_not_a_miss(tmp_path, setup):
+    c = client(tmp_path, FixtureHTTP(*ns_success()))
+    result = c.prepare_msa(**setup)
+    Path(result['artifacts'][0]['path']).write_bytes(b'corrupt')
+    with pytest.raises(api.MSAAPIError) as caught:
+        c.prepare_msa(**{**setup, 'credential_file': None}, cache_only=True)
+    assert not isinstance(caught.value, api.MSACacheMiss)
+
+@pytest.mark.parametrize('corruption', ['changed_native', 'missing_checkpoint'])
+def test_partial_role_corruption_never_downloads_or_resubmits(tmp_path, setup, corruption):
+    args = {**cf_args(setup, pairing_mode='unpaired_paired'), 'sequences': [SEQ, SEQ2]}
+    first = FixtureHTTP(*cf_success([SEQ, SEQ2]), response({'id': 'pair-ticket'}), response({'status': 'RUNNING'}))
+    with pytest.raises(api.PendingMSA):
+        client(tmp_path, first, max_polls=1).prepare_msa(**args)
+    state_path = next((args['cache_root']/'colabfold_api').glob('*/state.json'))
+    if corruption == 'changed_native':
+        (state_path.parent/'native-unpaired.tar.gz').write_bytes(b'changed')
+    else:
+        state = json.loads(state_path.read_text())
+        del state['tickets']['unpaired']['output']
+        state_path.write_text(json.dumps(state))
+    transport = FixtureHTTP()
+    with pytest.raises(api.MSAAPIError, match='checkpoint|durable digest'):
+        client(tmp_path, transport).prepare_msa(**args)
+    assert transport.calls == []
+
+
+def test_local_stop_records_submitted_id_without_poll_or_resubmit(tmp_path, setup):
+    import threading
+    stop = threading.Event()
+    class StopAfterPost(FixtureHTTP):
+        def request(self, method, url, **kw):
+            result = super().request(method, url, **kw)
+            if method == 'POST':
+                stop.set()
+            return result
+    first = StopAfterPost(response('fixture-job'))
+    with api.preparation_stop_scope(stop), pytest.raises(api.MSAPreparationInterrupted) as error:
+        client(tmp_path, first).prepare_msa(**setup)
+    assert [method for method, _, _ in first.calls] == ['POST']
+    assert error.value.operation['tickets']['unpaired']['remote_id'] == 'fixture-job'
+    second = FixtureHTTP(*ns_success()[1:])
+    assert client(tmp_path, second).prepare_msa(**setup)['artifacts']
+    assert all(method == 'GET' for method, _, _ in second.calls)

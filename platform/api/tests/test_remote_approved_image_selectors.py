@@ -1,5 +1,7 @@
 """Approved fixture bytes only: remote selectors do not confer lane availability."""
 import hashlib
+import json
+from dataclasses import replace
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +9,33 @@ from types import SimpleNamespace
 import pytest
 
 from services.remote_execution import bundle, cache, images
+from component_runtime import NativeInvocation, SelectedDependency, SelectedExecutionMetadata, SourceIdentity
+
+
+def selector_invocation(model, command, native=None):
+    """Explicit lower-layer selector fixture; not a native compiler proof."""
+    from services.nextflow import build_selected_execution_plan
+    native = {'pred_method': 'protenix', 'protenix_use_msa': False,
+              'run_frustrampnn': False, **(native or {})}
+    invocation = NativeInvocation.capture(model_id=model, mode="predict", command=command,
+        requested=native, effective=native, native_parameters=native,
+        entrypoint="workflows/structure_prediction.nf")
+    invocation = replace(invocation, source_identity=SourceIdentity.from_checkout(Path(__file__).resolve().parents[3]))
+    plan = build_selected_execution_plan(model_id=model, mode=invocation.mode,
+        entrypoint=invocation.entrypoint, requested=invocation.requested_json,
+        effective=invocation.effective_json, native_parameters=invocation.native_parameters,
+        source_identity=invocation.source_identity)
+    if model == 'selector_probe':
+        # Explicit image-selector contract only; canonical CM remains unsupported.
+        metadata = SelectedExecutionMetadata(
+            availability='fixture_only', settings_authority=__file__,
+            static_components=(), dynamic_templates=(), dependencies=(SelectedDependency(
+                'fixture:canonical-image', 'image', 'confornets-canonical.sif', __file__,
+                selector='cm_confornets_container_path'),), artifact_roles=(), external_services=(),
+            result_contract_json=b'{}', admission_authority=None, retrieval_authority=None,
+            blockers=(), closure_reviewed=True)
+        plan = replace(plan, metadata=metadata)
+    return replace(invocation, execution_plan=plan)
 from lib.runtime_image_lifecycle import commit_release, transaction
 from lib.shared_runtime_images import publish_image
 
@@ -48,19 +77,25 @@ def approved(tmp_path, monkeypatch):
 def test_inventory_and_transport_share_approved_selection(approved, monkeypatch, name, selection):
     containers, root, image, digest = approved
     flag, key = images.IMAGE_SELECTORS[name]
-    argv = ['nextflow', 'run', 'main.nf']
+    argv = ['nextflow', 'run', 'workflows/structure_prediction.nf']
+    native = {}
     if selection == 'environment':
         monkeypatch.setenv(key, str(image))
     if selection == 'typed':
         argv += ['--' + flag, str(image)]
+        native[flag] = str(image)
     # Canonical CM is not a supported remote lane: this probes the typed boundary
     # only, not submission or scientific execution of that workflow.
     model = 'protenix' if name == 'protenix.sif' else 'selector_probe'
     if name != 'protenix.sif' and selection != 'typed':
-        argv += ['--' + flag, str(images.resolve_image(name, containers))]
-    compiled, effective = bundle.compile_remote_dependencies(model, 'predict', argv)
+        selected = str(images.resolve_image(name, containers))
+        argv += ['--' + flag, selected]
+        native[flag] = selected
+    invocation = selector_invocation(model, argv, native)
+    compiled, effective = bundle.compile_remote_dependencies(model, 'predict', argv,
+        native_invocation=invocation)
     assert compiled[compiled.index('--' + flag) + 1] == str(image)
-    assets = bundle._runtime_assets(model, 'predict', effective)
+    assets = bundle._runtime_assets(model, 'predict', effective, native_invocation=invocation)
     assert [(p, n) for p, n in assets if n.endswith('.sif')] == [(image, 'containers/' + name)]
     assert not (containers / name).exists()
     assert image.stat().st_nlink == 1
@@ -99,7 +134,8 @@ def test_invalid_explicit_selection_never_falls_back(approved, monkeypatch, faul
         image.parent.chmod(0o500)
     monkeypatch.setenv('BMS_PROTENIX_CONTAINER_PATH', str(selected))
     with pytest.raises(bundle.RemoteBundleError):
-        bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'main.nf'])
+        bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'workflows/structure_prediction.nf'],
+            native_invocation=selector_invocation('protenix', ['nextflow', 'run', 'workflows/structure_prediction.nf']))
     with pytest.raises((OSError, RuntimeError, ValueError)):
         cache.independent_plan(SimpleNamespace(kind='image', model_id='protenix'))
 
@@ -114,10 +150,13 @@ def test_typed_retained_selection_precedes_current_lane_and_environment(approved
         commit_release(root, 'production', {'BMS_PROTENIX_CONTAINER_PATH': dict(path=str(successor), sha256=successor_digest)})
     monkeypatch.setenv('BMS_PROTENIX_CONTAINER_PATH', str(successor))
     before = (root / 'references/state.json').read_bytes()
-    compiled, params = bundle.compile_remote_dependencies('protenix', 'predict',
-        ['nextflow', 'run', 'main.nf', '--protenix_container_path', str(retained)])
+    argv = ['nextflow', 'run', 'workflows/structure_prediction.nf', '--protenix_container_path', str(retained)]
+    invocation = selector_invocation('protenix', argv, {'protenix_container_path': str(retained)})
+    compiled, params = bundle.compile_remote_dependencies('protenix', 'predict', argv,
+        native_invocation=invocation)
     assert params['protenix_container_path'] == str(retained)
-    assert (retained, 'containers/protenix.sif') in bundle._runtime_assets('protenix', 'predict', params)
+    assert (retained, 'containers/protenix.sif') in bundle._runtime_assets(
+        'protenix', 'predict', params, native_invocation=invocation)
     assert (root / 'references/state.json').read_bytes() == before
 
 
@@ -140,11 +179,16 @@ def test_public_availability_and_cm_callback_gate_are_unchanged(approved, monkey
             cache.independent_plan(SimpleNamespace(kind='image', model_id=model))
     assert get_registry().get_model('frustrampnn') is None
     monkeypatch.setenv('BMS_WORK', str(tmp_path / 'work'))
+    import paths
+    monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path)
+    (tmp_path / 'request.json').write_text(json.dumps({'backend': 'confornets'}))
+    native_invocations = []
     command = nextflow.build_nextflow_command('conformational_mapping', 'map',
         dict(cm_request_path=str(tmp_path / 'request.json'), gpu_id=0, run_frustrampnn=True),
-        str(tmp_path / 'out'), job_id='fixture-cm')
+        str(tmp_path / 'out'), job_id='fixture-cm', native_invocations=native_invocations)
     with pytest.raises(bundle.RemoteBundleError, match='Remote workflow closure is not implemented'):
-        bundle.compile_remote_dependencies('conformational_mapping', 'map', command)
+        bundle.compile_remote_dependencies('conformational_mapping', 'map', command,
+            native_invocation=native_invocations[0])
     containers, _, _, _ = approved
     assert images.resolve_image('confornets.sif', containers) == containers / 'confornets.sif'
 
@@ -154,19 +198,22 @@ def test_invalid_lane_cannot_reinstate_original(approved, monkeypatch):
     (containers / 'protenix.sif').write_bytes(b'not a fallback')
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'unknown')
     with pytest.raises(bundle.RemoteBundleError):
-        bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'main.nf'])
+        bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'workflows/structure_prediction.nf'],
+            native_invocation=selector_invocation('protenix', ['nextflow', 'run', 'workflows/structure_prediction.nf']))
 
 
 def test_recording_rejects_changed_cas_bytes_instead_of_approving_new_hash(approved, monkeypatch):
     containers, root, image, digest = approved
-    compiled, effective = bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'main.nf'])
-    real_hash = bundle._sha256_file
-    def mutate(path):
-        path.chmod(0o600)
-        path.write_bytes(b'changed after selector approval')
-        path.chmod(0o400)
-        return real_hash(path)
-    monkeypatch.setattr(bundle, '_sha256_file', mutate)
+    compiled, effective = bundle.compile_remote_dependencies('protenix', 'predict', ['nextflow', 'run', 'workflows/structure_prediction.nf'],
+            native_invocation=selector_invocation('protenix', ['nextflow', 'run', 'workflows/structure_prediction.nf']))
+    def redundant_hash(path):
+        raise AssertionError('Canonical recording must reuse the shared image verification digest')
+    monkeypatch.setattr(bundle, '_sha256_file', redundant_hash)
+    record = bundle._record_file(image, 'runtime/containers/protenix.sif', 'runtime')
+    assert record.sha256 == digest
+    image.chmod(0o600)
+    image.write_bytes(b'changed after selector approval')
+    image.chmod(0o400)
     with pytest.raises((RuntimeError, ValueError)):
         bundle._record_file(image, 'runtime/containers/protenix.sif', 'runtime')
 
@@ -180,9 +227,11 @@ def test_frustra_central_digest_not_arbitrary_release_membership(approved, monke
     monkeypatch.setattr(runtime, 'get_container_path', lambda name: containers / name)
     monkeypatch.setattr(runtime, 'FRUSTRAMPNN_RUNTIME_IDENTITY', replace(
         runtime.FRUSTRAMPNN_RUNTIME_IDENTITY, configured_sif_path=str(image), sif_sha256=digest))
-    compiled, effective = bundle.compile_remote_dependencies('protenix', 'predict',
-        ['nextflow', 'run', 'main.nf', '--run_frustrampnn', 'true'])
-    assets = bundle._runtime_assets('protenix', 'predict', effective)
+    argv = ['nextflow', 'run', 'workflows/structure_prediction.nf', '--run_frustrampnn', 'true']
+    invocation = selector_invocation('protenix', argv, {'run_frustrampnn': True})
+    compiled, effective = bundle.compile_remote_dependencies('protenix', 'predict', argv,
+        native_invocation=invocation)
+    assets = bundle._runtime_assets('protenix', 'predict', effective, native_invocation=invocation)
     assert (image, 'containers/frustrampnn.sif') in assets
     assert effective['frustrampnn_container_path'] == str(image)
     assert not (containers / 'frustrampnn.sif').exists()
@@ -195,4 +244,7 @@ def test_frustra_central_digest_not_arbitrary_release_membership(approved, monke
     monkeypatch.setenv('BMS_FRUSTRAMPNN_SIF', str(wrong))
     with pytest.raises(bundle.RemoteBundleError):
         bundle.compile_remote_dependencies('protenix', 'predict',
-            ['nextflow', 'run', 'main.nf', '--run_frustrampnn', 'true'])
+            ['nextflow', 'run', 'workflows/structure_prediction.nf', '--run_frustrampnn', 'true'],
+            native_invocation=selector_invocation('protenix',
+                ['nextflow', 'run', 'workflows/structure_prediction.nf', '--run_frustrampnn', 'true'],
+                {'run_frustrampnn': True}))

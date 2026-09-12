@@ -33,19 +33,15 @@ def write_checkpoint_receipt(
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve(strict=True)
     output_dir = Path(output_dir).expanduser().resolve(strict=True)
-    candidates = [
-        path for path in output_dir.rglob("*.cpt")
-        if (
-            path.is_file()
-            and not path.is_symlink()
-            and (minimum_mtime_ns is None or path.stat().st_mtime_ns >= minimum_mtime_ns)
-        )
-    ]
-    if not candidates:
+    # Native pause/resume is production-only. A fresher equilibration or backup
+    # checkpoint must never become a stage-less production snapshot.
+    checkpoint = output_dir / "production" / "production.cpt"
+    if (not checkpoint.is_file() or checkpoint.is_symlink()
+            or checkpoint.parent.is_symlink()
+            or (minimum_mtime_ns is not None and checkpoint.stat().st_mtime_ns < minimum_mtime_ns)):
         if minimum_mtime_ns is not None:
-            raise RuntimeError("no GROMACS checkpoint was updated after the pause request")
-        raise RuntimeError("no GROMACS checkpoint was produced")
-    checkpoint = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.as_posix()))
+            raise RuntimeError("no GROMACS production checkpoint was updated after the pause request")
+        raise RuntimeError("no GROMACS production checkpoint was produced")
     relative_path = checkpoint.relative_to(output_dir).as_posix()
 
     completed = subprocess.run(

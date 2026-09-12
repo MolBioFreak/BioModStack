@@ -205,6 +205,68 @@ def test_real_provider_control_flow_uses_one_ticket_with_offline_transport(modul
     assert receipts[0]['tickets'][0]['ticket_id'] == 'offline-fixture-ticket'
 
 
+def test_controller_config_validation_has_no_state_side_effects(controller):
+    from biomodstack_msa_controller import validate_controller_config
+    config = validate_controller_config(controller)
+    assert config['role'] == 'msa_controller'
+    assert not (controller.parent / 'state').exists()
+    config['qualified_single_egress'] = False
+    controller.write_text(json.dumps(config))
+    with pytest.raises(RuntimeError, match='controller-only'):
+        validate_controller_config(controller)
+    assert not (controller.parent / 'state').exists()
+
+
+def test_same_request_legacy_failure_cannot_be_upgraded(controller):
+    from biomodstack_msa_api import PendingMSA, ReconciliationRequired
+    def pending():
+        raise PendingMSA('fixture pending')
+    with pytest.raises(PendingMSA):
+        prepare(controller, {'digest': 'fixture'}, pending)
+    for opt_in in (False, True):
+        with pytest.raises(ReconciliationRequired):
+            prepare(controller, {'digest': 'fixture'}, lambda: pytest.fail('legacy retry'),
+                    resume_same_request=opt_in)
+
+
+def test_resumable_controller_requires_matching_identity_and_egress(controller):
+    from biomodstack_msa_api import PendingMSA, ReconciliationRequired
+    def pending():
+        raise PendingMSA('fixture pending')
+    with pytest.raises(PendingMSA):
+        prepare(controller, {'digest': 'fixture'}, pending, resume_same_request=True)
+    for request, opt_in in [({'digest': 'other'}, True), ({'digest': 'fixture'}, False)]:
+        with pytest.raises(ReconciliationRequired):
+            prepare(controller, request, lambda: pytest.fail('unmatched retry'), resume_same_request=opt_in)
+    config = json.loads(controller.read_text())
+    config['egress_identity'] = 'changed-egress'
+    controller.write_text(json.dumps(config))
+    with pytest.raises(ReconciliationRequired):
+        prepare(controller, {'digest': 'fixture'}, lambda: pytest.fail('changed egress'), resume_same_request=True)
+
+
+def test_resumable_completed_receipt_does_not_bypass_artifact_validation(controller):
+    # Real shared-client recovery is covered in tests/test_msa_api_client.py.
+    from biomodstack_msa_api import MSAAPIError
+    assert prepare(controller, {}, lambda: {'fixture': True}, resume_same_request=True) == {'fixture': True}
+    def verify():
+        raise MSAAPIError('fixture artifact hash mismatch')
+    with pytest.raises(MSAAPIError, match='hash mismatch'):
+        prepare(controller, {}, verify, resume_same_request=True)
+
+
+def test_resumable_interruption_restores_authority_and_preserves_state(controller):
+    def interrupted():
+        require_controller_submission()
+        raise KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        prepare(controller, {}, interrupted, resume_same_request=True)
+    with pytest.raises(RuntimeError, match='controller-only'):
+        require_controller_submission()
+    assert prepare(controller, {}, lambda: {'recovered': True}, resume_same_request=True) == {'recovered': True}
+    assert not (controller.parent / 'state' / 'active.json').exists()
+
+
 def test_portable_manifest_traversal_rejected(tmp_path):
     from biomodstack_msa_handoff import resolve_alignments
     with pytest.raises(ValueError, match='portable'):

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import { api, assertLocalOnlySubmission, type JobLogs } from '../../lib/api';
+import { api, prepareExecutionPlacement, type ExecutionPlacement, type JobLogs } from '../../lib/api';
 import { parseFrustraMpnnSourceInspection } from '../../lib/frustraMpnnApi';
 import type { FrustraMpnnRequestedSettings } from '../frustrampnn/frustraMpnnSettingsState';
 import type { FrustraMpnnSourceInspection } from '../frustrampnn/frustraMpnnSettingsState';
@@ -101,7 +101,7 @@ export type CmStateLandscapeComparison =
     | { mode: 'pairwise'; target_id: string; scope: 'all_within_target' }
     | { mode: 'reference'; target_id: string; scope: 'all_other_within_target'; reference_backend_coordinates: CmBackendCoordinates };
 
-export interface CmSubmitRequest {
+export interface CmSubmitRequest extends ExecutionPlacement {
     name: string;
     notes: string;
     idempotency_key: string;
@@ -124,7 +124,7 @@ export interface CmSubmitRequest {
     confornets?: CmConfornetsControls;
 }
 
-export interface CmSubmitReceipt {
+export interface CmSubmitReceipt extends ExecutionPlacement {
     request_id: string;
     job_id: string;
     status: string;
@@ -189,7 +189,7 @@ export interface CmRunRecord {
     selected_input: CmSelectedInputRecord;
 }
 
-export interface CmStatus {
+export interface CmStatus extends ExecutionPlacement {
     request_id: string;
     job_id: string;
     backend: CmBackend;
@@ -707,8 +707,7 @@ export const searchCmRcsb = async (
 };
 
 export const submitCmRequest = async (payload: CmSubmitRequest): Promise<CmSubmitReceipt> => {
-    assertLocalOnlySubmission('Conformational Mapping');
-    return (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', payload)).data;
+    return (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', prepareExecutionPlacement(payload))).data;
 };
 
 export const getCmStatus = async (requestId: string): Promise<CmStatus> =>
@@ -778,7 +777,7 @@ export const getCmStateLandscapeAnalysisRows = async (
 export const cancelCmRequest = async (requestId: string): Promise<{ request_id: string; status: string }> =>
     (await api.post(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/cancel`)).data;
 
-export const retryCmRequest = async (requestId: string): Promise<{ request_id: string; job_id: string; status: string; retry_count: number }> =>
+export const retryCmRequest = async (requestId: string): Promise<{ request_id: string; job_id: string; status: string; retry_count: number } & ExecutionPlacement> =>
     (await api.post(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/retry`)).data;
 
 export const cmArtifactUrl = (requestId: string, artifactId: string): string =>

@@ -53,7 +53,7 @@ class JobCreate(BaseModel):
         None,
         min_length=1,
         max_length=160,
-        description="Explicit execution target. Omit for local execution.",
+        description="Explicit execution target. Roots omit or use null for local; children inherit only when omitted.",
     )
     # Child job tracking (spawn-wait-collect pattern)
     parent_job_id: Optional[str] = Field(None, description="Parent job ID for child jobs")
@@ -101,6 +101,7 @@ class JobCreate(BaseModel):
         return data
     
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "name": "binder_test_001",

@@ -1353,7 +1353,11 @@ export interface FrustraMpnnComparisonSide {
 }
 
 export interface FrustraMpnnComparisonRow {
-    residue_key: { entity_instance_id: string; auth_asym_id: string; auth_seq_id: number; insertion_code: string };
+    residue_key: {
+        entity_instance_id: string; auth_asym_id: string; auth_seq_id: number; insertion_code: string;
+        source_entity_id?: string | null; label_asym_id?: string | null;
+        sequence_index?: number | null; wt?: string | null;
+    };
     sequence_index: number | null;
     mutation_aa: string;
     wt: string | null;
@@ -2920,12 +2924,17 @@ const parseComparisonSide = (value: unknown, label: string): FrustraMpnnComparis
 };
 
 const parseComparisonResidueKey = (value: unknown, label: string): FrustraMpnnComparisonRow['residue_key'] => {
-    const payload = fmClosedProjection(value, label, ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'], ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code']);
+    const required = ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'];
+    const payload = fmClosedProjection(value, label, [...required, 'source_entity_id', 'label_asym_id', 'sequence_index', 'wt'], required);
     return {
         entity_instance_id: fmString(payload.entity_instance_id, `${label}.entity_instance_id`),
         auth_asym_id: fmString(payload.auth_asym_id, `${label}.auth_asym_id`),
         auth_seq_id: fmInteger(payload.auth_seq_id, `${label}.auth_seq_id`),
         insertion_code: fmString(payload.insertion_code, `${label}.insertion_code`, true),
+        ...('source_entity_id' in payload ? { source_entity_id: fmSchemaNullableString(payload.source_entity_id, `${label}.source_entity_id`) } : {}),
+        ...('label_asym_id' in payload ? { label_asym_id: fmSchemaNullableString(payload.label_asym_id, `${label}.label_asym_id`) } : {}),
+        ...('sequence_index' in payload ? { sequence_index: payload.sequence_index === null ? null : fmInteger(payload.sequence_index, `${label}.sequence_index`, 1) } : {}),
+        ...('wt' in payload ? { wt: fmSchemaNullableString(payload.wt, `${label}.wt`) } : {}),
     };
 };
 
@@ -3140,8 +3149,8 @@ export interface FrustraMpnnGuidancePlan {
     region: {
         region_type: 'residue_set' | 'sequence_span' | 'pocket' | 'interface' | 'contact_set' | 'loop' | 'domain' | 'mapped_region';
         requested_residues: Array<{ entity_instance_id: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
-        resolved_residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
-        unresolved_residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
+        resolved_residues: Array<{ entity_instance_id?: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
+        unresolved_residues: Array<{ entity_instance_id?: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
         region_sha256: string;
         mapping_method: string | null;
         source_artifact_sha256: string | null;
@@ -3987,12 +3996,11 @@ export const parseFrustraMpnnGuidance = (value: unknown): FrustraMpnnGuidancePla
     if (!Array.isArray(region.requested_residues) || !Array.isArray(region.resolved_residues) || !Array.isArray(region.unresolved_residues)) throw new Error(`${label}.region residue collections must be arrays`);
     const parseRegionResidue = (item: unknown, index: number, collection: 'requested_residues' | 'resolved_residues' | 'unresolved_residues') => {
         const itemLabel = `${label}.region.${collection}[${index}]`;
-        const residueKeys = collection === 'requested_residues'
-            ? ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'] as const
-            : ['auth_asym_id', 'auth_seq_id', 'insertion_code'] as const;
-        const row = fmClosedProjection(item, itemLabel, residueKeys, residueKeys);
+        const residueKeys = ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'] as const;
+        const required = collection === 'requested_residues' ? residueKeys : ['auth_asym_id', 'auth_seq_id', 'insertion_code'];
+        const row = fmClosedProjection(item, itemLabel, residueKeys, required);
         return {
-            ...(collection === 'requested_residues' ? { entity_instance_id: fmSchemaNullableString(row.entity_instance_id, `${itemLabel}.entity_instance_id`) } : {}),
+            ...('entity_instance_id' in row ? { entity_instance_id: fmSchemaNullableString(row.entity_instance_id, `${itemLabel}.entity_instance_id`) } : {}),
             auth_asym_id: fmString(row.auth_asym_id, `${itemLabel}.auth_asym_id`),
             auth_seq_id: fmInteger(row.auth_seq_id, `${itemLabel}.auth_seq_id`),
             insertion_code: (() => {

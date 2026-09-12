@@ -157,6 +157,80 @@ def build_manifest(
     }
 
 
+def _relative_path(value: str) -> PurePosixPath:
+    path = PurePosixPath(value)
+    if (not value or "\\" in value or path.is_absolute() or
+            any(part in ("", ".", "..") for part in value.split("/"))):
+        raise ValueError("publication path must be a contained canonical relative path")
+    return path
+
+
+def sequence_manifest(manifest: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    """Mirror canonicalProducerOutputs without replacing sequence-owned identity."""
+    required = {
+        "producer_artifact_id", "producer_artifact_key", "producer_sample",
+        "producer_sequence", "producer_fold", "producer_rank",
+        "producer_submission_id", "producer_submission_name", "original_submission_identity",
+    }
+    if (not isinstance(metadata, dict) or set(metadata) != required or
+            metadata["producer_artifact_id"] != metadata["producer_artifact_key"] or
+            metadata["producer_sample"] != metadata["producer_artifact_id"]):
+        raise ValueError("typed sequence producer metadata is invalid")
+    prefix = str(_relative_path(metadata["producer_artifact_key"]))
+    return {
+        "schema_name": "sequence_structure_producer_candidates", "schema_version": 1,
+        "candidates": [dict(metadata, producer_method=row["producer_method"],
+                            producer_output_key=f"{prefix}/{row['producer_output_key']}",
+                            producer_artifact_sha256=row["producer_artifact_sha256"],
+                            source_format=row["source_format"])
+                       for row in manifest["candidates"]],
+    }
+
+
+def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str, Any]],
+                      manifest: dict[str, Any], predictions_root: Path,
+                      publication_dir: Path, published_structure_root: str) -> None:
+    """Bind native keys to the existing flat publishDir, without rewriting identity.
+
+    This is task-native custody used identically by local and remote publication.
+    The archived manifest is byte-for-byte the original downstream document.
+    """
+    target_root = _relative_path(published_structure_root)
+    root = predictions_root.resolve(strict=True)
+    bindings = []
+    destinations: set[str] = set()
+    for native, candidate in zip(native_candidates, manifest["candidates"], strict=True):
+        relative = _relative_path(native["producer_output_key"])
+        source = root.joinpath(*relative.parts)
+        if source.is_symlink() or not source.resolve(strict=True).is_relative_to(root):
+            raise ValueError("publication source escaped native predictions root")
+        digest = _sha256(source)
+        if digest != candidate["producer_artifact_sha256"]:
+            raise ValueError("publication source changed after manifest creation")
+        destination = (target_root / relative.name).as_posix()
+        if destination in destinations:
+            raise ValueError("flat publication has duplicate native destinations")
+        destinations.add(destination)
+        bindings.append({"producer_output_key": candidate["producer_output_key"],
+                         "published_relative_path": destination, "sha256": digest,
+                         "size_bytes": source.stat().st_size,
+                         "source_format": candidate["source_format"]})
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    descriptor = {
+        "schema_name": "structure_producer_publication", "schema_version": 1,
+        "producer_manifest": {
+            "relative_path": f"run/protenix/producer/{manifest_digest}/producer_candidates.json",
+            "sha256": manifest_digest,
+        },
+        "bindings": bindings,
+    }
+    destination_dir = publication_dir / manifest_digest
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    (destination_dir / "producer_candidates.json").write_bytes(manifest_bytes)
+    (destination_dir / "publication.json").write_text(
+        json.dumps(descriptor, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--predictions-root", required=True, type=Path)
@@ -168,7 +242,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--protein-science-contract-revision", type=int, choices=[1])
     parser.add_argument("--boltz-native-root", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--sequence-metadata-base64")
+    parser.add_argument("--publication-dir", type=Path)
+    parser.add_argument("--published-structure-root")
     args = parser.parse_args(argv)
+    if bool(args.publication_dir) != bool(args.published_structure_root):
+        parser.error("publication-dir and published-structure-root must be supplied together")
+    if (args.publication_dir or args.sequence_metadata_base64) and args.producer_method != "protenix":
+        parser.error("publication and sequence metadata options currently apply only to Protenix")
     producer_sample = args.producer_sample
     if args.producer_sample_base64 is not None:
         producer_sample = base64.b64decode(
@@ -182,10 +263,17 @@ def main(argv: list[str] | None = None) -> int:
         protein_science_contract_revision=args.protein_science_contract_revision,
         boltz_native_root=args.boltz_native_root,
     )
-    args.output.write_text(
-        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    native_candidates = manifest["candidates"]
+    if args.sequence_metadata_base64 is not None:
+        metadata = json.loads(base64.b64decode(args.sequence_metadata_base64, validate=True).decode("utf-8"))
+        manifest = sequence_manifest(manifest, metadata)
+    manifest_bytes = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if args.publication_dir is not None:
+        write_publication(manifest_bytes=manifest_bytes, native_candidates=native_candidates,
+                          manifest=manifest, predictions_root=args.predictions_root,
+                          publication_dir=args.publication_dir,
+                          published_structure_root=args.published_structure_root)
+    args.output.write_bytes(manifest_bytes)
     return 0
 
 

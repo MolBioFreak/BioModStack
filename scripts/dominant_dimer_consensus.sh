@@ -2,6 +2,8 @@
 set -euo pipefail
 
 events=""
+single_ref_events=""
+dominant_split_source="dimer_reference"
 bam=""
 dimer_count="0"
 screened_pos="NA"
@@ -20,6 +22,8 @@ out_metadata="dominant_dimer_consensus_metadata.tsv"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --events) events="$2"; shift 2 ;;
+        --single-ref-events) single_ref_events="$2"; shift 2 ;;
+        --dominant-split-source) dominant_split_source="$2"; shift 2 ;;
         --bam) bam="$2"; shift 2 ;;
         --dimer-count) dimer_count="$2"; shift 2 ;;
         --screened-pos) screened_pos="$2"; shift 2 ;;
@@ -88,6 +92,7 @@ critical_failure() {
 status="not_applicable"
 breakpoint_pos="NA"
 breakpoint_source="none"
+evidence_source="none"
 support_reads="0"
 support_pct="0.0000"
 read_id="NA"
@@ -117,13 +122,44 @@ elif is_valid_pos "$dominant_junction_pos" && [[ "$dominant_junction_support_num
 fi
 
 if [[ -n "$candidate_pos" ]]; then
-    if [[ ! -f "$events" ]]; then
-        critical_failure "DOMINANT_CONSENSUS_EVENTS_UNAVAILABLE"
+    # The screen combines both evidence passes; a promoted single-reference
+    # hotspot must select its actual read IDs, not unrelated dimer crossings.
+    evidence_source="dimer_reference"
+    if [[ "$candidate_source" == "screened_primary_breakpoint" && -n "$single_ref_events" ]]; then
+        evidence_source="combined_references"
+    elif [[ "$candidate_source" == "single_ref_split_hotspot" ]]; then
+        evidence_source="single_reference"
+    elif [[ "$candidate_source" == "dominant_split_hotspot" ]]; then
+        evidence_source="$dominant_split_source"
     fi
-    if ! awk -F"\t" -v pos="$candidate_pos" '
-        NR == 1 { next }
-        ($4 + 0) == (pos + 0) && ($5 + 0) > 0 { print $1 }
-    ' "$events" | LC_ALL=C sort -u > "$tmpdir/read_ids.txt"; then
+    case "$evidence_source" in
+        dimer_reference|single_reference|combined_references) ;;
+        *) critical_failure "DOMINANT_CONSENSUS_EVIDENCE_SOURCE_INVALID" ;;
+    esac
+    : > "$tmpdir/selected_ids.txt"
+    if [[ "$evidence_source" != "single_reference" ]]; then
+        if [[ ! -f "$events" ]]; then
+            critical_failure "DOMINANT_CONSENSUS_EVENTS_UNAVAILABLE"
+        fi
+        if ! awk -F"\t" -v pos="$candidate_pos" '
+            NR == 1 { next }
+            ($4 + 0) == (pos + 0) && ($5 + 0) > 0 { print $1 }
+        ' "$events" >> "$tmpdir/selected_ids.txt"; then
+            critical_failure "DOMINANT_CONSENSUS_READ_SELECTION_FAILED"
+        fi
+    fi
+    if [[ "$evidence_source" != "dimer_reference" ]]; then
+        if [[ ! -f "$single_ref_events" ]]; then
+            critical_failure "DOMINANT_CONSENSUS_SINGLE_REF_EVENTS_UNAVAILABLE"
+        fi
+        if ! awk -F"\t" -v pos="$candidate_pos" '
+            NR == 1 { next }
+            ($5 + 0) == (pos + 0) { print $1 }
+        ' "$single_ref_events" >> "$tmpdir/selected_ids.txt"; then
+            critical_failure "DOMINANT_CONSENSUS_READ_SELECTION_FAILED"
+        fi
+    fi
+    if ! LC_ALL=C sort -u "$tmpdir/selected_ids.txt" > "$tmpdir/read_ids.txt"; then
         critical_failure "DOMINANT_CONSENSUS_READ_SELECTION_FAILED"
     fi
     if [[ ! -s "$tmpdir/read_ids.txt" ]]; then
@@ -133,6 +169,7 @@ if [[ -n "$candidate_pos" ]]; then
         critical_failure "DOMINANT_CONSENSUS_BAM_UNAVAILABLE"
     fi
 
+    cp "$tmpdir/read_ids.txt" "${out_consensus%.fasta}.read_ids.txt"
     support_reads="$(wc -l < "$tmpdir/read_ids.txt" | tr -d '[:space:]')"
     support_reads="$(normalize_num "$support_reads")"
     support_pct="$(awk -v support="$support_reads" -v total="$dimer_count_num" 'BEGIN {
@@ -149,6 +186,15 @@ if [[ -n "$candidate_pos" ]]; then
     fi
     if [[ ! -s "$tmpdir/subset.sam" ]]; then
         critical_failure "DOMINANT_CONSENSUS_SUBSET_EMPTY"
+    fi
+    # Keep the established two-copy alignment/consensus coordinate substrate,
+    # but require every selected supporting read to contribute mapped evidence.
+    if ! samtools view -F 4 "$tmpdir/subset.sam" 2>> "$out_log" \
+        | cut -f1 | LC_ALL=C sort -u > "$tmpdir/mapped_ids.txt"; then
+        critical_failure "DOMINANT_CONSENSUS_SUBSET_IDENTITY_FAILED"
+    fi
+    if ! cmp -s "$tmpdir/read_ids.txt" "$tmpdir/mapped_ids.txt"; then
+        critical_failure "DOMINANT_CONSENSUS_SUPPORTING_ALIGNMENTS_UNAVAILABLE"
     fi
     if ! samtools sort -@ "$threads" -o "$tmpdir/subset.bam" "$tmpdir/subset.sam" >> "$out_log" 2>&1; then
         critical_failure "DOMINANT_CONSENSUS_SORT_FAILED"
@@ -173,6 +219,8 @@ fi
     echo -e "dominant_consensus_status\t$status"
     echo -e "dominant_consensus_breakpoint_position_mod_ref\t$breakpoint_pos"
     echo -e "dominant_consensus_breakpoint_source\t$breakpoint_source"
+    echo -e "dominant_consensus_evidence_source\t$evidence_source"
+    echo -e "dominant_consensus_alignment_source\t$bam"
     echo -e "dominant_consensus_support_reads\t$support_reads"
     echo -e "dominant_consensus_support_pct\t$support_pct"
     echo -e "dominant_consensus_read_id\t$read_id"

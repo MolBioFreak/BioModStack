@@ -113,6 +113,8 @@ class Cache:
 
     def ingest_runtime(self, item, source):
         if self.probe_runtime(item)['state'] == 'cache_hit':
+            runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+                owner='cache-artifact:' + item['sha256'])
             return {**item, 'state': 'ready', 'cache_hit': True}
         # One private upload -> one independently copied immutable object. Never
         # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
@@ -123,13 +125,12 @@ class Cache:
                     raise ValueError('runtime_image_identity_mismatch')
             finally:
                 os.close(fd)
-        runtime_images().publish_image(Path(source), self.image_store, item['sha256'])
-        self.verify_runtime(item)
+        runtime_lifecycle().publish_leased_image(Path(source), self.image_store, item['sha256'],
+            owner='cache-artifact:' + item['sha256'])
         return {**item, 'state': 'ready', 'cache_hit': False}
 
     def runtime_alias(self, value, destination, runtime_root, *, check=False):
         item = artifact(value)
-        target = self.verify_runtime(item)
         root, destination = PurePosixPath(str(runtime_root)), PurePosixPath(str(destination))
         attempts = self.root.parent.parent.parent / 'attempts'
         relative = root.relative_to(attempts)
@@ -139,13 +140,23 @@ class Cache:
                 or '..' in destination.parts or destination == root
                 or not destination.is_relative_to(root)):
             raise ValueError('unsafe_runtime_alias')
+        _, identities = runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'])
+        if identities[item['sha256']]['size'] != item['size_bytes']:
+            raise ValueError('runtime_image_size_mismatch')
+        target = self.image_path(item)
         with directory(destination.parent, create=not check) as parent:
             # Exact, controller-derived target only, not arbitrary external links.
             if check:
                 if os.readlink(destination.name, dir_fd=parent) != str(target):
                     raise ValueError('runtime_alias_mismatch')
             else:
-                os.symlink(str(target), destination.name, dir_fd=parent)
+                try:
+                    os.symlink(str(target), destination.name, dir_fd=parent)
+                except FileExistsError:
+                    # Recovery may repeat materialization, never retarget an alias.
+                    if os.readlink(destination.name, dir_fd=parent) != str(target):
+                        raise ValueError('runtime_alias_mismatch')
                 os.fsync(parent)
         return {**item, 'state': 'ready'}
 
@@ -154,7 +165,8 @@ class Cache:
             item = artifact(row['artifact'])
             if str(self.image_path(item)) != row['destination']:
                 raise ValueError('runtime_image_destination_mismatch')
-            self.verify_runtime(item)
+            if not row['aliases']:
+                raise ValueError('missing_runtime_alias')
             for alias in row['aliases']:
                 self.runtime_alias(item, alias, row['runtime_root'])
             return {**item, 'state': 'ready'}
@@ -175,7 +187,8 @@ class Cache:
         if path != Path(references['runtime_root']) / '.bms-runtime-images.json':
             raise ValueError('invalid_runtime_manifest_path')
         for row in references['images']:
-            self.verify_runtime(row)
+            if not row['aliases']:
+                raise ValueError('missing_runtime_alias')
             for alias in row['aliases']:
                 self.runtime_alias(row, alias, references['runtime_root'], check=True)
         if not command:
@@ -376,6 +389,21 @@ class Cache:
                 os.close(fd)
         self.emit(item, 'ready')
         return {**item, 'state': 'ready'}
+
+
+def runtime_lifecycle():
+    """Load the installed peer as a package so its relative imports stay exact."""
+    import importlib
+    import types
+    peer = Path(__file__).with_name('runtime_image_lifecycle.py')
+    if not peer.exists():
+        peer = Path(__file__).resolve().parents[3] / 'scripts/lib/runtime_image_lifecycle.py'
+    name = '_bms_image_authority_' + hashlib.sha256(str(peer.parent).encode()).hexdigest()[:16]
+    if name not in sys.modules:
+        package = types.ModuleType(name)
+        package.__path__ = [str(peer.parent)]
+        sys.modules[name] = package
+    return importlib.import_module(name + '.runtime_image_lifecycle')
 
 
 def runtime_images():

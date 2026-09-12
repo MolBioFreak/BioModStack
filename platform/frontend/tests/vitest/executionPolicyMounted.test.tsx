@@ -25,10 +25,10 @@ it('mounted control is manual until explicit opt-in; submission uses typed execu
     const select = view.container.querySelector('select')!;
     expect(select.value).toBe('manual');
     await submitJob(job);
-    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_policy: { remote_result_policy: 'manual' } });
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'manual' } });
     act(() => { select.value = 'automatic'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     await submitJob(job);
-    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_policy: { remote_result_policy: 'automatic' } });
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' } });
     expect(localStorage.getItem(RESULT_POLICY_DEFAULT_KEY)).toBeNull();
     expect(post.mock.calls.every(call => call[0] === '/api/jobs')).toBe(true);
 });
@@ -49,9 +49,9 @@ it('explicit new-job preference survives remount but never overrides clone or ex
     view = mount();
     expect(view.container.querySelector('select')!.value).toBe('manual');
     await submitJob(job);
-    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_policy: { remote_result_policy: 'manual' } });
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'manual' } });
     await submitJob({ ...job, execution_policy: { remote_result_policy: 'automatic' } });
-    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_policy: { remote_result_policy: 'automatic' } });
+    expect(post.mock.calls.at(-1)?.[1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' } });
     expect(localStorage.getItem(RESULT_POLICY_DEFAULT_KEY)).toBe('automatic');
 });
 it('automatic saved clones survive a manual new-job default; invalid preferences fail manual', () => {

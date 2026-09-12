@@ -1,6 +1,57 @@
 """CPU-only antibody declaration tests; no image/model execution."""
 from types import SimpleNamespace
 import pytest
+
+
+@pytest.mark.parametrize("family", ["rfantibody", "fampnn", "maturation", "antibody"])
+def test_native_antibody_spawners_keep_grouping_and_settings(family, tmp_path, monkeypatch):
+    import importlib
+    import json
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "scripts"))
+    module = importlib.import_module(f"spawn_{family}_children")
+    monkeypatch.setattr(module, "component_runtime_enabled", lambda: True)
+    monkeypatch.setattr(module, "check_existing_children", lambda *a, **kw: (False, [], {}))
+    requests = []
+
+    def submit(payload, **identity):
+        requests.append((payload, identity))
+        return f"component-{identity['child_key']}"
+
+    monkeypatch.setattr(module, "submit_child_job", submit)
+    monkeypatch.setattr(module.requests, "post", lambda *a, **kw: pytest.fail("host HTTP used"))
+    for index in range(5):
+        (tmp_path / f"design{index}.pdb").write_text(
+            "ATOM      1  CA  ALA H   1       0.000   0.000   0.000  1.00 20.00           C\n")
+    settings = {"seed": 73, "fampnn_temperature": 0.31, "pinned_gpus": [2]}
+    common = dict(parent_job_id="root", batch_name="batch", params_json=json.dumps(settings))
+    if family == "rfantibody":
+        result = module.spawn_rfantibody_jobs(total_designs=5, designs_per_job=2,
+            target_pdb_path=str(tmp_path / "design0.pdb"), epitope_residues="T1",
+            framework_type="nanobody", framework_pdb=None, **common)
+    elif family == "fampnn":
+        result = module.spawn_fampnn_jobs(pdb_dir=str(tmp_path), pdbs_per_job=2,
+                                         seqs_per_design=7, **common)
+    elif family == "maturation":
+        result = module.spawn_jobs(pdb_dir=str(tmp_path), designs_per_job=2,
+            stage="backbone_refine", display_prefix="", api_url="unused", **common)
+    else:
+        result = module.spawn_children(pdb_dir=str(tmp_path), seqs_per_validation_job=2, **common)
+    assert len(requests) == 3
+    assert [identity["child_key"] for _, identity in requests] == ["0", "1", "2"]
+    assert result["parent_job_id"] == "root"
+    assert result["children"] == [{"id": f"component-{i}"} for i in range(3)]
+    for payload, identity in requests:
+        assert identity["parent_job_id"] == "root"
+        assert identity["stage"] == payload["child_stage"]
+        # Native wait permits mixed results; it still requires at least one success.
+        assert identity["required"] is False
+        assert all(payload["params"][key] == value for key, value in settings.items())
+    if family == "rfantibody":
+        assert [p["params"]["rfantibody_num_designs"] for p, _ in requests] == [2, 2, 1]
+    else:
+        assert [len(p["params"]["pdb_paths"].split(",")) for p, _ in requests] == [2, 2, 1]
+
 from services.fampnn_policy_admission import compile_declaration
 from test_core_protein_scientific_admission import admission
 

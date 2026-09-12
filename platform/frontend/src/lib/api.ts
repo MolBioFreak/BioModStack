@@ -1,4 +1,6 @@
 import axios from 'axios';
+import type { CmSubmitRequest } from '../components/conformationalMapping/conformationalMappingApi';
+import type { MolecularDynamicsLaunchIntent } from '../components/molecularDynamicsUiState';
 import { parseMetricPoints, validateScientificEnvelope } from './scientificAnalytics';
 import type { ScientificPoint, ScientificCohort } from './scientificAnalytics';
 type ScientificPointFields = Partial<Omit<ScientificPoint, 'id' | 'name' | 'metrics' | 'contract_revision'>> & { contract_revision?: 1 | null };
@@ -420,10 +422,26 @@ export interface GPUStatus {
     processes: GPUProcess[];
 }
 
-export interface ProvisionSelection {
+export interface CatalogProvisionSelection {
     kind: 'model' | 'image';
     model_id: string;
 }
+export interface MdLaunchPreviewRequest {
+    schema_version: 'bms.md.launch-preview-request.v1';
+    intent: MolecularDynamicsLaunchIntent;
+}
+// Reuse native scientific contracts, never translate them into synthetic Jobs.
+export type NativeWorkflowProvisionRequest =
+    | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
+    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
+export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
+export type ProvisionSelection = CatalogProvisionSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
+export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
+export const provisionSelectionLabel = (selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection): string =>
+    'workflow_request' in selection
+        ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
+            : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
+        : selection.model_id;
 
 export interface CachedArtifactReceipt {
     name: string;
@@ -432,6 +450,14 @@ export interface CachedArtifactReceipt {
 }
 
 export interface ProvisionPreview {
+    destination?: { target_id: string; remote_root: string } | null;
+    effective_params?: Record<string, unknown> | null;
+    plan_sha256?: string | null;
+    asset_states?: Array<CachedArtifactReceipt & { state: 'verified' | 'missing' | 'corrupt' | 'incompatible' | 'unknown' }>;
+    transfer_bytes?: number;
+    storage_bytes?: number;
+    inventory_state?: 'current' | 'stale' | 'unobserved';
+    blockers?: string[];
     selection: ProvisionSelection;
     preview_sha256: string;
     artifacts: CachedArtifactReceipt[];
@@ -440,9 +466,9 @@ export interface ProvisionPreview {
     scope: 'managed_asset_activation';
 }
 
-export interface ProvisionRequest extends ProvisionSelection {
+export type ProvisionRequest = ProvisionSelection & {
     preview_sha256: string;
-}
+};
 
 export interface ObservedArtifactInventory {
     operation_id: string;
@@ -455,6 +481,10 @@ export interface ObservedArtifactInventory {
 }
 
 export interface RemotePreloadProgress {
+    artifact_progress?: Array<CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' }>;
+    sequence?: number;
+    cancel_requested?: boolean;
+    recovery_required?: boolean;
     operation_id: string;
     job_id?: string | null;
     selection?: ProvisionSelection | null;
@@ -462,7 +492,7 @@ export interface RemotePreloadProgress {
     source_revision: string;
     source_tree: string;
     request_sha256: string;
-    phase: 'checking' | 'transferring' | 'verifying' | 'source_download_ready' | 'failed';
+    phase: 'checking' | 'transferring' | 'verifying' | 'source_download_ready' | 'failed' | 'cancelling' | 'recovery_blocked' | 'cancelled';
     artifact: string | null;
     message: string;
     started_at: string;
@@ -570,8 +600,8 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     return response.data;
 };
 
-export const fetchProvisionCatalog = async (): Promise<ProvisionSelection[]> =>
-    (await api.get<ProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
+export const fetchProvisionCatalog = async (): Promise<CatalogProvisionSelection[]> =>
+    (await api.get<CatalogProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
 
 export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
     (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;
@@ -579,11 +609,49 @@ export const previewExecutionTargetProvision = async (targetId: string, selectio
 export const provisionExecutionTarget = async (targetId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
     (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision`, request)).data;
 
+export const cancelExecutionTargetProvision = async (targetId: string, operationId: string): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/${encodeURIComponent(operationId)}/cancel`)).data;
+export const retryExecutionTargetProvision = async (targetId: string, operationId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/${encodeURIComponent(operationId)}/retry`, request)).data;
+
 export interface ManagedRuntimeArtifact extends CachedArtifactReceipt {
     state: 'verified' | 'missing' | 'corrupt' | 'incompatible';
 }
+export interface CriticalRuntimeSelection {
+    kind: 'critical_runtime';
+    model_id: 'worker';
+}
+export interface CriticalRuntimeCompatibility {
+    requirements: Record<string, string>;
+    observed: Record<string, string>;
+    compatible: boolean;
+}
+export interface NativeRuntimeReadiness {
+    state: 'blocked' | 'unverified' | 'stale' | 'not_applicable';
+    scope: 'native_runtime_preflight_only';
+    authority: string;
+    missing_authorities: string[];
+    blockers: string[];
+    probe?: {
+        authority: string;
+        outcome: 'passed' | 'failed';
+        gpu_id?: number | null;
+        gpu_uuid?: string | null;
+        observed_at?: string | null;
+        release_sha256: string;
+        image_sha256: string;
+        script_sha256: string;
+        source_revision: string;
+        source_tree: string;
+        boot_id: string;
+    } | null;
+}
 export interface ManagedRuntimeRelease {
-    selection: ProvisionSelection;
+    native_readiness?: NativeRuntimeReadiness | null;
+    bounded_readiness?: 'verified_assets_and_critical_runtime' | 'blocked' | 'stale';
+    readiness_scope?: 'asset_integrity_and_critical_compatibility_only';
+    selection: CatalogProvisionSelection | WorkflowRuntimeSelection | CriticalRuntimeSelection;
+    critical?: CriticalRuntimeCompatibility | null;
     release_sha256: string;
     source_revision: string;
     source_tree: string;
@@ -597,7 +665,7 @@ export interface ManagedRuntimeInventory {
     scope: 'managed_independent_asset_releases';
     releases: ManagedRuntimeRelease[];
     scientific_ready: false;
-    critical_runtime_ready: false;
+    critical_runtime_ready: boolean;
     blockers: Array<'critical_release_not_verified' | 'scientific_readiness_not_checked'>;
 }
 export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory | null> =>
@@ -910,6 +978,30 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
     });
 };
 
+/** Materialize a selected structure through the existing upload authority. */
+export const materializeStructureTarget = async (
+    target: { path?: string; file?: File; url?: string; name: string },
+    destination: string,
+): Promise<string> => {
+    if (target.path && !target.file) return target.path;
+    let file = target.file;
+    if (!file && target.url) {
+        const response = await fetch(target.url);
+        if (!response.ok) throw new Error(`Failed to load selected structure (${response.status})`);
+        const name = target.name.replace(/[^\w.-]+/g, '_') || 'structure';
+        file = new File([await response.blob()], /\.(pdb|cif|mmcif)$/i.test(name) ? name : `${name}.pdb`);
+    }
+    if (!file) throw new Error('The selected structure has no available file or canonical path.');
+    // Generic upload is exclusive-create; keep the selected bytes and format,
+    // but use a fresh basename rather than a shared/guessed destination file.
+    const basename = file.name.replace(/[^A-Za-z0-9_.-]/g, '_');
+    const dot = basename.lastIndexOf('.');
+    const stem = dot > 0 ? basename.slice(0, dot) : basename;
+    const suffix = dot > 0 ? basename.slice(dot) : '.pdb';
+    const upload = new File([file], `${stem}-${crypto.randomUUID()}${suffix}`, { type: file.type });
+    return (await uploadFile(destination, upload)).data.path;
+};
+
 // Extract a single chain from a multi-chain PDB
 export interface ExtractChainResult {
     success: boolean;
@@ -944,21 +1036,34 @@ export const extractChain = async (
 
 import { submissionExecutionPolicy, type ExecutionPolicy } from './executionPolicy';
 
+export interface ExecutionPlacement {
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+}
+
+/** Snapshot placement once; explicit Local and saved policy always win. */
+export const prepareExecutionPlacement = <T extends object>(request: T & ExecutionPlacement): T & Required<ExecutionPlacement> => ({
+    ...request,
+    execution_target_id: request.execution_target_id === undefined
+        ? selectedExecutionTargetForSubmission() : request.execution_target_id,
+    execution_policy: request.execution_policy ?? submissionExecutionPolicy(),
+});
+
 // Start a job
-export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+export const prepareJobSubmission = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}): Partial<Job> => {
     const useLaunchContext = options.launchContext !== false;
     const launchContextId = typeof window !== 'undefined' && useLaunchContext
         ? new URLSearchParams(window.location.search).get('launch_context_id')
         : null;
-    const selectedExecutionTarget = selectedExecutionTargetForSubmission();
-    jobData = { ...jobData, execution_policy: jobData.execution_policy ?? submissionExecutionPolicy() };
-    const targetedJobData = selectedExecutionTarget && !jobData.execution_target_id
-        ? { ...jobData, execution_target_id: selectedExecutionTarget }
-        : jobData;
+    const targetedJobData = prepareExecutionPlacement(jobData);
     const payload = launchContextId && !targetedJobData.launch_context_id
         ? { ...targetedJobData, launch_context_id: launchContextId }
         : targetedJobData;
-    return api.post('/api/jobs', payload, useLaunchContext
+    return payload;
+};
+
+export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    return api.post('/api/jobs', prepareJobSubmission(jobData, options), options.launchContext !== false
         ? undefined
         : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
 };
@@ -1021,9 +1126,30 @@ export interface ShapeLengthPolicy {
     mode: 'fixed' | 'uniform_integer_range' | 'deterministic_range';
     min: number;
     max: number;
+    allocation_policy_id?: 'fixed_length_v1' | 'balanced_bucket_v1' | null;
+    allocation_policy_sha256?: string | null;
 }
 
-export interface ShapeLaunchRequest {
+export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn';
+export type ShapeSequenceSettings = Record<string, number | string | boolean>;
+
+// Wire projection of global registry metadata, not a separate settings schema.
+export interface ShapeSequenceSettingsDefinition {
+    engine: ShapeSequenceEngine;
+    model_version: string;
+    schema_sha256: string;
+    params: Array<{ name: string; type: string; default: number | string | boolean; [metadata: string]: unknown }>;
+    initial_values: ShapeSequenceSettings;
+    contextual_defaults: ShapeSequenceSettings;
+    contextual_default_reason: string;
+}
+
+export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequenceCount: number) =>
+    api.get<ShapeSequenceSettingsDefinition>(`/api/shape-blueprint/sequence-settings/${engine}`, {
+        params: { sequence_count: sequenceCount },
+    });
+
+export interface ShapeLaunchRequest extends ExecutionPlacement {
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -1036,7 +1162,8 @@ export interface ShapeLaunchRequest {
     sequences_per_backbone: number;
     seed: number;
     sequence_policy?: 'auto' | 'skip' | 'external';
-    sequence_engine?: 'proteinmpnn' | 'fampnn';
+    sequence_engine?: ShapeSequenceEngine;
+    sequence_settings?: ShapeSequenceSettings;
     validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
     guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
@@ -1052,10 +1179,9 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    assertLocalOnlySubmission('Shape Blueprint');
-    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
+    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>>(
         '/api/shape-blueprint/requests',
-        request,
+        prepareExecutionPlacement(request),
     );
 };
 
@@ -1156,7 +1282,7 @@ export interface OntManagedReferenceRequest {
     ngs_reference_revision_id: string;
 }
 
-export interface OntNgsSubmitRequest {
+export interface OntNgsSubmitRequest extends ExecutionPlacement {
     name?: string;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
@@ -1165,8 +1291,11 @@ export interface OntNgsSubmitRequest {
 }
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
-    assertLocalOnlySubmission('ONT/NGS');
-    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+    const payload = prepareExecutionPlacement(request);
+    if (payload.execution_target_id && payload.pinned_gpu != null) {
+        throw new Error('Controller GPU pins cannot be used on a worker. Choose worker scheduler assignment explicitly.');
+    }
+    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload);
 };
 
 export interface MolBioNgsReceiptRequest {
@@ -2707,6 +2836,7 @@ export interface QueuedJob {
     execution_target_id?: string | null;
     remote_state?: string | null;
     remote_waiting_reason?: string | null;
+    provenance?: Record<string, unknown> | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;

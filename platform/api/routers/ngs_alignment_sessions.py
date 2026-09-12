@@ -1858,3 +1858,36 @@ async def get_alignment_read(
         status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed read was not found.",
         job_id=job_id, resource="read",
     )
+
+
+def _requires_governed_ont_hierarchy(job: Job) -> bool:
+    try:
+        return is_ont_fastq_qc_job(job)
+    except OntNgsCompletionError as exc:
+        raise OntNgsRouteError(
+            status_code=409,
+            code="NGS_AUTHORITY_CONFLICT",
+            message="The persisted NGS authority is inconsistent.",
+            job_id=str(job.id),
+            resource="result",
+        ) from exc
+
+
+async def _validate_rotation_package_authority(job: Job) -> None:
+    if is_ont_signal_alignment_job(job):
+        async with _validated_pinned_result_root(job) as root:
+            descriptors = await run_in_threadpool(
+                service.build_ngs_package_artifacts, str(job.id),
+                **_job_package_authority(job), job_output_dir=root,
+                pinned_root_descriptor=True,
+            )
+            observed = canonical_ngs_package_authority(descriptors)
+            integrity = (job.provenance or {}).get("result_integrity")
+            if not isinstance(integrity, dict) or any(
+                integrity.get(field) != observed[field]
+                for field in ("artifact_set_sha256", "declared_artifact_count",
+                              "present_artifact_count", "unavailable_artifact_count")
+            ):
+                raise service.AlignmentSessionError("current signal-alignment package differs from persisted authority")
+            return
+    await build_ont_fastq_qc_result(job)

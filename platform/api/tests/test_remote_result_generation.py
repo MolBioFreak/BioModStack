@@ -186,6 +186,9 @@ async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_p
         (Path(job.output_dir) / "old.txt").write_text("good")
         contract = ex.resolve_job_result_contract(job)
         job.provenance = {"remote_execution_receipt": {
+            **{key: value for key, value in ex._pull_identity(job).items() if key != "schema"},
+            "state": status.state, "exit_code": status.exit_code,
+            "remote_attempt_dir": "/fixture/attempt",
             "result_manifest_sha256": status.result_manifest_sha256,
             "expected_result_contract_sha256": hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}}
         await session.execute(text("CREATE TABLE test_projection (id TEXT PRIMARY KEY)"))
@@ -199,9 +202,13 @@ async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_p
         if fail_import and len(attempts) == 1:
             raise RuntimeError("semantic validation failed")
         return 0
-    async def proof(*args): pass
-    async def remote_status(*args): return status
+    async def proof(*args):
+        assert not attempts, "Verified import retry must not require a provider"
+    async def remote_status(*args):
+        assert not attempts, "Verified import retry must not contact the worker"
+        return status
     async def collect(*args):
+        assert not attempts, "Verified import retry must reuse its received bytes"
         ex._verify_result_package(incoming, args[1], status)
         return manifest, incoming
     monkeypatch.setattr(result_ingester, "ingest_job_results", ingest)
@@ -230,7 +237,9 @@ async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_p
                 assert (incoming / "first.txt").read_text() == "first"
                 assert "remote_result_generation" not in job.provenance
             else:
-                assert count == 1 and job.remote_state == "ingested"
+                assert count == 1 and job.remote_state == "ingested", (
+                    count, job.remote_state, job.error_message, attempts,
+                    (job.provenance or {}).get("remote_execution_receipt"))
                 assert job.status == "completed"
                 assert (Path(job.output_dir) / "first.txt").read_text() == "first"
                 assert "remote_result_generation" in job.provenance
@@ -315,7 +324,7 @@ async def test_md_dispatch_reaches_native_completion_barrier(store, tmp_path, mo
         job.remote_state = "returning"
         manifest, incoming, status = package(job)
         contract = ex.resolve_job_result_contract(job)
-        job.provenance = {"remote_execution_receipt": {"expected_result_contract_sha256":
+        job.provenance = {"remote_execution_receipt": {"remote_attempt_dir": "/fixture/attempt", "expected_result_contract_sha256":
             hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}}
         await session.commit()
         called = []

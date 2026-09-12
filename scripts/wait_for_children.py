@@ -14,21 +14,25 @@ import requests
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 from pathlib import Path
+if __package__:
+    from .child_job_utils import component_runtime_enabled, fetch_children_status
+else:
+    from child_job_utils import component_runtime_enabled, fetch_children_status
 
 
-def expected_child_ids_from_receipt(path: Path, parent_job_id: str) -> set[str]:
+def expected_child_ids_from_receipt(path: Path, parent_job_id: str) -> list[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("parent_job_id") != parent_job_id:
         raise ValueError("spawn receipt does not belong to the requested parent")
     children = payload.get("children")
     if not isinstance(children, list) or not children:
         raise ValueError("spawn receipt must contain at least one child")
-    child_ids = {
+    child_ids = [
         str(child.get("id") or "").strip()
         for child in children
         if isinstance(child, dict)
-    }
-    if "" in child_ids or len(child_ids) != len(children):
+    ]
+    if "" in child_ids or len(child_ids) != len(children) or len(set(child_ids)) != len(child_ids):
         raise ValueError("spawn receipt child identities are missing or duplicated")
     return child_ids
 
@@ -40,7 +44,7 @@ def wait_for_children(
     timeout: int = 0,  # 0 = no timeout (disabled by default)
     api_url: str = DEFAULT_API_URL,
     batch_name: str | None = None,  # For resume: find children by batch_name
-    expected_child_ids: set[str] | None = None,
+    expected_child_ids: list[str] | set[str] | None = None,
 ):
     """
     Block until all children for this parent+stage complete.
@@ -55,6 +59,12 @@ def wait_for_children(
     Returns:
         Dictionary with child output directories
     """
+    use_runtime = component_runtime_enabled()
+    expected_order = list(expected_child_ids) if isinstance(expected_child_ids, (list, tuple)) else None
+    if expected_child_ids is not None:
+        if len(set(expected_child_ids)) != len(expected_child_ids):
+            raise ValueError("duplicate expected child identity")
+        expected_child_ids = set(expected_child_ids)
     start_time = time.time()
     endpoint = f"{api_url}/api/jobs/{parent_job_id}/children/status"
     params = {"stage": stage} if stage else {}
@@ -76,14 +86,15 @@ def wait_for_children(
             }
         
         try:
-            resp = requests.get(endpoint, params=params, timeout=30)
-            
-            if not resp.ok:
-                print(f"[WAIT] API error: {resp.status_code}", file=sys.stderr)
-                time.sleep(poll_interval)
-                continue
-            
-            data = resp.json()
+            if use_runtime:
+                data = fetch_children_status(parent_job_id, stage, batch_name=batch_name)
+            else:
+                resp = requests.get(endpoint, params=params, timeout=30)
+                if not resp.ok:
+                    print(f"[WAIT] API error: {resp.status_code}", file=sys.stderr)
+                    time.sleep(poll_interval)
+                    continue
+                data = resp.json()
 
             observed_child_ids = {
                 str(value).strip()
@@ -113,8 +124,18 @@ def wait_for_children(
                         "elapsed_seconds": elapsed,
                     }
             
+            if use_runtime and expected_order and observed_child_ids == expected_child_ids:
+                rows = {row["job_id"]: row for row in data["children"]}
+                data["children"] = [rows[identity] for identity in expected_order]
+                data["child_ids"] = expected_order
+                data["child_output_dirs"] = [row["output_dir"] for row in data["children"]
+                    if row["status"] in {"completed", "execution_finished"} and row.get("output_dir")]
+                data["child_output_dirs_all"] = data["child_output_dirs"]
+
             total = data.get("total", 0)
             completed = data.get("completed", 0)
+            execution_finished = data.get("execution_finished", 0)
+            output_available = completed + execution_finished
             failed = data.get("failed", 0)
             cancelled = data.get("cancelled", 0)
             running = data.get("running", 0)
@@ -132,10 +153,10 @@ def wait_for_children(
 
                 # Resume fallback: if all completed children are already marked aggregated,
                 # collect from the full completed set so downstream can still continue.
-                if not output_dirs and completed > 0:
+                if not output_dirs and output_available > 0:
                     output_dirs = data.get("child_output_dirs_all", [])
 
-                if completed == 0 and (failed > 0 or cancelled > 0):
+                if output_available == 0 and (failed > 0 or cancelled > 0):
                     print("[WAIT] All children are failed/cancelled. No usable outputs.", file=sys.stderr)
                     return {
                         "status": "failed",
@@ -149,18 +170,23 @@ def wait_for_children(
                         "elapsed_seconds": elapsed
                     }
                 
-                print(f"[WAIT] All children complete! Success rate: {success_rate}%")
+                print(f"[WAIT] All child executions finished; {output_available} outputs available, "
+                      f"{completed} scientifically validated")
                 print(f"[WAIT] Output directories: {len(output_dirs)}")
                 
                 # Mark children as aggregated to prevent double-collection
                 mark_url = f"{api_url}/api/jobs/{parent_job_id}/children/mark-aggregated"
                 try:
-                    requests.post(mark_url, params=params, timeout=10)
+                    if not use_runtime:
+                        requests.post(mark_url, params=params, timeout=10)
                 except Exception as e:
                     print(f"[WAIT] Warning: Failed to mark children aggregated: {e}")
                 
                 return {
-                    "status": "complete",
+                    "status": "outputs_available" if execution_finished else "complete",
+                    "execution_finished": execution_finished,
+                    "output_available": output_available,
+                    "children": data.get("children", []),
                     "total": total,
                     "completed": completed,
                     "failed": failed,
@@ -217,7 +243,7 @@ def main():
         sys.exit(2)
     elif result.get("status") == "failed":
         sys.exit(1)
-    elif result.get("completed", 0) == 0 and (
+    elif result.get("output_available", result.get("completed", 0)) == 0 and (
         result.get("failed", 0) > 0 or result.get("cancelled", 0) > 0
     ):
         print("[WAIT] No completed children (failed/cancelled only).", file=sys.stderr)

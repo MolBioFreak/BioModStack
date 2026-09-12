@@ -5,6 +5,7 @@ import { NeurosnapMsaControls } from './NeurosnapMsaControls';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
@@ -107,11 +108,11 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, Un
     if (proteinComponents.length === 0) return null;
 
     const preferredIds = [
+        ...parseChainIdList(initialValues?.primary_chain_id),
+        ...parseChainIdList(initialValues?.target_chains),
         ...parseChainIdList(initialValues?.sequence_batch_component_id),
         ...parseChainIdList(initialValues?.binder_chains),
         ...parseChainIdList(initialValues?.antibody_chains),
-        ...parseChainIdList(initialValues?.primary_chain_id),
-        ...parseChainIdList(initialValues?.target_chains),
     ];
     for (const chainId of preferredIds) {
         const matched = proteinComponents.find((component: UntypedApiValue) => String(component?.id || '').trim() === chainId);
@@ -252,10 +253,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const initialBoltzUseMsa = launchConfig.showMsaControls ? (initialValues?.boltz_use_msa ?? true) : false;
     const [boltzUseMsa, setBoltzUseMsa] = useState(initialBoltzUseMsa);
     const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(
-        clampBoltzRecyclingSteps(initialValues?.boltz_recycling_steps ?? 3, initialBoltzUseMsa)
+        initialValues?.boltz_recycling_steps ?? 3
     );
     const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(
-        clampBoltzSamplingSteps(initialValues?.boltz_sampling_steps ?? getBoltzQualityPresetValues('max').samplingSteps, initialBoltzUseMsa)
+        initialValues?.boltz_sampling_steps ?? getBoltzQualityPresetValues('max').samplingSteps
     );
     const [boltzNumSamples, setBoltzNumSamples] = useState(initialValues?.boltz_num_samples ?? 1);
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
@@ -394,35 +395,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
     const [boltzApiStatus, setBoltzApiStatus] = useState<BoltzApiProviderStatus | null>(null);
 
-    const projectDraftJson = JSON.stringify((() => {
-        const predMethod = predictor === 'boltz' ? 'boltz2' : predictor === 'protenix' ? 'protenix' : 'esmfold2';
-        const common: Record<string, UntypedApiValue> = {
-            sequence: sequence.trim(), sequence_name: sequenceName.trim(), pred_method: predMethod,
-            num_parallel_jobs: numParallelJobs,
-        };
-        if (predMethod === 'esmfold2') return {
-            ...common, run_frustrampnn: false, frustrampnn_requiredness: 'required',
-            model_variant: esmfold2Variant, local_files_only: true,
-        };
-        if (predMethod === 'boltz2') return {
-            ...common, boltz_recycling_steps: boltzRecyclingSteps,
-            boltz_diffusion_samples: boltzNumSamples,
-            boltz_max_parallel_samples: boltzMaxParallelSamples,
-            boltz_sampling_steps: boltzSamplingSteps, boltz_use_msa: boltzUseMsa,
-            boltz_method: boltzMethod,
-        };
-        return {
-            ...common, protenix_model_weights: protenixModelWeights,
-            protenix_use_msa: protenixUseMsa,
-            protenix_msa_backend: initialValues?.protenix_msa_backend ?? 'auto',
-            protenix_use_template: initialValues?.protenix_use_template ?? false,
-            protenix_seeds: protenixSeeds, protenix_n_sample: protenixNSample,
-            protenix_n_step: protenixNStep, protenix_n_cycle: protenixNCycle,
-        };
-    })());
-    useEffect(() => {
-        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, UntypedApiValue>);
-    }, [onDraftChange, projectDraftJson]);
     const [boltzApiEstimate, setBoltzApiEstimate] = useState<BoltzApiEstimateResponse | null>(null);
     const [boltzApiEstimateApproved, setBoltzApiEstimateApproved] = useState(false);
     const [boltzApiEstimateError, setBoltzApiEstimateError] = useState<string | null>(null);
@@ -732,7 +704,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             job_name: jobName,
             sequence: sequence.trim(),
             sequence_name: sequenceName,
-            pred_method: resolvedPredictorSelection.canonicalSelection,
+            pred_method: resolvedPredictorSelection.valid ? resolvedPredictorSelection.canonicalSelection : resolvedPredictorSelection.requestedSelection,
             num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
             pinned_gpus: pinnedGpus,
             lock_gpus: lockGpus && pinnedGpus.length > 0,
@@ -861,7 +833,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    // Project drafts reuse the saved-template scientific projection, not a second serializer.
+    const projectDraftJson = JSON.stringify(currentTemplateParams);
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, UntypedApiValue>);
+    }, [onDraftChange, projectDraftJson]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -946,9 +923,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             setMsaCacheInfo(null);
             setMsaCacheError(null);
             setMsaCacheLoading(false);
-            if (msaCacheOnly) {
-                setMsaCacheOnly(false);
-            }
             return;
         }
 
@@ -961,17 +935,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 .then((resp) => {
                     if (!active) return;
                     setMsaCacheInfo(resp.data);
-                    if (msaCacheOnly && resp.data.cache_entries < 1) {
-                        setMsaCacheOnly(false);
-                    }
+
                 })
                 .catch((err: UntypedApiValue) => {
                     if (!active) return;
                     setMsaCacheInfo(null);
                     setMsaCacheError(err?.response?.data?.detail || err?.message || 'Failed to read MSA cache');
-                    if (msaCacheOnly) {
-                        setMsaCacheOnly(false);
-                    }
+
                 })
                 .finally(() => {
                     if (active) {
@@ -994,26 +964,22 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 ? `Cache: ${msaCacheInfo.cache_entries} entr${msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}`
                 : 'Cache: none';
 
-    const handleSubmit = async () => {
+    const buildSubmission = (resolvedSourcePath: string | null, requireSource = true) => {
         if (sequenceHandoffLoading || sequenceHandoffError) {
-            alert(sequenceHandoffError || 'The selected saved sequence is still loading.');
-            return;
+            throw new Error(sequenceHandoffError || 'The selected saved sequence is still loading.');
         }
         const batchEntries = batchEntriesPreview;
 
         if (!sequence.trim() && batchEntries.length === 0) {
-            alert('Please enter an amino acid sequence');
-            return;
+            throw new Error('Please enter an amino acid sequence');
         }
 
         if (batchEntries.length > 0 && complexMode && !resolvedSequenceBatchComponentId) {
-            alert('Sequence matrix mode requires a target protein component to replace.');
-            return;
+            throw new Error('Sequence matrix mode requires a target protein component to replace.');
         }
 
         if (!resolvedPredictorSelection.valid) {
-            alert(resolvedPredictorSelection.error || 'The selected structure predictor cannot be launched in this mode.');
-            return;
+            throw new Error(resolvedPredictorSelection.error || 'The selected structure predictor cannot be launched in this mode.');
         }
 
         const params: Record<string, UntypedApiValue> = {
@@ -1074,17 +1040,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         }
 
         if (msaProvider === 'local') {
-            alert(MSA_POLICY.local_disabled);
-            return;
+            throw new Error(MSA_POLICY.local_disabled);
         }
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
-            alert('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
-            return;
+            throw new Error('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
         }
 
         if (msaNeeded && msaCacheOnly && (!msaCacheInfo || msaCacheInfo.cache_entries < 1)) {
-            alert('Use Cache Only is enabled, but no cached MSA exists for this sequence.');
-            return;
+            throw new Error('Use Cache Only is enabled, but no cached MSA exists for this sequence.');
         }
 
         // MSA Quality parameters (when MSA is enabled for unknown predictor)
@@ -1120,19 +1083,16 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
 
         const targetConditioningRequested = (!isBoltzApi && usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
         if (targetConditioningRequested && !complexMode) {
-            alert('Target conditioning needs a shared target or complex component.');
-            return;
+            throw new Error('Target conditioning needs a shared target or complex component.');
         }
         if (targetConditioningRequested && !fixedTargetAvailable) {
-            alert('Fixed-target anchoring requires importing the primary target from a PDB source first.');
-            return;
+            throw new Error('Fixed-target anchoring requires importing the primary target from a PDB source first.');
         }
         if (targetConditioningRequested) {
             const normalizedCurrentSequence = sanitizeSequenceInput(sequence);
             const normalizedSourceSequence = sanitizeSequenceInput(targetSourceSequence);
             if (!normalizedSourceSequence || normalizedCurrentSequence !== normalizedSourceSequence) {
-                alert('Fixed-target anchoring requires the primary sequence to exactly match the imported target source chain.');
-                return;
+                throw new Error('Fixed-target anchoring requires the primary sequence to exactly match the imported target source chain.');
             }
         }
 
@@ -1153,23 +1113,61 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             }
 
             if (targetConditioningRequested) {
-                try {
-                    const resolvedSourcePath = await resolveTargetStructurePath();
-                    if (!resolvedSourcePath) {
-                        alert('Failed to stage the fixed target structure for anchored prediction.');
-                        return;
-                    }
-                    params.fixed_target_source_path = resolvedSourcePath;
-                    params.fixed_target_source_chains = targetSourceChainId;
-                    params.fixed_target_model_number = selectedTargetModel || undefined;
-                    params.fixed_target_source_sequence = targetSourceSequence || undefined;
-                } catch (error: UntypedApiValue) {
-                    alert(error?.message || 'Failed to stage the fixed target structure.');
-                    return;
-                }
+                if (requireSource && !resolvedSourcePath) throw new Error('Prepare the fixed target source before dependency provisioning.');
+                params.fixed_target_source_path = resolvedSourcePath || undefined;
+                params.fixed_target_source_chains = targetSourceChainId;
+                params.fixed_target_model_number = selectedTargetModel || undefined;
+                params.fixed_target_source_sequence = targetSourceSequence || undefined;
             }
         }
 
+        if (batchEntries.length > 0) {
+            params.sequence_batch_entries = batchEntries;
+            params.sequence_batch_input = sequenceBatchInput;
+            params.sequence_batch_prefix = sequenceBatchPrefix;
+            if (complexMode) {
+                params.sequence_batch_component_id = resolvedSequenceBatchComponentId;
+            }
+        }
+
+        const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
+        const pinnedIncludesLockGpus = Object.prototype.hasOwnProperty.call(initialValues || {}, 'lock_gpus');
+        const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
+        const jobRequest = {
+            name: jobName,
+            model_id: modelId,
+            mode: mode,
+            params: {
+                ...params,
+                target_source: targetSource || undefined,
+                pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+                lock_gpus: launchContextActive && !pinnedIncludesLockGpus ? undefined : lockGpus && pinnedGpus.length > 0,
+                allow_retries: launchContextActive && !pinnedIncludesAllowRetries ? undefined : allowRetries
+            },
+            pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null
+        };
+        return { jobRequest, remoteComponents, remotePrimaryChainId, targetConditioningRequested };
+    };
+    const workflowRequest = (() => {
+        if (isBoltzApi) return null; // Provider cost/launch is a different contract.
+        try { return buildSubmission(targetSourcePath || targetSource?.path || null).jobRequest; }
+        catch { return null; }
+    })();
+    const handleSubmit = async () => {
+        let submission;
+        try {
+            submission = buildSubmission(null, false);
+            if (submission.targetConditioningRequested && complexMode) {
+                const source = await resolveTargetStructurePath();
+                if (!source) { alert('Failed to stage the fixed target structure for anchored prediction.'); return; }
+                submission = buildSubmission(source);
+            }
+        } catch (error: UntypedApiValue) {
+            alert(error?.message || 'Failed to stage the fixed target structure.');
+            return;
+        }
+        const batchEntries = batchEntriesPreview;
+        const { remoteComponents, remotePrimaryChainId } = submission;
         if (isBoltzApi) {
             if (batchEntries.length > 0) {
                 alert('Boltz API submission currently queues one remote prediction per launch. Remove the sequence batch first.');
@@ -1210,31 +1208,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             return;
         }
 
-        if (batchEntries.length > 0) {
-            params.sequence_batch_entries = batchEntries;
-            params.sequence_batch_input = sequenceBatchInput;
-            params.sequence_batch_prefix = sequenceBatchPrefix;
-            if (complexMode) {
-                params.sequence_batch_component_id = resolvedSequenceBatchComponentId;
-            }
-        }
-
-        const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
-        const pinnedIncludesLockGpus = Object.prototype.hasOwnProperty.call(initialValues || {}, 'lock_gpus');
-        const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
-        submitMutation.mutate({
-            name: jobName,
-            model_id: modelId,
-            mode: mode,
-            params: {
-                ...params,
-                target_source: targetSource || undefined,
-                pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
-                lock_gpus: launchContextActive && !pinnedIncludesLockGpus ? undefined : lockGpus && pinnedGpus.length > 0,
-                allow_retries: launchContextActive && !pinnedIncludesAllowRetries ? undefined : allowRetries
-            },
-            pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null
-        });
+        submitMutation.mutate(submission.jobRequest);
 
         // Treat force-refresh as a one-shot action to avoid accidental cache-bypass on reruns.
         if (msaForceRefresh) {
@@ -1382,6 +1356,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <ExecutionTargetPicker workflowRequest={workflowRequest} />
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
@@ -1925,8 +1900,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         onChange={(e) => {
                                             const nextUseMsa = e.target.value === 'true';
                                             setBoltzUseMsa(nextUseMsa);
-                                            setBoltzRecyclingSteps((prev) => clampBoltzRecyclingSteps(prev, nextUseMsa));
-                                            setBoltzSamplingSteps((prev) => clampBoltzSamplingSteps(prev, nextUseMsa));
                                         }}
                                         className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                     >

@@ -7,7 +7,7 @@ import pytest
 from fastapi import BackgroundTasks
 from database import Job, ExecutionTarget
 from services.remote_execution import executor as ex
-from test_remote_lifecycle_gaps import store, preparing
+from test_remote_lifecycle_gaps import store, preparing, lifecycle_invocation
 
 
 async def terminal(store, tmp_path):
@@ -156,7 +156,8 @@ async def test_launch_cache_progress_is_durable_and_fenced_without_ssh_transacti
             pytest.fail('superseded cache operation was allowed to continue')
         monkeypatch.setattr(ex, '_stage_bundle', stage)
         with pytest.raises(ex.RemoteExecutionError, match='superseded'):
-            await ex.launch_remote_job(launch_session, await launch_session.get(Job, 'job'), command=['true'])
+            await ex.launch_remote_job(launch_session, await launch_session.get(Job, 'job'), command=['true'],
+                                       native_invocation=lifecycle_invocation(['true']))
     async with store() as s:
         j = await s.get(Job, 'job')
         assert j.error_message is None

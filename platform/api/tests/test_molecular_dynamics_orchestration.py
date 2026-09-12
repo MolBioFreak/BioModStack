@@ -418,7 +418,8 @@ def test_analysis_collection_is_atomic_idempotent_and_conflict_preserving(tmp_pa
         json.dumps(
             {
                 "total": 1,
-                "completed": 1,
+                "completed": 0,
+                "execution_finished": 1,
                 "failed": 0,
                 "cancelled": 0,
                 "child_ids": ["analysis-child-1"],
@@ -428,7 +429,13 @@ def test_analysis_collection_is_atomic_idempotent_and_conflict_preserving(tmp_pa
         encoding="utf-8",
     )
 
-    collection = collect_module.collect_analysis(status_path, parent_root / "manifest.json", parent_root)
+    receipt = tmp_path / "analysis_spawn.json"
+    receipt.write_text(json.dumps({
+        "schema": "bms.md.analysis-spawn.v1", "parent_job_id": parent_id,
+        "aggregate_manifest_sha256": _sha256(parent_root / "manifest.json"), "analysis_count": 1,
+        "children": [{"id": "analysis-child-1", "replica_index": 0, "manifest_sha256": replica_manifest_sha256}],
+    }))
+    collection = collect_module.collect_analysis(status_path, parent_root / "manifest.json", parent_root, spawn_receipt=receipt)
     accepted = parent_root / "analysis" / report.name
     accepted_inode = accepted.stat().st_ino
     accepted_bytes = accepted.read_bytes()
@@ -836,6 +843,128 @@ async def test_partial_multi_replica_retry_admission_cancels_created_children_an
     await engine.dispose()
 
 
+def _shared_md_runtime(tmp_path, monkeypatch):
+    from scripts.lib.component_adapter import runtime_from_environment
+    context = tmp_path / 'context.json'
+    context.write_text(json.dumps(dict(ledger_path=str(tmp_path / 'ledger.sqlite'),
+        artifact_root=str(tmp_path), attempt_id='attempt', root_job_id='parent',
+        target_id='local', lease_id='lease')))
+    monkeypatch.setenv('BMS_COMPONENT_CONTEXT', str(context))
+    return runtime_from_environment()
+
+
+def test_shared_md_replica_submission_preserves_native_identity(tmp_path: Path, monkeypatch) -> None:
+    from scripts.bms_md import spawn_replicas as module
+    runtime = _shared_md_runtime(tmp_path, monkeypatch)
+    real_submit = module.submit_child_job
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"random_seed": 71, "execution": {"gpu_id": 2}, "engine": "gromacs"}))
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({"replicas": 2, "engine": "gromacs"}))
+    submitted = []
+    monkeypatch.setattr(module, "component_runtime_enabled", lambda: True)
+    monkeypatch.setattr(module.requests, "post", lambda *a, **k: pytest.fail("host callback"))
+
+    def submit(payload, **identity):
+        submitted.append((payload, identity))
+        return real_submit(payload, **identity)
+
+    monkeypatch.setattr(module, "submit_child_job", submit)
+    receipt = module.spawn_replicas(
+        parent_job_id="parent", parent_name="MD", normalized_config=config,
+        metadata_path=metadata, preparation_bundle=tmp_path / "bundle", api_url="http://unavailable.invalid",
+    )
+    assert [child["replica_seed"] for child in receipt["children"]] == [71, 72]
+    assert tuple(child['id'] for child in receipt['children']) == runtime.group_children('parent:md_replica')
+    assert [runtime.request(child['id']).child_key for child in receipt['children']] == ['0', '1']
+    for index, (payload, identity) in enumerate(submitted):
+        assert payload["pinned_gpu"] == 2
+        assert payload["mode"] == "replica"
+        assert payload["params"]["md_replica_seed"] == 71 + index
+        assert payload["params"]["md_replica_index"] == index
+        assert payload["params"]["lineage_root_job_id"] == "parent"
+        assert payload["params"]["md_attempt"] == 0
+        assert identity == {"parent_job_id": "parent", "stage": "md_replica", "child_key": str(index), "required": True}
+
+
+def test_shared_md_analysis_submission_is_required_cpu_native(tmp_path: Path, monkeypatch) -> None:
+    from scripts.bms_md import spawn_analysis as module
+    _shared_md_runtime(tmp_path, monkeypatch)
+    real_submit = module.submit_child_job
+
+    root = tmp_path / "parent"
+    manifest, digest = _write_completed_replica(root, "parent")
+    submitted = []
+    monkeypatch.setattr(module, "component_runtime_enabled", lambda: True)
+    monkeypatch.setattr(module.requests, "post", lambda *a, **k: pytest.fail("host callback"))
+
+    def submit(payload, **identity):
+        submitted.append((payload, identity))
+        return real_submit(payload, **identity)
+
+    monkeypatch.setattr(module, "submit_child_job", submit)
+    kwargs = dict(parent_job_id="parent", parent_name="MD", aggregate_manifest=root / "manifest.json",
+                  api_url="http://unavailable.invalid", work_item_dir=root / "work_items",
+                  runtime_sha256=module.QUALIFIED_RUNTIME_SHA256)
+    assert module.spawn_analysis(**kwargs) == module.spawn_analysis(**kwargs)
+    assert submitted[0] == submitted[1]
+    payload, identity = submitted[0]
+    assert payload["mode"] == "analyze"
+    assert "pinned_gpu" not in payload and "gpu_id" not in payload["params"]
+    assert identity == {"parent_job_id": "parent", "stage": "md_analysis",
+                        "child_key": f"0:{module._manifest_set_sha256([(0, digest)])}:0", "required": True}
+    assert payload["params"]["md_replica_manifest_sha256"] == digest
+    assert _sha256(manifest) == digest
+
+
+@pytest.mark.parametrize("execution_finished", [False, True])
+@pytest.mark.parametrize("fault", ["none", "partial", "foreign_child", "missing_output", "duplicate_output", "wrong_seed", "wrong_parent"])
+def test_md_exact_collection_preserves_native_results(tmp_path: Path, fault: str, execution_finished: bool) -> None:
+    child_root = tmp_path / "child"
+    manifest, _ = _write_completed_replica(child_root, "parent")
+    run = json.loads(manifest.read_text())
+    run.update(engine={"name": "gromacs", "version": "native"}, replica_seed=71)
+    if fault == "wrong_seed":
+        run["replica_seed"] = 72
+    if fault == "wrong_parent":
+        run["job_id"] = "foreign-parent"
+    manifest.write_text(json.dumps(run))
+    status = {"total": 1, "completed": 1, "failed": 0, "cancelled": 0,
+              "child_ids": ["child"], "child_output_dirs": [str(child_root)]}
+    if execution_finished:
+        status.update(completed=0, execution_finished=1, status="outputs_available")
+    if fault == "foreign_child":
+        status["child_ids"] = ["foreign"]
+    if fault == "missing_output":
+        status["child_output_dirs"] = []
+    if fault == "duplicate_output":
+        status["child_output_dirs"] *= 2
+    if fault == "partial":
+        status.update(total=2, failed=1, child_ids=["child", "failed-child"])
+    status_path = tmp_path / "status.json"
+    status_path.write_text(json.dumps(status))
+    receipt = tmp_path / "spawn.json"
+    receipt.write_text(json.dumps({"schema": "bms.md.replica-spawn.v1", "parent_job_id": "parent",
+                                  "engine": "gromacs", "replica_count": 1,
+                                  "children": [{"id": "child", "replica_index": 0, "replica_seed": 71}]}))
+    if fault == "partial":
+        payload = json.loads(receipt.read_text())
+        payload["replica_count"] = 2
+        payload["children"].append({"id": "failed-child", "replica_index": 1, "replica_seed": 72})
+        receipt.write_text(json.dumps(payload))
+    output = tmp_path / "collected"
+    if fault in {"none", "partial"}:
+        result = aggregate_module.collect_children(status_path, output, spawn_receipt=receipt)
+        assert result["status"] == ("completed" if fault == "none" else "partial_failure")
+        assert result["replicas"][0]["replica_seed"] == 71
+        assert aggregate_module.collect_children(status_path, output, spawn_receipt=receipt) == result
+        return
+    with pytest.raises(ValueError):
+        aggregate_module.collect_children(status_path, output, spawn_receipt=receipt)
+    assert not (output / "manifest.json").exists()
+
+
 def test_immutable_publication_copies_the_verified_descriptor_during_source_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -866,3 +995,41 @@ def test_immutable_publication_copies_the_verified_descriptor_during_source_repl
     )
     assert source.read_bytes() == b"replacement-generation"
     assert destination.read_bytes() == trusted
+
+
+def test_native_md_collector_seals_exact_quiescent_child(tmp_path, monkeypatch):
+    import json
+    from scripts.lib.component_adapter import runtime_from_environment
+    from component_runtime import ComponentRequest
+    from scripts.bms_md.aggregate_children import collect_children
+
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps(dict(ledger_path=str(tmp_path / "ledger.sqlite"),
+        artifact_root=str(tmp_path), attempt_id="attempt", root_job_id="parent",
+        target_id="target", lease_id="lease")))
+    monkeypatch.setenv("BMS_COMPONENT_CONTEXT", str(context))
+    runtime = runtime_from_environment()
+    request = ComponentRequest.capture(parent_job_id="parent", stage="md_replica", child_key="0",
+        payload=dict(model_id="molecular_dynamics", mode="replica", params={}))
+    child = runtime.submit(request)
+    output = tmp_path / "child"
+    manifest, _ = _write_completed_replica(output, "parent")
+    run = json.loads(manifest.read_bytes())
+    run.update(engine={"name": "gromacs"}, replica_seed=71)
+    manifest.write_text(json.dumps(run))
+    runtime.claim(child, owner_id="owner", boot_id="boot")
+    runtime.execution_finished(child, owner_id="owner", boot_id="boot", output_dir=str(output), exit_code=0)
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps(dict(total=1, completed=0, execution_finished=1,
+        failed=0, cancelled=0, child_ids=[child], child_output_dirs=[str(output)])))
+    receipt = tmp_path / "spawn.json"
+    receipt.write_text(json.dumps(dict(schema="bms.md.replica-spawn.v1", parent_job_id="parent",
+        engine="gromacs", replica_count=1, children=[dict(id=child, replica_index=0, replica_seed=71)])))
+    runtime.register_group('parent:md_replica', [child])
+    result = collect_children(status, tmp_path / "collected", spawn_receipt=receipt)
+    assert result["status"] == "completed"
+    assert runtime.join_children([child])[0]["status"] == "completed"
+    assert collect_children(status, tmp_path / "collected", spawn_receipt=receipt) == result
+    (manifest.parent / "production.xtc").write_bytes(b"tampered")
+    with pytest.raises(Exception, match="size|SHA-256"):
+        collect_children(status, tmp_path / "collected", spawn_receipt=receipt)

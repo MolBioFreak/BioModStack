@@ -13,6 +13,7 @@ vi.mock('react-plotly.js', () => ({
     ),
 }));
 
+import { api } from '../../src/lib/api';
 import { OntFastqQcResultPanel } from '../../src/components/ngs/OntFastqQcResultPanel';
 import { parseOntFastqQcResult, type OntFastqQcResult } from '../../src/lib/ontFastqQcResult';
 
@@ -223,4 +224,44 @@ describe('ONT FASTQ-QC decision report', () => {
         });
         expect(onRecoverAccess).toHaveBeenCalledTimes(1);
     });
+});
+
+
+it('keeps scientific verdict and summary visible when optional observations and detail pages are unavailable', async () => {
+    const result = resultFixture();
+    result.execution_resources.evidence_status = 'unavailable';
+    result.pagination = { artifacts: {offset: 0, count: 0, total: result.artifacts.length, next_offset: 0}, variants: {offset: 0, count: 0, total: result.verification.variants.length, next_offset: 0} };
+    result.artifacts = [];
+    result.verification.variants = [];
+    await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} />));
+    expect(container.textContent).toContain('REVIEW REQUIRED');
+    expect(container.textContent).toContain('unavailable');
+    expect(container.textContent).toContain('Load artifacts');
+    expect(container.textContent).toContain('Load variants');
+    expect(container.textContent).toContain('61,708');
+});
+
+
+it('loads governed artifact detail through the real fetch/parser and rejects changed authority', async () => {
+    const full = resultFixture();
+    const summary = structuredClone(full);
+    summary.pagination = { artifacts: {offset: 0, count: 0, total: full.artifacts.length, next_offset: 0}, variants: {offset: 0, count: 0, total: full.verification.variants.length, next_offset: 0} };
+    summary.artifacts = [];
+    summary.verification.variants = [];
+    const get = vi.spyOn(api, 'get').mockResolvedValue({data: full});
+    try {
+        await act(async () => root.render(<OntFastqQcResultPanel result={summary} loading={false} error={null} />));
+        const load = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Load artifacts');
+        expect(load).toBeDefined();
+        await act(async () => { load!.click(); });
+        expect(get).toHaveBeenCalledWith(`/api/jobs/${JOB_ID}/ngs-result`, {params: {collection: 'artifacts', page_size: 64, artifact_offset: 0}});
+        expect(container.querySelector('a[href*="/ngs-artifacts/"]')).not.toBeNull();
+        const changed = structuredClone(full);
+        changed.authority.sequence_qc_manifest_sha256 = 'b'.repeat(64);
+        get.mockResolvedValue({data: changed});
+        const variants = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Load variants');
+        await act(async () => { variants!.click(); });
+        expect(container.textContent).toContain('scientific result changed');
+        expect(container.textContent).toContain('REVIEW REQUIRED');
+    } finally { get.mockRestore(); }
 });

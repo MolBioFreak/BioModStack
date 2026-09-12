@@ -16,7 +16,10 @@ vi.mock('react-router-dom', async (importOriginal) => ({
     ...(await importOriginal<typeof import('react-router-dom')>()),
     useNavigate: () => navigate,
 }));
-vi.mock('../../src/lib/api', () => ({
+vi.mock('../../src/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/lib/api')>()),
+    fetchExecutionTargets: async () => ({ data: [{ id: 'vast:123', name: 'Worker', active: true, state: 'ready', capabilities: {} }] }),
+    previewExecutionTargetProvision: async (id: string, selection: unknown) => (await apiMocks.post(`/api/execution-targets/${encodeURIComponent(id)}/provision/preview`, selection)).data,
     api: { get: apiMocks.get, post: apiMocks.post },
     completeCurrentLaunchContext: apiMocks.completeCurrentLaunchContext,
 }));
@@ -170,6 +173,7 @@ const launchPreviewResponse = (body: Record<string, unknown>, digest = hash('d')
 };
 
 beforeEach(() => {
+    window.sessionStorage.clear();
     navigate.mockReset();
     apiMocks.get.mockReset();
     apiMocks.post.mockReset();
@@ -190,6 +194,7 @@ beforeEach(() => {
         throw new Error(`unexpected GET ${url}`);
     });
     apiMocks.post.mockImplementation(async (url: string, body: Record<string, unknown>) => {
+        if (url.endsWith('/provision/preview')) return response({ selection: body, scope: 'managed_asset_activation', artifacts: [], total_bytes: 0, preview_sha256: hash('e'), scientific_ready: false });
         if (url === '/api/molecular-dynamics/starting-structures/inspect') return response(inspection);
         if (url === '/api/molecular-dynamics/launch-preview') {
             return response({
@@ -1155,10 +1160,18 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             { source_ref: inspection.source_ref, chemistry_profile_id: profile.id },
         )); });
         expect(previewButton.disabled).toBe(false);
+        await click('Vast · Worker');
+        const beforeProvision = apiMocks.post.mock.calls.length;
+        await click('Preview artifact downloads');
+        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Managed asset activation — not scientific Ready')); });
+        expect(apiMocks.post.mock.calls.length).toBe(beforeProvision + 1);
+        const provisionCall = apiMocks.post.mock.calls.at(-1);
+        await click('Local');
 
         await click('Preview effective request');
         await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Effective request digest')); });
         const previewCall = apiMocks.post.mock.calls.find(([url]) => url === '/api/molecular-dynamics/launch-preview');
+        expect(provisionCall?.[1]).toEqual({ kind: 'workflow', workflow_request: { workflow_type: 'molecular_dynamics', request: previewCall?.[1] } });
         expect(previewCall?.[1]).toMatchObject({
             schema_version: 'bms.md.launch-preview-request.v1',
             intent: {

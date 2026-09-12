@@ -1,8 +1,8 @@
 """Controller preparation and portable Protenix input delivery.
 
 Internal service boundary, deliberately not a worker-accessible search endpoint.
-Remote bundle compilation calls this boundary before transport and stages the
-portable directory as mandatory input. Public preparation remains unavailable
+Launch preparation calls this boundary before transport and stages the portable
+directory as mandatory input. Preview and bundle compilation do not call providers. Public preparation remains unavailable
 without the shared provider configuration and cache boundary.
 """
 from __future__ import annotations
@@ -59,25 +59,21 @@ def materialize_protenix_inputs(source: Path, output_json: Path, settings: dict)
 
 
 def prepare_remote_protenix_inputs(params: dict, destination: Path) -> dict:
-    """Called by immutable remote bundle compilation before any transport.
+    """Called by launch preparation with native compiled inputs before transport.
 
-    Supplied shared-cache hits are converted on the controller, never delegated
-    to a remote cache miss. Cache contents are query-validated by the native adapter.
+    Explicit native alignments or provider/settings-qualified API cache entries
+    are packaged here. Legacy query-only caches cannot establish API identity.
     """
     import os
     import tempfile
-    from services.nextflow import compile_controller_protenix_input
-    from prepare_protenix_msa import hydrate_chains_from_shared_cache
-    payload = compile_controller_protenix_input(params)
+    from prepare_protenix_msa import load_native_protenix_input
+    payload = load_native_protenix_input(params)
     destination.parent.mkdir(parents=True, exist_ok=True)
     configured = os.environ.get('BMS_MSA_CONTROLLER_CONFIG')
     config = Path(configured) if configured else None
     with tempfile.TemporaryDirectory(prefix='.msa-input-', dir=destination.parent) as scratch:
         scratch = Path(scratch)
-        cache = str(params.get('msa_cache_dir') or '')
-        from services.msa_provider_setup import selected_provider
-        if cache and selected_provider(params) == 'colabfold_api':
-            hydrate_chains_from_shared_cache(payload, scratch / 'cache', cache)
+        # Query-only legacy caches are not provider/settings-qualified inputs.
         input_json = scratch / 'input.json'
         input_json.write_text(json.dumps(payload))
         system_keys = {'msa_cache_dir', 'msa_local_db', 'protenix_container_path',
@@ -94,13 +90,26 @@ def prepare_model_msa(*, sequences: list[str], params: dict) -> dict:
     from services.msa_provider_setup import (
         cache_root, credential_file, provider_settings, selected_provider,
     )
+    from biomodstack_msa_api import MSACacheMiss
+    from services.msa_provider_setup import controller_config_path
+    from biomodstack_msa_controller import prepare
     provider = selected_provider(params)
-    return prepare_msa(
-        sequences=sequences, provider=provider, settings=provider_settings(params),
-        cache_root=cache_root(),
-        credential_file=credential_file() if provider == "neurosnap_api" else None,
-        cache_only=params.get("msa_cache_only") in (True, "true", "1", 1),
-    )
+    arguments = dict(sequences=sequences, provider=provider,
+                     settings=provider_settings(params), cache_root=cache_root(),
+                     credential_file=None)
+    # Replay is always first: neither keys nor egress qualification authorize
+    # already verified input bytes. Only the explicit cache-miss error proceeds.
+    try:
+        return prepare_msa(**arguments, cache_only=True)
+    except MSACacheMiss:
+        if params.get('msa_cache_only') in (True, 'true', '1', 1):
+            raise
+    if provider == 'colabfold_api':
+        request = {**arguments, 'cache_root': str(arguments['cache_root'])}
+        return prepare(controller_config_path(), request,
+                       lambda: prepare_msa(**arguments), resume_same_request=True)
+    arguments['credential_file'] = credential_file()
+    return prepare_msa(**arguments)
 
 
 def _protenix_paired_headers(data: bytes) -> bytes:
@@ -141,32 +150,67 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
         raise ValueError('Preparation cannot search for no-MSA requests')
     if effective.get('protenix_msa_backend') in {'none', 'esm'}:
         raise ValueError('Non-search Protenix backend must use its model compiler')
-    chains = [chain for _, _, chain in iter_protein_chains(payload)]
-    if not chains:
-        raise ValueError('MSA preparation requires protein chains')
-    result = prepare_model_msa(sequences=[chain['sequence'] for chain in chains], params=effective)
+    from biomodstack_msa_api import validate_settings
+    from services.msa_provider_setup import selected_provider, provider_settings
+    from biomodstack_boltz_msa import a3m_rows
+    from biomodstack_msa_handoff import validate_a3m
     import tempfile
+    provider = selected_provider(effective)
+    tasks = {}
+    for task, index, chain in iter_protein_chains(payload):
+        tasks.setdefault(task, []).append((index, chain))
+    if not tasks:
+        raise ValueError('MSA preparation requires protein chains')
+    scientific = validate_settings(provider, provider_settings(effective))
     destination.parent.mkdir(parents=True, exist_ok=True)
+    receipts = []
     with tempfile.TemporaryDirectory(prefix='.native-pairing-', dir=destination.parent) as scratch:
-        # Fill only missing roles; explicitly supplied native data remains unchanged.
-        for artifact in result['artifacts']:
-            index = artifact['chain_index']
-            if type(index) is not int or not 0 <= index < len(chains):
-                raise ValueError('MSA provider returned an invalid chain identity')
-            key = {'unpaired': 'unpairedMsaPath', 'paired': 'pairedMsaPath'}.get(artifact['role'])
-            if key is None:
-                raise ValueError('MSA provider returned an invalid alignment role')
-            path = Path(artifact['path'])
-            if digest(path.read_bytes()) != artifact['sha256']:
-                raise ValueError('Cached MSA artifact changed before model packaging')
-            if artifact['role'] == 'paired' and result['provider'] == 'colabfold_api':
-                converted = Path(scratch) / f'chain-{index}-paired.a3m'
-                converted.write_bytes(_protenix_paired_headers(path.read_bytes()))
-                path = converted
-            if not chains[index].get(key):
-                chains[index][key] = str(path)
-        return export_protenix_inputs(payload, destination, effective,
-            {**result['provenance'], 'backend': result['provider'],
-             'request_digest': result['request_digest'], 'cache_hit': result['cache_hit'],
-             'paired_conversion': 'protenix-bd54a05-native-row-group-headers-v1'
-                 if any(a['role'] == 'paired' for a in result['artifacts']) and result['provider'] == 'colabfold_api' else None})
+        for task, roster in tasks.items():
+            if all_protein_chains_have_msa([payload[task]]):
+                continue
+            chains = [chain for _, chain in roster]
+            # Supplied paired groups have no provider-operation identity. Joining
+            # them to newly generated rows would invent cross-source pairing.
+            supplied = [chain for chain in chains if chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')]
+            if supplied and (scientific['pairing_mode'] != 'unpaired'
+                             or any(chain.get('pairedMsaPath') for chain in supplied)):
+                raise ValueError('Cannot combine supplied and generated paired groups without shared pairing identity')
+            missing = [chain for chain in chains if chain not in supplied]
+            result = prepare_model_msa(sequences=[chain['sequence'] for chain in missing], params=effective)
+            seen = set()
+            paired_depths = {}
+            for artifact in result['artifacts']:
+                index, role = artifact['chain_index'], artifact['role']
+                if type(index) is not int or not 0 <= index < len(missing):
+                    raise ValueError('MSA provider returned an invalid chain identity')
+                key = {'unpaired': 'unpairedMsaPath', 'paired': 'pairedMsaPath'}.get(role)
+                if key is None or (index, role) in seen:
+                    raise ValueError('MSA provider returned a duplicate or invalid alignment role')
+                seen.add((index, role))
+                path = Path(artifact['path'])
+                data = validate_a3m(path, missing[index]['sequence'])
+                if digest(path.read_bytes()) != artifact['sha256']:
+                    raise ValueError('Cached MSA artifact changed before model packaging')
+                if role == 'paired':
+                    paired_depths[index] = len(a3m_rows(data))
+                    if result['provider'] == 'colabfold_api':
+                        converted = Path(scratch) / f'task-{task}-chain-{index}-paired.a3m'
+                        converted.write_bytes(_protenix_paired_headers(data))
+                        path = converted
+                missing[index][key] = str(path)
+            if paired_depths and (set(paired_depths) != set(range(len(missing)))
+                                  or len(set(paired_depths.values())) != 1):
+                raise ValueError('Paired alignments require equal row counts for every native task chain')
+            mode = scientific['pairing_mode']
+            roles = {'paired', 'unpaired'} if mode == 'unpaired_paired' else {mode}
+            if seen != {(index, role) for index in range(len(missing)) for role in roles}:
+                raise ValueError('MSA provider result does not cover requested chain roles')
+            receipts.append({**result['provenance'], 'backend': result['provider'],
+                             'task_index': task, 'task_name': payload[task].get('name'),
+                             'request_digest': result['request_digest'], 'cache_hit': result['cache_hit'],
+                             'paired_conversion': 'protenix-bd54a05-native-row-group-headers-v1'
+                                 if paired_depths and result['provider'] == 'colabfold_api' else None})
+        provenance = receipts[0] if len(receipts) == 1 else {
+            'backend': provider, 'task_receipts': receipts,
+            'cache_hit': all(receipt['cache_hit'] for receipt in receipts)}
+        return export_protenix_inputs(payload, destination, effective, provenance)

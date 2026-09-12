@@ -1749,7 +1749,7 @@
               "type": "integer"
             },
             "observed_pids_peak": {
-              "minimum": 1,
+              "minimum": 0,
               "type": "integer"
             },
             "outcome": {
@@ -1761,7 +1761,66 @@
               "type": "string"
             },
             "receipt_schema": {
-              "const": "bms.workflow-resource-usage.v1"
+              "enum": [
+                "bms.workflow-resource-usage.v1",
+                "bms.workflow-resource-usage.v2"
+              ]
+            },
+            "receipt_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "run_attempt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "scheduler_gpu_assignment": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "admitted_cpu_threads": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "admitted_vram_bytes": {
+              "const": 0
+            },
+            "configured_dorado_device_ignored": {
+              "type": "null"
+            },
+            "evidence_status": {
+              "const": "accepted"
+            },
+            "execution_invocation_id": {
+              "type": "null"
+            },
+            "gpu_index": {
+              "type": "null"
+            },
+            "gpu_uuid": {
+              "type": "null"
+            },
+            "observed_memory_peak_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "observed_pids_peak": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "const": "completed"
+            },
+            "receipt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "receipt_schema": {
+              "const": "bms.workflow-resource-usage.v3"
             },
             "receipt_sha256": {
               "$ref": "#/$defs/sha256"

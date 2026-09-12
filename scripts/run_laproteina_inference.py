@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib.portable_inputs import bind_native_document, resolve_input_path
+
 import yaml
 
 
@@ -133,7 +135,9 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
-    request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    request_path = resolve_input_path(args.request)
+    request = bind_native_document(json.loads(request_path.read_text(encoding="utf-8")),
+                                   "protein-cad", owner=request_path)
     output_dir = Path(args.output_dir).resolve()
     raw_pdb_dir = output_dir / "raw" / "pdbs"
     raw_meta_dir = output_dir / "raw" / "metadata"

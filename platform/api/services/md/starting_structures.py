@@ -202,6 +202,9 @@ class MdRequestedSettings(_ClosedModel):
         return self
 
 
+from schemas import ExecutionPolicy
+
+
 class MdLaunchIntent(_ClosedModel):
     schema_version: Literal["bms.md.launch-intent.v1"]
     name: str = Field(min_length=1, max_length=255)
@@ -212,6 +215,8 @@ class MdLaunchIntent(_ClosedModel):
     catalog_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     requested_settings: MdRequestedSettings
     launch_context_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
 
 class MdLaunchPreviewRequest(_ClosedModel):
@@ -310,6 +315,8 @@ class MdLaunchNotice(_ClosedModel):
 
 
 class MdLaunchPreview(_ClosedModel):
+    execution_target_id: str | None = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     schema_version: Literal["bms.md.launch-preview.v1"]
     source: MdLaunchSourceIdentity
     chemistry: MdLaunchChemistryIdentity
@@ -1599,20 +1606,16 @@ def _step_count(value: float, scale: float, timestep_fs: float) -> int:
     return round(value * scale / timestep_fs)
 
 
-def compile_launch_preview(
-    *,
-    intent: MdLaunchIntent,
-    resolved: ResolvedStartingStructure,
-    profile: Mapping[str, Any] | None,
+def normalize_typed_launch_settings(
+    *, intent: MdLaunchIntent, profile: Mapping[str, Any] | None,
     current_catalog_digest: str,
-) -> MdLaunchPreview:
-    structure = read_resolved_structure(resolved)
-    if structure.sha256 != intent.expected_source_sha256:
-        raise _error(
-            "MD_STARTING_STRUCTURE_CHANGED",
-            "The starting-structure bytes changed after the caller selected them.",
-            409,
-        )
+) -> tuple[MdPublicEffectiveRequest, list[MdLaunchNotice], list[MdLaunchNotice]]:
+    """Native typed control authority shared with dependency-only provisioning.
+
+    Does not resolve sources or claim source-byte admission. Profile generation,
+    fixed values, defaults, duration conversion and resource checks are identical
+    to the scientific launch preview.
+    """
     if current_catalog_digest != intent.catalog_digest:
         raise _error(
             "MD_CHEMISTRY_CATALOG_STALE",
@@ -1648,6 +1651,12 @@ def compile_launch_preview(
         )
 
     requested = intent.requested_settings
+    if not requested.neutralize:
+        raise _error(
+            "MD_SETTING_FIXED_BY_PROFILE",
+            "Curated preparation profiles require charge neutralization.",
+            422,
+        )
     warnings: list[MdLaunchNotice] = []
     blockers: list[MdLaunchNotice] = []
     fixed_fields = {
@@ -1728,15 +1737,6 @@ def compile_launch_preview(
                 message="Production output intervals must be positive and cannot exceed production.",
             )
         )
-    admitted = constraints.get("structure_sha256") == structure.sha256
-    if not admitted:
-        blockers.append(
-            MdLaunchNotice(
-                code="MD_STARTING_STRUCTURE_NOT_ADMITTED",
-                message="The selected profile does not admit these exact starting-structure bytes.",
-            )
-        )
-
     effective = MdPublicEffectiveRequest(
         replicas=fixed_fields["replicas"],
         random_seed=requested.random_seed,
@@ -1768,6 +1768,38 @@ def compile_launch_preview(
         ),
         execution=MdPublicExecution(ntomp=requested.ntomp),
     )
+    return effective, warnings, blockers
+
+
+def compile_launch_preview(
+    *,
+    intent: MdLaunchIntent,
+    resolved: ResolvedStartingStructure,
+    profile: Mapping[str, Any] | None,
+    current_catalog_digest: str,
+) -> MdLaunchPreview:
+    structure = read_resolved_structure(resolved)
+    if structure.sha256 != intent.expected_source_sha256:
+        raise _error(
+            "MD_STARTING_STRUCTURE_CHANGED",
+            "The starting-structure bytes changed after the caller selected them.",
+            409,
+        )
+    effective, warnings, blockers = normalize_typed_launch_settings(
+        intent=intent, profile=profile, current_catalog_digest=current_catalog_digest,
+    )
+    requested = intent.requested_settings
+    assert isinstance(profile, Mapping)
+    constraints = profile["launch_constraints"]
+    admitted = constraints.get("structure_sha256") == structure.sha256
+    if not admitted:
+        blockers.append(
+            MdLaunchNotice(
+                code="MD_STARTING_STRUCTURE_NOT_ADMITTED",
+                message="The selected profile does not admit these exact starting-structure bytes.",
+            )
+        )
+
     source = MdLaunchSourceIdentity(
         source_ref=resolved.source_ref,
         label=resolved.label,
@@ -1786,6 +1818,8 @@ def compile_launch_preview(
     )
     preimage = {
         "schema_version": "bms.md.launch-preview-preimage.v1",
+        "execution_target_id": intent.execution_target_id,
+        "execution_policy": intent.execution_policy.model_dump(mode="json"),
         "source_ref": resolved.source_ref.model_dump(mode="json"),
         "source_sha256": structure.sha256,
         "source_size_bytes": structure.size_bytes,
@@ -1807,6 +1841,8 @@ def compile_launch_preview(
         ) from exc
     return MdLaunchPreview(
         schema_version="bms.md.launch-preview.v1",
+        execution_target_id=intent.execution_target_id,
+        execution_policy=intent.execution_policy,
         source=source,
         chemistry=chemistry,
         requested_settings=requested,

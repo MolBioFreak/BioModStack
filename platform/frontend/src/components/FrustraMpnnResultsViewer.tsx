@@ -37,6 +37,7 @@ import type { StructureSceneController } from '../structureViewer/runtime/Struct
 import type { StructureScenePresentation } from '../structureViewer/contracts/scenePresentation.js';
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
+import FrustraMpnnCandidateHandoffPanel from './FrustraMpnnCandidateHandoffPanel.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
 
 import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js';
@@ -297,6 +298,12 @@ export default function FrustraMpnnResultsViewer({
         && detail.data.summary.parent_job_id === job.id
         && detail.data.summary.candidate_id === detail.data.candidate_id
     );
+    // Historical contracts remain supported; the API verifies persisted landscape bytes.
+    const handoffSource = canonicalSucceeded && !detail.isError
+        && detail.data?.invocation_id === selectedInvocation
+        && detail.data.terminal_result.candidate_id === detail.data.candidate_id
+        && /^[0-9a-f]{64}$/.test(detail.data.summary.landscape_sha256 ?? '')
+        ? detail.data : null;
     const canonicalAuthorityError = detail.data?.status === 'succeeded' && !canonicalSucceeded
         ? 'canonical_result_authority_conflict: terminal result, summary, invocation, candidate, or result-job scope is incomplete or inconsistent.'
         : null;
@@ -496,6 +503,13 @@ export default function FrustraMpnnResultsViewer({
                 {resultContext.canReanalyzePersistedInputs && reanalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(reanalysis.error, 'Reanalysis child could not be queued.')}</div>}
                 {resultContext.canReanalyzePersistedInputs && nextReceipt.data && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">Reanalysis child {nextReceipt.data.status}.{nextResultJobId && <button type="button" onClick={() => onOpenJob(nextResultJobId)} className="ml-2 underline">Open child results</button>}</div>}
 
+                {handoffSource ? <FrustraMpnnCandidateHandoffPanel
+                    key={JSON.stringify([handoffSource.parent_job_id, handoffSource.invocation_id, handoffSource.summary.landscape_sha256])}
+                    parentJobId={handoffSource.parent_job_id}
+                    parentInvocationId={handoffSource.invocation_id}
+                    parentLandscapeSha256={handoffSource.summary.landscape_sha256}
+                    onOpenJob={onOpenJob}
+                /> : <p role="status" className="text-xs text-slate-400">External candidate reanalysis requires an available selected parent landscape.</p>}
                 <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" aria-label="Persisted execution state">
                     {[
                         ['Requested', receipt.data?.created_at ?? job.created_at],

@@ -1045,6 +1045,7 @@ def test_build_antibody_iteration_job_accepts_saved_review_dataset(tmp_path: Pat
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={
@@ -1317,6 +1318,7 @@ def test_build_antibody_iteration_job_allows_ppiflow_backbone_outputs_to_feed_fa
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={
@@ -1418,6 +1420,7 @@ def test_build_antibody_iteration_job_accepts_rfantibody_review_rows_with_source
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 best of 100 RFA outputs",
         params={"epitope_residues": "A45,A53"},
@@ -1480,6 +1483,7 @@ def test_build_antibody_iteration_job_allows_post_ppiflow_backbone_reattempt(tmp
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 beta large_resumed",
         params={"epitope_residues": "A45,A53"},
@@ -1581,6 +1585,7 @@ def test_build_antibody_iteration_job_accepts_explicit_sequence_designed_artifac
     selection_dir.mkdir()
 
     root_job = SimpleNamespace(
+        execution_target_id=None,
         id="root-job",
         name="RBX1 modular refinement",
         params={"epitope_residues": "A45,A53"},

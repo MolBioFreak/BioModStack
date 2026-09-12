@@ -34,6 +34,9 @@ from services.ont_ngs_reconciliation import (
 from services.sequence_qc_manifest import VERIFICATION_SCHEMA, load_sequence_qc_manifest
 from services.resource_usage_evidence import (
     GLOBAL_RESOURCE_ADMISSION_PARAM,
+    RESOURCE_USAGE_RECEIPT_SCHEMA,
+    RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
+    REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA,
     ResourceUsageEvidenceError,
     validate_producer_resource_usage_receipt,
 )
@@ -225,20 +228,24 @@ def _accepted_execution_resources(job: Job, authority: Mapping[str, Any]) -> dic
     admission = receipt.get("admission")
     observed = receipt.get("observed")
     accounting = observed.get("accounting") if isinstance(observed, dict) else None
+    remote_observation = receipt.get("schema") == REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA
     invocation_id = execution.get("invocation_id") if isinstance(execution, dict) else None
     required_text = (
         receipt.get("schema"),
         receipt.get("admission_id"),
         receipt.get("run_attempt_id"),
-        invocation_id,
-    )
+    ) + (() if remote_observation else (invocation_id,))
     cpu_threads = admission.get("cpu_threads") if isinstance(admission, dict) else None
     gpu_index = admission.get("gpu_index") if isinstance(admission, dict) else None
     gpu_uuid = admission.get("gpu_uuid") if isinstance(admission, dict) else None
-    memory_peak = accounting.get("memory_peak_bytes") if isinstance(accounting, dict) else None
-    pids_peak = accounting.get("pids_peak") if isinstance(accounting, dict) else None
+    memory_peak = accounting.get("sampled_tree_peak_rss_bytes" if remote_observation else "memory_peak_bytes") if isinstance(accounting, dict) else None
+    pids_peak = accounting.get("sampled_peak_processes" if remote_observation else "pids_peak") if isinstance(accounting, dict) else None
+    dispatch = receipt.get("dispatch", admission)
     if (
-        receipt.get("schema") != "bms.workflow-resource-usage.v1"
+        receipt.get("schema") not in {RESOURCE_USAGE_RECEIPT_SCHEMA, RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA, REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA}
+        or not isinstance(dispatch, Mapping)
+        or dispatch.get("gpu_index") is not None
+        or dispatch.get("gpu_uuid") is not None
         or receipt.get("complete") is not True
         or receipt.get("outcome") != "completed"
         or not all(isinstance(value, str) and value for value in required_text)
@@ -249,7 +256,7 @@ def _accepted_execution_resources(job: Job, authority: Mapping[str, Any]) -> dic
         or type(memory_peak) is not int
         or memory_peak < 0
         or type(pids_peak) is not int
-        or pids_peak < 1
+        or pids_peak < 0
         or gpu_index is not None
         or gpu_uuid is not None
         or job.assigned_gpu is not None
@@ -271,7 +278,11 @@ def _accepted_execution_resources(job: Job, authority: Mapping[str, Any]) -> dic
         "gpu_uuid": None,
         "admitted_vram_bytes": 0,
         **common,
-        "reason": "Accepted CPU-only producer resource-use receipt",
+        "reason": (
+            "Accepted CPU-only remote subreaper observation; memory/PID peaks are sampled process-tree values, "
+            "not hard cgroup/device containment evidence"
+            if remote_observation else "Accepted CPU-only producer resource-use receipt"
+        ),
         "scheduler_gpu_assignment": None,
         "configured_dorado_device_ignored": None,
     }
