@@ -19,8 +19,12 @@ const labelForModel = (modelId: string): string => {
         frustrampnn: 'FrustraMPNN',
         thermompnn: 'ThermoMPNN',
         proteinmpnn: 'ProteinMPNN',
-        fampnn: 'FAMPNN',
+        rfd3: 'RFD3',
+        fampnn: 'FA-MPNN',
         esmfold2: 'ESMFold2',
+        protenix_v2: 'Protenix V2',
+        protein_modification_experimental: 'All results',
+        protein_local_redesign: 'All results',
     };
     return known[modelId] ?? modelId.split(/[_-]+/).filter(Boolean).map((token) => token[0]?.toUpperCase() + token.slice(1)).join(' ');
 };

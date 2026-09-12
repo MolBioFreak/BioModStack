@@ -31,15 +31,18 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
         let data: unknown;
         const jobs = (children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob]).concat(extraJobs);
         if (url === '/api/jobs') data = { jobs, total: jobs.length };
-        else if (url.endsWith('/workflow-results')) data = { job: selectedJob, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: { artifacts: [] }, artifacts: [], counts: { persisted_design_rows: suppliedRows.length } };
+        else if (url.endsWith('/workflow-results')) data = { job: selectedJob, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: { artifacts: [{ artifact_id: 'source', label: 'Source structure', content_url: '/api/jobs/parent/workflow-results/artifacts/source', bytes: 100 }] }, artifacts: [], receipt: { schema_version: 1, validator_summaries: [{ validator: 'esmfold2', state: 'complete' }] }, counts: { persisted_design_rows: suppliedRows.length } };
         else if (url.startsWith('/api/jobs/') && !url.includes('/backbones')) data = jobs.find(item => item.id === url.split('/').pop()) ?? job;
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
         else if (url === '/api/launch-contexts/context') data = { schema: 'bms.launch-context.v1', launch_context_id: 'context', project_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', workflow_id: null, workflow_revision_id: null, pinned_gpu: null, return_uri: returnUri, source_receipt_id: 'r', state: 'issued', issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z' };
         else if (url === '/api/designs') {
-            let selected = params.model_id ? suppliedRows.filter(row => row.provenance.model_id === params.model_id) : suppliedRows;
+            const modelOf = (row: typeof suppliedRows[number]) => (row.provenance as Record<string, unknown>).producer_model_id ?? row.provenance.model_id;
+            let selected = params.model_id ? suppliedRows.filter(row => modelOf(row) === params.model_id) : suppliedRows;
             if (extraJobs.length) selected = selected.filter(row => row.job_id === params.job_id);
             if (params.q) selected = selected.filter(row => row.name.includes(params.q));
-            data = { designs: selected.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 100)), total: selected.length, model_counts: { boltz2: 501, protenix: 3 } };
+            const counts: Record<string, number> = {};
+            for (const row of suppliedRows) { const model = String(modelOf(row)); counts[model] = (counts[model] ?? 0) + 1; }
+            data = { designs: selected.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 100)), total: selected.length, model_counts: counts };
         } else if (/^\/api\/designs\/[^/]+$/.test(url)) {
             data = suppliedRows.find(row => row.id === url.split('/').pop());
             if (!data) throw new Error('Design not found in requested Job lineage');
@@ -144,9 +147,55 @@ test('explicit Job switching clears only Job-local selection and keeps the Proje
     expect(text(renderer!.root)).not.toContain('Requested Design');
 });
 
+const plrModels = [['rfd3', 'RFD3', 8], ['fampnn', 'FA-MPNN', 8], ['esmfold2', 'ESMFold2', 8], ['protenix_v2', 'Protenix V2', 40]] as const;
+const plrRows = plrModels.flatMap(([model, , count]) => Array.from({ length: count }, (_, index) => ({
+    ...design(`${model}-${index}`, 'protein_modification_experimental'),
+    provenance: { model_id: 'protein_modification_experimental', producer_model_id: model },
+})));
+
+test.each(plrModels)('PLR %s opens the exact producer-scoped Design without conflating workflow provenance', async (model, label, count) => {
+    await setup(`/designs/parent?design_id=${model}-0&result_model=${model}&launch_context_id=context`, false, plrRows, { ...job, model_id: 'protein_modification_experimental', mode: 'region_redesign', design_count: 64 });
+    const nav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
+    expect(nav.findAllByType('button').map(text)).toEqual(expect.arrayContaining(['All results', ...plrModels.map(([, modelLabel]) => modelLabel)]));
+    expect(nav.findAllByType('button').find(button => text(button) === label)?.props['aria-pressed']).toBe(true);
+    expect(calls.filter(call => call.url === '/api/designs').every(call => call.params.model_id === model)).toBe(true);
+    const pane = renderer!.root.findByType(StructureViewerPane);
+    expect(pane.props.selectedDesignId).toBe(`${model}-0`);
+    expect(pane.props.selectedDesign.provenance.model_id).toBe('protein_modification_experimental');
+    expect(pane.props.selectedDesign.provenance.producer_model_id).toBe(model);
+    expect(pane.props.designs).toHaveLength(count);
+    expect(pane.props.designs.every((row: typeof plrRows[number]) => row.provenance.producer_model_id === model)).toBe(true);
+    expect(text(renderer!.root)).not.toContain('No other candidate has been selected');
+    expect(calls.some(call => call.url.endsWith('/workflow-results'))).toBe(false);
+    const otherLabel = model === 'rfd3' ? 'FA-MPNN' : 'RFD3';
+    await act(async () => nav.findAllByType('button').find(button => text(button) === otherLabel)!.props.onClick()); await flush();
+    const location = renderer!.root.findAllByType('span').find(item => item.props['data-location'])?.props['data-location'];
+    expect(location).toContain('launch_context_id=context');
+    expect(location).not.toContain('design_id=');
+    const structureTab = renderer!.root.findAllByType('button').find(button => text(button).endsWith('Structure'))!;
+    await act(async () => structureTab.props.onClick()); await flush();
+    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesign.provenance.producer_model_id).toBe(model === 'rfd3' ? 'fampnn' : 'rfd3');
+});
+
 test('PLR workflow context composes with the exact shared Design structure workbench', async () => {
     await setup('/designs/parent?design_id=z-2', false, rows, { ...job, model_id: 'protein_modification_experimental', mode: 'region_redesign' });
     expect(text(renderer!.root)).toContain('Protein Local Redesign');
-    expect(calls.some(call => call.url.endsWith('/workflow-results'))).toBe(true);
+    expect(calls.some(call => call.url.endsWith('/workflow-results'))).toBe(false);
+    expect(text(renderer!.root)).not.toContain('Source and validator receipt');
+    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesignId).toBe('z-2');
+});
+
+test('PLR native files load only on disclosure and never dump validator receipts into the workbench', async () => {
+    await setup('/designs/parent?design_id=z-2', false, rows, { ...job, model_id: 'protein_modification_experimental', mode: 'region_redesign' });
+    expect(calls.filter(call => call.url.endsWith('/workflow-results'))).toHaveLength(0);
+    const inventory = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary) === 'Protein Local Redesign files'))!;
+    expect(inventory).toBeDefined();
+    await act(async () => inventory.props.onToggle({ currentTarget: { open: true } }));
+    await flush();
+    expect(calls.filter(call => call.url.endsWith('/workflow-results'))).toHaveLength(1);
+    expect(renderer!.root.findAllByType('a').some(link => link.props.href === '/api/jobs/parent/workflow-results/artifacts/source')).toBe(true);
+    expect(text(renderer!.root)).not.toContain('validator_summaries');
+    expect(text(renderer!.root)).not.toContain('schema_version');
+    expect(text(renderer!.root)).not.toContain('Source and validator receipt');
     expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesignId).toBe('z-2');
 });
