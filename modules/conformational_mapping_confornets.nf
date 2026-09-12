@@ -51,7 +51,7 @@ process RunCanonicalConforNets {
     def assetsPath = shellQuote(assets_dir.toString())
     """
     set -euo pipefail
-    python3 /scripts/run_confornets_inference.py \
+    python3 ${params.code_root}/scripts/run_confornets_inference.py --generated-msa-service \
         --request ${requestPath} \
         --assets-dir ${assetsPath} \
         --output-dir confornets_results \

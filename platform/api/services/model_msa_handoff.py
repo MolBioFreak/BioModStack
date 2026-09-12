@@ -22,7 +22,9 @@ def generated_msa_service_supported(service) -> bool:
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
             and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
                       'modules/protenix.nf:ProtenixFromComplex',
-                      'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble'}
+                      'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
+                      'modules/confornets_experimental.nf:RunConforNets',
+                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}
                      .intersection((get('authority') or '').split('; '))))
 
 
