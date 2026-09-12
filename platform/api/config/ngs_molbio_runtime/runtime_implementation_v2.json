@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "fab2172b458cc3cb2006ca6179ca803177acc3b2fe23dc9bf6917ea1ea906280",
+  "content_sha256": "dd34a7da7f07b4b70a52c21befb37b1ff76c7bf597d26d48d574d472d85e1a8d",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -139,8 +139,8 @@
     },
     {
       "path": "docs/plans/2026-08-29-small-reference-large-bam-igv-repair.md",
-      "sha256": "da59f4307a8211eacb35db4e0c64cd9e164412d33def554eabc09e9700b89e22",
-      "size_bytes": 12424
+      "sha256": "8f44751aa3e8253366b39187bc76e2439c92ecb921288cfcd4b52a0e8fd57367",
+      "size_bytes": 12582
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
@@ -1014,8 +1014,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "02223a42475455cadd6b4aab41fad177ba411b796e311624454c830f271a0ccf",
-      "size_bytes": 327901
+      "sha256": "ec1eca5a5b43bfb111df202f30c882f938169b4a2ac71e736746291bbcbb486a",
+      "size_bytes": 328697
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -1432,8 +1432,8 @@
     "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "c0c790b7f33e57651c3b934034a19cbfa81286f0",
-  "successor_source_tree": "cdc1f624cd86800f5ed68e4714f78339a822e145",
+  "successor_source_commit": "760f0b8342d36c1e98168fc90c214b1fd4bb5ead",
+  "successor_source_tree": "0f06a4de32757f1bb6f9bd1eb6fa9bc535f6e276",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
