@@ -172,7 +172,8 @@ test('structure submit target routes the selected Fold-CP predictor onto its exe
             predictionMode: 'complex',
             predictorSelection: 'esmfold2',
         }),
-        { modelId: 'esmfold2', mode: 'complex' },
+        // Complex inputs are supported by ESMFold2's declared predict mode.
+        { modelId: 'esmfold2', mode: 'predict' },
     );
 
     const cpConfig = resolveStructureLaunchConfig({

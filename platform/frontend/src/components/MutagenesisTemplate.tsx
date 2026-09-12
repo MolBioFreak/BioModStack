@@ -54,16 +54,12 @@ export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants:
             ligands: predictorConfig.ligands
         } : {})
     };
-        return {
-            name: jobNamePrefix,
-            model_id: predictorConfig.predictor === 'rf3'
-                ? 'rf3'
-                : predictorConfig.predictor === 'esmfold2'
-                    ? 'esmfold2'
-                    : 'boltz2',
-            mode: 'predict',
-            params: batchParams
-        };
+    return {
+        name: jobNamePrefix,
+        model_id: predictorConfig.predictor === 'boltz' ? 'boltz2' : predictorConfig.predictor,
+        mode: 'predict',
+        params: batchParams
+    };
 }
 
 export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplateProps) {
@@ -111,7 +107,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
 
     // Predictor Config
-    const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'esmfold2' | 'both'>('boltz');
+    const [predictor, setPredictor] = useState<'boltz' | 'esmfold2'>('boltz');
     const [predictorParams, setPredictorParams] = useState({
         recycling_steps: 3,
         diffusion_samples: 1,
@@ -872,17 +868,11 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                 {/* 6. Predictor Settings */}
                 <section className="pt-6 border-t border-slate-800">
                     <h3 className="text-sm font-semibold text-slate-200 mb-4">Prediction Settings</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                         <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'boltz' ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
                             onClick={() => setPredictor('boltz')}
                         >
                             <div className="font-bold mb-1">Boltz-2</div>
-                            <div className="text-xs opacity-70">Single Model</div>
-                        </div>
-                        <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'rf3' ? 'bg-green-600/20 border-green-500 text-green-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                            onClick={() => setPredictor('rf3')}
-                        >
-                            <div className="font-bold mb-1">RoseTTAFold3</div>
                             <div className="text-xs opacity-70">Single Model</div>
                         </div>
                         <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'esmfold2' ? 'bg-violet-600/20 border-violet-500 text-violet-300' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
@@ -890,12 +880,6 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         >
                             <div className="font-bold mb-1">ESMFold2</div>
                             <div className="text-xs opacity-70">Single Model</div>
-                        </div>
-                        <div className={`cursor-pointer p-3 rounded-lg border text-center transition-all ${predictor === 'both' ? 'bg-accent/20 border-accent text-accent' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                            onClick={() => setPredictor('both')}
-                        >
-                            <div className="font-bold mb-1">Ensemble (Both)</div>
-                            <div className="text-xs opacity-70">Run in Parallel</div>
                         </div>
                     </div>
 

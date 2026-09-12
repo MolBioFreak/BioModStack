@@ -300,7 +300,9 @@ export const resolveStructureSubmitTarget = ({
                     : resolvedSelection.canonicalSelection === 'esmfold2'
                         ? 'esmfold2'
                         : 'boltz2',
-        mode: resolvedSelection.canonicalSelection === 'fold_cp' ? 'design' : predictionMode,
+        mode: resolvedSelection.canonicalSelection === 'fold_cp'
+            ? 'design'
+            : resolvedSelection.canonicalSelection === 'esmfold2' ? 'predict' : predictionMode,
     };
 };
 
