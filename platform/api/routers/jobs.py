@@ -3399,6 +3399,7 @@ def _write_selection_manifest(
     manifest_items: List[Dict[str, Any]],
     source_stage_payload: Optional[Dict[str, Any]] = None,
     fixed_positions_by_pdb: Optional[Dict[str, str]] = None,
+    preserve_existing: bool = False,
 ) -> None:
     manifest = {
         "created_at": datetime.utcnow().isoformat() + "Z",
@@ -3415,9 +3416,28 @@ def _write_selection_manifest(
         "source_selection_count": len(manifest_items),
         "designs": manifest_items,
     }
-    _selection_manifest_path(selection_dir).write_text(json.dumps(manifest, indent=2))
+    def write_json(path, value):
+        if not preserve_existing:
+            path.write_text(json.dumps(value, indent=2, sort_keys=True))
+            return
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('Unsafe retained seed metadata')
+            previous = json.loads(path.read_bytes())
+            # Creation time is presentation only; all native provenance stays exact.
+            if {k: v for k, v in previous.items() if k != 'created_at'} != {
+                    k: v for k, v in value.items() if k != 'created_at'}:
+                raise ValueError('Retained seed metadata differs from reviewed derivation')
+            return
+        import tempfile
+        with tempfile.NamedTemporaryFile(dir=selection_dir.parent, prefix='.seed-metadata-') as temporary:
+            temporary.write(json.dumps(value, indent=2, sort_keys=True).encode())
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            os.link(temporary.name, path)  # publish once; never replace an existing file
+    write_json(_selection_manifest_path(selection_dir), manifest)
     if fixed_positions_by_pdb is not None:
-        (selection_dir / "mutation_fixed_positions.json").write_text(json.dumps(fixed_positions_by_pdb, indent=2, sort_keys=True))
+        write_json(selection_dir / "mutation_fixed_positions.json", fixed_positions_by_pdb)
 
 
 def _write_seeded_refinement_metadata(
@@ -3427,6 +3447,7 @@ def _write_seeded_refinement_metadata(
     action: str,
     manifest_items: List[Dict[str, Any]],
     fixed_positions_by_pdb: Optional[Dict[str, str]] = None,
+    preserve_existing: bool = False,
 ) -> None:
     _write_selection_manifest(
         selection_dir=selection_dir,
@@ -3440,6 +3461,7 @@ def _write_seeded_refinement_metadata(
             "source_stage_mode": _normalize_stage_family(getattr(source_job, "stage_mode", None)),
         },
         fixed_positions_by_pdb=fixed_positions_by_pdb,
+        preserve_existing=preserve_existing,
     )
 
 
@@ -3605,14 +3627,18 @@ def _materialize_seed_selection_from_completed_designs(
     action: str,
     selection_dir: Optional[Path] = None,
 ) -> tuple[Path, Path]:
+    retained = selection_dir is not None
     if selection_dir is None:
         selection_dir = _create_antibody_selection_dir(action)
     elif selection_dir.exists():
-        # Retry the same admitted expansion, not a new selection/preparation.
-        # The caller verifies every retained byte and fixed-position derivation.
-        return selection_dir, selection_dir / 'mutation_fixed_positions.json'
+        if selection_dir.is_symlink() or not selection_dir.is_dir():
+            raise ValueError('Unsafe retained seed selection')
     else:
         selection_dir.mkdir(parents=True, exist_ok=False)
+    expected_names = {f'{index:03d}_{design.id}.pdb' for index, design in enumerate(designs, 1)} | {
+        'selection_manifest.json', 'mutation_fixed_positions.json'}
+    if retained and any(path.name not in expected_names for path in selection_dir.iterdir()):
+        raise ValueError('Foreign file in retained seed selection')
     manifest_items: List[Dict[str, Any]] = []
     fixed_positions_by_pdb: Dict[str, str] = {}
 
@@ -3622,7 +3648,11 @@ def _materialize_seed_selection_from_completed_designs(
         if root_job.execution_target_id:
             # Remote input authority requires a regular immutable snapshot,
             # not a mutable reference into an imported result generation.
-            shutil.copyfile(source_path, dest_path)
+            if dest_path.exists() or dest_path.is_symlink():
+                if dest_path.is_symlink() or not dest_path.is_file() or dest_path.read_bytes() != source_path.read_bytes():
+                    raise ValueError('Retained seed bytes differ from native source')
+            else:
+                shutil.copyfile(source_path, dest_path)
             link_mode = 'copy'
         else:
             link_mode = _link_selection_input(source_path, dest_path)
@@ -3655,6 +3685,7 @@ def _materialize_seed_selection_from_completed_designs(
         action=action,
         manifest_items=manifest_items,
         fixed_positions_by_pdb=fixed_positions_by_pdb,
+        preserve_existing=retained,
     )
     return selection_dir, selection_dir / "mutation_fixed_positions.json"
 
