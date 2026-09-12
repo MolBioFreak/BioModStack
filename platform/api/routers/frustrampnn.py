@@ -30,6 +30,7 @@ from pydantic import (
     ValidationError,
     field_validator,
     model_validator,
+    model_serializer,
 )
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,6 +110,8 @@ from services import stage_reporting
 from services.frustrampnn.settings import (
     FrustraMPNNEffectiveSettings,
     FrustraMPNNRequestedSettings,
+    FrustraMPNNResolvedResidue,
+    FrustraMPNNResolvedChainSelection,
     RequestedSettingsPayloadError,
     SourceResolutionError,
     default_settings,
@@ -584,6 +587,49 @@ class FrustraMPNNHistoricalSummaryV1Document(RootModel[dict[str, JsonValue]]):
         return load_schema("frustrampnn_summary_v1")
 
 
+class _RetainedResolvedResidueV1(FrustraMPNNResolvedResidue):
+    # Later annotations were not recorded by the original v1 producer. Field
+    # defaults allow omission, but explicit values still use the strict types.
+    label_seq_id: Annotated[int, Field(strict=True, ge=1)] | None = None
+    pdb_residue_id: Annotated[int, Field(default=None, strict=True, ge=-999, le=9999)]
+    pdb_insertion_code: Annotated[str, Field(default=None, max_length=1)]
+    residue_name: Annotated[str, Field(default=None, min_length=3, max_length=3)]
+
+    @model_serializer(mode="wrap")
+    def _preserve_missing_annotations(self, handler):
+        payload = handler(self)
+        for key in ("label_seq_id", "pdb_residue_id", "pdb_insertion_code", "residue_name"):
+            if key not in self.model_fields_set:
+                payload.pop(key)
+        return payload
+
+
+class _RetainedResolvedChainV1(FrustraMPNNResolvedChainSelection):
+    residues: tuple[_RetainedResolvedResidueV1, ...]  # pyright: ignore[reportIncompatibleVariableOverride]
+
+
+class _RetainedEffectiveSettingsV1(FrustraMPNNEffectiveSettings):
+    resolved_chains: tuple[_RetainedResolvedChainV1, ...]  # pyright: ignore[reportIncompatibleVariableOverride]
+
+
+class FrustraMPNNRetainedEffectiveSettingsDocument(RootModel[dict[str, JsonValue]]):
+    """Validate retained identities/hashes without rewriting their saved JSON."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_retained(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            raise ValueError("retained effective settings must be an object")
+        if value.get("schema_version") not in (1, 2):
+            raise ValueError("unknown retained effective settings version")
+        model = (
+            _RetainedEffectiveSettingsV1
+            if value["schema_version"] == 1 else FrustraMPNNEffectiveSettings
+        )
+        model.model_validate(value)
+        return value
+
+
 class FrustraMPNNStatisticsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -598,7 +644,7 @@ class FrustraMPNNStatisticsResponse(BaseModel):
     effective_settings_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
-    effective_settings_json: FrustraMPNNEffectiveSettings | None = None
+    effective_settings_json: FrustraMPNNRetainedEffectiveSettingsDocument | None = None
     capability_inventory_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
@@ -1089,7 +1135,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     missing_fields: list[Phase4Field]
     settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     effective_settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    effective_settings_json: FrustraMPNNEffectiveSettings | None = None
+    effective_settings_json: FrustraMPNNRetainedEffectiveSettingsDocument | None = None
     capability_inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     statistics_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     statistics_json: FrustraMPNNStatisticsDocument | None = None
