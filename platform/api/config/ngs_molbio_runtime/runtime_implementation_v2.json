@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "611cba4126000e435129ef1f59f06434e4fe93f0776b3c1f971d8692d1ca7039",
+  "content_sha256": "133f073648a0aadf835508d05d2df087d7729a49de8bb9c6c961927ab7c02c3a",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -1129,8 +1129,8 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
-      "sha256": "ee17b8b8116ec3f1b18185ac5511039ade6333d0e687d7dd994220b3f0b740d5",
-      "size_bytes": 17975
+      "sha256": "abad65c9eff2d34423c7e4f177100237636ab76b2140be5fe321c90750b6b019",
+      "size_bytes": 18233
     },
     {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "c3ef3c08ecb4c3969e2111c2bcc6fc895aa6ccddf9065dd4470bcbea117ecf5e",
-      "size_bytes": 34962
+      "sha256": "ae7b9a00b4d94c33a75bf6d4b1814be21ef5269b157ce1ebf7899bde293f9bf8",
+      "size_bytes": 37002
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "f9d28e72ae235531e74831259424e72215825518",
-  "successor_source_tree": "9fc52b10df946f651c1f27a306fb72abc0246a2a",
+  "successor_source_commit": "da29367918b6397f6105ff1bc4dc2ddccd12767b",
+  "successor_source_tree": "9a541019b6965a48b74a78afb0b61c8a94945b61",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
