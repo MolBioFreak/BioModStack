@@ -111,10 +111,12 @@ async def test_reviewed_parent_to_automatic_child_and_recovery(admission, monkey
         assert all(not p.is_symlink() for p in selection.iterdir())
         # Exercise the actual bundle input-closure/sealing consumer, not just
         # preview hashes. No runtime image, provider, worker or inference call.
-        from services.remote_execution.bundle import _input_assets, _input_records
+        from services.remote_execution.bundle import _input_assets, _input_records, compile_remote_dependencies
         invocation = nextflow.compile_job_nextflow_invocation(child, child.params, child.output_dir)
         invocation.materialize_inputs(Path(child.output_dir))
-        assets = _input_assets(dict(invocation.native_parameters), native_invocation=invocation,
+        _, effective = compile_remote_dependencies(child.model_id, child.mode, list(invocation.command),
+                                                    native_invocation=invocation)
+        assets = _input_assets(effective, native_invocation=invocation,
             repo_root=Path(__file__).resolve().parents[3], runtime_paths=set(), output_dir=Path(child.output_dir))
         assert selection in {path for path, _ in assets}
         records = _input_records(selection, 'inputs/seeds', native_invocation=invocation, output_dir=Path(child.output_dir))
