@@ -53,23 +53,25 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
         queryKey: ['md-run', jobId], queryFn: () => fetchMDRun(jobId), retry: false,
         refetchInterval: (query) => query.state.data?.data.phase && !['completed', 'partial', 'failed', 'cancelled'].includes(query.state.data.data.phase) ? 5_000 : false,
     });
+    const lifecycleReady = lifecycle.isSuccess && !lifecycle.isFetching;
     const preReplicaTerminal = Boolean(
         lifecycle.data
         && ['failed', 'cancelled'].includes(lifecycle.data.data.phase)
         && lifecycle.data.data.replicas.length === 0,
     );
-    const summary = useQuery({ queryKey: ['md-summary', jobId], queryFn: () => fetchMDSummary(jobId), enabled: Boolean(lifecycle.data) && !preReplicaTerminal });
-    const artifacts = useQuery({ queryKey: ['md-artifacts', jobId], queryFn: () => fetchMDArtifacts(jobId), enabled: Boolean(lifecycle.data) && !preReplicaTerminal });
+    const summary = useQuery({ queryKey: ['md-summary', jobId], queryFn: () => fetchMDSummary(jobId), enabled: (Boolean(lifecycle.data) || lifecycle.isError) && !preReplicaTerminal });
+    const artifacts = useQuery({ queryKey: ['md-artifacts', jobId], queryFn: () => fetchMDArtifacts(jobId), enabled: (Boolean(lifecycle.data) || lifecycle.isError) && !preReplicaTerminal });
     const analysis = useQuery({
         queryKey: ['md-analysis', jobId],
         queryFn: () => fetchMDAnalysis(jobId),
-        enabled: Boolean(lifecycle.data) && !preReplicaTerminal,
+        enabled: (Boolean(lifecycle.data) || lifecycle.isError) && !preReplicaTerminal,
         refetchInterval: (query) => preReplicaTerminal ? false : (query.state.data?.data.status === 'completed' ? false : 5_000),
     });
     const logs = useQuery({ queryKey: ['job-logs', jobId], queryFn: () => fetchJobLogs(jobId), enabled: false });
     const lifecycleCommand = useMutation({
         mutationFn: async ({ action, replicaIndex }: { action: 'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel'; replicaIndex?: number }) => {
-            const run = lifecycle.data!.data;
+            if (!lifecycleReady || !lifecycle.data) throw new Error('Refresh lifecycle state before issuing commands.');
+            const run = lifecycle.data.data;
             const key = `${action}:${jobId}:${replicaIndex ?? 'run'}:${run.state_version}:${crypto.randomUUID()}`;
             if (action === 'pause') return pauseMDRun(jobId, run.state_version, key);
             if (action === 'cancel') return cancelMDRun(jobId, run.state_version, key);
@@ -96,7 +98,8 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     });
     const failedLaunchCommand = useMutation({
         mutationFn: async (action: 'reorchestrate' | 'delete_failed_launch') => {
-            const run = lifecycle.data!.data;
+            if (!lifecycleReady || !lifecycle.data) throw new Error('Refresh lifecycle state before issuing commands.');
+            const run = lifecycle.data.data;
             if (action === 'delete_failed_launch') return deleteFailedMDLaunch(jobId, run.state_version);
             const key = `${action}:${jobId}:${run.state_version}:${crypto.randomUUID()}`;
             return reorchestrateMDRun(jobId, run.state_version, key);
@@ -218,16 +221,19 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             customdata: report.residue_metrics!.map((residue) => [residue.resname, residue.backbone_atom_count]),
             hovertemplate: '%{x} %{customdata[0]}<br>Backbone RMSF %{y:.3f} Å<br>%{customdata[1]} backbone atoms<extra></extra>',
         })), [reports]);
-    const lifecyclePanel = lifecycle.data?.data ? <div className="rounded-xl border border-cyan-500/20 bg-slate-900/70 p-4" data-bms-md-lifecycle="true">
+    const lifecyclePanel = lifecycle.isError ? <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100">
+        Dynamics lifecycle is unavailable. Lifecycle commands are disabled. Available independent results are shown below.
+        <button type="button" disabled={lifecycle.isFetching} onClick={() => lifecycle.refetch()} className="ml-3 underline disabled:opacity-50">Retry lifecycle read</button>
+    </div> : lifecycle.data?.data ? <div className="rounded-xl border border-cyan-500/20 bg-slate-900/70 p-4" data-bms-md-lifecycle="true">
         <div className="flex flex-wrap items-start justify-between gap-3">
             <div><div className="text-xs uppercase tracking-wide text-cyan-300">Dynamics lifecycle</div><div className="mt-1 text-lg font-semibold text-white">{lifecycle.data.data.phase.replaceAll('_', ' ')}</div><div className="mt-1 text-xs text-slate-400">{lifecycle.data.data.engine} · {lifecycle.data.data.chemistry.profile_id} · {lifecycle.data.data.simulated_time_ps.toFixed(2)} / {lifecycle.data.data.requested_time_ps.toFixed(2)} ps</div></div>
-            <div className="flex flex-wrap gap-2">{lifecycle.data.data.allowed_actions.filter((action): action is 'pause' | 'resume_dynamics' | 'cancel' => action === 'pause' || action === 'resume_dynamics' || action === 'cancel').map((action) => <button key={action} type="button" disabled={lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action })} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 disabled:opacity-50">{action === 'resume_dynamics' ? 'Resume dynamics' : action[0].toUpperCase() + action.slice(1)}</button>)}
+            <div className="flex flex-wrap gap-2">{lifecycle.data.data.allowed_actions.filter((action): action is 'pause' | 'resume_dynamics' | 'cancel' => action === 'pause' || action === 'resume_dynamics' || action === 'cancel').map((action) => <button key={action} type="button" disabled={!lifecycleReady || lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action })} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 disabled:opacity-50">{action === 'resume_dynamics' ? 'Resume dynamics' : action[0].toUpperCase() + action.slice(1)}</button>)}
             {lifecycle.data.data.allowed_actions.includes('view_logs') && <button type="button" onClick={() => logs.refetch()} className="rounded-lg border border-slate-500 px-3 py-2 text-sm text-slate-100">View logs</button>}
-            {lifecycle.data.data.allowed_actions.includes('reorchestrate') && <button type="button" disabled={failedLaunchCommand.isPending} onClick={() => window.confirm('Create a fresh MD launch from this failed setup?') && failedLaunchCommand.mutate('reorchestrate')} className="rounded-lg border border-cyan-400/40 px-3 py-2 text-sm text-cyan-100">Re-orchestrate</button>}
-            {lifecycle.data.data.allowed_actions.includes('delete_failed_launch') && <button type="button" disabled={failedLaunchCommand.isPending} onClick={() => window.confirm('Delete this failed MD launch permanently?') && failedLaunchCommand.mutate('delete_failed_launch')} className="rounded-lg border border-rose-400/40 px-3 py-2 text-sm text-rose-200">Delete failed launch</button>}
+            {lifecycle.data.data.allowed_actions.includes('reorchestrate') && <button type="button" disabled={!lifecycleReady || failedLaunchCommand.isPending} onClick={() => window.confirm('Create a fresh MD launch from this failed setup?') && failedLaunchCommand.mutate('reorchestrate')} className="rounded-lg border border-cyan-400/40 px-3 py-2 text-sm text-cyan-100">Re-orchestrate</button>}
+            {lifecycle.data.data.allowed_actions.includes('delete_failed_launch') && <button type="button" disabled={!lifecycleReady || failedLaunchCommand.isPending} onClick={() => window.confirm('Delete this failed MD launch permanently?') && failedLaunchCommand.mutate('delete_failed_launch')} className="rounded-lg border border-rose-400/40 px-3 py-2 text-sm text-rose-200">Delete failed launch</button>}
             {['failed', 'cancelled'].includes(lifecycle.data.data.phase) && lifecycle.data.data.replicas.length === 0 && <><button type="button" disabled title={lifecycle.data.data.action_explanations?.resume_dynamics} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">Resume dynamics</button><button type="button" disabled title={lifecycle.data.data.action_explanations?.retry_dynamics} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">Retry dynamics</button></>}</div>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">{lifecycle.data.data.replicas.map((replica) => <span key={replica.id} className="flex items-center gap-2 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {replica.replica_index} · attempt {replica.attempt} · {replica.state}{lifecycle.data.data.allowed_actions.includes('retry_dynamics') && replica.retry_eligible && <button type="button" disabled={lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action: 'retry_dynamics', replicaIndex: replica.replica_index })} className="rounded border border-amber-400/40 px-2 py-1 text-amber-200 disabled:opacity-50">Retry dynamics</button>}</span>)}</div>
+        <div className="mt-3 flex flex-wrap gap-2">{lifecycle.data.data.replicas.map((replica) => <span key={replica.id} className="flex items-center gap-2 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {replica.replica_index} · attempt {replica.attempt} · {replica.state}{lifecycle.data.data.allowed_actions.includes('retry_dynamics') && replica.retry_eligible && <button type="button" disabled={!lifecycleReady || lifecycleCommand.isPending} onClick={() => lifecycleCommand.mutate({ action: 'retry_dynamics', replicaIndex: replica.replica_index })} className="rounded border border-amber-400/40 px-2 py-1 text-amber-200 disabled:opacity-50">Retry dynamics</button>}</span>)}</div>
         <div className="mt-2 text-xs text-slate-500">State version {lifecycle.data.data.state_version} · accepted checkpoints {lifecycle.data.data.checkpoints.length} · dynamics retry and analysis retry are independent operations.</div>
         {!lifecycle.data.data.allowed_actions.includes('resume_dynamics') && lifecycle.data.data.action_explanations?.resume_dynamics && <div className="mt-2 text-xs text-slate-400">Resume dynamics disabled: {lifecycle.data.data.action_explanations.resume_dynamics}</div>}
         {!lifecycle.data.data.allowed_actions.includes('retry_dynamics') && lifecycle.data.data.action_explanations?.retry_dynamics && <div className="mt-1 text-xs text-slate-400">Retry dynamics disabled: {lifecycle.data.data.action_explanations.retry_dynamics}</div>}
@@ -241,8 +247,8 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     if (summary.isError || artifacts.isError) {
         return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-100">Dynamics results are not complete yet or their manifests failed validation.</div></section>;
     }
-    if (summary.isLoading || artifacts.isLoading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
-    const summaryData = summary.data!.data;
+    if (!summary.data || !artifacts.data) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
+    const summaryData = summary.data.data;
     const analysisData = analysis.isError ? undefined : analysis.data?.data;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">

@@ -64,7 +64,8 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
-import RFD3GenerationResultsPane, { isRFD3GenerationResultJob } from './RFD3GenerationResultsPane';
+import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
+import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import {
     getRFD3LocalRedesignCandidateLabel,
     isRFD3LocalRedesignResultJob,
