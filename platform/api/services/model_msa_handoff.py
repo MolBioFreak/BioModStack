@@ -229,6 +229,26 @@ def _boltz_roster(params):
     return [{**copy.deepcopy(task), 'name': f'{name}_job{i}' if count > 1 else name} for i in range(count)]
 
 
+def _boltz_task_proteins(task, params):
+    """The native task's ordered protein/peptide chains and supplied MSA policy."""
+    if 'components' in task:
+        proteins = []
+        for index, component in enumerate(task['components']):
+            kind = component.get('type', 'protein')
+            if kind not in {'protein', 'peptide'}:
+                continue
+            sequence = component.get('sequence', '').upper()
+            chain_id = component.get('id', 'A')
+            # Exact native complex peptide policy; never search these chains.
+            msa = 'empty' if kind == 'peptide' and len(sequence) < 30 else component.get('msa_path')
+            proteins.append({'id': chain_id if isinstance(chain_id, list) else [chain_id],
+                             'sequence': sequence, 'msa': msa, 'component_index': index})
+        return proteins
+    sequence = str(task.get('sequence') or '').strip()
+    return [{'id': [chr(ord('A') + i)], 'sequence': s.strip(),
+             'msa': params.get('msa_path')} for i, s in enumerate(sequence.split(':'))]
+
+
 def prepare_boltz_roster(params, destination, *, roster=None):
     """Seal ordered task/chain artifacts; keep native input documents immutable."""
     import re
@@ -241,22 +261,7 @@ def prepare_boltz_roster(params, destination, *, roster=None):
     sealed = []
     for task_index, task in enumerate(tasks):
         base = Path(task['source_path']).parent if task.get('source_path') else Path.cwd()
-        if 'components' in task:
-            proteins = []
-            for index, component in enumerate(task['components']):
-                kind = component.get('type', 'protein')
-                if kind not in {'protein', 'peptide'}:
-                    continue
-                sequence = component.get('sequence', '').upper()
-                chain_id = component.get('id', 'A')
-                # Exact native complex peptide policy; never search these chains.
-                msa = 'empty' if kind == 'peptide' and len(sequence) < 30 else component.get('msa_path')
-                proteins.append({'id': chain_id if isinstance(chain_id, list) else [chain_id],
-                                 'sequence': sequence, 'msa': msa, 'component_index': index})
-        else:
-            sequence = str(task.get('sequence') or '').strip()
-            proteins = [{'id': [chr(ord('A') + i)], 'sequence': s.strip(),
-                         'msa': params.get('msa_path')} for i, s in enumerate(sequence.split(':'))]
+        proteins = _boltz_task_proteins(task, params)
         receipt = _prepare_proteins(proteins, params, destination / 'operations' / str(task_index), model_id='boltz2', base=base)
         chains = []
         for index, protein in enumerate(proteins):

@@ -615,16 +615,20 @@ def compile_remote_dependencies(
         selected = params["dorado_runtime_sif"]
         if not isinstance(selected, str) or not Path(selected).is_absolute():
             raise RemoteBundleError("Dorado runtime SIF selector must be an absolute managed path")
-    omitted: set[str] = set()
-    if model_id.lower() == "protenix":
-        omitted.update({"rfd_models", "af2_models", "boltz_models", "alphafold_params"})
-        omitted.update(key for key in params if key.startswith(("bcp_", "esmf_", "plr_", "md_", "rfantibody_")))
-        omitted.update(key for key in params
-                       if any(token in key for token in ("container_path", "_container", "runtime_sif", "checkpoint_path", "runtime_lock", "repo_path"))
-                       and not key.startswith(("protenix_", "frustrampnn_")))
-        backend = str(params.get("protenix_msa_backend", "auto")).lower()
-        if backend in {"colabfold_api", "neurosnap_api"} or str(params.get("protenix_use_msa", "true")).lower() == "false":
-            omitted.add("msa_local_db")
+    # The compiler emits these shared system defaults even when their native
+    # runtime role is not selected. Classify by the selected dependency closure,
+    # never by top-level model or by containment in biological input storage.
+    defaults = {"rfd_models": ("weights", "rfantibody"),
+                "af2_models": ("weights", "alphafold"),
+                "alphafold_params": ("weights", "alphafold"),
+                "boltz_models": ("weights", "boltz"),
+                "msa_local_db": ("reference_database", None)}
+    dependencies = plan.metadata.dependencies
+    omitted = {key for key, (kind, relative) in defaults.items()
+               if not any(row.selector == key or
+                          (relative is not None and row.kind == kind and
+                           row.relative_path == relative)
+                          for row in dependencies)}
     compiled: list[str] = []
     index = 0
     while index < len(command):
