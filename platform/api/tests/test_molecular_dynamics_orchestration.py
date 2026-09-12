@@ -187,23 +187,35 @@ async def test_analysis_child_rejects_any_requested_gpu_before_persistence(
     monkeypatch.setattr(jobs_router, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs_router, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs_router, "get_registry", lambda: _AcceptingRegistry())
-    with pytest.raises(HTTPException) as error:
-        await jobs_router.create_job(
-            JobCreate(
-                name="invalid analysis",
-                model_id="molecular_dynamics",
-                mode="analyze",
-                params={"md_analysis_work_item": str(tmp_path / "item.json")},
-                pinned_gpu=0,
-                parent_job_id="11111111-1111-1111-1111-111111111111",
-                child_stage="md_analysis",
-            ),
-            BackgroundTasks(),
-            object(),
-        )
-
-    assert error.value.status_code == 422
-    assert error.value.detail["code"] == "MD_ANALYSIS_GPU_FORBIDDEN"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rejected-analysis.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    parent_id = "11111111-1111-1111-1111-111111111111"
+    try:
+        async with sessions() as session:
+            session.add(Job(id=parent_id, name="MD parent", model_id="molecular_dynamics", mode="simulate", params={}, status="running", queue_status="running", vram_estimate_mb=0))
+            await session.commit()
+            with pytest.raises(HTTPException) as error:
+                await jobs_router.create_job(
+                    JobCreate(
+                        name="invalid analysis",
+                        model_id="molecular_dynamics",
+                        mode="analyze",
+                        params={"md_analysis_work_item": str(tmp_path / "item.json")},
+                        pinned_gpu=0,
+                        parent_job_id=parent_id,
+                        child_stage="md_analysis",
+                    ),
+                    BackgroundTasks(),
+                    session,
+                )
+            assert error.value.status_code == 422
+            assert error.value.detail["code"] == "MD_ANALYSIS_GPU_FORBIDDEN"
+            from sqlalchemy import select
+            assert list((await session.execute(select(Job.id))).scalars()) == [parent_id]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

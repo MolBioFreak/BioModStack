@@ -17,6 +17,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from paths import get_data_root
+from services.scientific_artifacts.writer import ScientificArtifactError, descriptor_content_digest
 
 
 class MDJobRecord(Protocol):
@@ -179,10 +180,11 @@ def _contained(root: Path, raw: str) -> Path:
     relative = PurePosixPath(raw)
     if relative.as_posix() != raw or any(part in {"", ".", ".."} for part in relative.parts):
         raise MDResultError("MD_ARTIFACT_PATH_INVALID", "MD artifact path is not contained")
-    root = root.resolve()
-    path = root.joinpath(*relative.parts).resolve()
+    root = root.absolute()
+    # Preserve lexical components for component-wise O_NOFOLLOW opening.
+    path = root.joinpath(*relative.parts)
     try:
-        path.relative_to(root)
+        path.resolve().relative_to(root)
     except ValueError as exc:
         raise MDResultError("MD_ARTIFACT_PATH_INVALID", "MD artifact escapes the job-owned result root") from exc
     return path
@@ -227,7 +229,7 @@ def _job_root(job: MDJobRecord) -> Path:
     return root
 
 
-def _load_inventory(job: MDJobRecord) -> tuple[Path, dict[str, Any], list[ResolvedMDArtifact]]:
+def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True) -> tuple[Path, dict[str, Any], list[ResolvedMDArtifact]]:
     root = _job_root(job)
     aggregate = _load_json(root / "manifest.json", "MD_RESULTS_ABSENT")
     if aggregate.get("schema") != "bms.md.aggregate.v1" or aggregate.get("job_id") != job.id:
@@ -296,8 +298,17 @@ def _load_inventory(job: MDJobRecord) -> tuple[Path, dict[str, Any], list[Resolv
                 "Replica final structure is not bound to the governed analysis trajectory",
                 409,
             )
+    if include_analysis:
+        inventory += _analysis_inventory(root, aggregate, job)
+        if len(inventory) > MAX_ARTIFACTS:
+            raise MDResultError("MD_MANIFEST_INVALID", "MD artifact inventory exceeds its bound")
+    return root, aggregate, inventory
+
+
+def _analysis_inventory(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord) -> list[ResolvedMDArtifact]:
+    inventory: list[ResolvedMDArtifact] = []
     analysis_root = root / "analysis"
-    for aggregate_replica in replicas:
+    for aggregate_replica in aggregate["replicas"]:
         replica_index = int(aggregate_replica["replica_index"])
         sidecar_path = analysis_root / f"md_analysis_replica_{replica_index}.artifacts.json"
         if not sidecar_path.is_file():
@@ -338,7 +349,7 @@ def _load_inventory(job: MDJobRecord) -> tuple[Path, dict[str, Any], list[Resolv
             ))
             if len(inventory) > MAX_ARTIFACTS:
                 raise MDResultError("MD_MANIFEST_INVALID", "MD artifact inventory exceeds its bound")
-    return root, aggregate, inventory
+    return inventory
 
 
 def _digest(path: Path) -> str:
@@ -375,14 +386,19 @@ def _analysis_identity(payload: Mapping[str, Any]) -> str:
 
 
 def resolve_artifact(job: MDJobRecord, artifact_id: str, *, verify: bool = True) -> ResolvedMDArtifact:
-    _root, _aggregate, inventory = _load_inventory(job)
+    if verify:
+        artifact, handle = open_verified_artifact(job, artifact_id)
+        handle.close()
+        return artifact
+    _root, _aggregate, inventory = _load_inventory(job, include_analysis=False)
     artifact = next((item for item in inventory if item.artifact_id == artifact_id), None)
+    if artifact is None:
+        _root, _aggregate, inventory = _load_inventory(job)
+        artifact = next((item for item in inventory if item.artifact_id == artifact_id), None)
     if artifact is None:
         raise MDResultError("MD_ARTIFACT_UNKNOWN", "Unknown MD artifact", 404)
     if not artifact.path.is_file():
         raise MDResultError("MD_ARTIFACT_MISSING", "MD artifact is unavailable", 404)
-    if verify and (artifact.path.stat().st_size != artifact.bytes or _digest(artifact.path) != artifact.sha256):
-        raise MDResultError("MD_ARTIFACT_CHECKSUM_MISMATCH", "MD artifact no longer matches its immutable manifest", 409)
     return artifact
 
 
@@ -413,24 +429,18 @@ def _open_artifact_beneath(root: Path, path: Path) -> int:
 
 
 def open_verified_artifact(job: MDJobRecord, artifact_id: str) -> tuple[ResolvedMDArtifact, BinaryIO]:
-    root, _aggregate, inventory = _load_inventory(job)
-    artifact = next((item for item in inventory if item.artifact_id == artifact_id), None)
-    if artifact is None:
-        raise MDResultError("MD_ARTIFACT_UNKNOWN", "Unknown MD artifact", 404)
+    artifact = resolve_artifact(job, artifact_id, verify=False)
+    root = _job_root(job)
     descriptor = _open_artifact_beneath(root, artifact.path)
     try:
         file_stat = os.fstat(descriptor)
         if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size != artifact.bytes:
             raise MDResultError("MD_ARTIFACT_CHECKSUM_MISMATCH", "MD artifact no longer matches its immutable manifest", 409)
-        digest = hashlib.sha256()
-        consumed = 0
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            consumed += len(chunk)
-            digest.update(chunk)
-        if consumed != artifact.bytes or digest.hexdigest() != artifact.sha256:
+        try:
+            consumed, digest = descriptor_content_digest(descriptor, scope=f"{root}:{artifact.sha256}")
+        except ScientificArtifactError as exc:
+            raise MDResultError("MD_ARTIFACT_CHECKSUM_MISMATCH", "MD artifact changed during verification", 409) from exc
+        if consumed != artifact.bytes or digest != artifact.sha256:
             raise MDResultError("MD_ARTIFACT_CHECKSUM_MISMATCH", "MD artifact no longer matches its immutable manifest", 409)
         os.lseek(descriptor, 0, os.SEEK_SET)
         handle = os.fdopen(descriptor, "rb", closefd=True)
@@ -442,9 +452,18 @@ def open_verified_artifact(job: MDJobRecord, artifact_id: str) -> tuple[Resolved
 
 
 def artifact_inventory(job: MDJobRecord) -> dict[str, Any]:
-    _root, _aggregate, inventory = _load_inventory(job)
+    _root, _aggregate, inventory = _load_inventory(job, include_analysis=False)
+    analysis_error = None
+    try:
+        analysis_inventory = _analysis_inventory(_root, _aggregate, job)
+        if len(inventory) + len(analysis_inventory) > MAX_ARTIFACTS:
+            raise MDResultError("MD_MANIFEST_INVALID", "MD artifact inventory exceeds its bound")
+        inventory += analysis_inventory
+    except MDResultError as exc:
+        analysis_error = {"code": exc.code, "message": str(exc)}
     return {
         "schema": "bms.md.artifact-inventory.v1", "job_id": job.id,
+        "analysis_error": analysis_error,
         "source": "validated_job_owned_manifests", "bounded": True,
         "artifacts": [{
             "id": item.artifact_id, "replica": item.replica_index, "name": item.name,
@@ -520,10 +539,10 @@ def analysis_report(job: MDJobRecord) -> dict[str, Any]:
             tool = report.get("tool")
             if (
                 not isinstance(tool, Mapping)
-                or tool.get("runtime_sif_sha256") != "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"
-                or tool.get("implementation_sha256") != expected_analysis_implementation_sha256()
+                or any(not isinstance(tool.get(key), str) or not SHA256.fullmatch(tool[key])
+                       for key in ("runtime_sif_sha256", "implementation_sha256"))
             ):
-                raise MDResultError("MD_ANALYSIS_REPORT_STALE", "MD analysis report runtime or implementation identity is not authoritative", 409)
+                raise MDResultError("MD_ANALYSIS_REPORT_STALE", "MD analysis report recorded runtime or implementation identity is invalid", 409)
             replica_artifacts = [item for item in inventory if item.replica_index == index]
             topology = next((item for item in replica_artifacts if item.semantic_role == "analysis_topology"), None)
             trajectory = next((item for item in replica_artifacts if item.semantic_role == "analysis_trajectory"), None)
@@ -801,8 +820,7 @@ def _trajectory_playback(inventory: list[ResolvedMDArtifact]) -> dict[str, Any]:
 
 
 def summary(job: MDJobRecord) -> dict[str, Any]:
-    root, aggregate, inventory = _load_inventory(job)
-    analysis = analysis_report(job)
+    root, aggregate, inventory = _load_inventory(job, include_analysis=False)
     replica_summaries = []
     for replica in aggregate["replicas"]:
         index = int(replica["replica_index"])
@@ -824,12 +842,12 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         "aggregate_manifest_sha256": _digest(root / "manifest.json"),
         "replica_count": len(aggregate["replicas"]), "artifact_count": len(inventory),
         "replicas": replica_summaries,
-        "analysis_status": analysis["status"], "trajectory_playback": _trajectory_playback(inventory),
+        "trajectory_playback": _trajectory_playback(inventory),
     }
 
 
 def build_analysis_work_items(job: MDJobRecord) -> dict[str, Any]:
-    root, aggregate, _inventory = _load_inventory(job)
+    root, aggregate, _inventory = _load_inventory(job, include_analysis=False)
     items = []
     for replica in aggregate["replicas"]:
         index = int(replica["replica_index"])

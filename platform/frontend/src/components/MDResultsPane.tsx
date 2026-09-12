@@ -38,14 +38,14 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [selectedReplica, setSelectedReplica] = useState<number | null>(null);
-    const [selectedPoint, setSelectedPoint] = useState<MDAnalysisPoint | null>(null);
-    const [selectedDisplayFrame, setSelectedDisplayFrame] = useState<number | null>(null);
+    const [selection, setSelection] = useState<
+        { kind: 'point'; point: Pick<MDAnalysisPoint, 'replica' | 'source_frame'> } | { kind: 'display'; displayFrame: number } | null
+    >(null);
     const [playbackState, setPlaybackState] = useState<'stopped' | 'playing' | 'paused'>('stopped');
     const [loopPlayback, setLoopPlayback] = useState(true);
     useEffect(() => {
         setSelectedReplica(null);
-        setSelectedPoint(null);
-        setSelectedDisplayFrame(null);
+        setSelection(null);
         setPlaybackState('stopped');
         setLoopPlayback(true);
     }, [jobId]);
@@ -113,7 +113,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
         },
     });
     const finalStructures = (artifacts.data?.data.artifacts ?? []).filter((item) => item.semantic_role === 'representative_structure');
-    const finalStructure = finalStructures.find((item) => item.replica === selectedReplica) ?? finalStructures[0];
+    const finalStructure = selectedReplica == null ? finalStructures[0] : finalStructures.find((item) => item.replica === selectedReplica);
     const playbackCapability = summary.data?.data.trajectory_playback;
     const activeReplica = selectedReplica ?? finalStructure?.replica ?? (playbackCapability?.supported ? playbackCapability.replicas[0]?.replica : null) ?? null;
     const frameMapArtifact = (artifacts.data?.data.artifacts ?? []).find((item) => (
@@ -128,31 +128,31 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             return response.json() as Promise<MDTrajectoryFrameMap>;
         },
     });
-    const reports = analysis.data?.data.reports ?? [];
+    const reports = analysis.isError ? [] : analysis.data?.data.reports ?? [];
     const playbackFrames = frameMap.data?.frames ?? [];
     useEffect(() => {
         if (playbackState !== 'playing' || playbackFrames.length === 0) return undefined;
         const timer = window.setInterval(() => {
-            setSelectedDisplayFrame((current) => {
-                const currentIndex = Math.max(0, playbackFrames.findIndex((frame) => frame.display_frame === current));
+            setSelection((current) => {
+                const currentIndex = Math.max(0, playbackFrames.findIndex((frame) => current?.kind === 'display'
+                    ? frame.display_frame === current.displayFrame
+                    : current?.kind === 'point' && frame.source_frame === current.point.source_frame));
                 const nextIndex = currentIndex + 1;
-                if (nextIndex < playbackFrames.length) return playbackFrames[nextIndex].display_frame;
-                if (loopPlayback) return playbackFrames[0].display_frame;
+                if (nextIndex < playbackFrames.length) return { kind: 'display', displayFrame: playbackFrames[nextIndex].display_frame };
+                if (loopPlayback) return { kind: 'display', displayFrame: playbackFrames[0].display_frame };
                 setPlaybackState('paused');
-                return playbackFrames[currentIndex].display_frame;
+                return { kind: 'display', displayFrame: playbackFrames[currentIndex].display_frame };
             });
         }, 500);
         return () => window.clearInterval(timer);
     }, [loopPlayback, playbackFrames, playbackState]);
-    const selectedFrame = (
-        (selectedDisplayFrame == null
-            ? undefined
-            : playbackFrames.find((frame) => frame.display_frame === selectedDisplayFrame))
-        ?? (selectedPoint && selectedPoint.replica === activeReplica
-            ? frameMap.data?.frames.find((frame) => frame.source_frame === selectedPoint.source_frame)
-            : undefined)
-        ?? (playbackCapability?.supported ? playbackFrames[0] : undefined)
-    );
+    const selectedFrame = selection?.kind === 'point'
+        ? playbackFrames.find((frame) => selection.point.replica === activeReplica && frame.source_frame === selection.point.source_frame)
+        : selection?.kind === 'display'
+            ? playbackFrames.find((frame) => frame.display_frame === selection.displayFrame)
+            : playbackCapability?.supported ? playbackFrames[0] : undefined;
+    const selectedPoint = reports.flatMap((report) => report.points ?? [])
+        .find((point) => point.replica === activeReplica && point.source_frame === (selection?.kind === 'point' ? selection.point.source_frame : selectedFrame?.source_frame));
     const molecularDynamics = useMemo<MDSceneState | undefined>(() => {
         if (activeReplica == null || !summary.data || !playbackCapability) return undefined;
         const topology = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === activeReplica && item.semantic_role === 'analysis_topology');
@@ -238,40 +238,41 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const loading = !lifecycle.data && lifecycle.isLoading;
     if (loading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
     if (preReplicaTerminal) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}</section>;
-    if (summary.isError || artifacts.isError || analysis.isError) {
+    if (summary.isError || artifacts.isError) {
         return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-100">Dynamics results are not complete yet or their manifests failed validation.</div></section>;
     }
-    if (summary.isLoading || artifacts.isLoading || analysis.isLoading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
+    if (summary.isLoading || artifacts.isLoading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
     const summaryData = summary.data!.data;
-    const analysisData = analysis.data!.data;
+    const analysisData = analysis.isError ? undefined : analysis.data?.data;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">
             {lifecyclePanel}
+            {artifacts.data?.data.analysis_error && <div role="alert" className="rounded border border-amber-500/30 p-3 text-amber-200">Analysis artifacts unavailable: {artifacts.data.data.analysis_error.message}</div>}
             <div className="grid gap-3 md:grid-cols-4">
                 {[
                     ['Replicas', summaryData.replica_count], ['Artifacts', summaryData.artifact_count],
-                    ['Dynamics', summaryData.status], ['Analysis', analysisData.status],
+                    ['Dynamics', summaryData.status], ['Analysis', analysis.isError ? 'unavailable' : analysisData?.status ?? 'loading'],
                 ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-1 text-xl font-semibold text-white">{value}</div></div>)}
             </div>
-            {analysisData.status !== 'completed' && <div className="flex items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/5 p-4"><div><div className="font-medium text-amber-100">Analysis requires attention</div><div className="mt-1 text-xs text-amber-200/70">{analysisData.retry.active ? 'A CPU-only analysis attempt is active.' : 'Retry schedules CPU analysis attempts only. Completed dynamics artifacts remain immutable.'}</div></div>{analysisData.retry.eligible && <button type="button" disabled={retry.isPending} onClick={() => retry.mutate()} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">{retry.isPending ? 'Scheduling…' : 'Retry analysis'}</button>}</div>}
+            {analysisData && analysisData.status !== 'completed' && <div className="flex items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/5 p-4"><div><div className="font-medium text-amber-100">Analysis requires attention</div><div className="mt-1 text-xs text-amber-200/70">{analysisData.retry.active ? 'A CPU-only analysis attempt is active.' : 'Retry schedules CPU analysis attempts only. Completed dynamics artifacts remain immutable.'}</div></div>{analysisData.retry.eligible && <button type="button" disabled={retry.isPending} onClick={() => retry.mutate()} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">{retry.isPending ? 'Scheduling…' : 'Retry analysis'}</button>}</div>}
             {retry.isError && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">Analysis retry was rejected. Refresh the job state before retrying.</div>}
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+            {analysisData && <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
                 <div className="font-semibold">{analysisData.evidence.status.replace('_', ' ')}</div>
                 <div className="mt-1 text-xs text-amber-200/80">{analysisData.evidence.reason} Frames are not treated as independent biological replicates.</div>
                 <div className="mt-2 text-xs text-slate-300">Completed independent replicas: {analysisData.ensemble.completed_replicas} · mean replica RMSD: {analysisData.ensemble.mean_of_replica_mean_rmsd_angstrom?.toFixed(3) ?? 'n/a'} Å · sample SD across replica means: {analysisData.ensemble.sample_stdev_of_replica_mean_rmsd_angstrom?.toFixed(3) ?? 'n/a'} Å</div>
-            </div>
+            </div>}
             <div className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
                     <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Backbone RMSD</h2><span className="text-xs text-slate-400">Server-produced bounded points</span></div>
-                    {analysisData.status === 'absent' ? <div className="py-20 text-center text-slate-400">Analysis has not been produced for this dynamics run.</div>
+                    {!analysisData ? <div className="py-20 text-center text-amber-300">{analysis.isError ? 'Analysis unavailable: report validation or read failed. Independent dynamics remain available.' : 'Loading analysis…'}</div> : analysisData.status === 'absent' ? <div className="py-20 text-center text-slate-400">Analysis has not been produced for this dynamics run.</div>
                         : traces.length === 0 ? <div className="py-20 text-center text-amber-300">Analysis is partial or failed. Inspect replica states below.</div>
                             : <Plot data={traces} layout={layout} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full"
-                                onClick={(event: PlotMouseEvent) => { const raw = event.points[0]?.customdata; if (Array.isArray(raw)) { const point = reports.flatMap((report) => report.points ?? []).find((candidate) => candidate.replica === Number(raw[0]) && candidate.source_frame === Number(raw[1])); if (point) { setSelectedPoint(point); setSelectedReplica(point.replica); } } }} />}
+                                onClick={(event: PlotMouseEvent) => { const raw = event.points[0]?.customdata; if (Array.isArray(raw)) { const point = reports.flatMap((report) => report.points ?? []).find((candidate) => candidate.replica === Number(raw[0]) && candidate.source_frame === Number(raw[1])); if (point) { setPlaybackState('paused'); setSelection({ kind: 'point', point: { replica: point.replica, source_frame: point.source_frame } }); setSelectedReplica(point.replica); } } }} />}
                     {selectedPoint && <div className="mt-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-100">Replica {selectedPoint.replica} · source frame {selectedPoint.source_frame} · {selectedPoint.time_ps.toFixed(2)} ps · {selectedPoint.rmsd_angstrom.toFixed(3)} Å</div>}
-                    <div className="mt-3 flex flex-wrap gap-2">{analysisData.replica_states.map((state) => <span key={state.replica} className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {state.replica}: {state.status}</span>)}</div>
+                    <div className="mt-3 flex flex-wrap gap-2">{analysisData?.replica_states.map((state) => <span key={state.replica} className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {state.replica}: {state.status}</span>)}</div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Replica final structure</h2>{finalStructures.length > 1 && <select value={finalStructure?.replica ?? ''} onChange={(event) => setSelectedReplica(Number(event.target.value))} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{finalStructures.map((item) => <option key={item.id} value={item.replica}>Replica {item.replica}</option>)}</select>}</div>
+                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Replica final structure</h2>{finalStructures.length > 1 && <select value={finalStructure?.replica ?? ''} onChange={(event) => { setPlaybackState('paused'); setSelection(null); setSelectedReplica(Number(event.target.value)); }} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{finalStructures.map((item) => <option key={item.id} value={item.replica}>Replica {item.replica}</option>)}</select>}</div>
                     {(finalStructure || molecularDynamics) ? <MolstarViewer structureUrl={finalStructure?.content_url ?? ''} format={finalStructure ? (finalStructure.format === 'cif' || finalStructure.format === 'mmcif' ? 'cif' : 'pdb') : 'pdb'} height={390} label={finalStructure ? `MD replica ${finalStructure.replica} final structure` : 'MD GRO+XTC trajectory'} showMetricWorkbench={false} molecularDynamics={molecularDynamics} artifactJobId={jobId} /> : <div className="py-20 text-center text-slate-400">No checksum-bound PDB/mmCIF final structure or GRO+XTC trajectory is available.</div>}
                     {summaryData.trajectory_playback.supported && playbackFrames.length > 0 && selectedFrame && <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-3 text-xs text-cyan-100">
                         <div className="mb-2 flex flex-wrap gap-2" aria-label="Governed trajectory playback controls">
@@ -286,7 +287,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                                 type="button"
                                 data-bms-md-display-frame={frame.display_frame}
                                 aria-pressed={frame.display_frame === selectedFrame.display_frame}
-                                onClick={() => { setPlaybackState('paused'); setSelectedDisplayFrame(frame.display_frame); }}
+                                onClick={() => { setPlaybackState('paused'); setSelection({ kind: 'display', displayFrame: frame.display_frame }); }}
                                 className={`rounded border px-2 py-1 ${frame.display_frame === selectedFrame.display_frame ? 'border-cyan-300 bg-cyan-400/20 text-white' : 'border-slate-600 bg-slate-950/50 text-slate-300 hover:border-cyan-500/60'}`}
                             >{frame.display_frame}</button>)}
                         </div>
@@ -295,6 +296,8 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                         </div>
                         <div className="mt-1 text-slate-400">Display indices address the bounded decoder; source/time/step values come from the governed frame map.</div>
                     </div>}
+                    {selection?.kind === 'point' && !selectedFrame && <div className="mt-2 text-xs text-amber-200">Selected source frame is not in the governed playback frame map; no trajectory frame is selected.</div>}
+                    {frameMap.isError && <div className="mt-2 text-xs text-amber-200">Trajectory frame map is unavailable.</div>}
                     {finalStructure && <div className="mt-3 space-y-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300"><div>Replica {finalStructure.replica} · source frame {finalStructure.source_frame ?? 'n/a'} · {finalStructure.time_ps != null ? `${finalStructure.time_ps.toFixed(2)} ps` : 'time unavailable'}</div><div className="break-all text-slate-500">Structure SHA-256 {finalStructure.sha256}</div><div className="break-all text-slate-500">Source trajectory SHA-256 {finalStructure.source_trajectory_sha256 ?? 'unavailable'}</div><div className="text-slate-500">Selection: {finalStructure.selection_method ?? 'completed production final coordinates'}</div></div>}
                     {!summaryData.trajectory_playback.supported && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">Trajectory playback unavailable: {summaryData.trajectory_playback.reason}. Plot selections retain exact replica/time/source-frame provenance but do not move Mol*.</div>}
                 </div>
