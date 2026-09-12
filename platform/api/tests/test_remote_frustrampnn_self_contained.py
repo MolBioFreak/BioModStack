@@ -161,7 +161,9 @@ def _assert_parent_fanout_submission_reuses_grouping_source_snapshot(tmp_path, m
     def submit(payload, **kwargs):
         member = payload['params']['frustrampnn_component_group']['candidates'][0]
         assert member['metadata'] == metadata
-        assert member['source_relative_path'] == 'candidate/source.pdb'
+        retained = tmp_path / member['source_relative_path']
+        assert retained != source
+        assert retained.read_bytes() == raw
         assert member['source_sha256'] == planned[0]['input_sha256'] == hashlib.sha256(raw).hexdigest()
         assert member['source_size_bytes'] == len(raw)
         raise SubmissionObserved
