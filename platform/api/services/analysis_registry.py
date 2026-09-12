@@ -130,11 +130,13 @@ async def build_analysis_input_signature(
     subject: Any,
     params: dict[str, Any],
     session: AsyncSession,
+    *,
+    native_selection=None,
 ) -> str:
     if (definition.subject_kind == "design" and definition.analysis_type in {PAE_MATRIX_ANALYSIS, CHAIN_METRICS_ANALYSIS, IPSAE_INTERFACE_ANALYSIS}
             and await scientific_contract_revision(subject, session) == 1):
-        from services.boltz_scientific_consumer import verified_boltz_design
-        identity = {"core_protein_scientific_contract":1, "viewer_identity_adapter":2,
+        from services.core_protein_scientific_contract import verified_native_spatial_design
+        identity = {"core_protein_scientific_contract":1, "viewer_identity_adapter":3,
             "design_id":subject.id, "analysis_type":definition.analysis_type, "params":params}
         if definition.analysis_type == IPSAE_INTERFACE_ANALYSIS:
             identity.update(review_profile_id=subject.review_profile_id,
@@ -145,7 +147,9 @@ async def build_analysis_input_signature(
         try:
             if not isinstance(getattr(subject, 'confidence_metrics', None), dict) or not subject.confidence_metrics.get('core_protein_scientific'):
                 raise ValueError('missing_producer_native_axis_ledger')
-            selected = await verified_boltz_design(subject, session)
+            selected = native_selection or await verified_native_spatial_design(subject, session)
+            if selected["design_id"] != subject.id:
+                raise ValueError("foreign selected snapshot")
         except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
             # This distinct namespace can only cache unavailable results. It
             # never falls back to legacy paths or reuses a prior healthy run.

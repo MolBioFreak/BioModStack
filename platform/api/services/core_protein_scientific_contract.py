@@ -209,5 +209,56 @@ def validate_metrics(payloads: list, descriptors: list, *, expected_source: Mapp
     return result
 
 
+async def native_spatial_consumer(design, session):
+    """Model applicability comes from the owning Job, never the revision alone.
+
+    ESMFold2's admitted native dialect proves token scalar means, not a spatial
+    correspondence ledger. The other marked families likewise must not borrow
+    Boltz axes or historical PDB B-factor semantics.
+    """
+    from sqlalchemy import select
+    from database import Job
+    with session.no_autoflush:
+        job = await session.scalar(select(Job).where(Job.id == design.job_id))
+        if job is None or revision_for_job(job) != 1:
+            raise ValueError('missing_native_spatial_authority')
+        if job.model_id in ('boltz', 'boltz2'):
+            from services import boltz_scientific_consumer
+            return boltz_scientific_consumer
+    return None
+
+
+async def scientific_document(design, session):
+    """Only publish a spatial document for a proven model-native dialect."""
+    consumer = await native_spatial_consumer(design, session)
+    return await consumer.scientific_document(design, session) if consumer is not None else None
+
+
+async def verified_native_spatial_design(design, session):
+    consumer = await native_spatial_consumer(design, session)
+    if consumer is None:
+        raise ValueError('unsupported_model_native_spatial_metric')
+    return await consumer.verified_boltz_design(design, session)
+
+
+async def compute_persisted_native_metric(design, metric, session, *, selected=None):
+    consumer = await native_spatial_consumer(design, session)
+    if consumer is not None:
+        return await consumer.compute_persisted_native_metric(design, metric, session, selected=selected)
+    from services.analysis_registry import unavailable_scientific_identity
+    from services.scientific_viewer_contract import ScientificViewerMetric
+    return ScientificViewerMetric.model_validate(unavailable_scientific_identity(
+        design, metric, 'unsupported_model_native_spatial_metric'))
+
+
+async def compute_persisted_pae(design, params, session, *, selected=None):
+    consumer = await native_spatial_consumer(design, session)
+    if consumer is not None:
+        return await consumer.compute_persisted_pae(design, params, session, selected=selected)
+    from services.analysis_registry import unavailable_scientific_identity
+    result = unavailable_scientific_identity(design, 'pae', 'unsupported_model_native_spatial_metric')
+    return result, {'status': result['status'], 'reason': result['reason']}, None
+
+
 def canonical_metric_json(payload: Any) -> str:
     return json.dumps(validate_metric(payload), allow_nan=False, sort_keys=True, separators=(",", ":"))

@@ -2645,7 +2645,7 @@ async def list_designs(
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
         if response.core_protein_scientific_contract == 1:
-            from services.boltz_scientific_consumer import scientific_document
+            from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
     
@@ -2867,7 +2867,7 @@ async def get_design(
                                    job=owners.get(design.job_id))
     response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
     if response.core_protein_scientific_contract == 1:
-        from services.boltz_scientific_consumer import scientific_document
+        from services.core_protein_scientific_contract import scientific_document
         response.scientific_structure_document = await scientific_document(design, session)
     return response
 
@@ -2888,11 +2888,12 @@ async def get_design_pdb(
         raise HTTPException(status_code=404, detail="No PDB file for this design")
     
     owner = await session.get(Job, design.job_id)
-    if revision_for_job(owner) == 1 and owner.model_id in ('boltz', 'boltz2'):
+    from services.core_protein_scientific_contract import native_spatial_consumer, verified_native_spatial_design
+    native_consumer = await native_spatial_consumer(design, session) if revision_for_job(owner) == 1 else None
+    if native_consumer is not None:
         from fastapi.responses import Response
-        from services.boltz_scientific_consumer import verified_boltz_design
         try:
-            selected = await verified_boltz_design(design, session)
+            selected = await verified_native_spatial_design(design, session)
         except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
             raise HTTPException(status_code=409, detail="invalid_scientific_structure_binding")
         # Serve the very snapshot validated with the metric ledger, never reopen
@@ -2954,7 +2955,7 @@ async def get_residue_metrics(
         raise HTTPException(status_code=404, detail="Design not found")
     
     if await scientific_contract_revision(design, session) == 1:
-        from services.boltz_scientific_consumer import compute_persisted_native_metric
+        from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "residue_plddt", session)
 
     if not design.residue_plddt:
@@ -2982,7 +2983,7 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
         raise HTTPException(status_code=404, detail="Design not found")
 
     if await scientific_contract_revision(design, session) == 1:
-        from services.boltz_scientific_consumer import compute_persisted_native_metric
+        from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "chain_metrics", session)
 
     payload = await _get_cached_design_analysis_payload(
@@ -3085,7 +3086,7 @@ async def get_designs_for_job(
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
         if response.core_protein_scientific_contract == 1:
-            from services.boltz_scientific_consumer import scientific_document
+            from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
     
@@ -3260,7 +3261,7 @@ async def get_pae_data(
         raise HTTPException(status_code=404, detail="No structure file for this design")
     
     if await scientific_contract_revision(design, session) == 1:
-        from services.boltz_scientific_consumer import compute_persisted_pae
+        from services.core_protein_scientific_contract import compute_persisted_pae
         from services.analysis_registry import normalize_pae_matrix_params
         payload, _, _ = await compute_persisted_pae(design, normalize_pae_matrix_params({'max_size':max_size}), session)
         return ScientificViewerMetric.model_validate(payload)

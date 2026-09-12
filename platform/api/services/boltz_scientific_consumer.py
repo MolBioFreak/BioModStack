@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from database import Design, Job
 from services.boltz_scientific_persistence import _verified_publication, _revalidate
-from services.core_protein_result_contract import validate_persisted_publication
 from services.core_protein_scientific_contract import revision_for_job
 from services.frustrampnn.contracts import canonical_json_bytes
 
@@ -13,8 +12,8 @@ from services.frustrampnn.contracts import canonical_json_bytes
 async def verified_boltz_design(design, session):
     """Return freshly verified native identity; no UUID allocation or DB writes.
 
-    Rebuild the publication from launch/workflow authority and exact file bytes,
-    then compare its receipt and compact blocks to committed ownership records.
+    Verify selected bytes against launch/workflow authority and the committed
+    receipt. Cohort admission is deliberately not repeated for a selected view.
     """
     from paths import get_data_root, resolve_runtime_data_path
     with session.no_autoflush:
@@ -25,31 +24,33 @@ async def verified_boltz_design(design, session):
             raise ValueError('missing_producer_publication_root')
         root = Path(job.output_dir)
         root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-        prepared, receipt = _verified_publication(job, root)
-        if canonical_json_bytes((job.provenance or {}).get('core_protein_candidate_publication')) != canonical_json_bytes(receipt):
-            raise ValueError('persisted publication receipt mismatch')
-        rows = list((await session.execute(select(Design).where(
-            Design.job_id == job.id, Design.source_stage.is_(None)))).scalars())
-        validate_persisted_publication(job, rows, root)
-        selected = None
-        for row in rows:
-            candidate = prepared[row.name]
-            expected = dict(candidate['block'], design_id=row.id)
-            if canonical_json_bytes((row.confidence_metrics or {}).get('core_protein_scientific')) != canonical_json_bytes(expected):
-                raise ValueError('persisted native design binding mismatch')
-            if row.id == design.id:
-                selected = candidate
-        if selected is None:
+        row = await session.scalar(select(Design).where(
+            Design.id == design.id, Design.job_id == job.id, Design.source_stage.is_(None)))
+        if row is None:
             raise ValueError('foreign selected design')
-        _revalidate(root, receipt)
-        # Retain the exact served bytes and bind the snapshot to the verified
-        # producer hash. Later pathname changes cannot affect a Response body.
-        import hashlib
-        structure_bytes = Path(selected['artifacts']['structure']['path']).read_bytes()
-        if hashlib.sha256(structure_bytes).hexdigest() != selected['artifacts']['structure']['sha256']:
-            raise ValueError('scientific_structure_content_mismatch')
-        return dict(selected, snapshots={**selected['snapshots'], 'structure': structure_bytes},
-                    publication_root=root, publication_receipt=receipt)
+        prepared, receipt = _verified_publication(job, root, document=row.name)
+        selected = prepared[row.name]
+        prior = (job.provenance or {})['core_protein_candidate_publication']
+        expected_receipt = dict(receipt,
+            workflow_inventory=prior['workflow_inventory'],
+            task_bindings={key: prior['task_bindings'][key] for key in receipt['task_bindings']},
+            manifest=prior['candidates'][row.name]['manifest'],
+            candidates={row.name: prior['candidates'][row.name]})
+        if canonical_json_bytes(expected_receipt) != canonical_json_bytes(receipt):
+            raise ValueError('persisted publication receipt mismatch')
+        confidence = row.confidence_metrics or {}
+        expected = dict(selected['block'], design_id=row.id)
+        artifacts = selected['artifacts']
+        if (canonical_json_bytes(confidence.get('core_protein_scientific')) != canonical_json_bytes(expected)
+                or confidence.get('core_protein_candidate_artifacts') != artifacts
+                or row.pdb_path != artifacts['structure']['path']
+                or row.json_path != artifacts['metrics']['path']
+                or row.aligned_error_path != artifacts['pae']['path']
+                or row.aligned_error_format != 'boltz_pae_npz'
+                or row.aligned_error_key != selected['native']['aligned_error']['matrix_key']):
+            raise ValueError('persisted native design binding mismatch')
+        # All projections use the no-follow snapshots, not reopened paths.
+        return dict(selected, design_id=row.id, publication_root=root, publication_receipt=receipt)
 
 
 async def scientific_document(design, session):
@@ -65,7 +66,7 @@ async def scientific_document(design, session):
         contentSha256=selected['artifacts']['structure']['sha256'], sourceKind='pdb')
 
 
-async def compute_persisted_native_metric(design, metric, session):
+async def compute_persisted_native_metric(design, metric, session, *, selected=None):
     """Project only bytes retained by the independent publication verifier."""
     from io import BytesIO
     import json
@@ -77,7 +78,9 @@ async def compute_persisted_native_metric(design, metric, session):
     if not isinstance(getattr(design, 'confidence_metrics', None), dict) or not design.confidence_metrics.get('core_protein_scientific'):
         return ScientificViewerMetric.model_validate(unavailable_scientific_identity(design, metric, reason))
     try:
-        selected = await verified_boltz_design(design, session)
+        selected = selected or await verified_boltz_design(design, session)
+        if selected['design_id'] != design.id:
+            raise ValueError('foreign selected snapshot')
         native = selected['native']
         axis = native['vectors'][0]['axis']
         payload = dict(schema_name='core_protein_viewer_metric', schema_version=1,
@@ -101,20 +104,21 @@ async def compute_persisted_native_metric(design, metric, session):
             result = ScientificChainMetric.model_validate(payload)
         else:
             raise ValueError('unsupported native metric')
-        _revalidate(selected['publication_root'], selected['publication_receipt'])
         return result
     except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
         return ScientificViewerMetric.model_validate(unavailable_scientific_identity(design, metric, reason))
 
 
-async def compute_persisted_pae(design, params, session):
+async def compute_persisted_pae(design, params, session, *, selected=None):
     from services.analysis_subprocess import _compute_pae_matrix
     from services.analysis_registry import unavailable_scientific_identity
     if not isinstance(getattr(design, 'confidence_metrics', None), dict) or not design.confidence_metrics.get('core_protein_scientific'):
         result = unavailable_scientific_identity(design, 'pae', 'missing_producer_native_axis_ledger')
         return result, {'status':'unavailable', 'reason':result['reason']}, None
     try:
-        selected = await verified_boltz_design(design, session)
+        selected = selected or await verified_boltz_design(design, session)
+        if selected['design_id'] != design.id:
+            raise ValueError('foreign selected snapshot')
         native = selected['native']
         # Narrow transport adaptation: paths are verified descriptors, not a
         # mutation of the ORM row or a basename-derived legacy fallback.

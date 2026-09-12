@@ -40,7 +40,7 @@ def job(tmp_path, marked=True):
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def publication(tmp_path, sequence=False, count=1, native_scalars=None):
+def publication(tmp_path, sequence=False, count=1, native_scalars=None, full_backbone=False):
     # Unit fixtures declare launch inputs independently of all result files.
     source = tmp_path / 'complex_input.json'
     source.write_text(json.dumps({'components': [{'id': 'A', 'type': 'protein', 'sequence': 'AAA:AA:A'}]}))
@@ -55,6 +55,32 @@ def publication(tmp_path, sequence=False, count=1, native_scalars=None):
     fixture = module.NativeIdentityTest()
     fixture.setUp()
     try:
+        if full_backbone:
+            # Generated TEST backbone through the same pinned native writer.
+            import numpy as np
+            from types import SimpleNamespace
+            fixture.atoms = np.zeros(28, module.ATOM)
+            for index in range(7):
+                for offset, (name, element) in enumerate([('N', 7), ('CA', 6), ('C', 6), ('O', 8)]):
+                    fixture.atoms[4 * index + offset] = (name, element, (float(index * 4), float(offset), 0.), True, 0., 0.)
+            fixture.chains['atom_idx'] *= 4
+            fixture.chains['atom_num'] *= 4
+            fixture.res['atom_idx'] *= 4
+            fixture.res['atom_num'] = 4
+            fixture.res['atom_center'] = fixture.res['atom_idx'] + 1
+            fixture.res['atom_disto'] = fixture.res['atom_idx'] + 1
+            fixture.save_ledger()
+            with np.load(fixture.ledger, allow_pickle=False) as data:
+                ledger = dict(data)
+            ledger['coords'] = np.zeros(28, dtype=[('coords', '3f4')])
+            ledger['ensemble'] = np.array([(0, 28)], dtype=[('atom_coord_idx', 'i4'), ('atom_num', 'i4')])
+            np.savez_compressed(fixture.ledger, **ledger)
+            native = module.native_data_writer()
+            native['Chem'] = SimpleNamespace(GetPeriodicTable=lambda: SimpleNamespace(
+                GetElementSymbol=lambda number: {6: 'C', 7: 'N', 8: 'O'}[number]))
+            structure = native['StructureV2'](**ledger).remove_invalid_chains()
+            fixture.structure.write_text(native['to_pdb'](structure, plddts=np.linspace(.5, .9, 6), boltz2=True))
+            (fixture.orig / fixture.structure.name).write_bytes(fixture.structure.read_bytes())
         for index in range(1, count):
             for path in list(fixture.orig.iterdir()):
                 if '_model_0' in path.name:
@@ -324,7 +350,7 @@ async def test_commit_false_leaves_publication_to_caller(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_explicit_specialized_owner_keeps_precedence(tmp_path, monkeypatch):
+async def test_frustra_cannot_bypass_native_publication(tmp_path, monkeypatch):
     from services import result_ingester
     factory, engine = await setup(tmp_path)
     try:
@@ -336,7 +362,8 @@ async def test_explicit_specialized_owner_keeps_precedence(tmp_path, monkeypatch
             async def specialized(*args, **kwargs):
                 return 17
             monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', specialized)
-            assert await ingest_job_results('job', str(tmp_path), session) == 17
+            with pytest.raises(RuntimeError, match='launch authority'):
+                await ingest_job_results('job', str(tmp_path), session)
     finally:
         await engine.dispose()
 

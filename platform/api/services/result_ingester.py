@@ -4134,9 +4134,26 @@ async def _ingest_explicit_frustrampnn_results(
         )
     designs_to_add: list[Design] = []
     for candidate_id, candidate_key, source_path, _bundle in parent_designs:
+        native_parent_id = None
+        from services.core_protein_scientific_contract import revision_for_job
+        if (getattr(current_job, 'model_id', None) == 'boltz2'
+                and revision_for_job(current_job) == 1):
+            from services.boltz_scientific_consumer import verified_boltz_design
+            producer = _bundle.request.get('producer_provenance') or {}
+            native_parent = await session.scalar(select(Design).where(
+                Design.job_id == current_job.id, Design.source_stage.is_(None),
+                Design.name == producer.get('producer_output_key')))
+            if native_parent is None:
+                raise FrustraMPNNPersistenceError('FrustraMPNN has no exact native Boltz parent')
+            selected = await verified_boltz_design(native_parent, session)
+            if (any(producer.get(key) != value for key, value in selected['block']['producer'].items())
+                    or producer.get('original_source_sha256') != selected['artifacts']['structure']['sha256']):
+                raise FrustraMPNNPersistenceError('FrustraMPNN native Boltz producer binding differs')
+            native_parent_id = native_parent.id
         design = await session.get(Design, candidate_id)
         if design is not None:
-            if design.job_id != str(current_job.id) or design.pdb_path != os.fspath(source_path):
+            if (design.job_id != str(current_job.id) or design.pdb_path != os.fspath(source_path)
+                    or (native_parent_id is not None and design.parent_design_id != native_parent_id)):
                 raise FrustraMPNNPersistenceError(
                     "FrustraMPNN deterministic Design identity conflicts with persisted authority"
                 )
@@ -4157,6 +4174,7 @@ async def _ingest_explicit_frustrampnn_results(
                 job_id=str(current_job.id),
                 name=candidate_key,
                 pdb_path=os.fspath(source_path),
+                parent_design_id=native_parent_id,
                 source_stage="frustrampnn_candidate",
                 source_stage_family=str(_bundle.request["parent_workflow_id"]),
                 source_stage_mode=str(
@@ -4420,6 +4438,21 @@ async def ingest_job_results(
             return await ingest_esmfold2_results(
                 job_id, output_path, session, current_job, commit=commit, remove_stage_reviews=True,
             )
+    # Parent-native publication and optional derived analysis are one terminal
+    # transaction. Analysis never wins ownership of the predictor's Designs.
+    if current_job and current_job.model_id == 'boltz2' and current_job.mode in {'predict', 'complex'}:
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            from services.boltz_scientific_persistence import ingest_verified_boltz
+            native_count = await ingest_verified_boltz(current_job, output_path, session, commit=False)
+            try:
+                await _ingest_explicit_frustrampnn_results(current_job, output_path, session, commit=False)
+                if commit:
+                    await session.commit()
+                return native_count
+            except Exception:
+                await session.rollback()
+                raise
     is_conformational_mapping = bool(
         current_job and str(current_job.model_id or "").strip().lower() == "conformational_mapping"
     )
@@ -4438,14 +4471,6 @@ async def ingest_job_results(
         if revision_for_job(current_job) == 1:
             from services.boltzgen_candidate_publication import ingest
             return await ingest(current_job, output_path, session, commit=commit)
-
-    # Preserve specialized terminal owners above; ordinary marked Boltz must
-    # validate its entire declared publication before generic cleanup/autoflush.
-    if current_job and current_job.model_id == 'boltz2' and current_job.mode in {'predict', 'complex'}:
-        from services.core_protein_scientific_contract import revision_for_job
-        if revision_for_job(current_job) == 1:
-            from services.boltz_scientific_persistence import ingest_verified_boltz
-            return await ingest_verified_boltz(current_job, output_path, session, commit=commit)
 
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")

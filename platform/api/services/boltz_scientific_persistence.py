@@ -47,7 +47,9 @@ def _json(content):
     return json.loads(content, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
 
 
-def _verified_publication(job, root):
+def _verified_publication(job, root, *, document=None):
+    # A selected read retains the launch/task/manifest boundary but does not open
+    # unrelated candidate payloads. Full publication admission uses document=None.
     """Read-only exact-byte verification shared by ingestion and consumers.
 
     This allocates no database identities and never promotes persisted claims.
@@ -103,17 +105,27 @@ def _verified_publication(job, root):
         launch_sha256=digest(authority_bytes), tasks=tasks)
     if canonical_json_bytes(workflow) != canonical_json_bytes(expected_workflow):
         raise ValueError('independent workflow task inventory does not match launch authority')
+    selected_document = document
     prepared = {}
     # Discovery locates producer manifests only. Candidate inventory/IDs and all
     # artifacts come exclusively from their exact declarations, never file scans.
-    manifests = sorted((root / 'scientific/boltz').glob('*/producer_candidates.json'))
+    if selected_document is None:
+        manifests = sorted((root / 'scientific/boltz').glob('*/producer_candidates.json'))
+    else:
+        retained = (job.provenance or {}).get('core_protein_candidate_publication', {})
+        manifest_key = Path(retained['candidates'][selected_document]['manifest']['path']).relative_to(root)
+        if (len(manifest_key.parts) != 4 or manifest_key.parts[:2] != ('scientific', 'boltz')
+                or manifest_key.name != 'producer_candidates.json' or manifest_key.parts[2] not in expected_tasks):
+            raise ValueError('foreign selected producer manifest')
+        manifests = [root / manifest_key]
     if not manifests:
         raise ValueError('missing Boltz producer candidate declaration')
-    if {p.parent.name for p in manifests} != set(expected_tasks):
+    if selected_document is None and {p.parent.name for p in manifests} != set(expected_tasks):
         raise ValueError('expected and observed Boltz task membership differ')
-    directories = list((root / 'scientific/boltz').iterdir())
-    if {p.name for p in directories} != set(expected_tasks):
-        raise ValueError('extra or foreign Boltz task directory')
+    if selected_document is None:
+        directories = list((root / 'scientific/boltz').iterdir())
+        if {p.name for p in directories} != set(expected_tasks):
+            raise ValueError('extra or foreign Boltz task directory')
     task_bindings = {}
     for manifest_path in manifests:
         expected_task = expected_tasks[manifest_path.parent.name]
@@ -137,6 +149,7 @@ def _verified_publication(job, root):
         if not isinstance(entries, list) or not entries:
             raise ValueError('missing Boltz producer candidate inventory')
         base = manifest_path.parent.relative_to(root) / 'predictions'
+        seen_documents = set()
         for entry in entries:
             fields = {'producer_method', 'producer_sample', 'producer_rank', 'producer_output_key',
                 'producer_artifact_sha256', 'source_format', 'protein_science_contract_revision', 'boltz_native_identity'}
@@ -166,8 +179,11 @@ def _verified_publication(job, root):
                 structure_key = document[len(prefix):]
             elif expected_task['owner'] != 'BoltzFromComplex' or entry['producer_sample'] != expected_task['namespace']:
                 raise ValueError('complex producer sample differs from launch task')
-            if not isinstance(document, str) or not document or document in prepared:
+            if not isinstance(document, str) or not document or document in seen_documents or document in prepared:
                 raise ValueError('duplicate or invalid producer document')
+            seen_documents.add(document)
+            if selected_document is not None and document != selected_document:
+                continue
             # Native transport flattens artifacts; no basename fallback for claims.
             if not isinstance(structure_key, str) or PurePosixPath(structure_key).name != structure_key:
                 raise ValueError('invalid producer structure key')
@@ -178,7 +194,7 @@ def _verified_publication(job, root):
             descriptors = {'ledger':claimed['processed_structure'], 'pae':claimed['aligned_error'],
                            'plddt':claimed['vectors'][0], 'metrics':claimed['confidence']}
             artifacts = {'structure':structure, 'manifest':manifest_artifact}
-            snapshots = {}
+            snapshots = {'structure': source}
             for role, descriptor in descriptors.items():
                 key = descriptor['artifact_key']
                 if not isinstance(key, str) or PurePosixPath(key).name != key:
@@ -208,6 +224,8 @@ def _verified_publication(job, root):
                     'chain_key_namespace':native['confidence']['chain_key_namespace'],
                     'matrix_key':native['aligned_error']['matrix_key'], 'vector_key':'plddt', 'vector_unit':'fraction'})
             prepared[document] = dict(artifacts=artifacts, block=block, native=native, snapshots=snapshots)
+    if selected_document is not None and set(prepared) != {selected_document}:
+        raise ValueError('missing selected producer document')
     ids = list(prepared)
     summary = validate_candidate_accounting(stage_id='boltz', requested_count=None, generated_ids=ids,
         dispositions=[{'candidate_id':i, 'disposition':'selected'} for i in ids],
