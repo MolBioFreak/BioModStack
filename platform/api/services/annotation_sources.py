@@ -12,6 +12,7 @@ import httpx
 NCBI_EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 ADDGENE_API_ORIGIN = "https://api.developers.addgene.org"
 MAX_GENBANK_BYTES = 10 * 1024 * 1024
+MAX_CATALOG_BYTES = 2 * 1024 * 1024
 _ACCESSION_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*(?:\.[0-9]+)?$")
 _ADDGENE_GENBANK_PATH = re.compile(r"^/download/genbank/([1-9][0-9]*)/$")
 
@@ -139,6 +140,26 @@ def validate_addgene_download_redirect(url: str) -> httpx.URL:
     return parsed
 
 
+async def _bounded_get(client: httpx.AsyncClient, url: str | httpx.URL, *,
+                       max_bytes: int = MAX_GENBANK_BYTES, **kwargs: Any) -> httpx.Response:
+    """Admit decoded bytes while streaming; redirect/error bodies are not needed."""
+    async with client.stream("GET", url, follow_redirects=False, **kwargs) as response:
+        raw = bytearray()
+        if response.status_code == 200:
+            declared = response.headers.get("content-length", "")
+            if declared.isdecimal() and int(declared) > max_bytes:
+                raise AnnotationSourceResponseError("Annotation source exceeded the response size limit")
+            async for chunk in response.aiter_bytes():
+                if len(raw) + len(chunk) > max_bytes:
+                    raise AnnotationSourceResponseError("Annotation source exceeded the response size limit")
+                raw.extend(chunk)
+        # A bounded buffered response preserves existing status/JSON/GenBank readers.
+        headers = {key: value for key, value in response.headers.items()
+                   if key not in {"content-encoding", "content-length"}}
+        return httpx.Response(response.status_code, headers=headers,
+                              content=bytes(raw), request=response.request)
+
+
 def _validated_genbank(response: httpx.Response) -> str:
     raw = response.content
     if len(raw) > MAX_GENBANK_BYTES:
@@ -197,7 +218,7 @@ async def fetch_ncbi_genbank(
     active_client = client or _default_client()
     try:
         try:
-            response = await active_client.get(NCBI_EFETCH_URL, params=params)
+            response = await _bounded_get(active_client, NCBI_EFETCH_URL, params=params)
         except httpx.HTTPError as exc:
             raise AnnotationSourceResponseError("NCBI EFetch was unreachable or timed out") from exc
         if response.status_code != 200:
@@ -233,7 +254,7 @@ async def fetch_addgene_genbank(
     catalog_url = f"{ADDGENE_API_ORIGIN}/catalog/plasmid-with-sequences/{validated_id}/"
     try:
         try:
-            catalog_response = await active_client.get(catalog_url, headers=auth_headers)
+            catalog_response = await _bounded_get(active_client, catalog_url, headers=auth_headers, max_bytes=MAX_CATALOG_BYTES)
         except httpx.HTTPError as exc:
             raise AnnotationSourceResponseError("Addgene catalog was unreachable or timed out") from exc
         if catalog_response.status_code in (401, 403):
@@ -255,7 +276,7 @@ async def fetch_addgene_genbank(
             raise AnnotationSourceResponseError("Addgene full sequence did not include a GenBank URL")
         sequence_id = validate_addgene_genbank_url(genbank_url)
 
-        download_response = await active_client.get(genbank_url, headers=auth_headers)
+        download_response = await _bounded_get(active_client, genbank_url, headers=auth_headers)
         if download_response.status_code in (401, 403):
             raise AnnotationSourceAuthenticationError("Addgene token cannot download the selected GenBank sequence")
         if download_response.status_code != 302:
@@ -265,7 +286,7 @@ async def fetch_addgene_genbank(
             raise AnnotationSourceResponseError("Addgene GenBank redirect omitted its target")
         s3_url = validate_addgene_download_redirect(location)
 
-        artifact_response = await active_client.get(s3_url)
+        artifact_response = await _bounded_get(active_client, s3_url)
         if artifact_response.status_code != 200:
             raise AnnotationSourceResponseError(f"Addgene GenBank download returned HTTP {artifact_response.status_code}")
         content = _validated_genbank(artifact_response)

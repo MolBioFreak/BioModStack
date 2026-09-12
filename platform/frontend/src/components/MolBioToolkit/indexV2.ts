@@ -12,7 +12,7 @@ export { ExportDropdown } from './ExportDropdown';
 
 // Hooks
 export { useSequenceHistory } from './hooks/useSequenceHistory';
-export { useSequenceOperations, useMolBioOperations } from './hooks/useSequenceOperations';
+export { useSequenceOperations } from './hooks/useSequenceOperations';
 
 // Types
 export type {

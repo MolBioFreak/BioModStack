@@ -392,7 +392,11 @@ async def create_reference(
     )
     if replay_id is not None:
         resource = await get_reference_resource(session, replay_id, global_domain_experiment_id)
-        revision = await get_reference_revision(session, replay_id, resource.current_revision_id or "")
+        from molbio_ngs_models import MolBioNGSIdempotencyClaim
+
+        claim = await session.get(MolBioNGSIdempotencyClaim, (scope, idempotency_key))
+        revision_id = json.loads(claim.response_json)["reference_revision_id"]
+        revision = await get_reference_revision(session, replay_id, revision_id)
         return resource, revision
     now = _now()
     resource = MolBioNGSReferenceResource(
@@ -670,8 +674,16 @@ async def read_reference_artifact_bytes(
     session: AsyncSession, revision: MolBioNGSReferenceRevision,
 ) -> bytes:
     checked = await get_reference_revision(session, revision.reference_id, revision.id)
-    artifact = await session.get(MolBioNGSReferenceArtifact, checked.artifact_id)
-    if artifact is None or artifact.reference_id != revision.reference_id:
+    return await _read_verified_reference_artifact_bytes(session, checked)
+
+
+async def _read_verified_reference_artifact_bytes(
+    session: AsyncSession, revision: MolBioNGSReferenceRevision,
+) -> bytes:
+    artifact = await session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
+    if (artifact is None or artifact.reference_id != revision.reference_id
+        or artifact.sha256 != revision.canonical_fasta_sha256
+        or artifact.size_bytes != revision.canonical_fasta_size_bytes):
         raise StateIntegrityError("reference artifact authority is missing")
     artifact_path = _managed_path(artifact.managed_relative_path)
     if not stat.S_ISREG(os.lstat(artifact_path).st_mode):
@@ -903,7 +915,7 @@ async def resolve_ngs_reference_revision_receipt(
         raise DomainStateNotFound(
             "managed reference revision is not owned by this Domain Experiment"
         )
-    await read_reference_artifact_bytes(session, revision)
+    await _read_verified_reference_artifact_bytes(session, revision)
     return build_external_member_receipt(
         source_store_id="molbio-ngs-domain", entity_kind="ngs_reference_revision",
         entity_id=revision.id, source_generation_or_revision=revision.revision_number,

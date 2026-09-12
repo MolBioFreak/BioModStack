@@ -1464,95 +1464,9 @@ async def _finalize(
     await session.commit()
 
 
-async def process_run_control_command(
-    session: AsyncSession,
-    core_session: AsyncSession,
-    *,
-    command_id: str,
-    worker_id: str,
-) -> ExperimentRunControlCommand:
-    command = await _claim_command(
-        session,
-        command_id=command_id,
-        worker_id=worker_id,
-    )
-    if command is None:
-        raise NotFound("run control command not found")
-    if command.status in {"applied", "conflicted"}:
-        return command
-    if command.status != "leased" or command.lease_owner != worker_id or not command.lease_token:
-        return command
-    lease_token = str(command.lease_token)
-    try:
-        snapshot, progress = _decode_command(command)
-        request_document = json.loads(command.request_json)
-        reason = str(request_document.get("reason") or "")
-        for target in _flatten_targets(snapshot):
-            await _process_target(
-                session,
-                core_session,
-                command=command,
-                target=target,
-                progress=progress,
-                reason=reason,
-            )
-        await _finalize(
-            session,
-            core_session,
-            command=command,
-            snapshot=snapshot,
-            progress=progress,
-            reason=reason,
-        )
-    except _Conflict as conflict:
-        await session.rollback()
-        await core_session.rollback()
-        await _set_conflicted(
-            session,
-            command_id=command.command_id,
-            lease_token=lease_token,
-            conflict=conflict,
-        )
-    except _Retryable as retryable:
-        await session.rollback()
-        await core_session.rollback()
-        await _set_retryable(
-            session,
-            command_id=command.command_id,
-            lease_token=lease_token,
-            code=retryable.code,
-            message=retryable.message,
-        )
-    except Exception:
-        await session.rollback()
-        await core_session.rollback()
-        await _set_retryable(
-            session,
-            command_id=command.command_id,
-            lease_token=lease_token,
-            code="run_control_processing_unavailable",
-            message="durable cancellation processing is temporarily unavailable",
-        )
-    refreshed = await session.get(ExperimentRunControlCommand, command.command_id)
-    if refreshed is None:
-        raise DispatchFailure("run control command disappeared after processing")
-    return refreshed
-
-
-async def process_run_control_command_once(
-    session: AsyncSession,
-    core_session: AsyncSession,
-    *,
-    worker_id: str,
-) -> int:
-    command = await _claim_command(session, command_id=None, worker_id=worker_id)
-    if command is None:
-        return 0
-    if command.status != "leased" or command.lease_owner != worker_id:
-        return 0
-    # process_run_control_command reuses the live lease because it is not ready
-    # for a second claim; execute the leased command directly through a private
-    # worker identity-preserving path.
+async def _process_leased_command(
+    session: AsyncSession, core_session: AsyncSession, command: ExperimentRunControlCommand,
+) -> None:
     lease_token = str(command.lease_token or "")
     try:
         snapshot, progress = _decode_command(command)
@@ -1604,6 +1518,45 @@ async def process_run_control_command_once(
             code="run_control_processing_unavailable",
             message="durable cancellation processing is temporarily unavailable",
         )
+
+
+async def process_run_control_command(
+    session: AsyncSession,
+    core_session: AsyncSession,
+    *,
+    command_id: str,
+    worker_id: str,
+) -> ExperimentRunControlCommand:
+    command = await _claim_command(
+        session,
+        command_id=command_id,
+        worker_id=worker_id,
+    )
+    if command is None:
+        raise NotFound("run control command not found")
+    if command.status in {"applied", "conflicted"}:
+        return command
+    if command.status != "leased" or command.lease_owner != worker_id or not command.lease_token:
+        return command
+    await _process_leased_command(session, core_session, command)
+    refreshed = await session.get(ExperimentRunControlCommand, command.command_id)
+    if refreshed is None:
+        raise DispatchFailure("run control command disappeared after processing")
+    return refreshed
+
+
+async def process_run_control_command_once(
+    session: AsyncSession,
+    core_session: AsyncSession,
+    *,
+    worker_id: str,
+) -> int:
+    command = await _claim_command(session, command_id=None, worker_id=worker_id)
+    if command is None:
+        return 0
+    if command.status != "leased" or command.lease_owner != worker_id:
+        return 0
+    await _process_leased_command(session, core_session, command)
     return 1
 
 

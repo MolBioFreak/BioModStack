@@ -290,7 +290,6 @@ async def create_project_dataset(
 ) -> dict[str, Any]:
     await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
     normalized_name = name.strip()
-    _enabled_dataset_kind(dataset_kind)
     request_body = {"name": normalized_name, "dataset_kind": dataset_kind, "change_summary": change_summary.strip()}
     normalized = {"operation": "dataset_create", "project_id": project_id, "experiment_id": experiment_id, "domain_id": domain_id, **request_body}
     digest = sha256_text(canonical_json(normalized))
@@ -300,6 +299,7 @@ async def create_project_dataset(
         if claim.request_sha256 != digest:
             raise IdempotencyConflict("idempotency key was reused with a different Dataset request")
         return json.loads(claim.response_json)
+    _enabled_dataset_kind(dataset_kind)
     head = await create_dataset(session, project_id, normalized_name, dataset_kind, experiment_id=domain_id)
     head.lifecycle_state = "active"
     head.description = ""
@@ -317,13 +317,14 @@ def _metadata(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValidationFailure("dataset metadata has unsupported fields")
     result = dict(value)
     tags = result.get("tags", [])
-    if not isinstance(tags, list) or len(tags) > 16 or len(tags) != len(set(tags)):
+    if not isinstance(tags, list) or len(tags) > 16 or any(type(tag) is not str for tag in tags) or len(tags) != len(set(tags)):
         raise ValidationFailure("dataset metadata tags are invalid")
+    for field, maximum in (("display_label", 255), ("group_label", 128), ("condition_label", 128)):
+        item = result.get(field)
+        if item is not None and (type(item) is not str or not 1 <= len(item) <= maximum):
+            raise ValidationFailure("dataset metadata labels are invalid")
     if len(canonical_json(result).encode("utf-8")) > 2048:
         raise ValidationFailure("dataset metadata exceeds 2 KiB")
-    forbidden = ("sequence", "reads", "alignment", "signal", "manifest", "structure", "payload", "base64", "digest", "path", "uri")
-    if any(token in str(item).lower() for item in result.values() for token in forbidden):
-        raise ValidationFailure("dataset_metadata_payload_forbidden")
     return result
 
 
@@ -401,7 +402,7 @@ async def revise_project_dataset(
     members: list[Mapping[str, Any]], actor: str, idempotency_key: str,
 ) -> dict[str, Any]:
     await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-    head = await require_mutable_dataset(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
+    head = await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
     normalized = {"operation": "dataset_revision_create", "project_id": project_id, "experiment_id": experiment_id, "domain_id": domain_id, "dataset_id": dataset_id, "expected_head_generation": expected_head_generation, "change_summary": change_summary.strip(), "members": members}
     digest = sha256_text(canonical_json(normalized))
     scope = "dataset-revision-create:" + sha256_text(canonical_json({"dataset_id": dataset_id}))
@@ -410,6 +411,9 @@ async def revise_project_dataset(
         if claim.request_sha256 != digest:
             raise IdempotencyConflict("idempotency key was reused with a different Dataset revision")
         return json.loads(claim.response_json)
+    if head.dataset_kind is None:
+        raise ValidationFailure("legacy null-kind Dataset is read-only")
+    _enabled_dataset_kind(head.dataset_kind)
     if head.lifecycle_state != "active":
         raise ValidationFailure("Dataset is not active")
     if head.head_generation != expected_head_generation:
@@ -445,7 +449,7 @@ async def set_project_dataset_lifecycle(
     idempotency_key: str,
 ) -> dict[str, Any]:
     await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-    head = await require_mutable_dataset(
+    head = await require_dataset_read(
         session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id
     )
     if operation not in {"archive", "restore"}:
@@ -471,6 +475,9 @@ async def set_project_dataset_lifecycle(
                 f"idempotency key was reused with a different Dataset {operation} request"
             )
         return json.loads(claim.response_json)
+    if head.dataset_kind is None:
+        raise ValidationFailure("legacy null-kind Dataset is read-only")
+    _enabled_dataset_kind(head.dataset_kind)
     if operation == "archive":
         if head.lifecycle_state != "active":
             raise InvalidLifecycleTransition("Dataset is not active")

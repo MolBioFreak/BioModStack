@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "26712f6cb4619b990bc89e9efdedb33e8ba557bcc76564a14cc86a9b8f01d960",
+  "content_sha256": "402c004f2b97b8bbe00c115545876cd634c024523d1c9bc2dba8da2e600fe1fe",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -131,7 +131,7 @@
     },
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
-      "schema_canonical_sha256": "3172df0f5d83061c4b6d13e271f396027089fb8db2eca857a5e255fcb2f16386",
+      "schema_canonical_sha256": "1c4f103b8650e35c3ebb6fb5e4a8f6ced44f072bcdcb7efe2a84b45e636ac6ae",
       "schema_id": "bms.ngs-molbio.adapter-registry.v1",
       "schema_sha256": "02a50037423b5b18e8df4748835575a1ce70363898f9e839cb7653a947141064"
     },
@@ -155,7 +155,7 @@
     },
     {
       "path": "schemas/ngs_molbio/capability-inventory-v2.schema.json",
-      "schema_canonical_sha256": "e477e5c0c52a2a26ad74785a867360b9a5eae9f78be62d3d4b87695e32e456e5",
+      "schema_canonical_sha256": "db93eb8544ccbbc991037ec0b6e4fdf8de1d77e9bc4f250f1027eda3d88d6d72",
       "schema_id": "bms.ngs-molbio.capability-inventory.v2",
       "schema_sha256": "227e087b89b2e51dc7e7e734e57c74e1f8367e3346c0f62579eb9a1e471aeab6"
     },
@@ -179,7 +179,7 @@
     },
     {
       "path": "schemas/ngs_molbio/dataset-kind-registry-v1.schema.json",
-      "schema_canonical_sha256": "5979953a324d80aff3608322883bd2f0fac9419f576aa93b7cdf13cfe7adacb6",
+      "schema_canonical_sha256": "efc3878d1af21e47187d6cfd361deb7b0e91cbddb9107583edbd14248bcb186d",
       "schema_id": "bms.ngs-molbio.dataset-kind-registry.v1",
       "schema_sha256": "717dabbf5c49f2e94fb4a5c332e22752285ec8ce59e4ab05805a116ad4fcfdbd"
     },

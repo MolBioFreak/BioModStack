@@ -2213,10 +2213,11 @@ export async function listDomainDatasets(
     globalExperimentId: string,
     domainExperimentId: string,
     signal?: AbortSignal,
+    cursor?: string | null,
 ): Promise<{ schema: string; items: DomainDatasetHead[]; next_cursor: string | null; has_more: boolean }> {
     return (await api.get<{ schema: string; items: DomainDatasetHead[]; next_cursor: string | null; has_more: boolean }>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets`,
-        { params: { limit: 100 }, signal },
+        { params: { limit: 100, cursor: cursor ?? undefined }, signal },
     )).data;
 }
 
@@ -2252,10 +2253,11 @@ export async function listDomainDatasetRevisions(
     domainExperimentId: string,
     datasetId: string,
     signal?: AbortSignal,
+    cursor?: string | null,
 ): Promise<{ schema: string; items: DomainDatasetRevisionSummary[]; next_cursor: string | null; has_more: boolean }> {
     return (await api.get<{ schema: string; items: DomainDatasetRevisionSummary[]; next_cursor: string | null; has_more: boolean }>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions`,
-        { params: { limit: 100 }, signal },
+        { params: { limit: 100, cursor: cursor ?? undefined }, signal },
     )).data;
 }
 
@@ -2280,10 +2282,11 @@ export async function listDomainDatasetRevisionMembers(
     datasetId: string,
     revisionId: string,
     signal?: AbortSignal,
+    cursor?: string | null,
 ): Promise<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }> {
     return (await api.get<{ schema: string; items: DomainDatasetMember[]; next_cursor: string | null; has_more: boolean }>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/datasets/${segment(datasetId)}/revisions/${segment(revisionId)}/members`,
-        { params: { limit: 100 }, signal },
+        { params: { limit: 100, cursor: cursor ?? undefined }, signal },
     )).data;
 }
 

@@ -1,4 +1,5 @@
 {
+  "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_local_resources.py",
@@ -185,6 +186,10 @@
     "platform/frontend/src/components/MolBioToolkit/panels/AlignmentPanel.tsx",
     "platform/frontend/src/components/MolBioToolkit/panels/AssemblyPanel.tsx",
     "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
+    "platform/frontend/src/components/MolBioToolkit/panels/sequenceSearch.ts",
+    "platform/frontend/src/components/MolBioToolkit/panels/sequenceSearch.worker.ts",
+    "platform/frontend/src/components/MolBioToolkit/panels/startSequenceSearch.ts",
+    "platform/frontend/src/components/MolBioToolkit/panels/useInputOwnership.ts",
     "platform/frontend/src/components/MolBioToolkit/types.ts",
     "platform/frontend/src/components/MolBioToolkit/utils/molecularWorkspaceState.ts",
     "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
@@ -194,8 +199,6 @@
     "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainDatasetOperator.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
-    "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
-    "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
     "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
     "platform/frontend/src/components/ngs/AlignmentPresentationStatus.tsx",
@@ -274,6 +277,5 @@
     "workflows/ngs/wf_clone_validation.nf",
     "workflows/oligo_design.nf"
   ],
-  "schema": "bms.ngs-molbio.runtime-source-denominator.v2",
-  "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822"
+  "schema": "bms.ngs-molbio.runtime-source-denominator.v2"
 }

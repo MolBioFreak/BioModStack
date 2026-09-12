@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import {
     createOntRunIntent,
     fetchMolBioNgsReferenceRevision,
     fetchMolBioNgsSampleRevision,
-    fetchMolBioNgsSamples,
+    fetchMolBioNgsSummaries,
     fetchOntDeviceStatus,
     fetchOntExternalPod5Candidates,
     fetchOntInstrumentRunGeneration,
@@ -190,14 +190,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const effectiveProtocolOptions = instrumentEvidenceError ? undefined : protocolOptions.data;
     const selectedOption: OntProtocolOption | undefined = effectiveProtocolOptions?.options[0];
 
-    const samplesQuery = useQuery({
-        queryKey: ['molbio-ngs-samples', exactDomainExperimentId],
-        queryFn: () => fetchMolBioNgsSamples(exactDomainExperimentId as string),
+    const samplesQuery = useInfiniteQuery({
+        queryKey: ['molbio-ngs-summaries', exactDomainExperimentId, 'samples'],
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ pageParam, signal }) => fetchMolBioNgsSummaries(exactDomainExperimentId as string, 'samples', { limit: 50, cursor: pageParam }, signal),
+        getNextPageParam: (page) => page.next_cursor ?? undefined,
         enabled: exactDomainExperimentId !== null,
         retry: false,
     });
     const currentSamples = useMemo(
-        () => (samplesQuery.data ?? []).filter((sample) => sample.current_revision_id !== null),
+        () => (samplesQuery.data?.pages.flatMap((page) => page.items) ?? []).filter((sample) => Boolean(sample.current_revision_id)),
         [samplesQuery.data],
     );
     const selectedSample = exactDomainExperimentId && sampleSelection?.domainId === exactDomainExperimentId
@@ -598,6 +600,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             {currentSamples.map((sample) => <option key={sample.id} value={sample.id}>{sample.id} · revision {sample.current_revision_id}</option>)}
                         </select>
                     </label>
+                    {samplesQuery.data && <p className="text-xs">Loaded {samplesQuery.data.pages.reduce((count, page) => count + page.items.length, 0)} of {samplesQuery.data.pages[0].total} samples (only revision-bearing samples are selectable).</p>}
+                    {samplesQuery.hasNextPage && <button type="button" disabled={samplesQuery.isFetchingNextPage} onClick={() => void samplesQuery.fetchNextPage()}>Load more samples</button>}
                     {samplesQuery.isError ? <p role="alert" className="text-xs text-amber-100">Exact domain samples could not be loaded: {errorMessage(samplesQuery.error, 'unknown sample query failure')}</p> : null}
                     {selectedSample ? (
                         <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">

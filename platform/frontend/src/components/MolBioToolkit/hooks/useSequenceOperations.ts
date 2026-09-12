@@ -9,7 +9,6 @@ import { isAxiosError } from 'axios';
 import type {
     NucleotideSequenceResponse,
     NucleotideSequenceListItem,
-    PCRProduct,
 } from '../types';
 import {
     fetchNucleotideSequences,
@@ -30,6 +29,8 @@ export function useSequenceOperations() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const getSequenceControllerRef = useRef(createLatestAsyncResourceController());
+    const listControllerRef = useRef(createLatestAsyncResourceController());
+    useEffect(() => () => listControllerRef.current.dispose(), []);
 
     useEffect(() => () => getSequenceControllerRef.current.dispose(), []);
 
@@ -47,16 +48,17 @@ export function useSequenceOperations() {
     const listSequences = useCallback(async (
         params: FetchNucleotideSequencesParams = {}
     ): Promise<NucleotideSequenceListItem[]> => {
+        const token = listControllerRef.current.begin();
         setLoading(true);
         setError(null);
         try {
             const res = await fetchNucleotideSequences(params);
             return res.data;
         } catch (e) {
-            setError(getErrorMessage(e));
+            if (listControllerRef.current.isCurrent(token)) setError(getErrorMessage(e));
             return [];
         } finally {
-            setLoading(false);
+            if (listControllerRef.current.isCurrent(token)) setLoading(false);
         }
     }, []);
 
@@ -146,69 +148,5 @@ export function useSequenceOperations() {
         createSequence,
         updateSequence,
         deleteSequence
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MOLBIO OPERATIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export function useMolBioOperations() {
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-
-    // PCR
-    const pcr = useCallback(async (params: {
-        sequence?: string;
-        sequence_id?: string;
-        primer_fwd: string;
-        primer_rev: string;
-    }): Promise<PCRProduct | null> => {
-        setLoading(true);
-        setError(null);
-        try {
-            const res = await fetch('/api/molbio/pcr', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
-            return null;
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    // Ligation
-    const ligate = useCallback(async (params: {
-        fragments: { sequence: string; left_overhang: string; right_overhang: string }[];
-    }): Promise<{ ligated_sequence: string } | null> => {
-        setLoading(true);
-        setError(null);
-        try {
-            const res = await fetch('/api/molbio/ligate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
-            return null;
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    return {
-        loading,
-        error,
-        pcr,
-        ligate
     };
 }

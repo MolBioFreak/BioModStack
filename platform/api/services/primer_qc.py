@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from services.molbio_ops import clean_sequence, resolve_primer_binding_sites, reverse_complement
+from services.molbio_ops import clean_sequence, _resolve_primer_binding_sites_canonical, reverse_complement
 
 
 @dataclass(slots=True)
@@ -108,7 +108,18 @@ def evaluate_primer_qc(
     circular_template: bool = False,
     min_binding_anneal_length: int = 12,
 ) -> PrimerQcMetrics:
-    cleaned = clean_sequence(sequence)
+    return _evaluate_primer_qc_canonical(
+        clean_sequence(sequence), sequence_type=sequence_type,
+        template_sequence=clean_sequence(template_sequence) if template_sequence else None,
+        circular_template=circular_template, min_binding_anneal_length=min_binding_anneal_length,
+    )
+
+
+def _evaluate_primer_qc_canonical(
+    cleaned: str, *, sequence_type: Literal["dna", "rna"] = "dna",
+    template_sequence: str | None = None, circular_template: bool = False,
+    min_binding_anneal_length: int = 12,
+) -> PrimerQcMetrics:
     if not cleaned:
         raise ValueError("Primer sequence contains no valid nucleotide characters")
 
@@ -132,7 +143,7 @@ def evaluate_primer_qc(
     binding_site_count: int | None = None
     off_target_site_count: int | None = None
     if template_sequence:
-        forward_sites = resolve_primer_binding_sites(
+        forward_sites = _resolve_primer_binding_sites_canonical(
             template_sequence,
             cleaned,
             reverse=False,
@@ -140,7 +151,7 @@ def evaluate_primer_qc(
             sequence_type=sequence_type,
             min_anneal_length=min_binding_anneal_length,
         )
-        reverse_sites = resolve_primer_binding_sites(
+        reverse_sites = _resolve_primer_binding_sites_canonical(
             template_sequence,
             cleaned,
             reverse=True,

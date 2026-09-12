@@ -9,12 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator, TypeAdapter
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy.orm import load_only
+from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-import asyncio
+from starlette.concurrency import run_in_threadpool
 import hashlib
 import json
 import os
@@ -76,8 +77,8 @@ from services.assembly.types import (
     FragmentEnd,
     GibsonDesignResult,
 )
-from services.molbio_ops import pcr_product, apply_mutations, reverse_complement
-from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
+from services.molbio_ops import pcr_product, apply_mutations, reverse_complement, clean_sequence
+from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc, _evaluate_primer_qc_canonical
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.annotation_sources import (
     AnnotationSourceAmbiguityError,
@@ -264,7 +265,7 @@ async def preview_sequence_import(payload: SequenceImportRequest) -> dict[str, A
     """Parse a bounded import source without mutating either MolBio data plane."""
 
     try:
-        return build_sequence_import_preview(payload)
+        return await run_in_threadpool(build_sequence_import_preview, payload)
     except ValueError as exc:
         # Request-model validation handles shape errors. This guard covers only
         # bounded canonicalization failures raised while building the report.
@@ -285,10 +286,12 @@ async def commit_sequence_import_route(
             payload,
             idempotency_key=idempotency_key,
         )
-    except SequenceImportInputError:
+    except SequenceImportInputError as exc:
         await molbio_session.rollback()
-        report = build_sequence_import_preview(payload)
-        raise HTTPException(status_code=422, detail=report)
+        detail = exc.preview if exc.preview is not None else {
+            "code": exc.code, "message": str(exc), "record_ordinal": exc.record_ordinal,
+        }
+        raise HTTPException(status_code=422, detail=detail) from exc
     except IdempotencyConflictError as exc:
         await molbio_session.rollback()
         raise HTTPException(
@@ -300,7 +303,7 @@ async def commit_sequence_import_route(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _revision_summary(revision: MolecularRevision, *, current_revision_id: str | None) -> dict[str, Any]:
+def _revision_summary(revision: MolecularRevision | SimpleNamespace, *, current_revision_id: str | None) -> dict[str, Any]:
     snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
     topology = str(snapshot.get("topology") or "").strip().lower()
     if topology not in {"circular", "linear"}:
@@ -334,22 +337,35 @@ def _revision_summary(revision: MolecularRevision, *, current_revision_id: str |
 async def list_sequence_revisions(
     sequence_id: str,
     molbio_session: AsyncSession = Depends(get_molbio_session),
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
-    if sequence is None:
-        raise HTTPException(status_code=404, detail="Saved molecular sequence not found")
     document = await molbio_session.get(MolecularDocument, sequence_id)
-    current_revision_id = document.current_revision_id if document is not None else None
-    revisions = (
-        await molbio_session.execute(
-            select(MolecularRevision)
-            .where(MolecularRevision.document_id == sequence_id)
-            .order_by(MolecularRevision.revision_number.desc())
-        )
-    ).scalars().all()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Molecular document not found")
+    if offset < 0 or (limit is not None and not 1 <= limit <= 500):
+        raise HTTPException(status_code=422, detail="offset must be nonnegative and limit must be 1..500")
+    fields = ("id", "document_id", "revision_number", "change_kind", "content_sha256",
+              "content_length", "created_at", "created_by")
+    query = select(
+        *(getattr(MolecularRevision, field) for field in fields),
+        MolecularRevision.snapshot["topology"].label("topology"),
+        MolecularRevision.snapshot["is_circular"].label("is_circular"),
+        func.json_type(MolecularRevision.snapshot, "$.is_circular").label("circular_type"),
+    ).where(MolecularRevision.document_id == sequence_id).order_by(
+        MolecularRevision.revision_number.desc()
+    ).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    rows = (await molbio_session.execute(query)).mappings()
     return [
-        _revision_summary(revision, current_revision_id=current_revision_id)
-        for revision in revisions
+        _revision_summary(SimpleNamespace(
+            **{field: row[field] for field in fields},
+            snapshot={"topology": row["topology"], "is_circular":
+                      row["circular_type"] == "true" if row["circular_type"] in {"true", "false"}
+                      else row["is_circular"]},
+        ), current_revision_id=document.current_revision_id)
+        for row in rows
     ]
 
 
@@ -362,9 +378,8 @@ async def get_sequence_revision(
     revision_id: str,
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
-    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
     revision = await molbio_session.get(MolecularRevision, revision_id)
-    if sequence is None or revision is None or revision.document_id != sequence_id:
+    if revision is None or revision.document_id != sequence_id:
         raise HTTPException(status_code=404, detail="Saved molecular sequence revision not found")
     document = await molbio_session.get(MolecularDocument, sequence_id)
     detail = _revision_summary(
@@ -386,23 +401,50 @@ async def get_sequence_ngs_workup(
     sequence_id: str,
     molbio_session: AsyncSession = Depends(get_molbio_session),
     session: AsyncSession = Depends(get_session),
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Return only validated NGS evidence explicitly receipt-bound to this revision."""
     sequence = await molbio_session.get(NucleotideSequence, sequence_id)
     revision = await current_molecular_revision(molbio_session, sequence_id) if sequence else None
     if sequence is None or revision is None:
         raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
-    candidates = (await session.execute(select(Job).where(Job.model_id == "nanopore"))).scalars().all()
+    if offset < 0 or (limit is not None and not 1 <= limit <= 500):
+        raise HTTPException(status_code=422, detail="offset must be nonnegative and limit must be 1..500")
+    query = (
+        select(Job, MolBioNgsReceipt)
+        .join(MolBioNgsReceipt, MolBioNgsReceipt.consumed_job_id == Job.id)
+        .where(Job.model_id == "nanopore", MolBioNgsReceipt.sequence_id == sequence_id)
+        .where(MolBioNgsReceipt.id == Job.params["molbio_revision_binding"]["receipt_id"].as_string())
+        .order_by(Job.id, MolBioNgsReceipt.id).offset(offset)
+    )
+    if limit is not None:
+        query = query.limit(limit + 1)
+    candidates = (await session.execute(query)).all()
+    has_more = limit is not None and len(candidates) > limit
+    if limit is not None:
+        candidates = candidates[:limit]
+    panel_ids = sorted({
+        binding["receipt_id"] for job, _ in candidates
+        if isinstance(job.params, dict)
+        and isinstance(binding := job.params.get("comparison_panel_binding"), dict)
+        and isinstance(binding.get("receipt_id"), str)
+    })
+    panel_receipts = {}
+    for start in range(0, len(panel_ids), 500):
+        rows = (await session.execute(select(NgsComparisonPanelReceipt).where(
+            NgsComparisonPanelReceipt.id.in_(panel_ids[start:start + 500])
+        ))).scalars()
+        panel_receipts.update((row.id, row) for row in rows)
     workups: list[dict[str, Any]] = []
-    for job in candidates:
+    for job, receipt in candidates:
         params = job.params or {}
         binding = params.get("molbio_revision_binding") if isinstance(params, dict) else None
         if not isinstance(binding, dict) or binding.get("sequence_id") != sequence_id:
             continue
         receipt_id = binding.get("receipt_id")
-        receipt = await session.get(MolBioNgsReceipt, receipt_id) if isinstance(receipt_id, str) else None
         if (
-            receipt is None or receipt.consumed_job_id != job.id
+            receipt.id != receipt_id or receipt.consumed_job_id != job.id
             or receipt.sequence_id != binding.get("sequence_id")
             or receipt.revision_id != binding.get("revision_id")
             or receipt.revision_sha256 != binding.get("revision_sha256")
@@ -414,7 +456,7 @@ async def get_sequence_ngs_workup(
         if "comparison_panel_binding" in params:
             panel_receipt_authorized = False
             if isinstance(panel_binding, dict) and isinstance(panel_binding.get("receipt_id"), str):
-                panel_receipt = await session.get(NgsComparisonPanelReceipt, panel_binding["receipt_id"])
+                panel_receipt = panel_receipts.get(panel_binding["receipt_id"])
                 panel_receipt_authorized = bool(
                     panel_receipt is not None
                     and panel_receipt.consumed_at is not None
@@ -424,45 +466,12 @@ async def get_sequence_ngs_workup(
                     and panel_receipt.panel_version == panel_binding.get("panel_version")
                     and panel_receipt.panel_snapshot_sha256 == panel_binding.get("panel_snapshot_sha256")
                 )
-        manifest: dict[str, Any] | None = None
-        root = None
         try:
-            root = resolve_persisted_job_result_root(job)
-            manifest = _load_job_sequence_qc_manifest(job, root)
-        except (SequenceQcManifestError, ValueError, OSError):
-            manifest = None
-        comparison_summary = None
-        comparison_root = None
-        summary_path = None
-        if isinstance(panel_binding, dict) and root is not None:
-            try:
-                comparison_root = safe_comparison_panel_root(root)
-                summary_path = comparison_root / "comparison_panel_summary.json"
-                if summary_path.is_symlink() or not summary_path.is_file():
-                    raise ValueError("comparison summary is unavailable or unsafe")
-                resolved_summary = summary_path.resolve(strict=True)
-                if resolved_summary.parent != comparison_root.resolve() or not resolved_summary.is_file():
-                    raise ValueError("comparison summary path is outside the comparison panel root")
-                if resolved_summary.stat().st_size > 10 * 1024 * 1024:
-                    raise ValueError("comparison summary is too large")
-                comparison_summary = json.loads(resolved_summary.read_text(encoding="utf-8"))
-                summary_path = resolved_summary
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                comparison_summary = None
-        try:
-            workups.append(
-                project_ngs_workup(
-                    job,
-                    manifest,
-                    revision,
-                    comparison_summary,
-                    comparison_panel_root=comparison_root,
-                    comparison_summary_path=summary_path,
-                    comparison_panel_authorized=panel_receipt_authorized,
-                )
-            )
+            workups.append(await run_in_threadpool(
+                _project_job_ngs_workup, job, revision, panel_receipt_authorized,
+            ))
         except ValueError:
-            # A malformed primary receipt is not evidence and must not be silently projected.
+            # A malformed primary receipt is not evidence.
             continue
     return {
         "schema": "bms.molbio.ngs-workup-list.v1",
@@ -471,7 +480,46 @@ async def get_sequence_ngs_workup(
         "current_revision_sha256": revision.content_sha256,
         "workups": workups,
         "read_only": True,
+        "limit": limit, "offset": offset, "has_more": has_more,
+        "next_offset": offset + len(candidates) if has_more else None,
     }
+
+
+def _project_job_ngs_workup(job: Job, revision: MolecularRevision,
+                            panel_receipt_authorized: bool | None) -> dict[str, Any]:
+    params = job.params or {}
+    panel_binding = params.get("comparison_panel_binding")
+    manifest: dict[str, Any] | None = None
+    root = None
+    try:
+        root = resolve_persisted_job_result_root(job)
+        manifest = _load_job_sequence_qc_manifest(job, root)
+    except (SequenceQcManifestError, ValueError, OSError):
+        manifest = None
+    comparison_summary = None
+    comparison_root = None
+    summary_path = None
+    if isinstance(panel_binding, dict) and root is not None:
+        try:
+            comparison_root = safe_comparison_panel_root(root)
+            summary_path = comparison_root / "comparison_panel_summary.json"
+            if summary_path.is_symlink() or not summary_path.is_file():
+                raise ValueError("comparison summary is unavailable or unsafe")
+            resolved_summary = summary_path.resolve(strict=True)
+            if resolved_summary.parent != comparison_root.resolve() or not resolved_summary.is_file():
+                raise ValueError("comparison summary path is outside the comparison panel root")
+            if resolved_summary.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("comparison summary is too large")
+            comparison_summary = json.loads(resolved_summary.read_text(encoding="utf-8"))
+            summary_path = resolved_summary
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            comparison_summary = None
+    return project_ngs_workup(
+        job, manifest, revision, comparison_summary,
+        comparison_panel_root=comparison_root,
+        comparison_summary_path=summary_path,
+        comparison_panel_authorized=panel_receipt_authorized,
+    )
 
 
 async def _resolve_owned_molecular_revision(
@@ -1690,12 +1738,12 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             status_code=400, detail=f"Invalid Tm settings: {exc}"
         ) from exc
 
-    forward_tm = calculate_primer_tm_result(
+    forward_tm = await run_in_threadpool(calculate_primer_tm_result,
         forward_primer,
         sequence_type="dna",
         settings=resolved_tm_settings,
     )
-    reverse_tm = calculate_primer_tm_result(
+    reverse_tm = await run_in_threadpool(calculate_primer_tm_result,
         reverse_primer,
         sequence_type="dna",
         settings=resolved_tm_settings,
@@ -1796,7 +1844,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         await session.commit()
 
     try:
-        product = pcr_product(
+        product = await run_in_threadpool(pcr_product,
             parent.sequence,
             forward_primer,
             reverse_primer,
@@ -1939,6 +1987,17 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
     )
 
 
+_PCR_SUMMARY_FIELDS = (
+    "id", "experiment_id", "revision_number", "operation_id", "template_document_id",
+    "template_revision_id", "template_sha256", "product_document_id", "product_revision_id",
+    "review_state", "created_by", "created_at",
+)
+
+
+def _pcr_revision_summary(revision: PCRExperimentRevision) -> dict[str, Any]:
+    return {field: getattr(revision, field) for field in _PCR_SUMMARY_FIELDS}
+
+
 def _pcr_revision_payload(revision: PCRExperimentRevision) -> dict[str, Any]:
     from services.molbio_ngs_member_receipts import pcr_experiment_revision_payload_sha256
 
@@ -2013,59 +2072,61 @@ def _pcr_revision_response(
 async def list_pcr_experiments(
     limit: int = 100,
     session: AsyncSession = Depends(get_molbio_session),
+    offset: int = 0,
+    summary: bool = False,
 ):
     bounded_limit = max(1, min(limit, 500))
-    experiments = (
-        (
-            await session.execute(
-                select(PCRExperiment)
-                .order_by(PCRExperiment.updated_at.desc())
-                .limit(bounded_limit)
-            )
-        )
-        .scalars()
-        .all()
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be nonnegative")
+    query = (
+        select(PCRExperiment, PCRExperimentRevision)
+        .outerjoin(PCRExperimentRevision, PCRExperiment.current_revision_id == PCRExperimentRevision.id)
+        .order_by(PCRExperiment.updated_at.desc(), PCRExperiment.id)
+        .offset(offset).limit(bounded_limit + 1)
     )
+    if summary:
+        query = query.options(load_only(*(getattr(PCRExperimentRevision, field) for field in _PCR_SUMMARY_FIELDS)))
+    rows = (await session.execute(query)).all()
+    has_more = len(rows) > bounded_limit
     items = []
-    for experiment in experiments:
-        current = (
-            await session.get(PCRExperimentRevision, experiment.current_revision_id)
-            if experiment.current_revision_id
-            else None
-        )
-        items.append(
-            {
-                "id": experiment.id,
-                "name": experiment.name,
-                "review_state": experiment.review_state,
-                "current_revision_id": experiment.current_revision_id,
-                "created_at": experiment.created_at,
-                "updated_at": experiment.updated_at,
-                "current_revision": _pcr_revision_payload(current) if current else None,
-            }
-        )
-    return {"items": items, "count": len(items), "limit": bounded_limit}
+    for experiment, current in rows[:bounded_limit]:
+        items.append({
+            "id": experiment.id, "name": experiment.name,
+            "review_state": experiment.review_state,
+            "current_revision_id": experiment.current_revision_id,
+            "created_at": experiment.created_at, "updated_at": experiment.updated_at,
+            "current_revision": (_pcr_revision_summary(current) if summary else _pcr_revision_payload(current)) if current else None,
+        })
+    return {"items": items, "count": len(items), "limit": bounded_limit,
+            "offset": offset, "has_more": has_more,
+            "next_offset": offset + len(items) if has_more else None, "summary": summary}
 
 
 @router.get("/pcr-experiments/{experiment_id}")
 async def get_pcr_experiment(
     experiment_id: str,
     session: AsyncSession = Depends(get_molbio_session),
+    limit: Optional[int] = None,
+    offset: int = 0,
+    summary: bool = False,
 ):
     experiment = await session.get(PCRExperiment, experiment_id)
     if experiment is None:
         raise HTTPException(status_code=404, detail="PCR experiment not found")
-    revisions = (
-        (
-            await session.execute(
-                select(PCRExperimentRevision)
-                .where(PCRExperimentRevision.experiment_id == experiment.id)
-                .order_by(PCRExperimentRevision.revision_number.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+    if offset < 0 or (limit is not None and not 1 <= limit <= 500):
+        raise HTTPException(status_code=422, detail="offset must be nonnegative and limit must be 1..500")
+    query = (select(PCRExperimentRevision)
+             .where(PCRExperimentRevision.experiment_id == experiment.id)
+             .order_by(PCRExperimentRevision.revision_number.desc())
+             .offset(offset))
+    if limit is not None:
+        query = query.limit(limit + 1)
+    if summary:
+        query = query.options(load_only(*(getattr(PCRExperimentRevision, field) for field in _PCR_SUMMARY_FIELDS)))
+    revisions = list((await session.execute(query)).scalars())
+    has_more = limit is not None and len(revisions) > limit
+    if limit is not None:
+        revisions = revisions[:limit]
     return {
         "id": experiment.id,
         "name": experiment.name,
@@ -2073,7 +2134,9 @@ async def get_pcr_experiment(
         "current_revision_id": experiment.current_revision_id,
         "created_at": experiment.created_at,
         "updated_at": experiment.updated_at,
-        "revisions": [_pcr_revision_payload(revision) for revision in revisions],
+        "revisions": [(_pcr_revision_summary(revision) if summary else _pcr_revision_payload(revision)) for revision in revisions],
+        "limit": limit, "offset": offset, "summary": summary, "has_more": has_more,
+        "next_offset": offset + len(revisions) if has_more else None,
     }
 
 
@@ -2085,6 +2148,7 @@ async def list_pcr_experiment_revisions(
     experiment_id: str,
     limit: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_molbio_session),
+    before_revision: Optional[int] = None,
 ) -> list[PCRExperimentRevisionResponse]:
     experiment = await session.get(PCRExperiment, experiment_id)
     if experiment is None:
@@ -2094,6 +2158,7 @@ async def list_pcr_experiment_revisions(
             await session.execute(
                 select(PCRExperimentRevision)
                 .where(PCRExperimentRevision.experiment_id == experiment.id)
+                .where(PCRExperimentRevision.revision_number < before_revision if before_revision is not None else True)
                 .order_by(PCRExperimentRevision.revision_number.desc())
                 .limit(limit)
             )
@@ -2240,7 +2305,7 @@ async def get_molecular_operation(
 @router.post("/assembly/ligation/simulate", response_model=AssemblyOperationResponse)
 async def simulate_ligation_assembly(request: LigationAssemblyRequest):
     try:
-        product = simulate_ligation(
+        product = await run_in_threadpool(simulate_ligation,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
         )
@@ -2259,7 +2324,7 @@ async def save_ligation_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        product = simulate_ligation(
+        product = await run_in_threadpool(simulate_ligation,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
         )
@@ -2625,7 +2690,7 @@ async def plan_dnaweaver_gibson_assembly(
         revision = await current_molecular_revision(session, source.id) if source is not None else None
         revision_ids = [revision.id] if revision is not None else []
         await session.rollback()
-        plan = await asyncio.to_thread(_execute_dnaweaver_plan, request, target)
+        plan = await run_in_threadpool(_execute_dnaweaver_plan, request, target)
         response = _dnaweaver_plan_to_response(plan, vendor_name=request.vendor_name)
         response.computation_id = await _retain_assembly_result(session, "dnaweaver_plan", request, plan, revision_ids)
         return response
@@ -2681,7 +2746,7 @@ async def design_gibson_assembly(
                 fragment.source_revision = revision.revision_number
                 revision_ids.append(revision.id)
         await session.rollback()
-        result = await asyncio.to_thread(_execute_gibson_design, bound_request)
+        result = await run_in_threadpool(_execute_gibson_design, bound_request)
         response = gibson_design_to_response(result)
         response.computation_id = await _retain_assembly_result(session, "gibson_design", request, result, revision_ids)
         return response
@@ -2756,7 +2821,7 @@ async def save_designed_gibson_assembly(
 @router.post("/assembly/gibson/simulate", response_model=AssemblyOperationResponse)
 async def simulate_gibson_assembly(request: GibsonAssemblyRequest):
     try:
-        product = simulate_gibson(
+        product = await run_in_threadpool(simulate_gibson,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
             minimum_overlap=request.minimum_overlap,
@@ -2778,7 +2843,7 @@ async def save_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        product = simulate_gibson(
+        product = await run_in_threadpool(simulate_gibson,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
             minimum_overlap=request.minimum_overlap,
@@ -2836,7 +2901,7 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
             catalog_id=request.catalog_id,
             expected_catalog_sha256=request.expected_catalog_sha256,
         )
-        product = simulate_golden_gate(
+        product = await run_in_threadpool(simulate_golden_gate,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             enzyme=enzyme,
             circular=request.circular,
@@ -2872,7 +2937,7 @@ async def save_golden_gate_assembly(
             catalog_id=request.catalog_id,
             expected_catalog_sha256=request.expected_catalog_sha256,
         )
-        product = simulate_golden_gate(
+        product = await run_in_threadpool(simulate_golden_gate,
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             enzyme=enzyme,
             circular=request.circular,
@@ -2939,7 +3004,7 @@ async def gibson(
 async def align_molecular_sequences(request: SequenceAlignmentRequest):
     """Align two nucleotide sequences and return rendered alignment plus variant events."""
     try:
-        result = await asyncio.to_thread(
+        result = await run_in_threadpool(
             align_sequences,
             request.reference_sequence,
             request.query_sequence,
@@ -3021,7 +3086,7 @@ async def save_molecular_alignment(
     # retaining a read snapshot) while unrelated edits are being saved.
     await session.rollback()
     try:
-        result = await asyncio.to_thread(
+        result = await run_in_threadpool(
             align_sequences,
             reference_sequence,
             query_sequence,
@@ -3260,7 +3325,7 @@ async def auto_annotate(request: AutoAnnotateRequest):
 
         # Run pLannotate
         try:
-            result = await asyncio.to_thread(
+            result = await run_in_threadpool(
                 subprocess.run,
                 cmd,
                 capture_output=True,
@@ -3928,18 +3993,8 @@ def _design_candidate(
     max_poly_x: int,
     tm_target_c: float,
     tm_max_delta_c: float,
-    template_sequence: str,
-    circular_template: bool,
 ) -> Optional[dict[str, Any]]:
     primer_sequence = (overhang + anneal_sequence).upper()
-    tm_result = calculate_primer_tm_result(
-        anneal_sequence,
-        sequence_type=sequence_type,
-        settings=tm_settings,
-    )
-    if tm_result.tm is None:
-        return None
-
     gc_percent = calculate_gc_percent(anneal_sequence)
     if gc_percent < gc_min or gc_percent > gc_max:
         return None
@@ -3952,15 +4007,16 @@ def _design_candidate(
     if homopolymer > max_poly_x:
         return None
 
-    if abs(tm_result.tm - tm_target_c) > tm_max_delta_c:
+    tm_result = calculate_primer_tm_result(
+        anneal_sequence,
+        sequence_type=sequence_type,
+        settings=tm_settings,
+    )
+    if tm_result.tm is None:
         return None
 
-    qc = evaluate_primer_qc(
-        primer_sequence,
-        sequence_type=sequence_type,  # type: ignore[arg-type]
-        template_sequence=template_sequence,
-        circular_template=circular_template,
-    )
+    if abs(tm_result.tm - tm_target_c) > tm_max_delta_c:
+        return None
 
     return {
         "sequence": primer_sequence,
@@ -3975,13 +4031,7 @@ def _design_candidate(
         "gc_percent": gc_percent,
         "gc_clamp": clamp,
         "max_homopolymer": homopolymer,
-        "max_self_complement": qc.max_self_complement,
-        "three_prime_self_complement": qc.three_prime_self_complement,
-        "max_hairpin_stem": qc.max_hairpin_stem,
-        "hairpin_loop_size": qc.hairpin_loop_size,
-        "binding_site_count": qc.binding_site_count,
-        "off_target_site_count": qc.off_target_site_count,
-        "warnings": [*tm_result.warnings, *qc.warnings],
+        "warnings": list(tm_result.warnings),
     }
 
 
@@ -4021,6 +4071,8 @@ def design_primer_pairs_for_request(
     tm_settings = request.tm_settings or default_tm_settings_for_sequence_type(
         sequence_type
     )
+    forward_overhang = clean_inline_sequence(request.overhang_forward, sequence_type) if request.overhang_forward else ""
+    reverse_overhang = clean_inline_sequence(request.overhang_reverse, sequence_type) if request.overhang_reverse else ""
     forward_candidates: list[dict[str, Any]] = []
     reverse_candidates: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -4050,7 +4102,7 @@ def design_primer_pairs_for_request(
                 start=start,
                 end=end,
                 strand=1,
-                overhang=clean_primer_sequence(request.overhang_forward),
+                overhang=forward_overhang,
                 sequence_type=sequence_type,
                 tm_settings=tm_settings,
                 gc_min=request.gc_min_percent,
@@ -4059,8 +4111,6 @@ def design_primer_pairs_for_request(
                 max_poly_x=request.max_poly_x,
                 tm_target_c=request.tm_target_c,
                 tm_max_delta_c=request.tm_max_delta_c,
-                template_sequence=template,
-                circular_template=request.is_circular,
             )
             if candidate:
                 forward_candidates.append(candidate)
@@ -4081,7 +4131,7 @@ def design_primer_pairs_for_request(
                 start=start,
                 end=end,
                 strand=-1,
-                overhang=clean_primer_sequence(request.overhang_reverse),
+                overhang=reverse_overhang,
                 sequence_type=sequence_type,
                 tm_settings=tm_settings,
                 gc_min=request.gc_min_percent,
@@ -4090,8 +4140,6 @@ def design_primer_pairs_for_request(
                 max_poly_x=request.max_poly_x,
                 tm_target_c=request.tm_target_c,
                 tm_max_delta_c=request.tm_max_delta_c,
-                template_sequence=template,
-                circular_template=request.is_circular,
             )
             if candidate:
                 reverse_candidates.append(candidate)
@@ -4109,9 +4157,23 @@ def design_primer_pairs_for_request(
         )
     )
 
+    forward_candidates = forward_candidates[:48]
+    reverse_candidates = reverse_candidates[:48]
+    # QC does not participate in the existing Tm/start shortlist ordering.
+    for candidate in [*forward_candidates, *reverse_candidates]:
+        qc = _evaluate_primer_qc_canonical(
+            candidate["sequence"], sequence_type=sequence_type,  # type: ignore[arg-type]
+            template_sequence=template, circular_template=request.is_circular,
+        )
+        for field in ("max_self_complement", "three_prime_self_complement",
+                      "max_hairpin_stem", "hairpin_loop_size", "binding_site_count",
+                      "off_target_site_count"):
+            candidate[field] = getattr(qc, field)
+        candidate["warnings"].extend(qc.warnings)
+
     pair_candidates: list[dict[str, Any]] = []
-    for forward in forward_candidates[:48]:
-        for reverse in reverse_candidates[:48]:
+    for forward in forward_candidates:
+        for reverse in reverse_candidates:
             product_length = reverse["end"] - forward["start"]
             if (
                 product_length < request.product_min_length
@@ -4363,6 +4425,10 @@ async def primer_tm_options():
 
 @router.post("/primer-tm/calculate", response_model=List[PrimerTmResult])
 async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
+    return await run_in_threadpool(_calculate_primer_tm_batch, request)
+
+
+def _calculate_primer_tm_batch(request: PrimerTmBatchRequest):
     """Calculate Tm for one or more primers using selectable thermodynamic models."""
     results: List[PrimerTmResult] = []
     for primer in request.primers:
@@ -4387,6 +4453,10 @@ async def calculate_primer_tm_batch(request: PrimerTmBatchRequest):
 
 @router.post("/primer-qc", response_model=PrimerQcBatchResponse)
 async def calculate_primer_qc(request: PrimerQcRequest):
+    return await run_in_threadpool(_calculate_primer_qc, request)
+
+
+def _calculate_primer_qc(request: PrimerQcRequest):
     """Calculate exact complementarity and template-binding QC metrics for primers or oligos."""
     template_sequence = None
     template_sequence_type = normalize_sequence_type(
@@ -4403,8 +4473,8 @@ async def calculate_primer_qc(request: PrimerQcRequest):
         sequence_type = primer.sequence_type or infer_primer_sequence_type(
             primer.sequence
         )
-        qc = evaluate_primer_qc(
-            primer.sequence,
+        qc = _evaluate_primer_qc_canonical(
+            clean_sequence(primer.sequence),
             sequence_type=sequence_type,  # type: ignore[arg-type]
             template_sequence=template_sequence,
             circular_template=request.template_is_circular,
@@ -4478,7 +4548,7 @@ async def design_primers(
         )
         sequence_name = sequence.name
 
-    return design_primer_pairs_for_request(request, sequence_name)
+    return await run_in_threadpool(design_primer_pairs_for_request, request, sequence_name)
 
 
 @router.get("/primers", response_model=List[PrimerResponse])
@@ -4488,12 +4558,14 @@ async def list_primers(
     favorites_only: bool = False,
     target_sequence_id: Optional[str] = None,
     session: AsyncSession = Depends(get_molbio_session),
+    limit: Optional[int] = None,
+    offset: int = 0,
 ):
     """List all primers with optional filtering."""
     query = (
         select(Primer)
         .where(Primer.deleted_at.is_(None))
-        .order_by(Primer.created_at.desc())
+        .order_by(Primer.created_at.desc(), Primer.id)
     )
 
     if favorites_only:
@@ -4503,19 +4575,19 @@ async def list_primers(
     if target_sequence_id:
         query = query.where(Primer.target_sequence_id == target_sequence_id)
 
+    if search:
+        # instr is literal (%, _ and backslash have no wildcard meaning).
+        query = query.where(or_(*(
+            func.instr(func.bms_unicode_lower(column), search.lower()) > 0
+            for column in (Primer.name, Primer.sequence, Primer.description)
+        )))
+    if offset < 0 or (limit is not None and not 1 <= limit <= 500):
+        raise HTTPException(status_code=422, detail="offset must be nonnegative and limit must be 1..500")
+    if limit is not None:
+        query = query.limit(limit)
+    query = query.offset(offset)
     result = await session.execute(query)
     primers = result.scalars().all()
-
-    # Filter by search term if provided
-    if search:
-        search_lower = search.lower()
-        primers = [
-            p
-            for p in primers
-            if search_lower in p.name.lower()
-            or search_lower in p.sequence.lower()
-            or (p.description and search_lower in p.description.lower())
-        ]
 
     return [build_primer_response(p) for p in primers]
 

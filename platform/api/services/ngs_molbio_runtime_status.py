@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from functools import lru_cache
+from threading import RLock
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +78,42 @@ def _source_denominator() -> dict[str, Any]:
     return denominator
 
 
-def runtime_implementation_record() -> dict[str, Any]:
+_ATTESTATION_LOCK = RLock()
+
+
+def _runtime_record(*, fresh: bool = False) -> dict[str, Any]:
+    """Reuse one attestation per immutable deployment record generation.
+
+    Deployment replaces the bound record and restarts workers when source changes.
+    Release verification can deliberately rehash all installed bytes with fresh=True.
+    Only the deployment record is statted on ordinary member/request paths.
+    """
+    with _ATTESTATION_LOCK:
+        if fresh:
+            _verified_runtime_generation.cache_clear()
+        try:
+            version = _RECORD.stat()
+        except OSError as exc:
+            raise NgsMolBioRuntimeAuthorityError("runtime deployment record is unavailable") from exc
+        record = _verified_runtime_generation(
+            _REPO_ROOT, _RECORD, version.st_ino, version.st_mtime_ns, version.st_size
+        )
+        return record
+
+
+def runtime_implementation_record(*, fresh: bool = False) -> dict[str, Any]:
+    return copy.deepcopy(_runtime_record(fresh=fresh))
+
+
+def runtime_source_commit() -> str:
+    """Read scalar identity without copying the full file inventory per member."""
+    return _runtime_record()["successor_source_commit"]
+
+
+@lru_cache(maxsize=1)
+def _verified_runtime_generation(
+    root: Path, record_path: Path, inode: int, mtime_ns: int, size: int,
+) -> dict[str, Any]:
     schema, _schema_raw = _read(_SCHEMA)
     denominator = _source_denominator()
     record, _record_raw = _read(_RECORD)
@@ -135,7 +172,7 @@ def runtime_implementation_record() -> dict[str, Any]:
     phase_ids = [row["phase_id"] for row in record["phases"]]
     if phase_ids != ["N1", "N2", "N3", "N4", "N5", "N6"]:
         raise NgsMolBioRuntimeAuthorityError("runtime phase order or denominator is invalid")
-    return copy.deepcopy(record)
+    return record
 
 
-__all__ = ["NgsMolBioRuntimeAuthorityError", "runtime_implementation_record"]
+__all__ = ["NgsMolBioRuntimeAuthorityError", "runtime_implementation_record", "runtime_source_commit"]

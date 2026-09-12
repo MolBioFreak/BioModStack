@@ -10,8 +10,9 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from database import get_session as get_core_session
 from experiment_database import get_experiment_session
@@ -418,7 +419,7 @@ async def list_dataset_revisions(project_id: str, experiment_id: str, domain_id:
         await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
         scope = f"dataset-revisions:{project_id}:{domain_id}:{dataset_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
-        statement = select(ExperimentRevision).where(ExperimentRevision.subject_id == dataset_id).order_by(ExperimentRevision.created_at.desc(), ExperimentRevision.resource_id.desc()).limit(limit + 1)
+        statement = select(ExperimentRevision).options(load_only(ExperimentRevision.resource_id, ExperimentRevision.revision_number, ExperimentRevision.parent_revision_id, ExperimentRevision.payload_sha256, ExperimentRevision.created_at)).where(ExperimentRevision.subject_id == dataset_id).order_by(ExperimentRevision.created_at.desc(), ExperimentRevision.resource_id.desc()).limit(limit + 1)
         if anchor:
             statement = statement.where(or_(ExperimentRevision.created_at < anchor[0], (ExperimentRevision.created_at == anchor[0]) & (ExperimentRevision.resource_id < anchor[1])))
         rows = list((await session.scalars(statement)).all())
@@ -431,7 +432,7 @@ async def list_dataset_revisions(project_id: str, experiment_id: str, domain_id:
 
 async def _exact_revision(session: AsyncSession, *, project_id: str, domain_id: str, dataset_id: str, revision_id: str) -> ExperimentRevision:
     await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
-    revision = await session.get(ExperimentRevision, revision_id)
+    revision = await session.get(ExperimentRevision, revision_id, options=[load_only(ExperimentRevision.resource_id, ExperimentRevision.subject_id, ExperimentRevision.revision_number, ExperimentRevision.parent_revision_id, ExperimentRevision.payload_sha256, ExperimentRevision.created_at)])
     if revision is None or revision.subject_id != dataset_id:
         raise NotFound("exact Dataset revision not found")
     return revision
@@ -445,7 +446,7 @@ async def get_dataset_revision(project_id: str, experiment_id: str, domain_id: s
         )
         revision = await _exact_revision(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id, revision_id=revision_id)
         rows = list((await session.scalars(select(ExperimentDatasetRevisionMember).where(ExperimentDatasetRevisionMember.revision_id == revision_id).order_by(ExperimentDatasetRevisionMember.ordinal).limit(101))).all())
-        result = {"schema": "bms.dataset-revision.v1", "dataset_id": dataset_id, "revision_id": revision_id, "revision_number": revision.revision_number, "parent_revision_id": revision.parent_revision_id, "revision_sha256": revision.payload_sha256, "member_count": len(json.loads(revision.canonical_payload).get("members", [])), "created_at": revision.created_at}
+        result = {"schema": "bms.dataset-revision.v1", "dataset_id": dataset_id, "revision_id": revision_id, "revision_number": revision.revision_number, "parent_revision_id": revision.parent_revision_id, "revision_sha256": revision.payload_sha256, "member_count": int(await session.scalar(select(func.json_array_length(ExperimentRevision.canonical_payload, "$.members")).where(ExperimentRevision.resource_id == revision_id)) or 0), "created_at": revision.created_at}
         if len(rows) <= 100:
             result["members"] = [_member_doc(row) for row in rows]
         else:
@@ -488,26 +489,68 @@ async def _native_rows(session: AsyncSession, model: Any, *, domain_id: str, ide
     return list((await session.scalars(statement)).all())
 
 
+async def _hub_page(session: AsyncSession, statement: Any, *, scope: str,
+                    cursor: str | None, created: Any, identity: Any, limit: int = 50,
+                    ascending: bool = False) -> tuple[list[Any], dict[str, Any]]:
+    """Page existing SQL authority; count before applying the scoped keyset."""
+    if cursor is not None and len(cursor) > 1024:
+        raise HTTPException(422, detail={"code": "invalid_cursor"})
+    total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+    try:
+        anchor = decode_cursor(cursor, scope=scope, limit=limit)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+    if anchor:
+        # Membership uses ordinal, unlike timestamp-keyed receipt/activity pages.
+        try:
+            key = int(anchor[0]) if ascending else anchor[0]
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "invalid_cursor"}) from exc
+        statement = statement.where(or_(created > key, (created == key) & (identity > anchor[1]))) if ascending else statement.where(or_(created < key, (created == key) & (identity < anchor[1])))
+    rows = list((await session.execute(statement.order_by(created.asc() if ascending else created.desc(), identity.asc() if ascending else identity.desc()).limit(limit + 1))).all())
+    page = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit:
+        last = page[-1][0]
+        next_cursor = encode_cursor(scope=scope, created_at=str(getattr(last, created.key)), stable_id=str(getattr(last, identity.key)), limit=limit)
+    return page, {"next_cursor": next_cursor, "has_more": next_cursor is not None, "total_count": total}
+
+
 async def _project_hub_linked_receipts(
-    session: AsyncSession,
-    *,
-    project_id: str,
-    domain_id: str,
-    kinds: set[str],
-    limit: int = 100,
-) -> list[ExperimentExternalEntityReceipt]:
-    return list((await session.scalars(
-        select(ExperimentExternalEntityReceipt)
-        .join(ExperimentLineageEdge, ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id)
-        .where(
-            ExperimentExternalEntityReceipt.workspace_id == project_id,
+    session: AsyncSession, *, project_id: str, domain_id: str, kinds: set[str],
+    cursor: str | None = None, section: str = "operations", state_revision_id: str = "",
+) -> tuple[list[ExperimentExternalEntityReceipt], dict[str, Any]]:
+    # EXISTS avoids duplicate receipt hydration/counting from multiple lineage edges.
+    statement = select(ExperimentExternalEntityReceipt).where(
+        ExperimentExternalEntityReceipt.workspace_id == project_id,
+        ExperimentExternalEntityReceipt.entity_kind.in_(kinds),
+        select(ExperimentLineageEdge.id).where(
+            ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
             ExperimentLineageEdge.workspace_id == project_id,
             ExperimentLineageEdge.source_resource_id == domain_id,
-            ExperimentExternalEntityReceipt.entity_kind.in_(kinds),
-        )
-        .order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id.desc())
-        .limit(limit)
-    )).unique().all())
+        ).exists(),
+    )
+    rows, page = await _hub_page(session, statement, scope=f"hub:{section}:{project_id}:{domain_id}:{state_revision_id}", cursor=cursor,
+        created=ExperimentExternalEntityReceipt.created_at, identity=ExperimentExternalEntityReceipt.id)
+    return [row[0] for row in rows], page
+
+
+def _hub_revision_summary():
+    # Extract display fields in SQLite; do not deserialize sequence, analysis tracks,
+    # primers or scientific provenance for a shelf summary.
+    keys = ("name", "description", "features", "gc_content", "sequence_type", "is_circular", "organism")
+    args = [item for key in keys for item in (key, func.json_extract(MolecularRevision.snapshot, f"$.{key}"))]
+    return select(MolecularRevision.id, MolecularRevision.document_id, MolecularRevision.content_sha256,
+        MolecularRevision.content_length, MolecularRevision.revision_number,
+        func.json_object(*args).label("snapshot"))
+
+
+async def _hub_revision_rows(session: AsyncSession, ids: list[str]) -> dict[str, Any]:
+    from types import SimpleNamespace
+    if not ids:
+        return {}
+    rows = (await session.execute(_hub_revision_summary().where(MolecularRevision.id.in_(set(ids))))).mappings().all()
+    return {row["id"]: SimpleNamespace(**{**row, "snapshot": json.loads(row["snapshot"])}) for row in rows}
 
 
 def _hub_acknowledgement(row: ExperimentExternalEntityReceipt) -> dict[str, Any]:
@@ -558,6 +601,10 @@ async def project_hub(
     session: AsyncSession = Depends(get_experiment_session),
     native: AsyncSession = Depends(get_molbio_ngs_session),
     molbio: AsyncSession = Depends(get_molbio_session),
+    members_cursor: str | None = None,
+    operations_cursor: str | None = None,
+    evidence_cursor: str | None = None,
+    activity_cursor: str | None = None,
 ) -> dict[str, Any]:
     """Compose a bounded operator read model without copying scientific payloads."""
     try:
@@ -565,71 +612,69 @@ async def project_hub(
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
     state = await native.get(MolBioNGSDomainState, domain_id)
-    selected = await native.get(MolBioNGSDomainStateRevision, state_revision_id)
+    selected = await native.get(MolBioNGSDomainStateRevision, state_revision_id, options=[load_only(
+        MolBioNGSDomainStateRevision.id, MolBioNGSDomainStateRevision.global_domain_experiment_id,
+        MolBioNGSDomainStateRevision.global_domain_experiment_revision_id, MolBioNGSDomainStateRevision.membership_graph_sha256)])
     if state is None or selected is None or selected.global_domain_experiment_id != domain_id:
         raise HTTPException(404, detail={"code": "not_found", "message": "exact Domain state revision not found"})
 
-    member_rows = list((await native.execute(
-        select(MolBioNGSDomainStateMember, MolBioNGSMemberReceipt)
-        .join(MolBioNGSMemberReceipt, MolBioNGSMemberReceipt.receipt_id == MolBioNGSDomainStateMember.receipt_id)
-        .where(MolBioNGSDomainStateMember.state_revision_id == selected.id)
-        .order_by(MolBioNGSDomainStateMember.ordinal, MolBioNGSDomainStateMember.receipt_id)
-        .limit(101)
-    )).all())
-    if len(member_rows) > 100:
-        raise HTTPException(413, detail={"code": "project_hub_member_limit"})
-    molecular_receipts = [receipt for _member, receipt in member_rows if receipt.entity_kind == "molecular_revision"]
+    member_statement = select(MolBioNGSDomainStateMember, MolBioNGSMemberReceipt).options(load_only(
+        MolBioNGSMemberReceipt.receipt_id, MolBioNGSMemberReceipt.entity_id, MolBioNGSMemberReceipt.entity_kind,
+        MolBioNGSMemberReceipt.receipt_sha256, MolBioNGSMemberReceipt.content_digest, MolBioNGSMemberReceipt.source_store_id,
+        MolBioNGSMemberReceipt.schema_name, MolBioNGSMemberReceipt.availability, MolBioNGSMemberReceipt.reopen_destination,
+    )).join(
+        MolBioNGSMemberReceipt, MolBioNGSMemberReceipt.receipt_id == MolBioNGSDomainStateMember.receipt_id
+    ).where(MolBioNGSDomainStateMember.state_revision_id == selected.id,
+            MolBioNGSMemberReceipt.entity_kind == "molecular_revision")
+    member_rows, member_page = await _hub_page(native, member_statement,
+        scope=f"hub:members:{project_id}:{domain_id}:{selected.id}", cursor=members_cursor,
+        created=MolBioNGSDomainStateMember.ordinal, identity=MolBioNGSDomainStateMember.receipt_id, ascending=True)
+    molecular_receipts = [receipt for _member, receipt in member_rows]
     attached_revision_ids = [receipt.entity_id for receipt in molecular_receipts]
-    attached_revisions = {
-        row.id: row for row in (await molbio.scalars(
-            select(MolecularRevision).where(MolecularRevision.id.in_(attached_revision_ids))
-        )).all()
-    } if attached_revision_ids else {}
+    attached_revisions = await _hub_revision_rows(molbio, attached_revision_ids)
     attached_sequence_ids = sorted({row.document_id for row in attached_revisions.values()})
     molecular_documents = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularDocument).where(MolecularDocument.id.in_(attached_sequence_ids))
+            select(MolecularDocument).options(load_only(MolecularDocument.id, MolecularDocument.current_revision_id)).where(MolecularDocument.id.in_(attached_sequence_ids))
         )).all()
     } if attached_sequence_ids else {}
     current_revision_ids = [
         row.current_revision_id for row in molecular_documents.values() if row.current_revision_id
     ]
-    current_revisions = {
-        row.id: row for row in (await molbio.scalars(
-            select(MolecularRevision).where(MolecularRevision.id.in_(current_revision_ids))
-        )).all()
-    } if current_revision_ids else {}
+    current_revisions = {key: value for key, value in attached_revisions.items() if key in current_revision_ids}
+    current_revisions.update(await _hub_revision_rows(molbio, [key for key in current_revision_ids if key not in current_revisions]))
     metadata_rows = list((await molbio.scalars(
         select(ProjectPlasmidMetadata).where(
             ProjectPlasmidMetadata.project_id == project_id,
             ProjectPlasmidMetadata.domain_experiment_id == domain_id,
             ProjectPlasmidMetadata.active_state_revision_id == selected.id,
-        ).limit(100)
+            ProjectPlasmidMetadata.sequence_id.in_(attached_sequence_ids),
+        )
     )).all())
     project_metadata = {row.sequence_id: row for row in metadata_rows}
 
-    operation_receipts = await _project_hub_linked_receipts(
+    operation_receipts, operation_page = await _project_hub_linked_receipts(
         session, project_id=project_id, domain_id=domain_id,
-        kinds={"molecular_operation", "pcr_experiment_revision"},
+        kinds={"molecular_operation", "pcr_experiment_revision"}, cursor=operations_cursor, state_revision_id=selected.id,
     )
     operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind == "molecular_operation"]
     operations = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularOperation).where(MolecularOperation.id.in_(operation_ids))
+            select(MolecularOperation).options(load_only(MolecularOperation.id, MolecularOperation.operation_kind, MolecularOperation.status, MolecularOperation.parameters)).where(MolecularOperation.id.in_(operation_ids))
         )).all()
     } if operation_ids else {}
     input_rows = list((await molbio.scalars(
-        select(MolecularOperationInput).where(MolecularOperationInput.operation_id.in_(operation_ids))
+        select(MolecularOperationInput).options(load_only(MolecularOperationInput.operation_id, MolecularOperationInput.revision_id)).where(MolecularOperationInput.operation_id.in_(operation_ids))
     )).all()) if operation_ids else []
     output_rows = list((await molbio.scalars(
-        select(MolecularOperationOutput).where(MolecularOperationOutput.operation_id.in_(operation_ids))
+        select(MolecularOperationOutput).options(load_only(MolecularOperationOutput.operation_id, MolecularOperationOutput.revision_id)).where(MolecularOperationOutput.operation_id.in_(operation_ids))
     )).all()) if operation_ids else []
     operation_sequence_ids: dict[str, set[str]] = {}
     operation_output_sequence_ids: dict[str, set[str]] = {}
     edge_revision_ids = [item.revision_id for item in [*input_rows, *output_rows]]
     edge_revisions = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularRevision).where(MolecularRevision.id.in_(edge_revision_ids))
+            select(MolecularRevision).options(load_only(MolecularRevision.id, MolecularRevision.document_id)).where(MolecularRevision.id.in_(edge_revision_ids))
         )).all()
     } if edge_revision_ids else {}
     for item in input_rows:
@@ -719,6 +764,7 @@ async def project_hub(
         plasmids.append({
             "sequence_id": sequence_id,
             "revision_id": revision.id,
+            "attached_revision_href": "/designer?" + urlencode({"molbio_sequence_id": sequence_id, "molbio_revision_id": receipt.entity_id}),
             "receipt_id": receipt.receipt_id,
             "receipt_sha256": receipt.receipt_sha256,
             "content_digest": receipt.content_digest,
@@ -738,6 +784,7 @@ async def project_hub(
             "neor_kanr": any("neor" in label or "kanr" in label for label in folded),
             "replication_origin_count": sum("origin" in label or "ori" in label for label in folded),
             "saved_experiment_count": saved_count,
+            "saved_experiment_count_complete": not operations_cursor and not operation_page["has_more"],
             "molecule_type": snapshot.get("sequence_type") or "dna",
             "topology": "circular" if snapshot.get("is_circular") else "linear",
             "organism_host_context": snapshot.get("organism"),
@@ -799,8 +846,9 @@ async def project_hub(
 
     sequence_kinds = {"ont_instrument_run", "ngs_job", "ngs_read_set", "ngs_alignment_job"}
     result_kinds = {"ngs_result_manifest", "sequence_qc_job", "ngs_analysis_job", "ngs_alignment_job"}
-    evidence_receipts = await _project_hub_linked_receipts(
+    evidence_receipts, evidence_page = await _project_hub_linked_receipts(
         session, project_id=project_id, domain_id=domain_id, kinds=sequence_kinds | result_kinds,
+        cursor=evidence_cursor, section="evidence", state_revision_id=selected.id,
     )
     sequence_items: list[dict[str, Any]] = []
     result_items: list[dict[str, Any]] = []
@@ -827,12 +875,12 @@ async def project_hub(
                 "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": ack.get("reopen_uri"),
             })
 
-    activities = list((await session.scalars(
-        select(ExperimentAuditEvent).where(
-            ExperimentAuditEvent.workspace_id == project_id,
-            ExperimentAuditEvent.resource_id == domain_id,
-        ).order_by(ExperimentAuditEvent.created_at.desc(), ExperimentAuditEvent.id.desc()).limit(50)
-    )).all())
+    activity_rows, activity_page = await _hub_page(session,
+        select(ExperimentAuditEvent).where(ExperimentAuditEvent.workspace_id == project_id,
+            ExperimentAuditEvent.resource_id == domain_id),
+        scope=f"hub:activity:{project_id}:{domain_id}:{selected.id}", cursor=activity_cursor,
+        created=ExperimentAuditEvent.created_at, identity=ExperimentAuditEvent.id)
+    activities = [row[0] for row in activity_rows]
     activity_items = []
     for row in activities:
         try:
@@ -852,7 +900,7 @@ async def project_hub(
         "schema": "bms.project-hub.v1",
         "project": {
             "id": project_id, "name": project.display_name, "objective": project.description,
-            "lifecycle_state": project.lifecycle_state, "created_at": project.created_at, "plasmid_count": len(plasmids),
+            "lifecycle_state": project.lifecycle_state, "created_at": project.created_at, "plasmid_count": member_page["total_count"],
             "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&section=plasmids&action=add-plasmid",
         },
         "identity": {
@@ -861,6 +909,7 @@ async def project_hub(
             "state_head_generation": state.head_generation, "global_domain_revision_id": selected.global_domain_experiment_revision_id,
             "membership_graph_sha256": selected.membership_graph_sha256, "binding_status": "acknowledged", "adapter_status": "available",
         },
+        "pages": {"members": member_page, "operations": operation_page, "evidence": evidence_page, "activity": activity_page},
         "plasmids": plasmids,
         "sequence_data": {
             "items": sequence_items,

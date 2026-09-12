@@ -2,7 +2,7 @@
  * SequenceHeader - Header bar with sequence metadata and actions
  */
 
-import { useCallback, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ExportDropdown } from './ExportDropdown';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
@@ -71,7 +71,7 @@ export function SequenceHeader({
     onToggleToolPanel,
     historyJournal = [],
 }: SequenceHeaderProps) {
-    const gcContent = calculateGC(sequenceData.sequence);
+    const gcContent = useMemo(() => calculateGC(sequenceData.sequence), [sequenceData.sequence]);
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
     const moleculeLabel = sequenceData.moleculeLabel || sequenceData.sequenceType.toUpperCase();
     const dragState = useRef<{

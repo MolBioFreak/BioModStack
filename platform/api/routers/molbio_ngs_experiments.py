@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, func, tuple_
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,13 +65,9 @@ from services.molbio_ngs_member_receipts import (
     serialize_external_member_receipt,
 )
 from services.molbio_ngs_references import (
-    append_reference_revision,
     archive_reference,
-    create_reference,
-    create_reference_from_molbio_revision,
     get_reference_resource,
     get_reference_revision,
-    import_browser_entry,
     list_reference_revisions,
     list_references,
     resolve_ngs_reference_revision_receipt,
@@ -186,57 +183,14 @@ ReferenceMoleculeType = Literal["dna", "rna"]
 ReferenceTopology = Literal["linear", "circular", "mixed", "unknown"]
 
 
-class CreateReferenceRequest(StrictModel):
-    global_domain_experiment_id: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=255)
-    fasta: str = Field(min_length=1)
-    molecule_type: ReferenceMoleculeType
-    topology: ReferenceTopology
-    coordinate_contract: str = Field(min_length=1, max_length=128)
-    source_provenance: dict[str, object]
-    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
-class CreateReferenceRevisionRequest(StrictModel):
-    fasta: str = Field(min_length=1)
-    molecule_type: ReferenceMoleculeType
-    topology: ReferenceTopology
-    coordinate_contract: str = Field(min_length=1, max_length=128)
-    source_provenance: dict[str, object]
-    expected_head_generation: int = Field(ge=1)
-    parent_revision_id: str = Field(min_length=1, max_length=128)
-    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
-class MolBioReferenceImportRequest(StrictModel):
-    global_domain_experiment_id: str = Field(min_length=1, max_length=128)
-    sequence_id: str = Field(min_length=1, max_length=128)
-    molecular_revision_id: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=255)
-    molecule_type: ReferenceMoleculeType
-    topology: ReferenceTopology
-    coordinate_contract: str = Field(min_length=1, max_length=128)
-    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
-class LegacyBrowserReferenceEntry(StrictModel):
-    id: str = Field(min_length=1, max_length=255)
-    name: str = Field(min_length=1, max_length=255)
-    source: Literal["fasta", "path"]
-    fasta: str | None = None
-    path: str | None = None
-    created_at: str = Field(alias="createdAt", min_length=1, max_length=255)
-    updated_at: str = Field(alias="updatedAt", min_length=1, max_length=255)
 
 
-class LegacyBrowserReferenceImportRequest(StrictModel):
-    global_domain_experiment_id: str = Field(min_length=1, max_length=128)
-    entry: LegacyBrowserReferenceEntry
-    name: str = Field(min_length=1, max_length=255)
-    molecule_type: ReferenceMoleculeType
-    topology: ReferenceTopology
-    coordinate_contract: str = Field(min_length=1, max_length=128)
-    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
 class ArchiveReferenceRequest(StrictModel):
@@ -989,39 +943,22 @@ async def read_molbio_ngs_sample_revision(
         raise _service_http_error(exc) from exc
 
 
-@router.post(
-    "/references",
-    response_model=ReferenceRevisionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_molbio_ngs_reference(
-    request: CreateReferenceRequest,
-    session: DomainSession,
-) -> ReferenceRevisionResponse:
-    try:
-        _reference, revision = await create_reference(
-            session,
-            global_domain_experiment_id=request.global_domain_experiment_id,
-            name=request.name,
-            raw_fasta=request.fasta.encode("utf-8"),
-            molecule_type=request.molecule_type,
-            topology=request.topology,
-            coordinate_contract=request.coordinate_contract,
-            source_provenance=request.source_provenance,
-            idempotency_key=request.idempotency_key,
-        )
-        await session.commit()
-        return _reference_revision_response(revision)
-    except (
-        DomainStateNotFound,
-        IdempotencyConflict,
-        RevisionConflict,
-        StateIntegrityError,
-        StateValidationError,
-        OSError,
-    ) as exc:
-        await session.rollback()
-        raise _service_http_error(exc) from exc
+@router.post("/references", deprecated=True, status_code=410)
+@router.post("/references/from-molbio-revision", deprecated=True, status_code=410)
+@router.post("/references/import-browser-entry", deprecated=True, status_code=410)
+async def retired_domain_reference_authoring() -> None:
+    """New reference authoring belongs to MolBio; historical readers stay live."""
+    raise HTTPException(status_code=410, detail={
+        "code": "domain_reference_authoring_retired",
+        "message": "Import or design in the shared molecular catalogue, then explicitly attach the selected revision. Historical Domain references remain readable.",
+        "dna_import": "/api/molbio/sequences/import/commit",
+        "rna_create": "/api/sequences/",
+    })
+
+
+@router.post("/references/{reference_id}/revisions", deprecated=True, status_code=410)
+async def retired_domain_reference_revision_authoring(reference_id: str) -> None:
+    await retired_domain_reference_authoring()
 
 
 @router.get("/references", response_model=list[ReferenceResponse])
@@ -1046,41 +983,6 @@ async def read_molbio_ngs_reference(
         raise _service_http_error(exc) from exc
 
 
-@router.post(
-    "/references/{reference_id}/revisions",
-    response_model=ReferenceRevisionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_molbio_ngs_reference_revision(
-    reference_id: str,
-    request: CreateReferenceRevisionRequest,
-    session: DomainSession,
-) -> ReferenceRevisionResponse:
-    try:
-        revision = await append_reference_revision(
-            session,
-            reference_id=reference_id,
-            raw_fasta=request.fasta.encode("utf-8"),
-            molecule_type=request.molecule_type,
-            topology=request.topology,
-            coordinate_contract=request.coordinate_contract,
-            source_provenance=request.source_provenance,
-            expected_head_generation=request.expected_head_generation,
-            parent_revision_id=request.parent_revision_id,
-            idempotency_key=request.idempotency_key,
-        )
-        await session.commit()
-        return _reference_revision_response(revision)
-    except (
-        DomainStateNotFound,
-        IdempotencyConflict,
-        RevisionConflict,
-        StateIntegrityError,
-        StateValidationError,
-        OSError,
-    ) as exc:
-        await session.rollback()
-        raise _service_http_error(exc) from exc
 
 
 @router.get(
@@ -1146,75 +1048,8 @@ async def archive_molbio_ngs_reference(
         raise _service_http_error(exc) from exc
 
 
-@router.post(
-    "/references/from-molbio-revision",
-    response_model=ReferenceRevisionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_molbio_ngs_reference_from_molbio_revision(
-    request: MolBioReferenceImportRequest,
-    session: DomainSession,
-    molbio_session: MolBioSession,
-) -> ReferenceRevisionResponse:
-    try:
-        _reference, revision = await create_reference_from_molbio_revision(
-            session,
-            molbio_session,
-            global_domain_experiment_id=request.global_domain_experiment_id,
-            sequence_id=request.sequence_id,
-            molecular_revision_id=request.molecular_revision_id,
-            name=request.name,
-            molecule_type=request.molecule_type,
-            topology=request.topology,
-            coordinate_contract=request.coordinate_contract,
-            idempotency_key=request.idempotency_key,
-        )
-        await session.commit()
-        return _reference_revision_response(revision)
-    except (
-        DomainStateNotFound,
-        IdempotencyConflict,
-        RevisionConflict,
-        StateIntegrityError,
-        StateValidationError,
-        OSError,
-    ) as exc:
-        await session.rollback()
-        raise _service_http_error(exc) from exc
 
 
-@router.post(
-    "/references/import-browser-entry",
-    response_model=ReferenceRevisionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def import_molbio_ngs_browser_reference(
-    request: LegacyBrowserReferenceImportRequest,
-    session: DomainSession,
-) -> ReferenceRevisionResponse:
-    try:
-        _reference, revision = await import_browser_entry(
-            session,
-            global_domain_experiment_id=request.global_domain_experiment_id,
-            entry=request.entry.model_dump(mode="json", by_alias=True),
-            name=request.name,
-            molecule_type=request.molecule_type,
-            topology=request.topology,
-            coordinate_contract=request.coordinate_contract,
-            idempotency_key=request.idempotency_key,
-        )
-        await session.commit()
-        return _reference_revision_response(revision)
-    except (
-        DomainStateNotFound,
-        IdempotencyConflict,
-        RevisionConflict,
-        StateIntegrityError,
-        StateValidationError,
-        OSError,
-    ) as exc:
-        await session.rollback()
-        raise _service_http_error(exc) from exc
 
 
 @router.post(
@@ -1573,6 +1408,87 @@ async def read_molbio_ngs_state(
         return _state_response(await get_domain_state(session, global_domain_experiment_id))
     except DomainStateNotFound as exc:
         raise _service_http_error(exc) from exc
+
+
+class HistorySummary(StrictModel):
+    """Navigation metadata only; exact readers retain native integrity proof."""
+
+    id: str
+    created_at: str
+    revision_number: int | None = None
+    payload_sha256: str | None = None
+    membership_graph_sha256: str | None = None
+    wrapper_sha256: str | None = None
+    reference_id: str | None = None
+    sample_id: str | None = None
+    canonical_fasta_sha256: str | None = None
+    archived_at: str | None = None
+    current_revision_id: str | None = None
+    head_generation: int | None = None
+    name: str | None = None
+
+
+class HistorySummaryPage(StrictModel):
+    items: list[HistorySummary]
+    next_cursor: str | None
+    total: int
+
+
+@router.get(
+    "/experiments/{global_domain_experiment_id}/summaries/{collection}",
+    response_model=HistorySummaryPage,
+)
+async def read_molbio_ngs_history_summaries(
+    global_domain_experiment_id: str,
+    collection: Literal["state", "sample", "reference", "evidence", "samples", "references"],
+    session: DomainSession,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=128),
+    resource_id: str | None = Query(default=None, max_length=128),
+) -> HistorySummaryPage:
+    # Scalar projection: never hydrate canonical payloads, wrappers or members
+    # just to display history navigation. Existing detailed readers are unchanged.
+    model, fields = {
+        "state": (MolBioNGSDomainStateRevision, ("revision_number", "payload_sha256", "membership_graph_sha256")),
+        "sample": (MolBioNGSSampleRevision, ("revision_number", "payload_sha256", "sample_id")),
+        "reference": (MolBioNGSReferenceRevision, ("revision_number", "payload_sha256", "reference_id", "canonical_fasta_sha256")),
+        "evidence": (MolBioNGSEvidenceAssessment, ("wrapper_sha256",)),
+        "samples": (MolBioNGSSample, ("current_revision_id", "head_generation")),
+        "references": (MolBioNGSReferenceResource, ("current_revision_id", "head_generation", "name", "archived_at")),
+    }[collection]
+    identity = model.evidence_id if collection == "evidence" else model.id
+    ordering = model.revision_number if collection in {"state", "sample", "reference"} else model.created_at
+    conditions = [model.global_domain_experiment_id == global_domain_experiment_id]
+    source = model.__table__
+    columns = [getattr(model, field) for field in fields]
+    if collection == "reference":
+        resource = MolBioNGSReferenceResource
+        source = source.join(resource, model.reference_id == resource.id)
+        conditions.append(resource.global_domain_experiment_id == global_domain_experiment_id)
+        columns.extend([resource.name, resource.archived_at])
+        # Like list_references, include archived resources for historical reopen.
+    if resource_id is not None:
+        if collection not in {"sample", "reference"}:
+            raise HTTPException(422, "resource_id applies only to sample/reference revisions")
+        conditions.append(getattr(model, f"{collection}_id") == resource_id)
+    total = (await session.execute(select(func.count()).select_from(source).where(*conditions))).scalar_one()
+    if cursor is not None:
+        anchor = (await session.execute(
+            select(ordering, identity).select_from(source).where(*conditions, identity == cursor)
+        )).one_or_none()
+        if anchor is None:
+            raise HTTPException(422, "cursor is not in the requested history")
+        conditions.append(tuple_(ordering, identity) < tuple_(*anchor))
+    rows = (await session.execute(
+        select(identity.label("id"), model.created_at, *columns).select_from(source)
+        .where(*conditions).order_by(ordering.desc(), identity.desc()).limit(limit + 1)
+    )).mappings().all()
+    page = rows[:limit]
+    return HistorySummaryPage(
+        items=[HistorySummary(**row) for row in page],
+        next_cursor=page[-1]["id"] if len(rows) > limit else None,
+        total=total,
+    )
 
 
 @router.get(

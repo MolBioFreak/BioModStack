@@ -63,6 +63,10 @@ class _AlignmentCandidate:
     strand: Literal["forward", "reverse"]
     mode: Literal["global", "local", "placement"]
     reference_is_circular: bool
+    columns: list[tuple[int | None, int | None, str, str]]
+    trim_info: dict[str, int]
+    reference_positions: list[int]
+    query_positions: list[int]
 
 
 def clean_alignment_sequence(sequence: str) -> str:
@@ -417,8 +421,9 @@ def _select_candidate(
             continue
 
         columns = _alignment_columns(alignment, reference_search, oriented_query)
+        trim_info = dict(reference_left=0, reference_right=0, query_left=0, query_right=0)
         if mode == "placement":
-            columns, _ = _trim_terminal_gap_columns(columns)
+            columns, trim_info = _trim_terminal_gap_columns(columns)
         reference_positions = [position for position, _, _, _ in columns if position is not None]
         query_positions = [position for _, position, _, _ in columns if position is not None]
 
@@ -438,6 +443,10 @@ def _select_candidate(
                 strand=candidate_strand,
                 mode=mode,
                 reference_is_circular=reference_is_circular,
+                columns=columns,
+                trim_info=trim_info,
+                reference_positions=reference_positions,
+                query_positions=query_positions,
             )
             best_key = current_key
 
@@ -448,19 +457,8 @@ def _select_candidate(
 
 def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
     reference_length = len(candidate.original_reference_sequence)
-    columns = _alignment_columns(
-        candidate.alignment,
-        candidate.reference_sequence,
-        candidate.query_sequence,
-    )
-    trim_info = {
-        "reference_left": 0,
-        "reference_right": 0,
-        "query_left": 0,
-        "query_right": 0,
-    }
-    if candidate.mode == "placement":
-        columns, trim_info = _trim_terminal_gap_columns(columns)
+    columns = candidate.columns
+    trim_info = candidate.trim_info
 
     if not columns:
         raise SequenceAlignmentError("Alignment produced no comparable span")
@@ -469,8 +467,8 @@ def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
     midline = _midline(reference_aligned, query_aligned)
     matches, mismatches, gap_columns, aligned_columns = _count_metrics(reference_aligned, query_aligned)
 
-    reference_positions = [position for position, _, _, _ in columns if position is not None]
-    query_positions = [position for _, position, _, _ in columns if position is not None]
+    reference_positions = candidate.reference_positions
+    query_positions = candidate.query_positions
     raw_reference_start = reference_positions[0] if reference_positions else 0
     raw_reference_end = (reference_positions[-1] + 1) if reference_positions else 0
     reference_start, reference_end, wraps_origin = _normalize_reference_interval(

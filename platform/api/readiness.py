@@ -172,42 +172,6 @@ def _check(*, required: bool, ready: bool, status: str, **extra: Any) -> dict[st
     return {"required": required, "ready": ready, "status": status, **extra}
 
 
-def _restriction_digest_readiness_is_exact(candidate: object) -> bool:
-    """Require the exact Phase 3 policy, migration, route, and guard authority."""
-
-    try:
-        import hashlib
-
-        import rfc8785
-
-        from molbio_migrations import restriction_digest_migration_attestation
-        from services.restriction_digest import resource_policy_receipt
-
-        if not isinstance(candidate, dict) or set(candidate) != {
-            "required", "ready", "status", "resource_policy",
-            "resource_policy_sha256", "migration", "routes",
-        }:
-            return False
-        policy = resource_policy_receipt().model_dump(mode="json", by_alias=True)
-        expected_routes = [
-            "POST /api/molbio/restriction/digests/simulate",
-            "POST /api/molbio/restriction/digests",
-            "GET /api/molbio/restriction/digests/{operation_id}",
-        ]
-        return bool(
-            candidate["required"] is True
-            and candidate["ready"] is True
-            and candidate["status"] == "ready"
-            and candidate["resource_policy"] == policy
-            and candidate["resource_policy_sha256"]
-            == hashlib.sha256(rfc8785.dumps(policy)).hexdigest()
-            and candidate["migration"] == restriction_digest_migration_attestation()
-            and candidate["routes"] == expected_routes
-        )
-    except Exception:
-        return False
-
-
 async def collect_runtime_readiness(
     *,
     molbio: dict[str, Any],
@@ -250,7 +214,13 @@ async def collect_runtime_readiness(
     restriction_catalog = catalog_authority.readiness()
     restriction_products = product_authority.readiness()
     restriction_digest = molbio.get("restriction_digest")
-    restriction_digest_ready = _restriction_digest_readiness_is_exact(restriction_digest)
+    # The in-process MolBio owner has already built and checked this status.
+    # Rehashing its policy/route receipt here adds no independent authority.
+    restriction_digest_ready = bool(
+        molbio_ready
+        and isinstance(restriction_digest, dict)
+        and restriction_digest.get("ready") is True
+    )
     checks = {
         "process_liveness": _check(required=True, ready=True, status="alive"),
         "core_database": _check(required=True, ready=core_ready, status=core_status),

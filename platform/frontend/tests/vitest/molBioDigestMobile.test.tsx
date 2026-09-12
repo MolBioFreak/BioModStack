@@ -17,6 +17,25 @@ describe('DigestPanel mobile API workflow', () => {
     let root: Root | undefined;
     let container: HTMLDivElement | undefined;
     afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
+    it('molbio-sanity-c maps recognition-only motifs and reuses occurrence grouping on selection edits', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const motifOnly = { ...record, analysis_capability: 'recognition_only' as const, cleavage: { ...record.cleavage, status: 'unknown' as const } };
+        const rows = [...analysis.analysis.occurrences];
+        const iteration = vi.spyOn(rows, Symbol.iterator);
+        const result = { ...analysis, analysis: { ...analysis.analysis, occurrences: rows } };
+        const onHighlight = vi.fn(), onDigestSelectionChange = vi.fn(), onEnzymesChange = vi.fn(), onSimulateDigest = vi.fn();
+        const render = (selection?: { start: number; end: number }) => root?.render(<DigestPanel mobile sequenceData={sequence} sequenceId={null} selection={selection} onHighlight={onHighlight} selectedEnzymes={[]} onEnzymesChange={onEnzymesChange} catalog={catalog} productEvidence={products} catalogRecords={[motifOnly]} analysis={result} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={onDigestSelectionChange} onSimulateDigest={onSimulateDigest} />);
+        await act(async () => render());
+        expect(iteration).toHaveBeenCalledTimes(1);
+        await act(async () => render({ start: 1, end: 4 }));
+        expect(iteration).toHaveBeenCalledTimes(1);
+        const map = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Map')!;
+        const digest = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Add')!;
+        expect(map.disabled).toBe(false);
+        expect(digest.disabled).toBe(true);
+        await act(async () => map.click());
+        expect(onEnzymesChange).toHaveBeenCalledWith(['EcoRI']);
+    });
     it('keeps one enzyme scroller, touch-safe sticky footer, and exact API output usable', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const simulate = vi.fn();

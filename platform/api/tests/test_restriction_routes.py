@@ -655,7 +655,7 @@ async def test_cpu_analysis_does_not_block_event_loop(monkeypatch) -> None:
     authority = _authority()
     app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
-    original = molbio_restriction.analyze_sequence
+    original = molbio_restriction._analyze_normalized_sequence
     started = threading.Event()
     lightweight_completed = threading.Event()
     release = threading.Event()
@@ -673,7 +673,7 @@ async def test_cpu_analysis_does_not_block_event_loop(monkeypatch) -> None:
         observed.append(lightweight_completed.wait(1))
         release.set()
 
-    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    monkeypatch.setattr(molbio_restriction, "_analyze_normalized_sequence", blocked_analysis)
     control = threading.Thread(target=controller)
     control.start()
     transport = httpx.ASGITransport(app=app)
@@ -697,7 +697,7 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
     authority = _authority()
     app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
-    original = molbio_restriction.analyze_sequence
+    original = molbio_restriction._analyze_normalized_sequence
     release = threading.Event()
     first_started = threading.Event()
     both_started = threading.Event()
@@ -727,7 +727,7 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
         if not observed[-1]:
             release.set()
 
-    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    monkeypatch.setattr(molbio_restriction, "_analyze_normalized_sequence", blocked_analysis)
     control = threading.Thread(target=controller)
     control.start()
     transport = httpx.ASGITransport(app=app)
@@ -805,7 +805,7 @@ async def test_busy_rejection_precedes_custom_normalization_and_jcs(monkeypatch)
     authority = _authority()
     app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
-    original_analysis = molbio_restriction.analyze_sequence
+    original_analysis = molbio_restriction._analyze_normalized_sequence
     original_normalize = molbio_restriction.normalize_dna
     original_dumps = molbio_restriction.rfc8785.dumps
     release = threading.Event()
@@ -835,7 +835,7 @@ async def test_busy_rejection_precedes_custom_normalization_and_jcs(monkeypatch)
             helper_calls += 1
         return original_dumps(value)
 
-    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    monkeypatch.setattr(molbio_restriction, "_analyze_normalized_sequence", blocked_analysis)
     monkeypatch.setattr(molbio_restriction, "normalize_dna", counted_normalize)
     monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", counted_dumps)
     transport = httpx.ASGITransport(app=app)

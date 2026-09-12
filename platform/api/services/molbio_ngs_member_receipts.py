@@ -610,6 +610,17 @@ async def resolve_ngs_result_manifest_receipt(
     job_id: str,
     manifest_identity: str = "sequence-qc-manifest",
 ) -> ExternalMemberReceipt:
+    receipt, _manifest = await resolve_ngs_result_manifest_snapshot(
+        session, job_id=job_id, manifest_identity=manifest_identity
+    )
+    return receipt
+
+
+async def resolve_ngs_result_manifest_snapshot(
+    session: AsyncSession, *, job_id: str,
+    manifest_identity: str = "sequence-qc-manifest",
+) -> tuple[ExternalMemberReceipt, dict[str, Any]]:
+    """Resolve native bytes once; keep the verified document request-local."""
     if manifest_identity != "sequence-qc-manifest":
         raise KeyError("NGS result manifest identity was not found")
     job = await session.get(Job, job_id)
@@ -656,16 +667,17 @@ async def resolve_ngs_result_manifest_receipt(
         )
     else:
         raise ValueError("NGS result manifest schema is unsupported")
-    return build_external_member_receipt(
+    receipt = build_external_member_receipt(
         source_store_id="core-ngs",
         entity_kind="ngs_result_manifest",
         entity_id=f"{job.id}:{manifest_identity}",
         source_generation_or_revision="result-manifest",
-        content_digest=_sha256_bytes(raw),
+        content_digest=_manifest_digest,
         source_schema=source_schema,
         availability="available",
         reopen_destination=_reopen("ngs-job-evidence", job_id=job.id),
     )
+    return receipt, manifest
 
 
 async def resolve_sample_revision_receipt(

@@ -15,6 +15,7 @@ from database import Job
 from molbio_ngs_models import (
     MolBioNGSDomainStateMember,
     MolBioNGSEvidenceAssessment,
+    MolBioNGSIdempotencyClaim,
     MolBioNGSMemberReceipt,
     MolBioNGSSampleRevision,
 )
@@ -33,7 +34,6 @@ from molbio_ngs_services import (
     verify_state_revision_integrity,
 )
 from services.molbio_authority import SERVER_OWNED_ACTOR
-from services.job_result_roots import resolve_persisted_job_result_root
 from services.molbio_ngs_member_receipts import (
     ExternalMemberReceipt,
     build_external_member_receipt,
@@ -43,18 +43,16 @@ from services.molbio_ngs_member_receipts import (
     resolve_molecular_revision_receipt,
     resolve_ngs_job_receipt,
     resolve_ngs_result_manifest_receipt,
+    resolve_ngs_result_manifest_snapshot,
     resolve_ont_instrument_run_receipt,
 )
 from services.molbio_ngs_references import (
-    get_reference_revision,
-    read_reference_artifact_bytes,
     resolve_ngs_reference_revision_receipt,
 )
 from services.sequence_qc_manifest import (
     VERIFICATION_SCHEMA,
     find_canonical_fastq_manifest,
     find_manifest_in_result_root,
-    load_sequence_qc_manifest,
     read_manifest_json_nofollow,
 )
 
@@ -262,8 +260,6 @@ async def attach_job_evidence(
         raise StateIntegrityError(
             "core NGS job state is not owned by the requested Domain Experiment"
         ) from exc
-    resolved_job = await resolve_ngs_job_receipt(core_session, job_id=job_id)
-    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job_id)
     request_sha256 = _digest(
         _canonical(
             {
@@ -291,6 +287,8 @@ async def attach_job_evidence(
         _receipt_row_authority(manifest_row)
         return job_row, manifest_row
 
+    resolved_job = await resolve_ngs_job_receipt(core_session, job_id=job_id)
+    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job_id)
     manifest_receipt_id = _derived_receipt_id(job_receipt_id, "result-manifest")
     created_at = _now()
     job_row = await persist_member_receipt(
@@ -350,11 +348,6 @@ async def attach_instrument_run_evidence(
         raise StateIntegrityError(
             "instrument run state is not owned by the requested Domain Experiment"
         ) from exc
-    resolved = await resolve_ont_instrument_run_receipt(
-        core_session,
-        run_id=run_id,
-        observed_generation=observed_generation,
-    )
     request_sha256 = _digest(
         _canonical(
             {
@@ -380,6 +373,11 @@ async def attach_instrument_run_evidence(
             raise StateIntegrityError("completed instrument evidence attachment is incomplete")
         _receipt_row_authority(row)
         return row
+    resolved = await resolve_ont_instrument_run_receipt(
+        core_session,
+        run_id=run_id,
+        observed_generation=observed_generation,
+    )
     row = await persist_member_receipt(
         session,
         _copy_receipt_with_identity(
@@ -569,13 +567,57 @@ async def create_evidence_assessment(
 
     if not idempotency_key.strip() or len(notes or "") > 4000:
         raise StateValidationError("evidence idempotency key or notes are invalid")
-    rule = ASSESSMENT_RULE_REGISTRY.get(assessment_rule_id)
-    if rule is None:
-        raise StateValidationError("assessment rule is not registered by the server")
 
     state_revision = await get_state_revision(
         domain_session, global_domain_experiment_id, state_revision_id
     )
+    request_payload = {
+        "global_domain_experiment_id": global_domain_experiment_id,
+        "state_revision_id": state_revision_id,
+        "sample_revision_id": sample_revision_id,
+        "receipt_ids": {
+            "ngs_job": ngs_job_receipt_id,
+            "ngs_result_manifest": ngs_result_manifest_receipt_id,
+            "ngs_reference_revision": ngs_reference_revision_receipt_id,
+            "ont_instrument_run": ont_instrument_run_receipt_id,
+            "molecular_revision": molecular_revision_receipt_id,
+            "ngs_comparison_panel": ngs_comparison_panel_receipt_id,
+        },
+        "assessment_rule_id": assessment_rule_id,
+        "notes": notes,
+        "created_by": SERVER_OWNED_ACTOR,
+    }
+    request_sha256 = _digest(_canonical(request_payload))
+    scope = f"create-evidence-assessment:{global_domain_experiment_id}"
+    evidence_id = _id("molbio_ngs_evidence")
+    original = None
+    claim = await domain_session.get(MolBioNGSIdempotencyClaim, (scope, idempotency_key))
+    if claim is not None and claim.status == "completed" and claim.request_sha256 != request_sha256:
+        original = await get_evidence_assessment(
+            domain_session, global_domain_experiment_id, claim.result_resource_id
+        )
+        legacy_hash = _digest(_canonical({
+            **request_payload, "requested_assessment": original.requested_assessment,
+        }))
+        if claim.request_sha256 == legacy_hash:
+            request_sha256 = legacy_hash
+    replay_id = await _reserve_idempotency(
+        domain_session,
+        scope=scope,
+        idempotency_key=idempotency_key,
+        request_sha256=request_sha256,
+        result_resource_id=evidence_id,
+    )
+    if replay_id is not None:
+        if original is not None:
+            return original
+        return await get_evidence_assessment(
+            domain_session, global_domain_experiment_id, replay_id
+        )
+
+    rule = ASSESSMENT_RULE_REGISTRY.get(assessment_rule_id)
+    if rule is None:
+        raise StateValidationError("assessment rule is not registered by the server")
     state_payload, _state_graph = await verify_state_revision_integrity(
         domain_session, state_revision
     )
@@ -618,7 +660,7 @@ async def create_evidence_assessment(
     expected_manifest_entity = f"{job.id}:sequence-qc-manifest"
     if manifest_authority["entity_id"] != expected_manifest_entity:
         raise StateIntegrityError("result-manifest receipt is not owned by the receipt-bound job")
-    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job.id)
+    resolved_manifest, manifest = await resolve_ngs_result_manifest_snapshot(core_session, job_id=job.id)
     _require_same_receipt_authority(
         manifest_authority, resolved_manifest, label="NGS result manifest"
     )
@@ -640,14 +682,6 @@ async def create_evidence_assessment(
     _require_same_receipt_authority(
         reference_authority, resolved_reference, label="NGS reference revision"
     )
-    reference_revision = await get_reference_revision(
-        domain_session, reference_id, revision_id
-    )
-    reference_bytes = await read_reference_artifact_bytes(
-        domain_session, reference_revision
-    )
-    if _sha256_bytes(reference_bytes) != reference_authority["content_digest"]:
-        raise StateIntegrityError("reference receipt digest does not match managed bytes")
 
     reference_member = (
         await domain_session.execute(
@@ -681,12 +715,9 @@ async def create_evidence_assessment(
     ):
         raise StateValidationError("job workflow or result schema is ineligible for the state revision")
 
-    result_root = resolve_persisted_job_result_root(job)
-    manifest_path, raw_manifest = _read_receipt_bound_result_manifest(job, result_root)
-    raw_manifest_sha256 = _sha256_bytes(raw_manifest)
+    raw_manifest_sha256 = resolved_manifest.content_digest
     if raw_manifest_sha256 != manifest_authority["content_digest"]:
         raise StateIntegrityError("raw result manifest bytes do not match their receipt")
-    manifest = load_sequence_qc_manifest(manifest_path, raw_bytes=raw_manifest)
     if manifest.get("job_id") != job.id:
         raise StateIntegrityError("result manifest does not name the receipt-bound job")
     if "MALFORMED_VERIFICATION_MANIFEST" in manifest.get("reason_codes", []):
@@ -711,44 +742,12 @@ async def create_evidence_assessment(
         manifest_schema=manifest_authority["source_schema"],
         rule=rule,
     )
-    request_payload = {
-        "global_domain_experiment_id": global_domain_experiment_id,
-        "state_revision_id": state_revision_id,
-        "sample_revision_id": sample_revision_id,
-        "receipt_ids": {
-            "ngs_job": ngs_job_receipt_id,
-            "ngs_result_manifest": ngs_result_manifest_receipt_id,
-            "ngs_reference_revision": ngs_reference_revision_receipt_id,
-            "ont_instrument_run": ont_instrument_run_receipt_id,
-            "molecular_revision": molecular_revision_receipt_id,
-            "ngs_comparison_panel": ngs_comparison_panel_receipt_id,
-        },
-        "assessment_rule_id": assessment_rule_id,
-        # Compatibility alias only; caller verdicts never enter authority.
-        "requested_assessment": scientific_assessment,
-        "notes": notes,
-        "created_by": SERVER_OWNED_ACTOR,
-    }
-    request_sha256 = _digest(_canonical(request_payload))
-    scope = f"create-evidence-assessment:{global_domain_experiment_id}"
-    evidence_id = _id("molbio_ngs_evidence")
-    replay_id = await _reserve_idempotency(
-        domain_session,
-        scope=scope,
-        idempotency_key=idempotency_key,
-        request_sha256=request_sha256,
-        result_resource_id=evidence_id,
-    )
-    if replay_id is not None:
-        return await get_evidence_assessment(
-            domain_session, global_domain_experiment_id, replay_id
-        )
-
     created_at = _now()
     wrapper = {
         "schema": EVIDENCE_WRAPPER_SCHEMA,
         "evidence_id": evidence_id,
         **request_payload,
+        "requested_assessment": scientific_assessment,
         "scientific_assessment": scientific_assessment,
         "job_lifecycle_state": lifecycle,
         "manifest_integrity": manifest_integrity,

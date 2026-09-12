@@ -22,6 +22,7 @@ interface FeaturePanelProps {
     onHighlight: (regions: HighlightedRegion[]) => void;
     onAddFeature: (feature: Feature) => void;
     onRemoveFeature: (featureId: string) => void;
+    onRemoveFeatures?: (featureIds: string[]) => void;
     onUpdateFeature?: (feature: Feature) => void;
     onJumpToPosition?: (position: number) => void;
 }
@@ -307,6 +308,7 @@ export function FeaturePanel({
     onHighlight,
     onAddFeature,
     onRemoveFeature,
+    onRemoveFeatures,
     onUpdateFeature,
     onJumpToPosition,
 }: FeaturePanelProps) {
@@ -485,7 +487,8 @@ export function FeaturePanel({
     const clearSelection = () => setSelectedFeatures(new Set());
 
     const deleteSelected = () => {
-        selectedFeatures.forEach((id) => onRemoveFeature(id));
+        if (onRemoveFeatures) onRemoveFeatures([...selectedFeatures]);
+        else selectedFeatures.forEach((id) => onRemoveFeature(id));
         clearSelection();
     };
 

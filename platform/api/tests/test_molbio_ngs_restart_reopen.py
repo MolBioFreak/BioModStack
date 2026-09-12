@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.molbio_ngs_managed_fixture import initialize_managed_domain
+
 import hashlib
 import json
 from datetime import datetime
@@ -97,7 +99,6 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
         get_sample,
         get_sample_revision,
         get_state_revision,
-        initialize_domain_state,
         save_state_revision,
         verify_state_revision_integrity,
     )
@@ -232,7 +233,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
     )
 
     async with domain_factory() as domain_session, molbio_factory() as molbio_session:
-        await initialize_domain_state(
+        await initialize_managed_domain(
             domain_session,
             binding,
             idempotency_key="phase2b-initialize",
@@ -377,8 +378,8 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
                     }
                 ),
                 Response(),
-                launch_core_session,
-                domain_session,
+                session=launch_core_session,
+                molbio_ngs_session=domain_session,
             )
         launched_job = cast(JobCreate, captured_launch["job"])
         assert captured_launch["commit"] is True
@@ -761,6 +762,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
             assert reopened_receipt.reopen_destination == {
                 "surface": "molbio-ngs-reference-revision",
                 "params": {
+                    "global_domain_experiment_id": domain_spec["id"],
                     "reference_id": durable_ids["reference_id"],
                     "revision_id": durable_ids["reference_revision_1_id"],
                 },

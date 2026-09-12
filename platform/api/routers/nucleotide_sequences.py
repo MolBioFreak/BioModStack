@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from datetime import datetime, timezone
 import hashlib
 import re
@@ -719,7 +719,16 @@ async def list_sequences(
     offset: int = Query(0, ge=0),
 ):
     """List all nucleotide sequences."""
-    query = select(NucleotideSequence)
+    feature_count = func.coalesce(func.json_array_length(NucleotideSequence.features), 0)
+    summary_fields = (
+        "id", "name", "description", "sequence_type", "molecule_strandedness",
+        "molecule_orientation", "is_circular", "length", "gc_content", "organism",
+        "accession", "source_file", "created_at", "updated_at",
+    )
+    query = select(
+        *(getattr(NucleotideSequence, field) for field in summary_fields),
+        feature_count.label("feature_count"),
+    )
 
     normalized_type = sequence_type.strip().lower() if sequence_type else None
     if normalized_type in {"dna", "rna"}:
@@ -740,25 +749,21 @@ async def list_sequences(
             NucleotideSequence.source_file.ilike(search_pattern),
         ))
 
-    result = await session.execute(query)
-    sequences = result.scalars().all()
+    sort_expression = {
+        "name": func.bms_unicode_lower(func.coalesce(NucleotideSequence.name, "")),
+        "length": func.coalesce(NucleotideSequence.length, 0),
+        "gc_content": func.coalesce(NucleotideSequence.gc_content, 0.0),
+        "feature_count": feature_count,
+        "created_at": func.coalesce(func.julianday(NucleotideSequence.created_at), 0),
+    }.get(sort_by, func.coalesce(func.julianday(func.coalesce(
+        NucleotideSequence.updated_at, NucleotideSequence.created_at,
+    )), 0))
+    query = query.order_by(
+        sort_expression.desc() if sort_desc else sort_expression.asc(),
+        NucleotideSequence.id.asc(),
+    ).offset(offset).limit(limit)
+    paginated = (await session.execute(query)).all()
 
-    def sort_value(seq: NucleotideSequence):
-        if sort_by == "name":
-            return (seq.name or "").lower()
-        if sort_by == "length":
-            return seq.length or 0
-        if sort_by == "gc_content":
-            return seq.gc_content or 0.0
-        if sort_by == "feature_count":
-            return len(seq.features) if seq.features else 0
-        if sort_by == "created_at":
-            return _sortable_timestamp(seq.created_at)
-        return _sortable_timestamp(seq.updated_at or seq.created_at)
-
-    sequences = sorted(sequences, key=sort_value, reverse=sort_desc)
-    paginated = sequences[offset:offset + limit]
-    
     return [
         NucleotideSequenceListItem(
             id=seq.id,
@@ -771,7 +776,7 @@ async def list_sequences(
             is_circular=seq.is_circular,
             length=seq.length,
             gc_content=seq.gc_content,
-            feature_count=len(seq.features) if seq.features else 0,
+            feature_count=seq.feature_count,
             organism=seq.organism,
             accession=seq.accession,
             source_file=seq.source_file,
@@ -826,6 +831,7 @@ async def list_molecular_revisions(
     sequence_id: str,
     session: AsyncSession = Depends(get_molbio_session),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> List[MolecularRevisionResponse]:
     """List immutable revisions without consulting the mutable sequence projection."""
     document = await session.get(MolecularDocument, sequence_id)
@@ -837,6 +843,7 @@ async def list_molecular_revisions(
                 select(MolecularRevision)
                 .where(MolecularRevision.document_id == document.id)
                 .order_by(MolecularRevision.revision_number.desc())
+                .offset(offset if isinstance(offset, int) else 0)
                 .limit(limit)
             )
         ).scalars()
@@ -995,102 +1002,63 @@ async def update_sequence(
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
 
-    changed = False
     provided_fields = data.model_fields_set
-
-    next_sequence_type = normalize_sequence_type(
-        data.sequence_type or seq.sequence_type,
-        data.sequence or seq.sequence,
+    values: dict[str, Any] = {}
+    next_sequence_type = (
+        normalize_sequence_type(data.sequence_type or seq.sequence_type, data.sequence or seq.sequence)
+        if data.sequence is not None or data.sequence_type is not None else seq.sequence_type
     )
-    try:
-        next_sequence = clean_sequence(
-            data.sequence if data.sequence is not None else seq.sequence,
-            next_sequence_type,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    if not next_sequence:
-        raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
+    next_sequence = seq.sequence
+    if data.sequence is not None or next_sequence_type != seq.sequence_type:
+        try:
+            next_sequence = clean_sequence(
+                data.sequence if data.sequence is not None else seq.sequence, next_sequence_type,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if not next_sequence:
+            raise HTTPException(status_code=400, detail="Invalid sequence: no valid nucleotides found")
+    sequence_changed = next_sequence != seq.sequence
+    type_changed = next_sequence_type != seq.sequence_type
     next_is_circular = data.is_circular if data.is_circular is not None else seq.is_circular
-    normalized_primers = normalize_primer_payloads(
-        []
-        if "primers" in provided_fields and data.primers is None
-        else data.primers
-        if data.primers is not None
-        else seq.primers,
-        len(next_sequence),
-        next_is_circular,
-    )
-    normalized_features = normalize_feature_payloads(
-        []
-        if "features" in provided_fields and data.features is None
-        else data.features
-        if data.features is not None
-        else seq.features,
-        len(next_sequence),
-    )
-    normalized_analysis_tracks = (
-        normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))
-        if "analysis_tracks" in provided_fields
-        else []
-        if data.sequence is not None
-        else None
-    )
-
-    # Update fields if provided
-    if data.name is not None:
-        seq.name = data.name
-        changed = True
-    if "description" in provided_fields:
-        seq.description = data.description
-        changed = True
-    if data.sequence is not None or data.sequence_type is not None:
-        seq.sequence = next_sequence
-        seq.length = len(next_sequence)
-        seq.gc_content = calculate_gc_content(next_sequence)
-        changed = True
-    if data.sequence_type is not None:
-        seq.sequence_type = next_sequence_type
-        changed = True
-
-    if data.molecule_strandedness is not None:
-        seq.molecule_strandedness = normalize_molecule_strandedness(data.molecule_strandedness, next_sequence_type)
-        changed = True
-    elif getattr(seq, "molecule_strandedness", None) in {None, ""}:
-        seq.molecule_strandedness = normalize_molecule_strandedness(None, next_sequence_type)
-        changed = True
-
-    if data.molecule_orientation is not None or data.molecule_strandedness is not None:
-        seq.molecule_orientation = normalize_molecule_orientation(
-            data.molecule_orientation if data.molecule_orientation is not None else getattr(seq, "molecule_orientation", None),
-            normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), next_sequence_type),
+    topology_changed = next_is_circular != seq.is_circular
+    if sequence_changed:
+        values.update(sequence=next_sequence, length=len(next_sequence),
+                      gc_content=calculate_gc_content(next_sequence))
+    if type_changed:
+        values["sequence_type"] = next_sequence_type
+    if topology_changed:
+        values["is_circular"] = next_is_circular
+    for field in ("name", "description", "organism", "accession", "source_file"):
+        if field in provided_fields and (field != "name" or data.name is not None):
+            values[field] = getattr(data, field)
+    if data.molecule_strandedness is not None or type_changed:
+        values["molecule_strandedness"] = normalize_molecule_strandedness(
+            data.molecule_strandedness or seq.molecule_strandedness, next_sequence_type,
         )
-        changed = True
-    elif getattr(seq, "molecule_orientation", None) in {None, ""}:
-        seq.molecule_orientation = normalize_molecule_orientation(None, normalize_molecule_strandedness(getattr(seq, "molecule_strandedness", None), next_sequence_type))
-        changed = True
-
-    if data.is_circular is not None:
-        seq.is_circular = data.is_circular
-        changed = True
-    if "features" in provided_fields or data.sequence is not None:
-        seq.features = normalized_features
-        changed = True
-    if "primers" in provided_fields or data.sequence is not None or data.is_circular is not None:
-        seq.primers = normalized_primers
-        changed = True
-    if normalized_analysis_tracks is not None:
-        seq.analysis_tracks = normalized_analysis_tracks
-        changed = True
-    if "organism" in provided_fields:
-        seq.organism = data.organism
-        changed = True
-    if "accession" in provided_fields:
-        seq.accession = data.accession
-        changed = True
-    if "source_file" in provided_fields:
-        seq.source_file = data.source_file
-        changed = True
+    if data.molecule_orientation is not None or "molecule_strandedness" in values:
+        values["molecule_orientation"] = normalize_molecule_orientation(
+            data.molecule_orientation if data.molecule_orientation is not None else seq.molecule_orientation,
+            values.get("molecule_strandedness", seq.molecule_strandedness),
+        )
+    if "features" in provided_fields or sequence_changed or type_changed:
+        values["features"] = normalize_feature_payloads(
+            (data.features or []) if "features" in provided_fields else seq.features, len(next_sequence),
+        )
+    if "primers" in provided_fields or sequence_changed or type_changed or topology_changed:
+        values["primers"] = normalize_primer_payloads(
+            (data.primers or []) if "primers" in provided_fields else seq.primers,
+            len(next_sequence), next_is_circular,
+        )
+    if "analysis_tracks" in provided_fields:
+        values["analysis_tracks"] = normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))
+    elif sequence_changed:
+        values["analysis_tracks"] = []
+    changed = False
+    for field, value in values.items():
+        if getattr(seq, field) != value:
+            setattr(seq, field, value)
+            changed = True
 
     if changed:
         seq.version = (seq.version or 1) + 1

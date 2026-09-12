@@ -421,10 +421,15 @@ app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
-async def health_check():
-    """Separate process liveness from dependency and workflow readiness."""
-    molbio = await molbio_health()
-    molbio_ngs = await molbio_ngs_health()
+async def health_check(deep: bool = False):
+    """Report readiness without rescanning retained science on ordinary polls.
+
+    Explicit ``?deep=true`` requests keep the full diagnostic integrity audit.
+    Startup, release and exact scientific reads retain their own checks.
+    """
+    molbio, molbio_ngs = await asyncio.gather(
+        molbio_health(deep=deep), molbio_ngs_health(deep=deep),
+    )
     readiness = await collect_runtime_readiness(molbio=molbio, molbio_ngs=molbio_ngs)
     return {
         "status": "healthy" if readiness["ready"] else "degraded",

@@ -360,12 +360,12 @@ def _validate_comparison_summary(
             raise ValueError("comparison artifact digest is malformed")
         artifact_path = _safe_comparison_file(comparison_panel_root, artifact.get("path"))
         size = _strict_count(artifact.get("size_bytes"), label=f"comparison artifact {kind} size")
-        if _sha256_file(artifact_path) != artifact["sha256"] or artifact_path.stat().st_size != size:
+        if kind == "comparison_panel_occurrence_map":
+            if any(artifact.get(key) != occurrence_descriptor.get(key) for key in ("path", "sha256", "size_bytes")):
+                raise ValueError("comparison occurrence-map artifact binding mismatch")
+        elif _sha256_file(artifact_path) != artifact["sha256"] or artifact_path.stat().st_size != size:
             raise ValueError("comparison artifact mismatch")
         artifact_by_kind[kind] = artifact
-    map_artifact = artifact_by_kind["comparison_panel_occurrence_map"]
-    if map_artifact.get("path") != occurrence_descriptor.get("path") or map_artifact.get("sha256") != occurrence_descriptor.get("sha256") or map_artifact.get("size_bytes") != occurrence_descriptor.get("size_bytes"):
-        raise ValueError("comparison occurrence-map artifact binding mismatch")
 
     return {
         "panel_id": panel_binding["panel_id"],

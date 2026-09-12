@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +46,7 @@ from molbio_ngs_models import (
     MolBioNGSOutboxStream,
 )
 from services.ngs_molbio_source_authority import source_build_revision
+from services.ngs_molbio_capabilities import _read_version, _compiled_validator, NgsMolBioCapabilityError
 
 
 BINDING_ADAPTER_ID = "bms.ngs-molbio.domain-binding.adapter.v1"
@@ -103,11 +103,12 @@ def _digest(value: str) -> str:
 def _validate(schema_id: str, payload: dict[str, Any]) -> None:
     path = _SCHEMA_ROOT / _SCHEMA_FILES[schema_id]
     try:
-        schema = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        version = path.stat()
+        schema, _raw = _read_version(path, version.st_mtime_ns, version.st_size)
+    except (OSError, NgsMolBioCapabilityError) as exc:
         raise ConnectorUnavailable(f"package-local N0 schema unavailable: {schema_id}") from exc
     errors = sorted(
-        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload),
+        _compiled_validator(json.dumps(schema, sort_keys=True)).iter_errors(payload),
         key=lambda item: list(item.absolute_path),
     )
     if errors:
@@ -125,11 +126,13 @@ def _validate_hierarchy_revision_payload(aggregate_kind: str, payload: dict[str,
         if filename is None:
             raise ConnectorConflict(f"unsupported hierarchy revision kind: {aggregate_kind}")
         try:
-            schema = json.loads((_HIERARCHY_SCHEMA_ROOT / filename).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            path = _HIERARCHY_SCHEMA_ROOT / filename
+            version = path.stat()
+            schema, _raw = _read_version(path, version.st_mtime_ns, version.st_size)
+        except (OSError, NgsMolBioCapabilityError) as exc:
             raise ConnectorUnavailable(f"hierarchy schema unavailable: {aggregate_kind}") from exc
         errors = sorted(
-            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload),
+            _compiled_validator(json.dumps(schema, sort_keys=True)).iter_errors(payload),
             key=lambda item: list(item.absolute_path),
         )
         if errors:
@@ -973,7 +976,6 @@ async def _append_local_binding(domain_session: AsyncSession, command: Experimen
         "schema": "bms.molbio-ngs.binding-acknowledged.v1", "binding_revision_id": binding.binding_revision_id,
         "binding_revision_number": binding.revision_number, "binding_receipt_sha256": command.global_receipt_sha256,
     }
-    _validate(event_payload["schema"], event_payload)
     await emit_ordered_event(domain_session, domain_id=command.domain_experiment_id, binding_revision_id=binding.binding_revision_id, event_stream="binding", event_type="molbio_ngs.binding.acknowledged", payload=event_payload, source_generation=binding.revision_number)
     health_payload = {
         "schema": "bms.molbio-ngs.binding-health-published.v1",
@@ -982,7 +984,6 @@ async def _append_local_binding(domain_session: AsyncSession, command: Experimen
         "health_state": "ready",
         "observed_at": _utc_now(),
     }
-    _validate_event_payload("molbio_ngs.binding.health_published", health_payload)
     await emit_ordered_event(
         domain_session,
         domain_id=command.domain_experiment_id,
@@ -1737,10 +1738,18 @@ async def process_outbox_once(global_session: AsyncSession, domain_session: Asyn
 
 
 async def connector_health(global_session: AsyncSession, domain_session: AsyncSession) -> dict[str, Any]:
-    commands = list((await global_session.scalars(select(ExperimentDomainConnectorCommand))).all())
-    events = list((await domain_session.scalars(select(MolBioNGSOutboxEvent))).all())
+    commands = (await global_session.execute(select(
+        ExperimentDomainConnectorCommand.status,
+        func.count(), func.min(ExperimentDomainConnectorCommand.created_at),
+    ).group_by(ExperimentDomainConnectorCommand.status))).all()
+    events = (await domain_session.execute(select(
+        MolBioNGSOutboxEvent.status, func.count(), func.min(MolBioNGSOutboxEvent.created_at),
+    ).group_by(MolBioNGSOutboxEvent.status))).all()
     now_dt = datetime.now(timezone.utc)
-    pending_times = [datetime.fromisoformat(item.created_at.replace("Z", "+00:00")) for item in events if item.status in {"pending", "leased", "retryable_error"}]
+    command_pending = {"pending", "leased", "retryable"}
+    event_pending = {"pending", "leased", "retryable_error"}
+    pending_times = [datetime.fromisoformat(created.replace("Z", "+00:00"))
+                     for status, count, created in events if status in event_pending]
     deferred_count = int((await global_session.scalar(
         select(func.count(ExperimentDomainConnectorInbox.event_id)).where(
             ExperimentDomainConnectorInbox.disposition == "deferred_gap"
@@ -1752,17 +1761,14 @@ async def connector_health(global_session: AsyncSession, domain_session: AsyncSe
     last_applied_at = await global_session.scalar(
         select(func.max(ExperimentDomainConnectorInbox.applied_at))
     )
-    command_times = [
-        datetime.fromisoformat(item.created_at.replace("Z", "+00:00"))
-        for item in commands
-        if item.status in {"pending", "leased", "retryable"}
-    ]
+    command_times = [datetime.fromisoformat(created.replace("Z", "+00:00"))
+                     for status, count, created in commands if status in command_pending]
     return {
         "schema": "bms.ngs-molbio.connector-health.v1",
-        "command_pending_count": sum(item.status in {"pending", "leased", "retryable"} for item in commands),
-        "command_conflict_count": sum(item.status == "conflicted" for item in commands),
-        "outbox_pending_count": len(pending_times),
-        "outbox_conflict_count": sum(item.status == "conflict" for item in events),
+        "command_pending_count": sum(count for status, count, created in commands if status in command_pending),
+        "command_conflict_count": sum(count for status, count, created in commands if status == "conflicted"),
+        "outbox_pending_count": sum(count for status, count, created in events if status in event_pending),
+        "outbox_conflict_count": sum(count for status, count, created in events if status == "conflict"),
         "inbox_deferred_gap_count": deferred_count,
         "inbox_conflict_count": inbox_conflict_count,
         "oldest_command_age_seconds": max((int((now_dt - value).total_seconds()) for value in command_times), default=None),

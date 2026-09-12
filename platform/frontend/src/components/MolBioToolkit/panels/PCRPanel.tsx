@@ -3,12 +3,14 @@
  */
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useInputOwnership } from './useInputOwnership';
 import { useLocation } from 'react-router-dom';
 import type { SequenceData, HighlightedRegion } from '../types';
 import {
     calculatePrimerTm,
     fetchPcrExperimentRevision,
-    fetchPcrExperimentRevisions,
+    fetchPcrExperimentSummaryPage,
+    type PcrExperimentRevisionSummary,
     runPcrOperation,
     type PcrExperimentRevision,
     type PcrOperationResponse,
@@ -56,14 +58,6 @@ function validatePcrRevision(
         throw new Error('PCR revision response identity does not match the exact requested experiment/revision pair.');
     }
     return revision;
-}
-
-function validatePcrRevisionList(
-    experimentId: string,
-    revisions: PcrExperimentRevision[],
-): PcrExperimentRevision[] {
-    revisions.forEach((revision) => validatePcrRevision(experimentId, revision.id, revision));
-    return revisions;
 }
 
 function immutablePcrPayload(revision: PcrExperimentRevision): Record<string, unknown> {
@@ -115,7 +109,21 @@ export function PCRPanel(props: PCRPanelProps) {
     const [result, setResult] = useState<{ sequence: string; length: number; start?: number; end?: number; wrapsOrigin?: boolean } | null>(null);
     const [persistedResult, setPersistedResult] = useState<Pick<PcrOperationResponse, 'experiment_id' | 'experiment_revision_id'> | null>(null);
     const [exactRevision, setExactRevision] = useState<PcrExperimentRevision | null>(null);
-    const [revisionHistory, setRevisionHistory] = useState<PcrExperimentRevision[]>([]);
+    const [revisionHistory, setRevisionHistory] = useState<PcrExperimentRevisionSummary[]>([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyError, setHistoryError] = useState<string | null>(null);
+    const [historyPage, setHistoryPage] = useState({ owner: requestedPcrExperimentId, offset: 0 });
+    const [historyNextOffset, setHistoryNextOffset] = useState<number | null>(null);
+    const [currentRevisionId, setCurrentRevisionId] = useState<string | null>(null);
+    const historyOwner = hasExactPcrPair ? requestedPcrExperimentId : null;
+    if (historyPage.owner !== historyOwner) {
+        setHistoryPage({ owner: historyOwner, offset: 0 });
+        setRevisionHistory([]);
+        setHistoryError(null);
+        setHistoryNextOffset(null);
+        setCurrentRevisionId(null);
+    }
+    const historyOffset = historyPage.owner === historyOwner ? historyPage.offset : 0;
     const [authorityLoading, setAuthorityLoading] = useState(false);
     const [authorityError, setAuthorityError] = useState<string | null>(null);
     const [tmLoading, setTmLoading] = useState(false);
@@ -126,6 +134,8 @@ export function PCRPanel(props: PCRPanelProps) {
 
     const sequenceType: 'dna' | 'rna' = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
+    const pcrOwner = useInputOwnership([sequenceId, sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, forwardPrimer, reversePrimer, tmSettings, productName, persistImmutableRevision]);
+    useEffect(() => { setResult(null); setPersistedResult(null); setLoading(false); }, [pcrOwner.token]);
 
     useEffect(() => {
         setPersistImmutableRevision(Boolean(sequenceId));
@@ -134,7 +144,6 @@ export function PCRPanel(props: PCRPanelProps) {
     useEffect(() => {
         if (!hasExactPcrPair || !requestedPcrExperimentId || !requestedPcrRevisionId) {
             setExactRevision(null);
-            setRevisionHistory([]);
             setAuthorityLoading(false);
             setAuthorityError(null);
             return;
@@ -142,21 +151,12 @@ export function PCRPanel(props: PCRPanelProps) {
 
         let cancelled = false;
         setExactRevision(null);
-        setRevisionHistory([]);
         setAuthorityLoading(true);
         setAuthorityError(null);
-        void Promise.all([
-            fetchPcrExperimentRevision(requestedPcrExperimentId, requestedPcrRevisionId),
-            fetchPcrExperimentRevisions(requestedPcrExperimentId),
-        ])
-            .then(([revision, revisions]) => ({
-                revision: validatePcrRevision(requestedPcrExperimentId, requestedPcrRevisionId, revision),
-                revisions: validatePcrRevisionList(requestedPcrExperimentId, revisions),
-            }))
-            .then(({ revision, revisions }) => {
+        void fetchPcrExperimentRevision(requestedPcrExperimentId, requestedPcrRevisionId)
+            .then((revision) => {
                 if (cancelled) return;
-                setExactRevision(revision);
-                setRevisionHistory(revisions);
+                setExactRevision(validatePcrRevision(requestedPcrExperimentId, requestedPcrRevisionId, revision));
             })
             .catch((authorityFailure) => {
                 if (!cancelled) {
@@ -176,7 +176,34 @@ export function PCRPanel(props: PCRPanelProps) {
         requestedPcrRevisionId,
     ]);
 
-    const selectExactRevision = useCallback((revision: PcrExperimentRevision) => {
+    useEffect(() => {
+        const controller = new AbortController();
+        if (historyOffset === 0) {
+            setRevisionHistory([]);
+            setCurrentRevisionId(null);
+        }
+        setHistoryError(null);
+        setHistoryNextOffset(null);
+        setHistoryLoading(hasExactPcrPair);
+        if (!hasExactPcrPair || !requestedPcrExperimentId) return;
+        void fetchPcrExperimentSummaryPage(requestedPcrExperimentId, 50, historyOffset, controller.signal)
+            .then((page) => {
+                if (controller.signal.aborted) return;
+                if (page.id !== requestedPcrExperimentId || page.revisions.some((revision) => revision.experiment_id !== requestedPcrExperimentId)) {
+                    throw new Error('PCR history summary belongs to a different experiment.');
+                }
+                setRevisionHistory((current) => historyOffset === 0 ? page.revisions : [...current, ...page.revisions]);
+                setHistoryNextOffset(page.has_more ? page.next_offset : null);
+                setCurrentRevisionId(page.current_revision_id);
+            })
+            .catch((failure) => {
+                if (!controller.signal.aborted) setHistoryError(failure instanceof Error ? failure.message : String(failure));
+            })
+            .finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+        return () => controller.abort();
+    }, [hasExactPcrPair, requestedPcrExperimentId, historyOffset, historyPage]);
+
+    const selectExactRevision = useCallback((revision: PcrExperimentRevisionSummary) => {
         updateQueryParams({
             pcr_experiment_id: revision.experiment_id,
             pcr_revision_id: revision.id,
@@ -223,6 +250,7 @@ export function PCRPanel(props: PCRPanelProps) {
         }
 
         let cancelled = false;
+        setTmResults({ forward: null, reverse: null });
         setTmLoading(true);
         const timer = window.setTimeout(async () => {
             try {
@@ -346,15 +374,13 @@ export function PCRPanel(props: PCRPanelProps) {
                 persist_experiment: shouldPersist,
                 new_name: productName || `${sequenceData.name}_PCR`,
                 tm_settings: tmSettings,
-                ...(sequenceId
-                    ? { sequence_id: sequenceId }
-                    : {
-                        sequence: sequenceData.sequence,
-                        name: sequenceData.name,
-                        sequence_type: sequenceType,
-                    }),
+                // Execute the same editable template used by the binding preview.
+                sequence: sequenceData.sequence,
+                name: sequenceData.name,
+                sequence_type: sequenceType,
             });
 
+            if (!pcrOwner.isCurrent()) return;
             const responseProduct = data.product;
             const persistedSequence = data.sequence;
             const product = responseProduct
@@ -428,9 +454,9 @@ export function PCRPanel(props: PCRPanelProps) {
                 });
             }
         } catch (runError) {
-            setError(runError instanceof Error ? runError.message : 'Unknown error');
+            if (pcrOwner.isCurrent()) setError(runError instanceof Error ? runError.message : 'Unknown error');
         } finally {
-            setLoading(false);
+            if (pcrOwner.isCurrent()) setLoading(false);
         }
     };
 
@@ -452,7 +478,7 @@ export function PCRPanel(props: PCRPanelProps) {
                         Exact PCR reopen requires both pcr_experiment_id and pcr_revision_id. No identifier is inferred from the other.
                     </div>
                 ) : authorityLoading ? (
-                    <div className="text-xs text-cyan-200">Loading the exact PCR revision and its immutable revision history…</div>
+                    <div className="text-xs text-cyan-200">Loading the exact PCR revision…</div>
                 ) : authorityError ? (
                     <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-300">
                         Unable to load exact PCR revision authority: {authorityError}
@@ -500,8 +526,15 @@ export function PCRPanel(props: PCRPanelProps) {
                         <div className="space-y-2">
                             <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.1em] text-slate-500">
                                 <span>Server immutable PCR revision history</span>
-                                <span>{revisionHistory.length} revisions</span>
+                                <span>{revisionHistory.length} revisions loaded</span>
                             </div>
+                            {historyLoading && <p>Loading PCR revision summaries…</p>}
+                            {historyError && <p role="alert">Unable to load PCR revision history: {historyError}. Exact revision remains available.</p>}
+                            {(historyNextOffset !== null || historyError) && (
+                                <button type="button" disabled={historyLoading} onClick={() => setHistoryPage({ owner: requestedPcrExperimentId, offset: historyError ? historyOffset : historyNextOffset! })}>
+                                    {historyError ? 'Retry PCR history' : 'Load more PCR revisions'}
+                                </button>
+                            )}
                             {revisionHistory.map((revision) => {
                                 const selected = revision.id === exactRevision.id;
                                 return (
@@ -516,7 +549,7 @@ export function PCRPanel(props: PCRPanelProps) {
                                         }`}
                                     >
                                         <div className="flex items-center justify-between gap-3">
-                                            <span>Revision #{revision.revision_number} · {revision.relation} · {revision.review_state.replace(/_/g, ' ')}</span>
+                                            <span>Revision #{revision.revision_number} · {revision.id === currentRevisionId ? 'current' : 'historical'} · {revision.review_state.replace(/_/g, ' ')}</span>
                                             <span>{new Date(revision.created_at).toLocaleString()}</span>
                                         </div>
                                         <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{revision.id}</div>

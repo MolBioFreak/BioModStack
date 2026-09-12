@@ -434,3 +434,25 @@ describe('mounted MolBio project hub', () => {
         expect(activityTechnical?.textContent).toContain('event-digest');
     });
 });
+
+it('continues bounded hub pages and never reuses a cursor across exact states', async () => {
+    const page = { next_cursor: null, has_more: false, total_count: 1 };
+    apiMocks.fetchProjectHub.mockResolvedValue({ ...readModel, pages: {
+        members: { next_cursor: 'member-next', has_more: true, total_count: 105 },
+        operations: page, evidence: page, activity: page,
+    } });
+    await renderWorkspace();
+    expect(container.textContent).toContain('DNA memberships: 105 total');
+    await act(async () => buttonNamed('Next members page')?.click());
+    for (let i = 0; i < 4; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(apiMocks.fetchProjectHub.mock.calls.at(-1)?.[5]).toEqual({ members_cursor: 'member-next' });
+    await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-other');
+    for (let i = 0; i < 4; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    const otherCalls = apiMocks.fetchProjectHub.mock.calls.filter(call => call[3] === 'state-other');
+    expect(otherCalls.length).toBeGreaterThan(0);
+    expect(otherCalls.every(call => Object.keys(call[5]).length === 0)).toBe(true);
+    for (const unused of [apiMocks.fetchMolBioNgsStateRevisions, apiMocks.fetchMolBioNgsStateRevision,
+        apiMocks.fetchMolBioNgsSamples, apiMocks.fetchMolBioNgsReferences, apiMocks.fetchMolBioNgsEvidence]) {
+        expect(unused).not.toHaveBeenCalled();
+    }
+});

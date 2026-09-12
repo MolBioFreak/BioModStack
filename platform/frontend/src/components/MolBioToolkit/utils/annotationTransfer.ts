@@ -95,14 +95,14 @@ function reverseComplement(sequence: string): string {
     }).join('');
 }
 
-function rotationOffsets(source: string, target: string): number[] {
+function rotationOffsets(source: string, target: string, limit = 2): number[] {
     if (source.length !== target.length || source.length === 0) return [];
     const doubled = source + source.slice(0, -1);
     const offsets: number[] = [];
     let index = doubled.indexOf(target);
-    while (index >= 0 && index < source.length) {
+    while (index >= 0 && index < source.length && offsets.length < limit) {
         offsets.push(index);
-        index = doubled.indexOf(target, index + 1);
+        if (offsets.length < limit) index = doubled.indexOf(target, index + 1);
     }
     return offsets;
 }
@@ -140,20 +140,13 @@ export function resolveAnnotationSequenceAlignment(
         throw new Error('Annotated-file sequence does not match the open linear construct.');
     }
 
-    const candidates: AnnotationSequenceAlignment[] = [
-        ...rotationOffsets(source, target).map((rotation) => ({
-            length: source.length,
-            mode: 'rotated' as const,
-            reverseComplement: false,
-            rotation,
-        })),
-        ...(reversed ? rotationOffsets(reversed, target).map((rotation) => ({
-            length: source.length,
-            mode: 'reverse_complement_rotated' as const,
-            reverseComplement: true,
-            rotation,
-        })) : []),
-    ];
+    const candidates: AnnotationSequenceAlignment[] = [];
+    for (const [candidate, reverse] of [[source, false], [reversed, true]] as const) {
+        if (!candidate || candidates.length >= 2) break;
+        for (const rotation of rotationOffsets(candidate, target, 2 - candidates.length)) {
+            candidates.push({ length: source.length, mode: reverse ? 'reverse_complement_rotated' : 'rotated', reverseComplement: reverse, rotation });
+        }
+    }
 
     if (candidates.length === 0) {
         throw new Error('Annotated-file sequence does not match the open circular construct.');

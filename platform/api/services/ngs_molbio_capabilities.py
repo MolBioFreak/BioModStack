@@ -182,11 +182,15 @@ def _read_version(path: Path, mtime_ns: int, size: int) -> tuple[dict[str, Any],
 
 
 
-def _read(path: Path) -> tuple[dict[str, Any], bytes]:
+def _file_version(path: Path):
     try:
-        version = path.stat()
+        return path.stat()
     except OSError as exc:
         raise NgsMolBioCapabilityError(f"contract unreadable: {path}") from exc
+
+
+def _read(path: Path) -> tuple[dict[str, Any], bytes]:
+    version = _file_version(path)
     document, raw = _read_version(path, version.st_mtime_ns, version.st_size)
     return copy.deepcopy(document), raw
 
@@ -220,18 +224,28 @@ def _unique(rows: Iterable[dict[str, Any]], key: str, label: str) -> dict[str, d
     return indexed
 
 
+@lru_cache(maxsize=128)
+def _checked_schema(schema_json: str):
+    schema = json.loads(schema_json)
+    Draft202012Validator.check_schema(schema)
+    return schema
+
+
+@lru_cache(maxsize=128)
+def _compiled_validator(schema_json: str, registry: Registry | None = None):
+    schema = _checked_schema(schema_json)
+    return NgsMolBioContractValidator(
+        schema, registry=registry if registry is not None else Registry(), format_checker=_FORMAT_CHECKER,
+    )
+
+
 def _validate(
     value: dict[str, Any],
     schema: dict[str, Any],
     label: str,
     registry: Registry | None = None,
 ) -> None:
-    Draft202012Validator.check_schema(schema)
-    validator = NgsMolBioContractValidator(
-        schema,
-        registry=registry or Registry(),
-        format_checker=_FORMAT_CHECKER,
-    )
+    validator = _compiled_validator(json.dumps(schema, sort_keys=True), registry)
     errors = sorted(validator.iter_errors(value), key=lambda item: list(item.absolute_path))
     if errors:
         location = ".".join(str(part) for part in errors[0].absolute_path) or "<root>"
@@ -243,7 +257,6 @@ class _ScopedSchemas(Mapping[str, dict[str, Any]]):
 
     def __init__(self, entries: list[dict[str, Any]]) -> None:
         self.rows = _unique(entries, "schema_id", "schema ID")
-        self.loaded = {}
 
     def __iter__(self):
         return iter(self.rows)
@@ -252,21 +265,30 @@ class _ScopedSchemas(Mapping[str, dict[str, Any]]):
         return len(self.rows)
 
     def __getitem__(self, schema_id: str) -> dict[str, Any]:
-        if schema_id not in self.loaded:
-            entry = self.rows[schema_id]
-            schema, raw = _read(_path(entry["path"]))
-            if schema.get("$id", schema.get("schema")) != schema_id:
-                raise NgsMolBioCapabilityError(f"schema ID mismatch: {schema_id}")
-            if _raw_digest(raw) != entry["schema_sha256"]:
-                raise NgsMolBioCapabilityError(f"schema byte digest mismatch: {schema_id}")
-            canonical = rfc8785.dumps(schema) if "$id" in schema else json.dumps(
-                schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-            ).encode("utf-8")
-            if _raw_digest(canonical) != entry["schema_canonical_sha256"]:
-                raise NgsMolBioCapabilityError(f"schema canonical digest mismatch: {schema_id}")
-            Draft202012Validator.check_schema(schema)
-            self.loaded[schema_id] = schema
-        return self.loaded[schema_id]
+        entry = self.rows[schema_id]
+        path = _path(entry["path"])
+        version = _file_version(path)
+        return _verified_schema_version(
+            path, version.st_mtime_ns, version.st_size, schema_id,
+            entry["schema_sha256"], entry["schema_canonical_sha256"],
+        )
+
+
+@lru_cache(maxsize=128)
+def _verified_schema_version(path, mtime_ns, size, schema_id, raw_digest, canonical_digest):
+    schema, raw = _read_version(path, mtime_ns, size)
+    if schema.get("$id", schema.get("schema")) != schema_id:
+        raise NgsMolBioCapabilityError(f"schema ID mismatch: {schema_id}")
+    if _raw_digest(raw) != raw_digest:
+        raise NgsMolBioCapabilityError(f"schema byte digest mismatch: {schema_id}")
+    canonical = rfc8785.dumps(schema) if "$id" in schema else json.dumps(
+        schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    if _raw_digest(canonical) != canonical_digest:
+        raise NgsMolBioCapabilityError(f"schema canonical digest mismatch: {schema_id}")
+    # Shared with validator construction; check each immutable schema only once.
+    _checked_schema(json.dumps(schema, sort_keys=True))
+    return schema
 
 
 def _schema_closure(entries: list[dict[str, Any]]) -> tuple[_ScopedSchemas, Registry]:
@@ -284,7 +306,14 @@ def _schema_closure(entries: list[dict[str, Any]]) -> tuple[_ScopedSchemas, Regi
 def _contract_document(name: str) -> dict[str, Any]:
     if name not in _REGISTRY_FILES:
         raise NgsMolBioCapabilityError(f"unknown contract registry: {name}")
-    document, _raw = _read(_CONFIG_ROOT / _REGISTRY_FILES[name])
+    path = _CONFIG_ROOT / _REGISTRY_FILES[name]
+    version = _file_version(path)
+    return copy.deepcopy(_contract_document_version(name, path, version.st_mtime_ns, version.st_size))
+
+
+@lru_cache(maxsize=32)
+def _contract_document_version(name: str, path: Path, mtime_ns: int, size: int):
+    document, _raw = _read_version(path, mtime_ns, size)
     if document.get("schema") != _REGISTRY_SCHEMA_IDS[name]:
         raise NgsMolBioCapabilityError(f"{name} registry identity mismatch")
     if document.get("content_sha256") != _canonical_digest(document):
@@ -293,6 +322,13 @@ def _contract_document(name: str) -> dict[str, Any]:
 
 
 def _schema_context() -> tuple[_ScopedSchemas, Registry]:
+    path = _CONFIG_ROOT / _REGISTRY_FILES["schema"]
+    version = _file_version(path)
+    return _schema_context_version(_REPO_ROOT, path, version.st_mtime_ns, version.st_size)
+
+
+@lru_cache(maxsize=8)
+def _schema_context_version(root: Path, path: Path, mtime_ns: int, size: int):
     return _schema_closure(_contract_document("schema")["entries"])
 
 

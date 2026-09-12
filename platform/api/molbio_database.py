@@ -404,6 +404,11 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
         )
 
         dbapi_connection.create_function(
+            "bms_unicode_lower", 1,
+            lambda value: str(value).lower() if value is not None else None,
+            deterministic=True,
+        )
+        dbapi_connection.create_function(
             "bms_restriction_digest_result_valid", 7,
             validate_restriction_digest_result, deterministic=True,
         )
@@ -604,6 +609,14 @@ async def _migration_restriction_digest_results(connection: AsyncConnection) -> 
     await _migration_append_only_guards(connection)
 
 
+async def _migration_revision_digest_index(connection: AsyncConnection) -> None:
+    """Forward-only lookup index; never rewrite scientific history."""
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_molecular_revisions_digest_created "
+        "ON molecular_revisions (content_sha256, created_at, id)"
+    ))
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -631,6 +644,11 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0007_restriction_digest_results",
         "immutable exact restriction digest results",
         _migration_restriction_digest_results,
+    ),
+    (
+        "0008_revision_digest_index",
+        "index immutable revision digest reuse",
+        _migration_revision_digest_index,
     ),
 )
 
@@ -761,14 +779,25 @@ async def get_applied_molbio_migrations(*, engine: AsyncEngine | None = None) ->
         return [str(row[0]) for row in rows.fetchall()]
 
 
-async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, object]:
+async def molbio_health(*, engine: AsyncEngine | None = None, deep: bool = True) -> dict[str, object]:
     target_engine = engine or molbio_engine
     expected_versions = [version for version, _description, _apply in MOLBIO_MIGRATIONS]
     try:
         async with target_engine.connect() as connection:
-            schema_issues = await _molbio_schema_issues(connection)
-            quick_check = str((await connection.execute(text("PRAGMA quick_check"))).scalar_one())
-            foreign_key_rows = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
+            if deep:
+                schema_issues = await _molbio_schema_issues(connection)
+                quick_check = str((await connection.execute(text("PRAGMA quick_check"))).scalar_one())
+                foreign_key_rows = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
+            else:
+                # Schema-only presence probe and ledger/guard checks below are
+                # independent of scientific row counts. No integrity PASS implied.
+                tables = set((await connection.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ))).scalars())
+                schema_issues = [f"required table missing: {name}"
+                                 for name in MolBioBase.metadata.tables if name not in tables]
+                quick_check = "not_run"
+                foreign_key_rows = []
             migrations = (
                 await connection.execute(
                     text("SELECT version FROM molbio_schema_migrations ORDER BY version")
@@ -791,7 +820,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
                 await connection.execute(
                     text("SELECT id, parent_id FROM nucleotide_sequences ORDER BY id")
                 )
-            ).fetchall()
+            ).fetchall() if deep else []
         versions = [str(row[0]) for row in migrations]
         migrations_current = versions == expected_versions
         triggers_current = _immutable_triggers_are_current(trigger_rows)
@@ -800,7 +829,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
         )
         sequence_parent_cycles = _sequence_parent_cycles(sequence_parent_rows)
         healthy = (
-            quick_check.lower() == "ok"
+            (not deep or quick_check.lower() == "ok")
             and not foreign_key_rows
             and migrations_current
             and not schema_issues
@@ -829,17 +858,20 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "owner": "molbio",
             "database_kind": "sqlite",
             "status": "healthy" if healthy else "degraded",
+            "check_mode": "deep" if deep else "light",
+            "integrity_checks_run": deep,
             "quick_check": quick_check,
-            "foreign_key_violations": len(foreign_key_rows),
+            "foreign_key_violations": len(foreign_key_rows) if deep else None,
             "migration_count": len(versions),
             "latest_migration": versions[-1] if versions else None,
             "migrations_current": migrations_current,
-            "database_schema_current": not schema_issues,
+            "database_schema_current": not schema_issues if deep else None,
+            "database_schema_presence_current": not schema_issues,
             "database_schema_issue_count": len(schema_issues),
             "immutable_trigger_count": len(trigger_rows),
             "immutable_triggers_current": triggers_current,
             "sequence_parent_foreign_key_current": sequence_parent_fk_current,
-            "sequence_parent_cycle_count": len(sequence_parent_cycles),
+            "sequence_parent_cycle_count": len(sequence_parent_cycles) if deep else None,
             "restriction_digest": digest_readiness,
         }
     except Exception as exc:  # health endpoints must report, not propagate

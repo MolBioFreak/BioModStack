@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.molbio_ngs_managed_fixture import initialize_managed_domain
+
 import hashlib
 import json
 import sqlite3
@@ -99,7 +101,6 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
     from molbio_ngs_services import (
         InternalVerifiedGlobalBinding,
         StateMember,
-        initialize_domain_state,
         save_state_revision,
     )
     from routers.molbio_ngs_experiments import StateMemberInput
@@ -136,6 +137,8 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
     manifest_path.parent.mkdir(parents=True)
     manifest_payload = {
         **fixture["manifest"],
+        "job_id": job_spec["id"],
+        "workflow_id": "ont_plasmid_qc",
         "execution": {"status": "SUCCEEDED", "exit_code": 0},
         "threshold_profile": {
             "calibration_status": "experimental",
@@ -337,7 +340,7 @@ async def test_phase2_fixture_lineage_is_digest_bound(tmp_path: Path, monkeypatc
                 },
                 verified_at="2026-08-08T22:00:00+00:00",
             )
-            await initialize_domain_state(
+            await initialize_managed_domain(
                 domain_session,
                 binding_authority,
                 idempotency_key="phase2-init",
@@ -673,7 +676,6 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
     from molbio_ngs_services import (
         StateMember,
         StateValidationError,
-        initialize_domain_state,
         save_state_revision,
     )
     from services.molbio_ngs_member_receipts import (
@@ -692,6 +694,9 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
     manifest = {
         "artifact_schema_version": 1,
         "job_id": "job-domain-2",
+        "workflow_id": "ont_plasmid_qc",
+        "input_mode": "fastq",
+        "analysis_status": "completed",
         "workflow_status": "completed",
         "verification_status": "review",
         "artifacts": [],
@@ -719,6 +724,7 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
                     model_id="nanopore",
                     mode="plasmid_qc",
                     params={
+                        "ont_workflow_id": "ont_plasmid_qc",
                         "global_domain_experiment_id": "domain-2",
                         "molbio_ngs_state_revision_id": "state-domain-2",
                     },
@@ -735,12 +741,12 @@ async def test_state_save_rejects_cross_domain_job_and_result_receipts(
             )
 
             async with domain_factory() as domain_session:
-                await initialize_domain_state(
+                await initialize_managed_domain(
                     domain_session,
                     _domain_binding("domain-1", "global-domain-rev-1"),
                     idempotency_key="init-domain-1",
                 )
-                await initialize_domain_state(
+                await initialize_managed_domain(
                     domain_session,
                     _domain_binding("domain-2", "global-domain-rev-2"),
                     idempotency_key="init-domain-2",
@@ -931,7 +937,6 @@ async def test_instrument_run_attachment_requires_exact_same_domain_state_bindin
         StateIntegrityError,
         StateMember,
         StateValidationError,
-        initialize_domain_state,
         save_state_revision,
     )
     from services.molbio_ngs_evidence import attach_instrument_run_evidence
@@ -980,12 +985,12 @@ async def test_instrument_run_attachment_requires_exact_same_domain_state_bindin
             await core_session.commit()
 
             async with domain_factory() as domain_session:
-                await initialize_domain_state(
+                await initialize_managed_domain(
                     domain_session,
                     _domain_binding("domain-1", "global-domain-rev-1"),
                     idempotency_key="init-domain-1-ont",
                 )
-                await initialize_domain_state(
+                await initialize_managed_domain(
                     domain_session,
                     _domain_binding("domain-2", "global-domain-rev-2"),
                     idempotency_key="init-domain-2-ont",

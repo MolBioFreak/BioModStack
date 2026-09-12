@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInputOwnership } from './useInputOwnership';
 import {
     fetchGoldenGateAssemblyOptions,
     fetchSavedGibsonWorkups,
@@ -342,10 +343,10 @@ export function AssemblyPanel({
     const [gibsonMaxOverlap, setGibsonMaxOverlap] = useState(80);
     const [pasteName, setPasteName] = useState('');
     const [pasteSequence, setPasteSequence] = useState('');
-    const [result, setResult] = useState<AssemblyOperationResponse | null>(null);
+    const [resultState, setResultState] = useState<{ token: object; value: AssemblyOperationResponse } | null>(null);
     const [loading, setLoading] = useState<'simulate' | 'save' | null>(null);
     const [planning, setPlanning] = useState(false);
-    const [dnaWeaverPlan, setDnaWeaverPlan] = useState<DnaWeaverPlanResponse | null>(null);
+    const [planState, setPlanState] = useState<{ token: object; value: DnaWeaverPlanResponse } | null>(null);
     const [plannerMinFragmentLength, setPlannerMinFragmentLength] = useState(500);
     const [plannerMaxFragmentLength, setPlannerMaxFragmentLength] = useState(1500);
     const [plannerOverlapLength, setPlannerOverlapLength] = useState(30);
@@ -357,6 +358,13 @@ export function AssemblyPanel({
     const [savedWorkupsLoading, setSavedWorkupsLoading] = useState(false);
     const [savedWorkupsError, setSavedWorkupsError] = useState<string | null>(null);
     const plannerScopeRef = useRef('');
+    const planOwner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, plannerMinFragmentLength, plannerMaxFragmentLength, plannerOverlapLength, plannerVendorName, plannerPricePerBp, plannerLeadTimeDays]);
+    const dnaWeaverPlan = planState?.token === planOwner.token ? planState.value : null;
+    const setDnaWeaverPlan = (value: DnaWeaverPlanResponse | null) => setPlanState(value ? { token: planOwner.token, value } : null);
+    const owner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, fragments, goldenGateEnzyme, goldenGateOptions, gibsonMinOverlap, gibsonPreferredOverlap, gibsonMaxOverlap, saveName, saveDescription]);
+    const result = resultState?.token === owner.token ? resultState.value : (mode === 'gibson' && gibsonWorkflow === 'plan' && dnaWeaverPlan && fragments === dnaWeaverPlan.ordered_fragments ? { product: dnaWeaverPlan.selected_product, saved_sequence: dnaWeaverPlan.saved_sequence || undefined, message: dnaWeaverPlan.message } : null);
+    const setResult = (value: AssemblyOperationResponse | null) => setResultState(value ? { token: owner.token, value } : null);
+    useEffect(() => { setLoading(null); setPlanning(false); setError(null); }, [owner.token]);
 
     useEffect(() => {
         setDnaWeaverPlan(null);
@@ -406,6 +414,7 @@ export function AssemblyPanel({
     }, []);
 
     const addWholeConstruct = () => {
+        setDnaWeaverPlan(null);
         setFragments((current) => [
             ...current,
             fragmentFromSequence({
@@ -419,6 +428,7 @@ export function AssemblyPanel({
     };
 
     const addSelectionFragment = () => {
+        setDnaWeaverPlan(null);
         if (!activeSelection) return;
         setFragments((current) => [
             ...current,
@@ -436,6 +446,7 @@ export function AssemblyPanel({
     };
 
     const addPastedFragment = () => {
+        setDnaWeaverPlan(null);
         const sequence = pasteSequence.toUpperCase().replace(/[^A-Z]/g, '');
         if (!sequence) {
             return;
@@ -482,6 +493,7 @@ export function AssemblyPanel({
     };
 
     const resetForMode = (nextMode: AssemblyMode) => {
+        setDnaWeaverPlan(null);
         setMode(nextMode);
         setResult(null);
         setError(null);
@@ -523,7 +535,7 @@ export function AssemblyPanel({
         const scope = plannerScope;
         try {
             const response = await planDnaWeaverGibsonAssembly(request);
-            if (plannerScopeRef.current !== scope) return;
+            if (plannerScopeRef.current !== scope || !owner.isCurrent() || !planOwner.isCurrent()) return;
             const ordered = response.data.ordered_fragments;
             setDnaWeaverPlan(response.data);
             setFragments(ordered);
@@ -537,11 +549,11 @@ export function AssemblyPanel({
                 message: response.data.message,
             });
         } catch (planError: UntypedApiValue) {
-            if (plannerScopeRef.current === scope) {
+            if (plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) {
                 setError(planError?.response?.data?.detail || planError?.message || 'DNA Weaver planning failed');
             }
         } finally {
-            if (plannerScopeRef.current === scope) setPlanning(false);
+            if (plannerScopeRef.current === scope && owner.isCurrent() && planOwner.isCurrent()) setPlanning(false);
         }
     };
 
@@ -589,7 +601,7 @@ export function AssemblyPanel({
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                 });
-                if (plannerScopeRef.current !== scope) return;
+                if (plannerScopeRef.current !== scope || !owner.isCurrent() || !planOwner.isCurrent()) return;
                 setDnaWeaverPlan(response.data);
                 setResult({
                     product: response.data.selected_product,
@@ -636,11 +648,11 @@ export function AssemblyPanel({
                     ? await saveGoldenGateAssembly(payload)
                     : await simulateGoldenGateAssembly(payload);
             }
-            setResult(response.data);
+            if (owner.isCurrent()) setResult(response.data);
         } catch (runError: UntypedApiValue) {
-            setError(runError?.response?.data?.detail || runError?.message || 'Assembly failed');
+            if (owner.isCurrent()) setError(runError?.response?.data?.detail || runError?.message || 'Assembly failed');
         } finally {
-            setLoading(null);
+            if (owner.isCurrent()) setLoading(null);
         }
     };
 

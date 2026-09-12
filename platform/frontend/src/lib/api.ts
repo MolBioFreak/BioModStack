@@ -3244,6 +3244,9 @@ export interface MolBioSequenceImportCommitResponse {
         sequence_id: string;
         name: string;
         revision_id?: string;
+        revision_number?: number;
+        topology?: 'linear' | 'circular';
+        content_sha256?: string;
         reused_existing_revision?: boolean;
     }>;
 }
@@ -4147,7 +4150,9 @@ export const fetchPrimers = (params?: {
     primer_type?: string;
     favorites_only?: boolean;
     target_sequence_id?: string;
-}) => api.get<Primer[]>('/api/molbio/primers', { params });
+    limit?: number;
+    offset?: number;
+}, signal?: AbortSignal) => api.get<Primer[]>('/api/molbio/primers', { params, signal });
 
 export const fetchPrimer = (id: string) =>
     api.get<Primer>(`/api/molbio/primers/${id}`);
@@ -4431,6 +4436,38 @@ export const fetchMolBioNgsDomainExperiment = (domainExperimentId: string) =>
         `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}`,
     ));
 
+export type MolBioNgsSummaryCollection = 'state' | 'sample' | 'reference' | 'evidence' | 'samples' | 'references';
+export interface MolBioNgsSummaryItem {
+    id: string;
+    created_at: string;
+    revision_number?: number | null;
+    reference_id?: string | null;
+    sample_id?: string | null;
+    canonical_fasta_sha256?: string | null;
+    archived_at?: string | null;
+    payload_sha256?: string | null;
+    membership_graph_sha256?: string | null;
+    wrapper_sha256?: string | null;
+    current_revision_id?: string | null;
+    head_generation?: number | null;
+    name?: string | null;
+}
+export interface MolBioNgsSummaryPage {
+    items: MolBioNgsSummaryItem[];
+    next_cursor: string | null;
+    total: number;
+}
+/** Navigation metadata only; use the existing exact-detail endpoint for science. */
+export const fetchMolBioNgsSummaries = (
+    domainExperimentId: string,
+    collection: MolBioNgsSummaryCollection,
+    params?: { limit?: number; cursor?: string; resource_id?: string },
+    signal?: AbortSignal,
+) => apiData(api.get<MolBioNgsSummaryPage>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/summaries/${collection}`,
+    { params, signal },
+));
+
 export interface DomainState {
     global_domain_experiment_id: string;
     current_state_revision_id: string | null;
@@ -4696,69 +4733,16 @@ export interface DomainReferenceRevision {
     };
 }
 
-export interface CreateDomainReferenceRequest {
-    global_domain_experiment_id: string;
-    name: string;
-    fasta: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    source_provenance: Record<string, unknown>;
-    idempotency_key: string;
-}
 
-export interface CreateDomainReferenceRevisionRequest {
-    fasta: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    source_provenance: Record<string, unknown>;
-    expected_head_generation: number;
-    parent_revision_id: string;
-    idempotency_key: string;
-}
 
-export interface ImportMolBioReferenceRequest {
-    global_domain_experiment_id: string;
-    sequence_id: string;
-    molecular_revision_id: string;
-    name: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    idempotency_key: string;
-}
 
-export interface ImportBrowserReferenceRequest {
-    global_domain_experiment_id: string;
-    entry: {
-        id: string;
-        name: string;
-        source: 'fasta' | 'path';
-        fasta?: string | null;
-        path?: string | null;
-        createdAt: string;
-        updatedAt: string;
-    };
-    name: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    idempotency_key: string;
-}
 
-export const createMolBioNgsReference = (payload: CreateDomainReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references', payload));
 export const fetchMolBioNgsReferences = (domainExperimentId: string) =>
     apiData(api.get<DomainReference[]>('/api/molbio-ngs/references', {
         params: { global_domain_experiment_id: domainExperimentId },
     }));
 export const fetchMolBioNgsReference = (referenceId: string) =>
     apiData(api.get<DomainReference>(`/api/molbio-ngs/references/${encodeURIComponent(referenceId)}`));
-export const createMolBioNgsReferenceRevision = (referenceId: string, payload: CreateDomainReferenceRevisionRequest) =>
-    apiData(api.post<DomainReferenceRevision>(
-        `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`, payload,
-    ));
 export const fetchMolBioNgsReferenceRevisions = (referenceId: string) =>
     apiData(api.get<DomainReferenceRevision[]>(
         `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`,
@@ -4767,10 +4751,6 @@ export const fetchMolBioNgsReferenceRevision = (referenceId: string, revisionId:
     apiData(api.get<DomainReferenceRevision>(
         `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions/${encodeURIComponent(revisionId)}`,
     ));
-export const importMolBioNgsReferenceRevision = (payload: ImportMolBioReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/from-molbio-revision', payload));
-export const importMolBioNgsBrowserReference = (payload: ImportBrowserReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/import-browser-entry', payload));
 export const archiveMolBioNgsReference = (
     referenceId: string,
     payload: { expected_head_generation: number; idempotency_key: string },
@@ -4917,9 +4897,28 @@ export interface MolecularRevision {
     };
 }
 
-export const fetchMolecularRevisions = (sequenceId: string, limit = 100) =>
+export interface MolecularRevisionSummary {
+    id: string;
+    revision_id: string;
+    sequence_id: string;
+    revision_number: number;
+    change_kind: string;
+    content_sha256: string;
+    content_length: number;
+    topology: 'circular' | 'linear';
+    created_at: string;
+    created_by: string | null;
+    is_current: boolean;
+}
+
+export const fetchMolecularRevisionSummaries = (sequenceId: string, limit = 50, offset = 0, signal?: AbortSignal) =>
+    apiData(api.get<MolecularRevisionSummary[]>(
+        `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
+    ));
+
+export const fetchMolecularRevisions = (sequenceId: string, limit = 100, offset = 0, signal?: AbortSignal) =>
     apiData(api.get<MolecularRevision[]>(
-        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit } },
+        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
     ));
 export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =>
     apiData(api.get<MolecularRevision>(
@@ -5008,6 +5007,30 @@ export const fetchPcrExperiments = (limit = 100) =>
     apiData(api.get<{ items: PcrExperimentListItem[]; count: number; limit: number }>(
         '/api/molbio/pcr-experiments', { params: { limit } },
     ));
+
+export type PcrExperimentRevisionSummary = Pick<PcrExperimentRevision,
+    'id' | 'experiment_id' | 'revision_number' | 'operation_id' | 'template_document_id'
+    | 'template_revision_id' | 'template_sha256' | 'product_document_id' | 'product_revision_id'
+    | 'review_state' | 'created_by' | 'created_at'>;
+
+export interface PcrExperimentSummaryPage {
+    id: string;
+    name: string;
+    current_revision_id: string | null;
+    revisions: PcrExperimentRevisionSummary[];
+    limit: number;
+    offset: number;
+    has_more: boolean;
+    next_offset: number | null;
+    summary: true;
+}
+
+export const fetchPcrExperimentSummaryPage = (experimentId: string, limit = 50, offset = 0, signal?: AbortSignal) =>
+    apiData(api.get<PcrExperimentSummaryPage>(
+        `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}`,
+        { params: { summary: true, limit, offset }, signal },
+    ));
+
 export const fetchPcrExperimentRevisions = (experimentId: string, limit = 100) =>
     apiData(api.get<PcrExperimentRevision[]>(
         `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}/revisions`, { params: { limit } },
@@ -5945,12 +5968,14 @@ export interface ProjectHubDNASequenceSummary {
     neor_kanr: boolean | null;
     replication_origin_count: number | null;
     saved_experiment_count: number;
+    saved_experiment_count_complete?: boolean;
     molecule_type?: string;
     topology?: string;
     organism_host_context: string | null;
     project_tags: string[];
     project_notes: string;
     reopen_href: string;
+    attached_revision_href?: string;
     map_segments: ProjectHubMapSegment[];
 }
 
@@ -6004,6 +6029,18 @@ export interface ProjectHubActivitySummary {
 
 export type ProjectHubPlasmidSummary = ProjectHubDNASequenceSummary;
 
+export interface ProjectHubPageInfo {
+    next_cursor: string | null;
+    has_more: boolean;
+    total_count: number;
+}
+export interface ProjectHubPaging {
+    members_cursor?: string;
+    operations_cursor?: string;
+    evidence_cursor?: string;
+    activity_cursor?: string;
+}
+
 export interface ProjectHubReadModel {
     schema: 'bms.project-hub.v1';
     project: {
@@ -6038,6 +6075,12 @@ export interface ProjectHubReadModel {
     experiments: ProjectHubExperimentSummary[];
     results: ProjectHubResultSummary[];
     activity: ProjectHubActivitySummary[];
+    pages?: {
+        members: ProjectHubPageInfo;
+        operations: ProjectHubPageInfo;
+        evidence: ProjectHubPageInfo;
+        activity: ProjectHubPageInfo;
+    };
 }
 
 export interface ProjectHubPlasmidInfoDraft {
@@ -6068,8 +6111,9 @@ export const fetchProjectHub = (
     domainId: string,
     stateRevisionId: string,
     signal?: AbortSignal,
+    paging?: ProjectHubPaging,
 ) => apiData(api.get<ProjectHubReadModel>(projectHubRoot(projectId, experimentId, domainId), {
-    params: { state_revision_id: stateRevisionId },
+    params: { state_revision_id: stateRevisionId, ...paging },
     signal,
 }));
 

@@ -2,7 +2,7 @@
  * Sequence diagnostics track for GC and other practical construct QC metrics.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotSelectionEvent, Shape } from 'plotly.js';
 import type { SelectionInfo } from './SequenceViewer';
@@ -14,7 +14,7 @@ import {
     sequenceForPlotDisplay,
     type SelectionRange,
 } from './utils/selectionActions';
-import { shouldComputeRestrictionPositions } from './utils/gcTrackPolicy';
+import { countPositionsInRange, shouldComputeRestrictionPositions } from './utils/gcTrackPolicy';
 
 type MetricId = 'gc' | 'restriction_density' | 'ambiguity_density' | 'homopolymer_burden';
 
@@ -47,6 +47,7 @@ interface GCContentTrackProps {
     circular?: boolean;
     selectedEnzymes?: string[];
     restrictionOccurrences?: RestrictionOccurrence[];
+    onRestrictionAnalysisRequested?: () => void;
     windowSize?: number;
     stepSize?: number;
     height?: number;
@@ -229,15 +230,6 @@ function smoothValues(values: number[]): number[] {
     });
 }
 
-function countPositionsInRange(positions: number[], start: number, end: number, includeEnd = false): number {
-    let count = 0;
-    for (const position of positions) {
-        if (position >= start && (position < end || (includeEnd && position === end))) {
-            count += 1;
-        }
-    }
-    return count;
-}
 
 function computeMetricValue(
     metric: MetricId,
@@ -346,6 +338,7 @@ export function GCContentTrack({
     circular = false,
     selectedEnzymes = [],
     restrictionOccurrences = [],
+    onRestrictionAnalysisRequested,
     windowSize = 60,
     stepSize,
     height = 156,
@@ -354,6 +347,9 @@ export function GCContentTrack({
     onClearSelection,
 }: GCContentTrackProps) {
     const [metricId, setMetricId] = useState<MetricId>('gc');
+    useEffect(() => {
+        if (metricId === 'restriction_density') onRestrictionAnalysisRequested?.();
+    }, [metricId, onRestrictionAnalysisRequested]);
     const metric = METRIC_INDEX.get(metricId) ?? METRIC_DEFINITIONS[0];
     const normalizedSequence = useMemo(
         () => normalizeSequence(sequenceForPlotDisplay(sequence, sequenceType, reverseCoordinates)),

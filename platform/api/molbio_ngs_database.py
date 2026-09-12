@@ -68,8 +68,8 @@ async def init_molbio_ngs_db() -> None:
     await asyncio.to_thread(run_all, path)
 
 
-async def molbio_ngs_health() -> dict[str, object]:
-    return await asyncio.to_thread(health, get_molbio_ngs_db_path())
+async def molbio_ngs_health(*, deep: bool = True) -> dict[str, object]:
+    return await asyncio.to_thread(health, get_molbio_ngs_db_path(), deep=deep)
 
 
 async def get_molbio_ngs_session():

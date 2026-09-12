@@ -6,12 +6,13 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import {
     fetchRestrictionAnalysisBatch,
     fetchRestrictionCatalog,
-    fetchRestrictionProducts,
+    parseRestrictionProducts,
     simulateRestrictionDigest,
     type RestrictionAnalysisBatch,
     type RestrictionCatalogReceipt,
@@ -31,7 +32,7 @@ import {
     type MobileMolBioWorkupStatus,
 } from './MobileMolBioWorkspace';
 import { VisibilityPanel } from './VisibilityPanel';
-import { createHistoryState, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
+import { createHistoryState, reconcileSavedHistory, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
@@ -71,6 +72,7 @@ import {
     fetchProjectHub,
     fetchMolecularRevision,
     fetchNucleotideSequence,
+    fetchNucleotideSequences,
     fetchPrimerTmOptions,
     type MolecularRevision,
     type SequenceAnalysisTrack,
@@ -165,6 +167,7 @@ interface SequenceLibraryProps {
     sequences: NucleotideSequenceListItem[];
     demos: SequenceData[];
     demoLoading: boolean;
+    onDemoIntent?: () => void;
     selectedId: string | null;
     onSelect: (sequence: NucleotideSequenceListItem) => void;
     onRefresh: () => void;
@@ -181,6 +184,7 @@ export function SequenceLibrary({
     sequences,
     demos,
     demoLoading,
+    onDemoIntent,
     selectedId,
     onSelect,
     onRefresh,
@@ -228,7 +232,7 @@ export function SequenceLibrary({
             >
                 {(!projectScoped || showAllConstructs) && <div className="border-b border-slate-700">
                     <button
-                        onClick={() => setShowDemos(!showDemos)}
+                        onClick={() => { if (!showDemos) onDemoIntent?.(); setShowDemos(!showDemos); }}
                         data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
                         className={`flex w-full items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800 ${mobile ? 'min-h-12' : ''}`}
                     >
@@ -774,40 +778,8 @@ export function MolBioToolkitV2() {
     const [selectedRnaTrackId, setSelectedRnaTrackId] = useState<string | null>(null);
     const [demoPlasmids, setDemoPlasmids] = useState<SequenceData[]>([]);
     const [demoLoading, setDemoLoading] = useState(true);
-    const [ngsWorkups, setNgsWorkups] = useState<Array<{ job_id: string; scientific_status: 'PASS' | 'FAIL' | 'REVIEW'; revision_relation: 'current' | 'historical'; manifest_available: boolean }>>([]);
-    const [ngsWorkupStatus, setNgsWorkupStatus] = useState<MobileMolBioWorkupStatus>('idle');
-
-    useEffect(() => {
-        if (!selectedSequenceId) {
-            setNgsWorkups([]);
-            setNgsWorkupStatus('idle');
-            return;
-        }
-        let cancelled = false;
-        setNgsWorkups([]);
-        setNgsWorkupStatus('loading');
-        fetch(`/api/molbio/sequences/${encodeURIComponent(selectedSequenceId)}/ngs-workup`)
-            .then((response) => {
-                if (!response.ok) throw new Error(`QC workup request failed with HTTP ${response.status}.`);
-                return response.json();
-            })
-            .then((payload: unknown) => {
-                const workups = parseMobileMolBioWorkups(payload);
-                if (!workups) throw new Error('QC workup response is malformed.');
-                if (!cancelled) {
-                    setNgsWorkups(workups);
-                    setNgsWorkupStatus('ready');
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setNgsWorkups([]);
-                    setNgsWorkupStatus('unavailable');
-                }
-            });
-        return () => { cancelled = true; };
-    }, [selectedSequenceId]);
-
+    const [demoRequested, setDemoRequested] = useState(false);
+    const requestDemos = useCallback(() => setDemoRequested(true), []);
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
     const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
         // Default: Common 6-cutters for cloning
@@ -848,6 +820,14 @@ export function MolBioToolkitV2() {
         () => workspaceTabs.find((tab) => tab.id === activeWorkspaceId) ?? null,
         [activeWorkspaceId, workspaceTabs],
     );
+    const workspaceStateRef = useRef({ activeWorkspaceId, historyState, workspaceTabs });
+    workspaceStateRef.current = { activeWorkspaceId, historyState, workspaceTabs };
+    const captureEditableOwner = useCallback(() => {
+        const owner = workspaceStateRef.current;
+        return () => !exactMolecularAuthorityRef.current
+            && workspaceStateRef.current.activeWorkspaceId === owner.activeWorkspaceId
+            && workspaceStateRef.current.historyState === owner.historyState;
+    }, []);
     const activeExactMolecularRevision = activeWorkspace?.exactMolecularRevision ?? null;
     const activeExactMatchesRequest = activeExactMolecularRevision !== null
         && activeExactMolecularRevision.sequence_id === requestedMolecularSequenceId
@@ -872,6 +852,7 @@ export function MolBioToolkitV2() {
         [sequenceData.moleculeOrientation, sequenceData.sequenceType],
     );
 
+    const queryClient = useQueryClient();
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
     const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
     const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
@@ -906,52 +887,54 @@ export function MolBioToolkitV2() {
         };
     }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
 
+    // Release resources are independent of construct identity. Query invalidation
+    // remains the explicit refresh boundary; changing DNA never redownloads them.
     useEffect(() => {
-        const controller = restrictionAuthorityControllerRef.current;
-        const token = controller.begin();
+        let cancelled = false;
+        void queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-catalog'],
+            queryFn: ({ signal }) => fetchRestrictionCatalog({ signal }),
+            staleTime: 300_000,
+        }).then((page) => {
+            if (cancelled) return;
+            restrictionCatalogRecordsRef.current = page.items;
+            setRestrictionCatalog(page.catalog);
+            setRestrictionCatalogRecords(page.items);
+        }).catch((error) => {
+            if (!cancelled) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction catalog unavailable.');
+        });
+        return () => { cancelled = true; };
+    }, [queryClient]);
+
+    useEffect(() => {
         restrictionDigestControllerRef.current.begin();
         restrictionAnalysisControllerRef.current.begin();
         restrictionAnalysisAbortRef.current?.abort();
-        restrictionCatalogRecordsRef.current = [];
-        setRestrictionCatalog(null);
-        setRestrictionCatalogRecords([]);
         setRestrictionAnalysis(null);
         setRestrictionDigest(null);
         setRestrictionDigestLoading(false);
         setRestrictionDigestError(null);
-        setRestrictionAuthorityError(null);
         setRestrictionAuthorityLoading(false);
-        if (!restrictionSource) return;
-        const abort = new AbortController();
-        void fetchRestrictionCatalog({
-            signal: abort.signal,
-            onPage: (page) => {
-                if (!controller.isCurrent(token)) return;
-                restrictionCatalogRecordsRef.current = page.items;
-                setRestrictionCatalog((current) => current?.catalog_sha256 === page.catalog.catalog_sha256 ? current : page.catalog);
-                setRestrictionCatalogRecords(page.items);
-            },
-        }).catch((error) => {
-            if (controller.isCurrent(token) && !abort.signal.aborted) {
-                setRestrictionAuthorityError(error instanceof Error ? error.message : 'Part of the restriction catalog is unavailable.');
-            }
-        });
-        return () => abort.abort();
     }, [restrictionSource]);
 
     // Supplier products do not own recognition-site or cleavage geometry.
     useEffect(() => {
-        const abort = new AbortController();
-        setRestrictionProductEvidence(null);
-        if (restrictionSource) {
-            void fetchRestrictionProducts({ signal: abort.signal }).then((products) => {
-                if (!abort.signal.aborted) setRestrictionProductEvidence(products.product_release);
-            }).catch(() => {
-                if (!abort.signal.aborted) setRestrictionProductEvidence(null);
-            });
-        }
-        return () => abort.abort();
-    }, [restrictionSource]);
+        let cancelled = false;
+        void queryClient.fetchQuery({
+            queryKey: ['molbio-restriction-product-release'],
+            queryFn: async ({ signal }) => {
+                // Only the release receipt is consumed here. The existing catalogue
+                // page carries it; product rows and their continuation are not needed.
+                const response = await fetch('/api/molbio/restriction/products?limit=1', { signal, credentials: 'same-origin' });
+                if (!response.ok) throw new Error('Restriction product release unavailable.');
+                return parseRestrictionProducts(await response.json()).product_release;
+            },
+            staleTime: 300_000,
+        }).then((receipt) => {
+            if (!cancelled) setRestrictionProductEvidence(receipt);
+        }).catch(() => { if (!cancelled) setRestrictionProductEvidence(null); });
+        return () => { cancelled = true; };
+    }, [queryClient]);
 
     const runRestrictionAnalysis = useCallback((enzymeIds?: string[]) => {
         if (!restrictionSource || !restrictionCatalog || enzymeIds?.length === 0) return;
@@ -982,11 +965,6 @@ export function MolBioToolkitV2() {
         });
     }, [restrictionCatalog, restrictionSource]);
 
-    const selectedRestrictionIds = JSON.stringify(selectedEnzymes);
-    useEffect(() => {
-        const ids: string[] = JSON.parse(selectedRestrictionIds);
-        if (ids.length > 0) runRestrictionAnalysis(ids);
-    }, [selectedRestrictionIds, runRestrictionAnalysis]);
 
     useEffect(() => () => {
         restrictionAuthorityControllerRef.current.dispose();
@@ -1040,33 +1018,55 @@ export function MolBioToolkitV2() {
     const {
         loading,
         error,
-        listSequences,
         getSequence,
         invalidateGetSequence,
         createSequence,
         updateSequence
     } = useSequenceOperations();
 
+    const [libraryLoading, setLibraryLoading] = useState(false);
+    const libraryControllerRef = useRef(createLatestAsyncResourceController());
+    useEffect(() => () => libraryControllerRef.current.dispose(), []);
+
     // Load sequence library on mount
     const loadLibrary = useCallback(async () => {
-        if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
-            const model = await fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId);
-            setSequences(projectHubDNASequencesToConstructShelf(model));
-            return;
+        const controller = libraryControllerRef.current;
+        const token = controller.begin();
+        setSequences([]);
+        setLibraryLoading(true);
+        try {
+            if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
+                const model = await queryClient.fetchQuery({
+                    queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, domainExperimentId, stateRevisionId],
+                    queryFn: ({ signal }) => fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, signal),
+                    staleTime: 30_000,
+                });
+                if (controller.isCurrent(token)) setSequences(projectHubDNASequencesToConstructShelf(model));
+                return;
+            }
+            const response = await queryClient.fetchQuery({
+                queryKey: ['molbio-recent-sequence-shelf'],
+                queryFn: () => fetchNucleotideSequences({ limit: 24, sort_by: 'updated_at', sort_desc: true }),
+                staleTime: 0,
+            });
+            if (controller.isCurrent(token)) setSequences(response.data);
+        } catch (error) {
+            if (controller.isCurrent(token)) {
+                setSequences([]);
+                setWorkspaceRestoreNotice(error instanceof Error ? error.message : 'Construct shelf unavailable.');
+            }
+        } finally {
+            if (controller.isCurrent(token)) setLibraryLoading(false);
         }
-        const seqs = await listSequences({
-            limit: 24,
-            sort_by: 'updated_at',
-            sort_desc: true,
-        });
-        setSequences(seqs);
-    }, [domainExperimentId, globalExperimentId, listSequences, showAllConstructs, stateRevisionId, workspaceId]);
+    }, [domainExperimentId, globalExperimentId, queryClient, showAllConstructs, stateRevisionId, workspaceId]);
 
     useEffect(() => {
         loadLibrary();
     }, [loadLibrary]);
 
     useEffect(() => {
+        if (!demoRequested) return;
+        setDemoLoading(true);
         let cancelled = false;
         const loadDemos = async () => {
             try {
@@ -1076,6 +1076,10 @@ export function MolBioToolkitV2() {
                 }
             } catch (error) {
                 console.error('Failed to load demo plasmids:', error);
+                if (!cancelled) {
+                    setWorkspaceRestoreNotice('Demo dataset unavailable. Close and reopen Demo Plasmids to retry.');
+                    setDemoRequested(false);
+                }
             } finally {
                 if (!cancelled) {
                     setDemoLoading(false);
@@ -1086,7 +1090,7 @@ export function MolBioToolkitV2() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [demoRequested]);
 
     useEffect(() => {
         setWorkspaceTabs((current) => current.map((tab) => (
@@ -1318,7 +1322,7 @@ export function MolBioToolkitV2() {
 
     // Auto-compute ORFs for display only. Keep them out of persisted undo history.
     useEffect(() => {
-        if (sequenceData.sequence && sequenceData.sequence.length > 100) {
+        if (visibility.translations && sequenceData.sequence && sequenceData.sequence.length > 100) {
             setDerivedTranslations(findOpenReadingFrames(
                 sequenceData.sequence,
                 100,
@@ -1327,7 +1331,7 @@ export function MolBioToolkitV2() {
         } else {
             setDerivedTranslations([]);
         }
-    }, [sequenceData.circular, sequenceData.sequence]);
+    }, [visibility.translations, sequenceData.circular, sequenceData.sequence]);
 
     const viewerSequenceData = useMemo(() => ({
         ...sequenceData,
@@ -1573,12 +1577,14 @@ export function MolBioToolkitV2() {
 
     // Import file using Teselagen bio-parsers
     const handleImport = useCallback(async (file: File, topology: ImportTopology = 'preserve') => {
+        const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
             const result = await anyToJson(file, {
                 fileName: file.name,
                 parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
             });
+            if (!ownsCompletion()) return;
             const results = Array.isArray(result) ? result : [result];
 
             if (results.length === 0 || !results[0]?.parsedSequence) {
@@ -1620,6 +1626,7 @@ export function MolBioToolkitV2() {
 
             if (exactMolecularAuthorityRef.current) return;
             const savedImport = await createSequence(sequencePayloadFromData(sequenceData));
+            if (!ownsCompletion()) return;
             if (savedImport && !exactMolecularAuthorityRef.current) {
                 openWorkspace(sequenceDataFromApiRecord(savedImport), {
                     sequenceId: savedImport.id,
@@ -1658,33 +1665,30 @@ export function MolBioToolkitV2() {
             : await createSequence(payload);
         if (!savedRecord) return false;
 
+        const latest = workspaceStateRef.current;
+        const latestTab = latest.workspaceTabs.find((tab) => tab.id === workspaceId);
+        if (!latestTab || latestTab.exactMolecularRevision) return false;
+        const stillActive = latest.activeWorkspaceId === workspaceId;
+        const latestHistory = stillActive ? latest.historyState : latestTab.historyState;
+        const unchanged = latestHistory === targetHistory;
         const savedData = sequenceDataFromApiRecord(savedRecord);
-        const savedHistory: HistoryState = {
-            ...targetHistory,
-            present: savedData,
-        };
+        // Preserve edits made after submission. The response advances only saved identity.
+        const savedHistory = reconcileSavedHistory(targetHistory, latestHistory, savedData);
         const stableWorkspaceId = molecularWorkspaceId(savedRecord.id);
         setWorkspaceTabs((current) => current.map((tab) => tab.id === workspaceId
-            ? {
-                ...tab,
-                id: stableWorkspaceId,
-                title: savedData.name || tab.title,
-                sequenceId: savedRecord.id,
-                dirty: false,
-                historyState: savedHistory,
-                sequenceType: savedData.sequenceType,
-                exactMolecularRevision: null,
-            }
+            ? { ...tab, id: stableWorkspaceId, sequenceId: savedRecord.id,
+                title: savedHistory.present.name || tab.title, dirty: !unchanged,
+                historyState: savedHistory, sequenceType: savedHistory.present.sequenceType }
             : tab));
-
-        if (targetIsActive) {
+        if (stillActive) {
             setActiveWorkspaceId(stableWorkspaceId);
             setSelectedSequenceId(savedRecord.id);
             hydrate(savedHistory);
-            setIsDirty(false);
+            if (unchanged) setIsDirty(false);
         }
         void loadLibrary();
-        return true;
+        // A transition must not discard edits which were not part of this save.
+        return unchanged;
     }, [activeWorkspaceId, createSequence, historyState, hydrate, loadLibrary, sequenceData, updateSequence, workspaceTabs]);
 
     const saveSequence = useCallback(
@@ -1963,72 +1967,84 @@ export function MolBioToolkitV2() {
     // Add feature handler
     const handleAddFeature = useCallback((feature: Feature) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
-            features: normalizeFeatureList([...sequenceData.features, normalizeFeatureRecord(feature, feature.id)])
-        });
+        setSequenceData((current) => ({
+            ...current,
+            features: normalizeFeatureList([...current.features, normalizeFeatureRecord(feature, feature.id)])
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     // Remove feature handler
     const handleRemoveFeature = useCallback((featureId: string) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
-            features: sequenceData.features.filter(f => f.id !== featureId)
-        });
+        setSequenceData((current) => ({
+            ...current,
+            features: current.features.filter(f => f.id !== featureId)
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     // Update feature handler (for inline edit)
     const handleUpdateFeature = useCallback((updatedFeature: Feature) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
-            features: normalizeFeatureList(sequenceData.features.map(f =>
+        setSequenceData((current) => ({
+            ...current,
+            features: normalizeFeatureList(current.features.map(f =>
                 f.id === updatedFeature.id ? normalizeFeatureRecord(updatedFeature, updatedFeature.id) : f
             ))
-        });
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     const handleAddFeatures = useCallback((newFeatures: Feature[]) => {
         if (exactMolecularAuthorityRef.current || newFeatures.length === 0) return;
-        setSequenceData({
-            ...sequenceData,
-            features: normalizeFeatureList([...sequenceData.features, ...newFeatures]),
-        });
+        setSequenceData((current) => ({
+            ...current,
+            features: normalizeFeatureList([...current.features, ...newFeatures]),
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     // Add primer handler
     const handleAddPrimer = useCallback((primer: Primer) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
-            primers: [...(sequenceData.primers || []), primer]
-        });
+        setSequenceData((current) => ({
+            ...current,
+            primers: [...(current.primers || []), primer]
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
+
+    const handleAddPrimers = useCallback((primers: Primer[]) => {
+        if (exactMolecularAuthorityRef.current || !primers.length) return;
+        setSequenceData((current) => ({ ...current, primers: [...(current.primers || []), ...primers] }), 'Add primer pair');
+        setIsDirty(true);
+    }, [setSequenceData]);
+    const handleRemoveFeatures = useCallback((ids: string[]) => {
+        if (exactMolecularAuthorityRef.current || !ids.length) return;
+        const removed = new Set(ids);
+        setSequenceData((current) => ({ ...current, features: current.features.filter((feature) => !removed.has(feature.id)) }), 'Remove selected features');
+        setIsDirty(true);
+    }, [setSequenceData]);
 
     // Remove primer handler
     const handleRemovePrimer = useCallback((primerId: string) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
-            primers: (sequenceData.primers || []).filter(p => p.id !== primerId)
-        });
+        setSequenceData((current) => ({
+            ...current,
+            primers: (current.primers || []).filter(p => p.id !== primerId)
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     const handleAnalysisTracksChange = useCallback((tracks: AnalysisTrack[]) => {
         if (exactMolecularAuthorityRef.current) return;
-        setSequenceData({
-            ...sequenceData,
+        setSequenceData((current) => ({
+            ...current,
             analysisTracks: tracks,
-        });
+        }));
         setIsDirty(true);
-    }, [isExactMolecularAuthority, sequenceData, setSequenceData]);
+    }, [setSequenceData]);
 
     // Auto-annotation state
     const [isAnnotating, setIsAnnotating] = useState(false);
@@ -2200,11 +2216,55 @@ export function MolBioToolkitV2() {
     }, [activeDisplayStrand, activePanel, activeWorkspaceId, workspaceRestoreComplete, workspaceTabs, workspaceViewModes]);
 
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
+    const ngsWorkupQuery = useInfiniteQuery({
+        queryKey: ['molbio-workups', activeWorkspaceId, selectedSequenceId],
+        enabled: Boolean(selectedSequenceId) && !isViewerFullscreen,
+        initialPageParam: 0,
+        queryFn: async ({ pageParam, signal }) => {
+            const response = await fetch(`/api/molbio/sequences/${encodeURIComponent(selectedSequenceId!)}/ngs-workup?limit=50&offset=${pageParam}`, { signal });
+            if (!response.ok) throw new Error(`QC workup request failed with HTTP ${response.status}.`);
+            const payload = await response.json();
+            const workups = parseMobileMolBioWorkups(payload);
+            if (!workups || payload.sequence_id !== selectedSequenceId) throw new Error('QC workup response is malformed or belongs to another sequence.');
+            if (typeof payload.has_more !== 'boolean' || (payload.has_more && (!Number.isInteger(payload.next_offset) || payload.next_offset <= pageParam))) {
+                throw new Error('QC workup response has no usable continuation.');
+            }
+            return { workups, nextOffset: payload.has_more ? payload.next_offset as number : null };
+        },
+        getNextPageParam: (page) => page.nextOffset ?? undefined,
+        // Loaded history grows only on explicit continuation, not focus/remount refetches.
+        staleTime: Infinity,
+        retry: false,
+        refetchOnWindowFocus: false,
+    });
+    const ngsWorkups = ngsWorkupQuery.data?.pages.flatMap((page) => page.workups) ?? [];
+    const ngsWorkupStatus: MobileMolBioWorkupStatus = !selectedSequenceId ? 'idle'
+        : ngsWorkupQuery.isPending ? 'loading' : ngsWorkupQuery.isError && ngsWorkups.length === 0 ? 'unavailable' : 'ready';
+    const ngsWorkupContinuation = (
+        <div className="p-2 text-xs text-slate-400">
+            {ngsWorkupQuery.hasNextPage && <p>{ngsWorkups.length} workups loaded; more candidate history remains.</p>}
+            {ngsWorkupQuery.isError && <p role="alert">Workup history could not be loaded completely.</p>}
+            {(ngsWorkupQuery.hasNextPage || ngsWorkupQuery.isError) && (
+                <button type="button" disabled={ngsWorkupQuery.isFetching} onClick={() => {
+                    if (ngsWorkupQuery.hasNextPage) void ngsWorkupQuery.fetchNextPage();
+                    else void ngsWorkupQuery.refetch();
+                }}>
+                    {ngsWorkupQuery.isFetching ? 'Loading workups…' : ngsWorkupQuery.isError ? 'Retry workup history' : 'Load more workups'}
+                </button>
+            )}
+        </div>
+    );
     const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
     const [viewportWidth, setViewportWidth] = useState(initialViewportWidth);
     const [viewportHeight, setViewportHeight] = useState(initialViewportHeight);
     const [mobileSurface, setMobileSurface] = useState<MolBioMobileSurface>('map');
+    const selectedRestrictionIds = JSON.stringify(selectedEnzymes);
+
+
+    const requestDiagnosticRestrictionAnalysis = useCallback(() => {
+        runRestrictionAnalysis(JSON.parse(selectedRestrictionIds));
+    }, [runRestrictionAnalysis, selectedRestrictionIds]);
     const [mobileConstructPickerOpen, setMobileConstructPickerOpen] = useState(false);
     const pendingMobileDemoRef = useRef<SequenceData | null>(null);
     const [pendingMobileDemoVersion, setPendingMobileDemoVersion] = useState(0);
@@ -2221,6 +2281,12 @@ export function MolBioToolkitV2() {
         viewportWidth,
         viewportHeight,
     });
+    const restrictionConsumerVisible = visibility.cutsites || (isMobileMolBio
+        ? mobileSurface === 'digest'
+        : !isToolPanelCollapsed && activePanel === 'digest');
+    useEffect(() => {
+        if (restrictionConsumerVisible) runRestrictionAnalysis(JSON.parse(selectedRestrictionIds));
+    }, [selectedRestrictionIds, runRestrictionAnalysis, restrictionConsumerVisible]);
     useMolBioBodyScrollLock(isViewerFullscreen, isMobileMolBio);
     const [leftPanelWidth, setLeftPanelWidth] = useState(MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH);
     const [rightPanelWidth, setRightPanelWidth] = useState(() => getDefaultMolBioToolPanelWidth('view'));
@@ -2257,22 +2323,14 @@ export function MolBioToolkitV2() {
 
         const loadPrimerTmOptions = async () => {
             try {
-                const response = await fetchPrimerTmOptions();
+                const response = await queryClient.fetchQuery({ queryKey: ['molbio-primer-tm-options'], queryFn: fetchPrimerTmOptions, staleTime: 300_000 });
                 if (cancelled) {
                     return;
                 }
                 setPrimerTmOptions(response.data);
-                const preferredSequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
-                const supported = response.data.algorithms.some(
-                    (option) =>
-                        option.id === primerTmSettings.algorithm &&
-                        option.sequence_types.includes(preferredSequenceType),
-                );
-                if (!supported) {
-                    setPrimerTmSettings(response.data.defaults[preferredSequenceType]);
-                }
             } catch (tmError) {
                 console.error('Failed to load primer Tm options:', tmError);
+                if (!cancelled) setWorkspaceRestoreNotice('Primer Tm options unavailable. Reload to retry.');
             }
         };
 
@@ -2280,7 +2338,7 @@ export function MolBioToolkitV2() {
         return () => {
             cancelled = true;
         };
-    }, [primerTmSettings.algorithm, sequenceData.sequenceType]);
+    }, [queryClient]);
 
     useEffect(() => {
         if (!primerTmOptions) {
@@ -2443,6 +2501,7 @@ export function MolBioToolkitV2() {
         file: File,
         publishedSource?: AnnotationSourceProvenance,
     ): Promise<string> => {
+        const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) {
             throw new Error('Exact immutable molecular revisions are read-only. Open the current editable projection before importing annotations.');
         }
@@ -2564,6 +2623,7 @@ export function MolBioToolkitV2() {
         if (exactMolecularAuthorityRef.current) {
             throw new Error('Exact immutable molecular revision authority opened before annotation import completed; no local annotations were changed.');
         }
+        if (!ownsCompletion()) throw new Error('Workspace changed during annotation import; no annotations applied.');
         setSequenceData({
             ...sequenceData,
             features: transferredFeatures,
@@ -2575,17 +2635,22 @@ export function MolBioToolkitV2() {
     }, [sequenceData, setSequenceData]);
 
     const retrieveNcbiAnnotations = useCallback(async (accession: string): Promise<string> => {
+        const ownsCompletion = captureEditableOwner();
         const retrieved = await retrieveNcbiAnnotationSource(accession);
+        if (!ownsCompletion()) throw new Error('Workspace changed during annotation retrieval; no annotations applied.');
         return importAnnotationsFromFile(retrieved.file, retrieved.source);
     }, [importAnnotationsFromFile]);
 
     const retrieveAddgeneAnnotations = useCallback(async (plasmidId: string): Promise<string> => {
+        const ownsCompletion = captureEditableOwner();
         const retrieved = await retrieveAddgeneAnnotationSource(plasmidId);
+        if (!ownsCompletion()) throw new Error('Workspace changed during annotation retrieval; no annotations applied.');
         return importAnnotationsFromFile(retrieved.file, retrieved.source);
     }, [importAnnotationsFromFile]);
 
     // Run auto-annotation with user settings
     const runAutoAnnotate = useCallback(async (settings: AutoAnnotateSettings) => {
+        const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         if (!sequenceData.sequence) return;
         if (sequenceData.sequenceType === 'rna') {
@@ -2699,6 +2764,7 @@ export function MolBioToolkitV2() {
             if (exactMolecularAuthorityRef.current) {
                 throw new Error('Exact immutable molecular revision authority opened before auto-annotation completed; no local features were changed.');
             }
+            if (!ownsCompletion()) throw new Error('Workspace changed during auto-annotation; no annotations applied.');
             setSequenceData({
                 ...sequenceData,
                 features: mergedFeatures
@@ -2819,6 +2885,7 @@ export function MolBioToolkitV2() {
     }, [loadLibrary, openWorkspace]);
 
     const handleQuickAddPrimer = useCallback(async (input: SelectionPrimerInput) => {
+        const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         if (!selectionAction || selectionAction.action === 'feature') {
             return;
@@ -2857,6 +2924,7 @@ export function MolBioToolkitV2() {
                 setQuickAddBusy(null);
                 return;
             }
+            if (!ownsCompletion()) { setQuickAddBusy(null); return; }
             handleAddPrimer(primer);
             setHighlightedRegions(getPrimerHighlightRegions(
                 primer,
@@ -2878,7 +2946,8 @@ export function MolBioToolkitV2() {
         handleAddPrimer,
         primerTmSettings,
         selectionAction,
-        sequenceData.sequenceType,
+        sequenceData,
+        captureEditableOwner,
     ]);
 
     const handleQuickAddFeature = useCallback((input: SelectionFeatureInput) => {
@@ -3031,11 +3100,12 @@ export function MolBioToolkitV2() {
                             sequences={sequences}
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
+                            onDemoIntent={requestDemos}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => handleMobileSelectSequence(sequence.id)}
                             onRefresh={loadLibrary}
                             onLoadDemo={handleMobileLoadDemo}
-                            loading={loading}
+                            loading={libraryLoading}
                             width={viewportWidth}
                             projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
                             showAllConstructs={showAllConstructs}
@@ -3046,12 +3116,15 @@ export function MolBioToolkitV2() {
                 map={mobileViewer(mobileMapViewMode)}
                 sequence={mobileViewer('linear')}
                 details={(
+                    <>
                     <MobileMolBioReadPanel
                         mode="details"
                         sequenceData={sequenceData}
                         workups={ngsWorkups}
                         workupsStatus={ngsWorkupStatus}
                     />
+                    {ngsWorkupContinuation}
+                    </>
                 )}
                 digest={(
                     <DigestPanel
@@ -3079,12 +3152,15 @@ export function MolBioToolkitV2() {
                     />
                 )}
                 qc={(
-                    <MobileMolBioReadPanel
+                    <>
+                    {ngsWorkupQuery.hasNextPage && ngsWorkups.length === 0 ? <p className="p-3">No valid workups in the loaded page; continue to check older history.</p> : <MobileMolBioReadPanel
                         mode="qc"
                         sequenceData={sequenceData}
                         workups={ngsWorkups}
                         workupsStatus={ngsWorkupStatus}
-                    />
+                    />}
+                    {ngsWorkupContinuation}
+                    </>
                 )}
             />
         );
@@ -3127,6 +3203,7 @@ export function MolBioToolkitV2() {
                             sequences={sequences}
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
+                            onDemoIntent={requestDemos}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => {
                                 if (sequence.revision_id) {
@@ -3151,7 +3228,7 @@ export function MolBioToolkitV2() {
                             }}
                             onRefresh={loadLibrary}
                             onLoadDemo={guardedLoadDemo}
-                            loading={loading}
+                            loading={libraryLoading}
                             width={viewerLayout.leftPanelWidth}
                             projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
                             showAllConstructs={showAllConstructs}
@@ -3282,13 +3359,14 @@ export function MolBioToolkitV2() {
                                 </a>
                             </div>
                             {ngsWorkups.length === 0 ? (
-                                <p className="mt-1 text-slate-400">No revision-bound NGS evidence. Job completion is not a scientific PASS.</p>
+                                <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing workups…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing workups unavailable.' : ngsWorkupQuery.hasNextPage ? 'No valid workups in the loaded page; older history remains.' : 'No revision-bound NGS evidence. Job completion is not a scientific PASS.'}</p>
                             ) : ngsWorkups.map((workup) => (
                                 <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
                                     <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
                                     <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
                                 </div>
                             ))}
+                            {ngsWorkupContinuation}
                         </section>
                     )}
 
@@ -3342,6 +3420,7 @@ export function MolBioToolkitV2() {
                                 {/* GC Content Track */}
                                 {!isViewerFullscreen && showGCTrack && (
                                     <GCContentTrack
+                                        onRestrictionAnalysisRequested={requestDiagnosticRestrictionAnalysis}
                                         sequence={sequenceData.sequence}
                                         sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
                                         reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
@@ -3613,6 +3692,7 @@ export function MolBioToolkitV2() {
                                 selection={selection}
                                 onHighlight={setHighlightedRegions}
                                 onAddPrimer={handleAddPrimer}
+                                onAddPrimers={handleAddPrimers}
                                 onRemovePrimer={handleRemovePrimer}
                                 tmOptions={primerTmOptions}
                                 tmSettings={primerTmSettings}
@@ -3638,6 +3718,7 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 onAddFeature={handleAddFeature}
                                 onRemoveFeature={handleRemoveFeature}
+                                onRemoveFeatures={handleRemoveFeatures}
                                 onUpdateFeature={handleUpdateFeature}
                             />
                         )}
@@ -3831,6 +3912,7 @@ export function MolBioToolkitV2() {
                 onOpenPrimerAsConstruct={handleOpenPrimerAsConstruct}
                 hasOpenSequence={Boolean(sequenceData.sequence)}
                 currentSequenceData={sequenceData.sequence ? sequenceData : null}
+                onDemoIntent={requestDemos}
                 demos={demoPlasmids}
             />
         </>

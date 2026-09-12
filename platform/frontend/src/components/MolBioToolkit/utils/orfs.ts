@@ -87,15 +87,19 @@ export function findOpenReadingFrames(
         const workSeq = strand === 1 ? seq : reverseComplementCodingSequence(seq);
         const scanSeq = circular ? workSeq + workSeq.slice(0, Math.max(0, sequenceLength - 1)) : workSeq;
 
+        // A backwards sweep indexes the next stop in each reading frame once.
+        const nextStops = new Int32Array(scanSeq.length + 3).fill(-1);
+        for (let position = scanSeq.length - 3; position >= 0; position -= 1) {
+            nextStops[position] = STOP_CODONS.has(scanSeq.slice(position, position + 3))
+                ? position : nextStops[position + 3];
+        }
         for (let start = 0; start <= sequenceLength - 3; start += 1) {
             if (scanSeq.slice(start, start + 3) !== 'ATG') {
                 continue;
             }
             const maximumEnd = circular ? start + sequenceLength : sequenceLength;
-            for (let stop = start + 3; stop + 3 <= maximumEnd; stop += 3) {
-                if (!STOP_CODONS.has(scanSeq.slice(stop, stop + 3))) {
-                    continue;
-                }
+            const stop = nextStops[start + 3];
+            if (stop >= 0 && stop + 3 <= maximumEnd) {
                 const length = stop + 3 - start;
                 if (length >= minLength) {
                     const workSegments = splitForwardRange(start, length, sequenceLength);
@@ -111,7 +115,6 @@ export function findOpenReadingFrames(
                         segments,
                     });
                 }
-                break;
             }
         }
     }

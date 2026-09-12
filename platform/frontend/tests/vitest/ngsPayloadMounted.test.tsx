@@ -8,8 +8,8 @@ const apiMocks = vi.hoisted(() => ({
     commitMolBioSequenceImport: vi.fn(),
     createMolBioNgsReference: vi.fn(),
     fetchFiles: vi.fn(),
-    fetchMolBioNgsReferenceRevisions: vi.fn(),
-    fetchMolBioNgsReferences: vi.fn(),
+    fetchMolBioNgsReferenceRevision: vi.fn(),
+    fetchMolBioNgsSummaries: vi.fn(),
     fetchMolBioNgsStateRevision: vi.fn(),
     fetchMolBioSequenceRevisions: vi.fn(),
     fetchNucleotideSequences: vi.fn(),
@@ -44,14 +44,14 @@ let queryClient: QueryClient;
 beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.fetchNucleotideSequences.mockResolvedValue({ data: [] });
-    apiMocks.fetchMolBioNgsReferences.mockResolvedValue([{ id: 'reference-1', name: 'Reference one' }]);
-    apiMocks.fetchMolBioNgsReferenceRevisions.mockResolvedValue([{
+    apiMocks.fetchMolBioNgsSummaries.mockResolvedValue({ next_cursor: null, total: 1, items: [{
+        reference_id: 'reference-1', name: 'Reference one',
         id: 'reference-revision-1',
         revision_number: 1,
         canonical_fasta_sha256: 'a'.repeat(64),
         molecule_type: 'dna',
         topology: 'circular',
-    }]);
+    }] });
     apiMocks.fetchMolBioNgsStateRevision.mockResolvedValue({
         id: 'state-1',
         members: [{ role: 'ngs_reference', entity_kind: 'ngs_reference_revision', entity_id: 'reference-revision-1' }],

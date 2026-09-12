@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import './vitest/setup';
+import { webcrypto } from 'node:crypto';
+import './setup';
 
 import {
     fetchRestrictionAnalysis,
@@ -10,9 +11,9 @@ import {
     parseRestrictionDigestSimulation,
     parseRestrictionProducts,
     simulateRestrictionDigest,
-} from '../src/lib/restrictionAnalysis';
-import { createLatestAsyncResourceController } from '../src/lib/latestAsyncResource';
-import * as restrictionApi from '../src/lib/restrictionAnalysis';
+} from '../../src/lib/restrictionAnalysis';
+import { createLatestAsyncResourceController } from '../../src/lib/latestAsyncResource';
+import * as restrictionApi from '../../src/lib/restrictionAnalysis';
 
 const H = 'a'.repeat(64);
 const POLICY = {
@@ -110,6 +111,74 @@ const DIGEST = { schema: 'bms.molbio.restriction-digest-simulation.v1', cleavage
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 describe('restriction API boundary', () => {
+    it('molbio-sanity-c canonicalizes lowercase DNA and trimmed names for analysis and digest', async () => {
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            const source = { kind: 'inline_dna' as const, name: ' fixture ', dna: 'ttgaattcaa', topology: 'linear' as const };
+            const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('TTGAATTCAA'));
+            const sha = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+            const analysis = clone(ANALYSIS);
+            analysis.source.content_sha256 = sha;
+            analysis.analysis.source_sha256 = sha;
+            const simulation = clone(DIGEST);
+            simulation.source.content_sha256 = sha;
+            const transport = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+                expect(JSON.parse(String(init?.body)).source).toEqual({ ...source, name: 'fixture', dna: 'TTGAATTCAA' });
+                return new Response(JSON.stringify(String(url).endsWith('/analyze') ? analysis : simulation));
+            });
+            const args = { source, catalog: { catalog_id: 'catalog-v1', expected_catalog_sha256: H }, enzymeIds: ['EcoRI'], transport };
+            await fetchRestrictionAnalysis(args);
+            await simulateRestrictionDigest(args);
+            expect(transport).toHaveBeenCalledTimes(2);
+            await expect(fetchRestrictionAnalysis({ ...args, source: { ...source, dna: 'TT GAATTC' } })).rejects.toThrow('DNA input is invalid');
+            expect(transport).toHaveBeenCalledTimes(2);
+        } finally { vi.unstubAllGlobals(); }
+    });
+
+    it('molbio-sanity-c splits only typed work budgets with complete motif-only coverage', async () => {
+        const ids = ['A', 'B', 'C', 'D'];
+        const records = ids.map((enzyme_id) => ({ ...clone(RECORD), enzyme_id, canonical_name: enzyme_id, analysis_capability: 'recognition_only' as const }));
+        const catalog = { ...clone(RECEIPT), counts: { ...COUNTS, total: 4, geometry_ready: 0, commercial_geometry_ready: 0, unknown_geometry: 4 } };
+        const source = { kind: 'molecular_revision' as const, sequence_id: 'seq', revision_id: 'rev', expected_content_sha256: H };
+        const calls: string[][] = [];
+        const transport = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            const ids = JSON.parse(String(init?.body)).scope.enzyme_ids as string[];
+            calls.push(ids);
+            if (ids.length > 1) return new Response(JSON.stringify({ detail: { code: 'request_too_large', budget: 'scan_work', limit: 1, observed: 2 } }), { status: 413 });
+            const response = clone(ANALYSIS);
+            response.catalog = catalog;
+            response.source = { ...SOURCE, kind: 'molecular_revision', sequence_id: 'seq', revision_id: 'rev', revision_number: 1 };
+            response.analysis.occurrences = [];
+            response.analysis.grouped_cleavages = [];
+            response.analysis.counts = { recognition_site_count_definite: 0, recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0 };
+            response.analysis.enzyme_summaries = ids.map((enzyme_id) => ({ ...response.analysis.counts, enzyme_id, canonical_name: enzyme_id, analysis_capability: 'recognition_only', cleavage_status: 'unknown', limitations: [] }));
+            return new Response(JSON.stringify(response));
+        });
+        const result = await restrictionApi.fetchRestrictionAnalysisBatch({ source, catalog, records, transport });
+        expect(calls.map((row) => row.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
+        expect(result.complete).toBe(true);
+        expect(result.chunks.flatMap((chunk) => chunk.enzyme_ids)).toEqual(ids);
+        expect(result.failed_enzyme_ids).toEqual([]);
+        const permanent = vi.fn(async () => new Response(JSON.stringify({ detail: { code: 'catalog_digest_mismatch' } }), { status: 409 }));
+        await expect(restrictionApi.fetchRestrictionAnalysisBatch({ source, catalog, records, transport: permanent })).rejects.toMatchObject({ status: 409, code: 'catalog_digest_mismatch' });
+        expect(permanent).toHaveBeenCalledTimes(1);
+        const untyped = vi.fn(async () => new Response(JSON.stringify({ detail: { code: 'request_too_large' } }), { status: 413 }));
+        await expect(restrictionApi.fetchRestrictionAnalysisBatch({ source, catalog, records, transport: untyped })).rejects.toThrow('supported limits');
+        expect(untyped).toHaveBeenCalledTimes(1);
+    });
+
+    it('molbio-sanity-c encodes analysis once and counts only definite complete cuts', () => {
+        const value = clone(ANALYSIS);
+        value.analysis.occurrences[0].certainty = 'possible';
+        value.analysis.counts = { recognition_site_count_definite: 0, recognition_site_count_possible: 1, double_strand_break_count: 0, nick_count: 0 };
+        Object.assign(value.analysis.enzyme_summaries[0], value.analysis.counts);
+        const stringify = vi.spyOn(JSON, 'stringify');
+        try {
+            expect(parseRestrictionAnalysis(value)).toBe(value);
+            expect(stringify).toHaveBeenCalledTimes(1);
+        } finally { stringify.mockRestore(); }
+    });
+
     it('accepts backend-shaped catalog/analysis/digest payloads without reordering', () => {
         const page = parseRestrictionCatalogPage({ schema: 'bms.molbio.restriction-catalog-page.v1', catalog: RECEIPT, items: [RECORD], next_cursor: null });
         expect(page.items[0]).toBe(RECORD);
@@ -376,9 +445,9 @@ describe('restriction API boundary', () => {
         expect(explicitChunks.flat()).toEqual(ids);
         expect(result.analysis.enzyme_summaries.map((row) => row.enzyme_id)).toEqual(ids);
         expect(result.chunks.map((chunk) => chunk.result_sha256)).toEqual(['1'.repeat(64), '2'.repeat(64), '3'.repeat(64)]);
-        await expect(batchFetch({ source, catalog: receipt, records: records.slice(0, -1), transport })).rejects.toThrow('catalog record count');
-        const missingCapability = records.map((row, index) => index === 0 ? { ...row, analysis_capability: 'recognition_only' } : row);
-        await expect(batchFetch({ source, catalog: receipt, records: missingCapability, transport })).rejects.toThrow('analysis-capable catalog count');
+        const motifOnly = records.map((row, index) => index === 0 ? { ...row, analysis_capability: 'recognition_only' } : row);
+        const full = await batchFetch({ source, catalog: receipt, records: motifOnly, transport });
+        expect(full.analysis.enzyme_summaries.map((row) => row.enzyme_id)).toEqual(ids);
     });
 
     it('prevents an older completion from replacing newer authority even when transport ignores AbortSignal', async () => {

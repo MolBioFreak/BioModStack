@@ -40,6 +40,7 @@ from services.restriction_analysis import (
     ResourcePolicyReceipt,
     InvalidDNAError,
     analyze_sequence,
+    _analyze_normalized_sequence,
     normalize_dna,
     resource_policy_receipt,
 )
@@ -53,7 +54,7 @@ from services.restriction_digest import (
     DigestGeometryError,
     DigestLimitError,
     DigestSimulation,
-    simulate_digest_canonical,
+    _simulate_normalized_digest_canonical,
 )
 from services.restriction_digest_save_receipt import (
     canonical_save_request_receipt,
@@ -961,12 +962,14 @@ def list_catalog(
         )
     else:
         ordered = view.ordered_records
-    selected = [
-        record
-        for record in ordered
-        if matches(record)
-        and (after is None or (record.canonical_name.casefold(), record.enzyme_id.casefold()) > after)
-    ]
+    selected = []
+    for record in ordered:
+        if after is not None and (record.canonical_name.casefold(), record.enzyme_id.casefold()) <= after:
+            continue
+        if matches(record):
+            selected.append(record)
+            if len(selected) > page_limit:
+                break
     items = selected[:page_limit]
     next_cursor = (
         _encode_cursor(view, fingerprint, page_limit, items[-1])
@@ -1252,8 +1255,8 @@ def _complete_analysis_pipeline(
         "request": normalized_request,
         "resource_policy_sha256": policy_sha256,
     })).hexdigest()
-    analysis = analyze_sequence(
-        sequence=sequence,
+    analysis = _analyze_normalized_sequence(
+        sequence=sequence, source_sha=source_receipt.content_sha256,
         topology=topology,
         catalog=view,
         records=records,
@@ -1316,7 +1319,10 @@ async def analyze_restriction_sites(
     except InvalidDNAError as exc:
         raise _error(422, "invalid_dna", "DNA input or regions are invalid") from exc
     except AnalysisLimitError as exc:
-        raise _error(413, "request_too_large", "restriction analysis request is too large") from exc
+        raise HTTPException(status_code=413, detail={
+            "code": "request_too_large", "message": "restriction analysis request is too large",
+            **({"budget": exc.budget, "limit": exc.limit, "observed": exc.observed} if exc.budget else {}),
+        }) from exc
     except AnalysisTimeoutError as exc:
         raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
     except Exception as exc:
@@ -1341,8 +1347,8 @@ def _complete_digest_pipeline(
     if payload.catalog.expected_catalog_sha256 != view.content_sha256:
         raise _error(409, "catalog_digest_mismatch", "restriction catalog digest does not match")
     sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
-    simulation, canonical = simulate_digest_canonical(
-        sequence=sequence, topology=topology, catalog=view,
+    simulation, canonical = _simulate_normalized_digest_canonical(
+        sequence=sequence, source_sha=source_receipt.content_sha256, topology=topology, catalog=view,
         records=_digest_records(view, payload.enzyme_ids),
         selected_enzyme_ids=tuple(payload.enzyme_ids),
         source_receipt=source_receipt.model_dump(mode="json", by_alias=True),
@@ -1416,6 +1422,8 @@ def _parse_saved_digest_result(
     result_sha256: str,
 ) -> SavedDigestResponse:
     raw = raw_text.encode("utf-8")
+    if len(raw) > MAX_SIMULATION_RESPONSE_BYTES:
+        raise DigestLimitError("saved digest response exceeds digest byte limit")
     document = json.loads(raw)
     if raw != rfc8785.dumps(document):
         raise ValueError("noncanonical result")
@@ -1759,7 +1767,7 @@ def _validate_saved_digest_snapshot(*, snapshot: _SavedDigestSnapshot) -> _Prepa
     if total_bases > MAX_TOTAL_FRAGMENT_BASES:
         raise DigestLimitError("saved digest output bases exceed digest limit")
     return _PreparedSavedDigest(
-        fragments=(), canonical_bytes=_serialize_saved_digest_response(response)
+        fragments=(), canonical_bytes=cast(str, snapshot.raw_text).encode("utf-8")
     )
 
 
@@ -1779,6 +1787,27 @@ async def _run_digest_cpu(function: Callable[..., Any], **kwargs: Any) -> Any:
 async def _load_saved_digest(
     session: AsyncSession, operation_id: str,
 ) -> bytes:
+    try:
+        _reserve_analysis_capacity()
+    except AnalysisBusyError as exc:
+        raise _error(503, "analysis_busy", "restriction digest capacity is busy") from exc
+    try:
+        snapshot = await _load_saved_digest_snapshot(session, operation_id)
+    except BaseException:
+        _analysis_capacity.release()
+        raise
+    try:
+        validated = await _run_capacity_owned(_validate_saved_digest_snapshot, snapshot=snapshot)
+        return validated.canonical_bytes
+    except AnalysisTimeoutError as exc:
+        raise _error(504, "analysis_timeout", "restriction digest exceeded its wait timeout") from exc
+    except DigestLimitError as exc:
+        raise _error(413, "request_too_large", "restriction digest request is too large") from exc
+    except Exception as exc:
+        raise _error(409, "digest_result_integrity_error", "saved restriction digest evidence failed integrity verification") from exc
+
+
+async def _load_saved_digest_snapshot(session: AsyncSession, operation_id: str) -> _SavedDigestSnapshot:
     result = (
         await session.execute(
             select(
@@ -1928,8 +1957,7 @@ async def _load_saved_digest(
                 for row in output_documents
             ),
         )
-        validated = await _run_digest_cpu(_validate_saved_digest_snapshot, snapshot=snapshot)
-        return validated.canonical_bytes
+        return snapshot
     except HTTPException:
         raise
     except Exception as exc:

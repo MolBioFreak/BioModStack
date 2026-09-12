@@ -16,7 +16,10 @@ test('Nanopore references have no browser or mutable path authority', () => {
         template,
         /reference_fasta:\s*(?:effectiveReferencePath|referencePath|legacyPath|entry\.path)|managed_reference_(?:path|fasta_path)|params\.reference_fasta\s*=/u,
     );
-    assert.match(template, /importMolBioNgsBrowserReference/u);
+    assert.doesNotMatch(template, /createMolBioNgsReference|importMolBioNgsBrowserReference/u);
+    assert.match(template, /commitMolBioSequenceImport/u);
+    assert.match(template, /origin_surface: 'ngs'/u);
+    assert.match(template, /createNucleotideSequence\(\{ \.\.\.record, sequence_type: 'rna', is_circular:/u);
     assert.match(template, /managed_reference:\s*\{/u);
     assert.match(api, /fetchMolBioSequenceRevisions/u);
     assert.match(api, /\/api\/molbio\/sequences\/\$\{encodeURIComponent\(sequenceId\)\}\/revisions/u);
