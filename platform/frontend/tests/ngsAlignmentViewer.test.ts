@@ -54,6 +54,40 @@ test('large governed BAM avoids unsafe automatic browser allocation', () => {
     }
 });
 
+test('automatic full-source budget keeps small BAMs and routes dense AAZ to bounded presentation', () => {
+    const budget = 16 * 1024 * 1024;
+    for (const size of [5_000_000, budget]) {
+        assert.deepEqual(alignmentTrackAutoLoadDisposition(size), { autoLoad: true, reason: null });
+        assert.equal(resolveBrowserAlignmentTrackSource({
+            jobId: 'job-a', sessionId: 'session-a', alignmentUrl: '/source.bam',
+            alignmentIndexUrl: '/source.bam.bai', alignmentSizeBytes: size,
+        })?.kind, 'full');
+    }
+    assert.equal(alignmentTrackAutoLoadDisposition(budget + 1).autoLoad, false);
+
+    // Observed AAZ source size; receipt below is synthetic, not live performance evidence.
+    const input = {
+        jobId: 'job-a', sessionId: 'session-a', alignmentUrl: '/source.bam',
+        alignmentIndexUrl: '/source.bam.bai', alignmentSizeBytes: 67_380_607,
+    };
+    assert.equal(alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad, false);
+    assert.equal(resolveBrowserAlignmentTrackSource(input), null,
+        'do not send the full BAM to IGV while the asynchronous presentation is pending');
+    const presentation = presentationFixture();
+    const preview = resolveBrowserAlignmentTrackSource({ ...input, presentation })!;
+    assert.equal(preview.kind, 'preview');
+    assert.equal(preview.selectedReadCount, 2000);
+    assert.equal(buildAlignmentTrackConfig(preview, 420).url, presentation.preview.bam.url);
+    assert.equal(buildAlignmentTrackConfig(preview, 420).showCoverage, false);
+    assert.deepEqual(preview.fullSourceDownload, { url: '/source.bam', sizeBytes: 67_380_607 });
+
+    const locusSlice = locusFixture();
+    const locus = resolveBrowserAlignmentTrackSource({ ...input, presentation, locusSlice })!;
+    assert.equal(locus.kind, 'locus', 'explicit detailed locus still overrides automatic preview');
+    assert.equal(buildAlignmentTrackConfig(locus, 420).url, locusSlice.bam.url);
+    assert.deepEqual(locus.fullSourceDownload, preview.fullSourceDownload);
+});
+
 test('track sources keep browser presentation separate from full-source download authority', () => {
     const full = resolveBrowserAlignmentTrackSource({
         jobId: 'job-a',

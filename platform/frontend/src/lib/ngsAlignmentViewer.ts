@@ -197,7 +197,10 @@ export interface LocalIgvConfigInput {
     auxiliaryTracks: Array<Record<string, unknown>>;
 }
 
-const MAX_BROWSER_ALIGNMENT_BYTES = 536_870_912;
+// Automatic full-source rendering budget, not a scientific artifact/download limit.
+// Dense small-reference BAMs can stall IGV well below 512 MiB; larger sources use
+// the existing deterministic primary-read preview and explicit bounded locus reads.
+const MAX_BROWSER_ALIGNMENT_BYTES = 16 * 1024 * 1024;
 
 export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | undefined): {
     autoLoad: boolean;
