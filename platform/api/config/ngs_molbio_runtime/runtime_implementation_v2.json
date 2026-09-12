@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "6a57cb1a55cbddf3489d05a1974613711fb791f96e5b309e2a2ee8f373c5a8e9",
+  "content_sha256": "a45568c6ed5142e77501c3b431078c04be07879d85b2f985be87ffd718ab264b",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -139,8 +139,8 @@
     },
     {
       "path": "docs/plans/2026-08-29-small-reference-large-bam-igv-repair.md",
-      "sha256": "30130b995457c157183f435eeb9ad15fc86b3f02a76eb96b6caf47f2a12a3503",
-      "size_bytes": 12319
+      "sha256": "da59f4307a8211eacb35db4e0c64cd9e164412d33def554eabc09e9700b89e22",
+      "size_bytes": 12424
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "7ad05f98563583464dea2104c6c59bccefb913af",
-  "successor_source_tree": "a4774ee179d80d05d0906320488d428d8f12cd82",
+  "successor_source_commit": "fd483148e48fcc091a4470a88208ed61777400ce",
+  "successor_source_tree": "7322b6348a80f238da5efe2a6b0f5c93307ba8b3",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
