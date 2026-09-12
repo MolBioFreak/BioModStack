@@ -250,7 +250,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             {artifacts.data?.data.analysis_error && <div role="alert" className="rounded border border-amber-500/30 p-3 text-amber-200">Analysis artifacts unavailable: {artifacts.data.data.analysis_error.message}</div>}
             <div className="grid gap-3 md:grid-cols-4">
                 {[
-                    ['Replicas', summaryData.replica_count], ['Artifacts', summaryData.artifact_count],
+                    ['Replicas', summaryData.replica_count], ['Dynamics artifacts', summaryData.artifact_count],
                     ['Dynamics', summaryData.status], ['Analysis', analysis.isError ? 'unavailable' : analysisData?.status ?? 'loading'],
                 ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-1 text-xl font-semibold text-white">{value}</div></div>)}
             </div>

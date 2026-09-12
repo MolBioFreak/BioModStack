@@ -38,6 +38,7 @@ export default defineConfig({
             './tests/vitest/molecularDynamicsGen2Mounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2ShellRoundTrip.test.tsx',
             './tests/vitest/molstarViewerLoadStateMounted.test.tsx',
+            './tests/vitest/dockingResultIdentityMounted.test.tsx',
             './tests/vitest/boltzApiNativeControls.test.tsx',
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
             './tests/vitest/bioxpCockpitAdmissionFanoutMounted.test.tsx',
