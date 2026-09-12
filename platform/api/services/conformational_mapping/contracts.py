@@ -1376,6 +1376,15 @@ def protenix_msa_settings(value: Mapping[str, Any], *, enabled: bool = True) -> 
         raise ValueError('Invalid CM hosted MSA settings: ' + errors[0].message)
     effective = apply_msa_policy('protenix', {**value, 'protenix_use_msa': enabled})
     effective.pop('protenix_use_msa')  # Native feature flags belong to the request, not this settings object.
+    if enabled:
+        from biomodstack_msa_api import MSAAPIError, validate_settings
+        from services.msa_provider_setup import provider_settings, selected_provider
+        try:
+            # Existing pure prequeue authority; generated roster applicability
+            # remains checked by effective_settings at the actual service.
+            validate_settings(selected_provider(effective), provider_settings(effective))
+        except MSAAPIError as exc:
+            raise ValueError(str(exc)) from exc
     return effective
 
 
@@ -1401,7 +1410,9 @@ class FeaturePolicy(_StrictModel):
     protein_msa_enabled: bool | None = None
     templates_enabled: bool | None = None
     rna_msa_enabled: bool | None = None
-    msa_settings: Annotated[dict[str, Any], WithJsonSchema(hosted_msa_settings_schema())] | None = None
+    msa_settings: Annotated[dict[str, Any] | None, WithJsonSchema(hosted_msa_settings_schema())] = Field(
+        default=None, json_schema_extra=lambda schema: schema.pop('default', None),
+    )
 
     @model_validator(mode="before")
     @classmethod
