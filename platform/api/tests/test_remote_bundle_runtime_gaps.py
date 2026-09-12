@@ -24,13 +24,27 @@ def bundle_assignment_fixture(gpu_indices=(0,)):
         "gpu_indices": list(gpu_indices)}}
 
 
-def bundle_resource_components_fixture():
-    """Use one declared native CPU setup policy for import-only transport tests."""
+def bundle_metadata_fixture(*, runtime_assets=False):
+    """Bounded transport projection of real reviewed native descriptors.
+
+    Only the CPU preparation policy executes in these import/cache probes;
+    optional image/weight leaves are transported, never scientific execution.
+    Keep its actual dependency and artifact closure, not just resource fields.
+    """
     from model_registry import selected_execution_metadata
     metadata = selected_execution_metadata('protenix', 'complex', {
         'pred_method': 'protenix', 'protenix_use_msa': False, 'run_frustrampnn': False,
     }, 'workflows/complex_prediction.nf')
-    return (next(row for row in metadata.static_components if row.component_key == 'PrepProtenixComplex'),)
+    component = next(row for row in metadata.static_components if row.component_key == 'PrepProtenixComplex')
+    dependencies = set(component.dependency_ids)
+    roles = set((*component.input_role_ids, *component.output_role_ids))
+    metadata = replace(metadata, static_components=(component,), dynamic_templates=(),
+        dependencies=tuple(row for row in metadata.dependencies
+            if row.logical_id in dependencies or (runtime_assets and row.kind in {'image', 'weights'})),
+        artifact_roles=tuple(row for row in metadata.artifact_roles if row.role_id in roles),
+        external_services=(), result_contract_json=b'{}')
+    assert metadata.complete
+    return metadata
 
 
 @pytest.fixture(autouse=True)
@@ -147,17 +161,10 @@ def package(tmp_path, monkeypatch):
         source_identity=SourceIdentity('a'*40, 'b'*40))
     # Explicit shared relocation fixture, not scientific compilation evidence.
     # Capture intentionally cannot infer a selected dependency plan from argv.
-    from component_runtime import SelectedDependency, SelectedExecutionMetadata, SelectedExecutionPlan
+    from component_runtime import SelectedExecutionPlan
     invocation = job.native_invocation
     assert invocation.source_identity is not None and invocation.entrypoint is not None
-    metadata = SelectedExecutionMetadata(
-        availability='fixture', settings_authority=__file__, static_components=bundle_resource_components_fixture(),
-        dynamic_templates=(), dependencies=(
-            SelectedDependency('fixture:image', 'image', 'protenix.sif', __file__),
-            SelectedDependency('fixture:weights', 'weights', 'protenix', __file__),
-            SelectedDependency('fixture:support', 'support_python', None, __file__)),
-        artifact_roles=(), external_services=(), result_contract_json=b'{}',
-        admission_authority=None, retrieval_authority=None, blockers=(), closure_reviewed=True)
+    metadata = bundle_metadata_fixture(runtime_assets=True)
     job.native_invocation = replace(invocation, execution_plan=SelectedExecutionPlan(
         source_identity=invocation.source_identity, workflow='fixture',
         model_id=invocation.model_id, mode=invocation.mode, entrypoint=invocation.entrypoint,
@@ -505,8 +512,10 @@ def test_selected_unknown_declarations_never_become_empty_complete():
 
 def test_effective_dependency_inventory_omits_other_model_runtime_defaults(package):
     roots, release, job, target, _ = package
+    from services.frustrampnn.settings import default_settings
     command = compile_native(job, dict(sequence='AAAA', protenix_use_msa=False,
-        msa_provider='colabfold_api', rf3_container_path='/unrelated/rf3.sif', run_frustrampnn=True, gpu_id=0))
+        msa_provider='colabfold_api', rf3_container_path='/unrelated/rf3.sif', run_frustrampnn=True,
+        frustrampnn_settings=default_settings().model_dump_json(), gpu_id=0))
     compiled, params = bundle.compile_remote_dependencies('protenix', 'predict', command,
                                                          native_invocation=job.native_invocation)
     assert '--rf3_container_path' not in compiled
@@ -535,12 +544,33 @@ def test_actual_normalized_nextflow_command_omits_unrelated_original_params(pack
 
 @pytest.mark.parametrize('native', [None, 'auto', 'colabfold_api'])
 @pytest.mark.parametrize('use_msa', [False, True])
-def test_remote_consumes_compiler_resolved_backend_without_mutation(package, native, use_msa):
+def test_remote_consumes_compiler_resolved_backend_without_mutation(package, monkeypatch, native, use_msa):
     roots, release, job, target, _ = package
-    params = dict(sequence='AAAA', msa_provider='colabfold_api', protenix_use_msa=use_msa)
+    params = dict(sequence='AAAA', msa_provider='colabfold_api', protenix_use_msa=use_msa,
+                  run_frustrampnn=False)
     if native is not None:
         params['protenix_msa_backend'] = native
     command = compile_native(job, params)
+    if use_msa:
+        from services import msa_preparation
+        from services.model_msa_handoff import prepare_launch_msa
+        from prepare_protenix_msa import iter_protein_chains
+        supplied = roots['inputs'] / 'supplied.a3m'
+        supplied.write_text('>query\nAAAA\n>hit\nAA-A\n')
+        real_prepare = msa_preparation.prepare_protenix_inputs
+        def supplied_input(config, input_json, destination, settings):
+            # Explicit supplied-alignment seam; keep real packaging and binding.
+            payload = json.loads(input_json.read_text())
+            for _, _, chain in iter_protein_chains(payload):
+                chain['unpairedMsaPath'] = str(supplied)
+            input_json.write_text(json.dumps(payload))
+            return real_prepare(config, input_json, destination, settings)
+        monkeypatch.setattr(msa_preparation, 'prepare_protenix_inputs', supplied_input)
+        prepared = prepare_launch_msa(job.model_id, job.native_invocation.native_parameters,
+                                     Path(job.output_dir) / 'prepared-msa')
+        job.native_invocation = nextflow._bind_protenix_msa_transport(job.native_invocation, prepared)
+        command = list(job.native_invocation.command)
+    assert job.native_invocation.execution_plan.complete
     original = list(command)
     before = job.native_invocation.native_parameters
     compiled, effective = bundle.compile_remote_dependencies('protenix', 'predict', command,
@@ -569,7 +599,9 @@ def test_remote_rejects_invocation_source_mismatch(package):
 def test_cancelled_smaller_request_shape_keeps_enabled_stage_assets(package):
     roots, release, job, target, command = package
     (roots['containers']/'frustrampnn.sif').write_bytes(b'fixture-image-not-executed')
+    from services.frustrampnn.settings import default_settings
     normalized = dict(
+        frustrampnn_settings=default_settings().model_dump_json(),
         msa_provider='colabfold_api', allow_retries=False, sequence='AAAA', gpu_id=0,
         protenix_n_sample=5, protenix_n_cycle=10, protenix_n_step=200,
         protenix_seeds='42', protenix_use_msa=False, protenix_use_template=False,

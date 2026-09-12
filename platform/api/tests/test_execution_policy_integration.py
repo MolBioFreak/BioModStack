@@ -113,15 +113,16 @@ async def test_scheduler_restart_recovers_waiting_without_browser(store, monkeyp
     monkeypatch.setattr(ex, "_prove_pull_endpoint", unavailable)
     monkeypatch.setattr(ex, "remote_status", forbidden)
     monkeypatch.setattr(ex, "run_remote", forbidden)
-    poller = GPUOrchestrator.__new__(GPUOrchestrator)
-    poller.db_session_factory = store
+    poller = GPUOrchestrator(store, forbidden, forbidden)
     await poller.check_job_completions()
+    await asyncio.gather(*list(poller._remote_reconciliation_tasks.values()))
     await asyncio.gather(*list(ex._result_return_tasks))
     async with store() as session:
         current = await session.get(Job, "job")
         assert current.remote_state == ("result_pull_failed" if value == "automatic" else "results_available")
     assert seen == (["proof"] if value == "automatic" else [])
     await poller.check_job_completions()
+    await asyncio.gather(*list(poller._remote_reconciliation_tasks.values()))
     assert seen == (["proof"] if value == "automatic" else [])
 
 @pytest.mark.asyncio
@@ -133,18 +134,25 @@ async def test_scheduler_repairs_abandoned_diagnostics_locally(store, tmp_path, 
         job = await session.get(Job, "job")
         job.status = job.queue_status = "cancelled" if state == "cancelled" else "failed"
         job.remote_state = state
-        job.provenance = dict(job.provenance, remote_diagnostics={"state":"returning", **ex._pull_identity(job)})
+        job.provenance = dict(job.provenance, remote_execution_receipt=dict(
+            job.provenance['remote_execution_receipt'], state=state))
         before = (job.status, job.queue_status, job.remote_state, job.completed_at, job.error_message, job.output_dir)
         await session.commit()
+        tasks = BackgroundTasks()
+        await ex.request_remote_diagnostic_pull(session, job, tasks)
+        assert len(tasks.tasks) == 1
+        # Emulate process death releasing the real admitted claim, not transfer.
+        tasks.tasks[0].args[3].__exit__(None, None, None)
     async def forbidden(*_, **__):
         pytest.fail("diagnostic recovery must not transfer or contact worker")
     monkeypatch.setattr(ex, "remote_status", forbidden)
     monkeypatch.setattr(ex, "collect_remote_results", forbidden)
     monkeypatch.setattr(ex, "_prove_pull_endpoint", forbidden)
-    poller = GPUOrchestrator.__new__(GPUOrchestrator)
-    poller.db_session_factory = store
+    poller = GPUOrchestrator(store, forbidden, forbidden)
     await poller.check_job_completions()
+    await asyncio.gather(*list(poller._remote_reconciliation_tasks.values()))
     await poller.check_job_completions()
+    await asyncio.gather(*list(poller._remote_reconciliation_tasks.values()))
     async with store() as session:
         job = await session.get(Job, "job")
         assert job.provenance["remote_diagnostics"]["state"] == "failed"

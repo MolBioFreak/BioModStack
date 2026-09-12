@@ -14,7 +14,6 @@ from database import Job, ExecutionTarget
 from services.remote_execution import executor as ex
 from test_remote_lifecycle_gaps import store
 from test_remote_manual_result_pull import ready, success
-from test_remote_diagnostics_backend import terminal
 from test_remote_result_generation import package
 
 
@@ -140,19 +139,51 @@ async def test_success_policy_never_retrieves_terminal_diagnostics(store, monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["failed", "lost", "cancelled"])
-@pytest.mark.parametrize("boundary", ["before_rename", "after_rename", "after_commit", "corrupt"])
+@pytest.mark.parametrize("boundary", ["before_rename", "after_rename", "after_commit", "corrupt", "missing_authority"])
 async def test_diagnostic_process_death_recovery_matrix(store, tmp_path, monkeypatch, state, boundary):
-    await terminal(store, tmp_path)
     async with store() as session:
         job = await session.get(Job, "job")
-        job.status = job.queue_status = job.remote_state = "cancelled" if state == "cancelled" else "failed"
-        _, incoming, status = package(job)
+        job.output_dir = str(tmp_path / 'science')
+        Path(job.output_dir).mkdir()
+        (Path(job.output_dir) / 'untouched').write_text('science')
+        target = await session.get(ExecutionTarget, 'target')
+        # Use the real receipt producer at the transport boundary, followed by
+        # real terminal reconciliation. No remote runner or science is invoked.
+        remote_attempt = '/fixture/worker/attempts/attempt'
+        envelope = SimpleNamespace(path_map={job.output_dir: remote_attempt + '/results'},
+            output_directory=remote_attempt + '/results', resource_monitor=None,
+            source_revision=job.execution_source_revision, source_tree=job.execution_source_tree,
+            source_archive_sha256='d'*64, expected_result_contract={}, command=['nextflow'])
+        prepared = SimpleNamespace(remote_attempt_dir=remote_attempt, input_transfers=(),
+            envelope=envelope, attempt_id=job.remote_attempt_id,
+            envelope_sha256=job.execution_bundle_sha256, runtime_identity_sha256='e'*64)
+        job.provenance = {'remote_execution_receipt': ex._remote_receipt(prepared, target, state='running')}
+        _, incoming, status = package(job, state=state)
+        async def observed(*_):
+            return status
+        monkeypatch.setattr(ex, 'remote_status', observed)
+        await session.commit()
+        assert await ex.reconcile_remote_job(session, job)
+        await session.refresh(job)
+        receipt = job.provenance['remote_execution_receipt']
+        assert receipt['terminal_status'] == status.model_dump(mode='json')
+        assert receipt['remote_attempt_dir'] == remote_attempt
+        assert receipt['exit_code'] == 1 and receipt['state'] == state
+        # Preserve an existing historical scientific terminal state while a new
+        # worker owner takes the lease; archive recovery must not change either.
+        job.status = job.queue_status = job.remote_state = 'cancelled' if state == 'cancelled' else 'failed'
+        job.completed_at = datetime(2025, 1, 1)
+        job.error_message = 'science failed'
+        target.leased_job_id = 'successor'
         digest = status.result_manifest_sha256
         identity = ex._pull_identity(job)
-        receipt = dict(state=state, exit_code=1, result_manifest_sha256=digest)
         record = dict(state="returning", identity=identity, result_manifest_sha256=digest,
                       output_dir=None, error=None)
-        job.provenance = dict(remote_execution_receipt=receipt, remote_diagnostics=record)
+        job.provenance = dict(job.provenance, remote_diagnostics=record)
+        if boundary == 'missing_authority':
+            receipt = dict(receipt)
+            receipt.pop('remote_attempt_dir')
+            job.provenance = dict(job.provenance, remote_execution_receipt=receipt)
         destination = ex._diagnostic_destination("job", identity, digest)
         await session.commit()
         provenance = dict(job.provenance)
@@ -193,6 +224,10 @@ async def test_diagnostic_process_death_recovery_matrix(store, tmp_path, monkeyp
             assert (incoming / "first.txt").read_text() == "first"
         elif boundary == "corrupt":
             assert (destination / "first.txt").read_text() == "corrupt"
+        elif boundary == 'missing_authority':
+            assert 'remote_attempt_dir' in record['error']
+            assert record['output_dir'] is None
+            assert (destination / 'first.txt').read_text() == 'first'
         else:
             assert (Path(record["output_dir"]) / "first.txt").read_text() == "first"
 

@@ -139,7 +139,8 @@ async def test_live_staging_producer_is_not_expired(store, monkeypatch):
     monkeypatch.setattr(ex, 'prepare_remote_bundle', lambda **_: bundle)
     # Resource admission is independently covered; exercise the publication fence.
     from services.remote_execution import targets, bundle as bundle_module
-    monkeypatch.setattr(bundle_module, 'bind_resource_admission', lambda value, admission: value)
+    monkeypatch.setattr(bundle_module, 'bind_resource_admission',
+                        lambda value, admission, *, resource_monitor=None: value)
     async def admitted(target, **requirements):
         return {'schema': 'bms.target-resource-admission.v1', 'execution_target_id': target.id,
                 'required': {'cpus': 1, 'memory_bytes': 1, 'scratch_bytes': 0},
@@ -155,8 +156,14 @@ async def test_live_staging_producer_is_not_expired(store, monkeypatch):
                 await ex.launch_remote_job(s, await s.get(Job, 'job'), command=['true'],
                                            native_invocation=lifecycle_invocation(['true']))
     producer = asyncio.create_task(launch())
-    await asyncio.wait_for(entered.wait(), 5)
+    stage_entered = asyncio.create_task(entered.wait())
     try:
+        done, _ = await asyncio.wait({producer, stage_entered}, timeout=5,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if producer in done:
+            await producer  # Surface the producer error rather than a misleading event timeout.
+            pytest.fail('Producer exited before staging')
+        assert stage_entered in done, 'Producer did not reach staging within 5 seconds'
         async with store() as s:
             j = await s.get(Job, 'job')
             j.provenance = dict(j.provenance, remote_execution_assignment={'claimed_at': (datetime.utcnow() - timedelta(hours=1)).isoformat() + 'Z'})
@@ -169,4 +176,6 @@ async def test_live_staging_producer_is_not_expired(store, monkeypatch):
             assert (await s.get(ExecutionTarget, 'target')).leased_job_id == 'job'
     finally:
         release.set()
-        await producer
+        stage_entered.cancel()
+        await asyncio.gather(stage_entered, return_exceptions=True)
+        await asyncio.wait_for(producer, 5)
