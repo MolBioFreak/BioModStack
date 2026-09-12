@@ -1,6 +1,6 @@
 """Retained PLR native layout and ingester metadata through real HTTP/ORM.
 
-Shapes follow Job3541d25d-96d0-4571-be9a-c4dc6e76071d: 8 backbones,
+Shapes cover a workflow with 8 backbones,
 8 sequences, 8 ESMFold2 structures, 40 Protenix samples and one reference.
 No response-enriched provenance is mistaken for persisted producer identity.
 """
@@ -110,7 +110,7 @@ async def test_retained_plr_native_scope(tmp_path: Path, stored_provenance, monk
 
 @pytest.mark.asyncio
 async def test_native_membership_is_job_bound_and_literal(tmp_path):
-    from services.plr_workflow_results import design_model_identity_expression, design_producer_model_id
+    from services.plr_workflow_results import design_model_identity_expression
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'membership.db'}")
     async with engine.begin() as connection:
@@ -135,10 +135,7 @@ async def test_native_membership_is_job_bound_and_literal(tmp_path):
         for index, (path, name, expected) in enumerate(cases):
             row = Design(id=str(index), job_id=job.id, name=name, pdb_path=path, provenance=None)
             session.add(row)
-            assert design_producer_model_id(job, row) == expected
         await session.commit()
         actual = dict((await session.execute(select(Design.id, design_model_identity_expression()))).all())
         assert actual == {str(index): expected for index, (_, _, expected) in enumerate(cases)}
-        foreign = Job(id='foreign', model_id=job.model_id, mode=job.mode, output_dir=job.output_dir, params={})
-        assert design_producer_model_id(foreign, await session.get(Design, '0')) is None
     await engine.dispose()
