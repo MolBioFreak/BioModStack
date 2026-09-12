@@ -4,6 +4,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -382,14 +383,24 @@ def test_structure_prediction_preparer_v2_fails_closed_when_selector_cannot_map(
 
 def test_structure_prediction_workflow_is_v2_only_when_enabled_and_preserves_disabled_lane() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    enabled = workflow.split("if (params.run_frustrampnn != false)", 1)[1].split("} else {", 1)[0]
+    enabled, disabled = workflow.split("if (params.run_frustrampnn != false)", 1)[1].split(
+        "} else {\n            if (!params.job_id) error('FrustraMPNN not-requested", 1)
     preparer = workflow.split("process PrepareStructurePredictionFrustraMPNNCandidate", 1)[1].split(
         "process ReportStructurePredictionFrustraMPNNNotRequested", 1
     )[0]
 
-    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
-    assert "CanonicalFrustraMPNNV2(PrepareStructurePredictionFrustraMPNNCandidate.out.prepared)" in enabled
-    assert "CanonicalFrustraMPNN(" not in enabled
+    assert "include { RemoteCanonicalFrustraMPNN } from '../modules/frustrampnn_remote.nf'" in workflow
+    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'" in workflow
+    remote, local = enabled.split("if (System.getenv('BMS_REMOTE_EXECUTION') == '1') {", 1)[1].split('} else {', 1)
+    assert "RemoteCanonicalFrustraMPNN(PrepareStructurePredictionFrustraMPNNCandidate.out.prepared)" in remote
+    assert "PublishStructurePredictionFrustraMPNNCandidate(RemoteCanonicalFrustraMPNN.out.result)" in remote
+    assert "SchedulerFrustraMPNNParentFanout(" in local
+    assert "Channel.value(params.frustrampnn_settings.toString())" in local
+    assert "Channel.value(settingsValueOrigin)" in local
+    assert "CanonicalFrustraMPNNV2(" not in enabled
+    assert "RemoteCanonicalFrustraMPNN(" not in disabled
+    assert "SchedulerFrustraMPNNParentFanout(" not in disabled
+    assert re.search(r'\bCanonicalFrustraMPNN\(', enabled) is None
     assert "checkpoint_id" not in enabled
     assert "frustrampnn_settings" in enabled
     assert "requireCompleteFrustraMPNNSettings" in workflow

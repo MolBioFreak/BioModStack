@@ -243,6 +243,17 @@ async def test_pulled_receipts_ingest_native_frustra_rows_and_designs(tmp_path, 
         monkeypatch.setenv(key, value)
     marker = publisher.publish_remote(source_bundle=bundle, allowed_root=worker,
         destination=worker / 'frustrampnn/results' / request['candidate_id'], marker=tmp_path / 'marker.json')
+    # Ordinary native import owns the primary Design and original structure;
+    # Frustra attaches normalized evidence instead of manufacturing another row.
+    producer = request['producer_provenance']
+    native_relative = producer['producer_output_key']
+    native_source = worker / native_relative
+    native_source.parent.mkdir(parents=True, exist_ok=True)
+    native_source.write_bytes((candidate / 'model.pdb').read_bytes())
+    native_producer = {key: producer[key] for key in (
+        'producer_method', 'producer_sample', 'producer_rank', 'producer_output_key')}
+    native_producer.update(producer_artifact_sha256=hashlib.sha256(native_source.read_bytes()).hexdigest(),
+                           source_format='pdb')
     write_remote_stage_receipt(job_id='remote-parent', stage='frustrampnn', status='complete',
         outputs=[marker['result'], marker['manifest']], job_root_relative=True)
     pulled = tmp_path / 'pulled'
@@ -264,14 +275,25 @@ async def test_pulled_receipts_ingest_native_frustra_rows_and_designs(tmp_path, 
             await session.flush()
             await apply_remote_stage_receipts(session=session, job=job, attempt_id=attempt,
                 output_root=pulled, manifest=manifest)
+            from services.frustrampnn.persistence import FrustraMPNNPersistenceError
+            with pytest.raises(FrustraMPNNPersistenceError, match='exactly one native primary Design'):
+                await _ingest_explicit_frustrampnn_results(job, pulled, session, commit=False)
+            primary = Design(id=str(uuid.uuid4()), job_id=job.id, name='sample-0',
+                pdb_path=str(pulled / native_relative), source_stage_family=workflow,
+                provenance={'native_producer': native_producer})
+            session.add(primary)
+            await session.flush()
             assert await _ingest_explicit_frustrampnn_results(job, pulled, session, commit=False) == 1
             await session.commit()
             terminal = json.loads((pulled / marker['result']).read_bytes())
             native = await session.get(FrustraMPNNResult, ('remote-parent', terminal['invocation_id']))
             assert native is not None
-            design = await session.get(Design, request['candidate_id'])
+            assert native.design_id == primary.id
+            assert native.candidate_id == request['candidate_id'] != primary.id
+            design = await session.get(Design, primary.id)
             assert design.source_stage_family == workflow
-            assert Path(design.pdb_path).read_bytes() == (candidate / remote.FILES[1]).read_bytes()
+            assert design.provenance['native_producer'] == native_producer
+            assert Path(design.pdb_path).read_bytes() == (candidate / 'model.pdb').read_bytes()
             assert await _ingest_explicit_frustrampnn_results(job, pulled, session, commit=False) == 0
     finally:
         await engine.dispose()
