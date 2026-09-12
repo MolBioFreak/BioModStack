@@ -413,7 +413,19 @@ interface MutableIgvTrackBrowser {
     findTracks: (predicate: (track: Record<string, unknown>) => boolean) => Array<Record<string, unknown>>;
     loadTrack: (config: Record<string, unknown>) => Promise<Record<string, unknown>>;
     removeTrack: (track: Record<string, unknown>) => void;
+    alert?: {
+        present: (reason: unknown, callback?: unknown) => void;
+        dialog?: {
+            body: { textContent: string | null };
+            container: { style: { display: string } };
+            errorHeadline: { textContent: string | null };
+            callback?: unknown;
+            ok: { click: () => void };
+        };
+    };
 }
+
+const failedAlignmentDialogs = new WeakMap<MutableIgvTrackBrowser, string>();
 
 export async function replaceAlignmentTrackTransactionally(
     browser: MutableIgvTrackBrowser,
@@ -421,15 +433,55 @@ export async function replaceAlignmentTrackTransactionally(
     isCurrent: () => boolean,
 ): Promise<Record<string, unknown> | null> {
     const previousTracks = browser.findTracks((track) => track.type === 'alignment') || [];
-    const loadedTrack = await browser.loadTrack(config);
+    const alert = browser.alert;
+    const dialog = alert?.dialog;
+    const precedingMessage = dialog?.body.textContent;
+    const replacedUrls = [...previousTracks, config].map((track) => (
+        (track.config as Record<string, unknown> | undefined)?.url ?? track.url
+    )).filter((url): url is string => typeof url === 'string' && url.length > 0);
+    const ownsPrecedingError = dialog?.container.style.display !== 'none'
+        && dialog?.errorHeadline.textContent === 'ERROR'
+        && !!precedingMessage && (replacedUrls.some((url) => precedingMessage.includes(url))
+            || failedAlignmentDialogs.get(browser) === precedingMessage);
+    // IGV 3.7's viewport loader catches resource failures, presents the error and
+    // resolves loadTrack. Preserve its alert, but do not commit a failed track.
+    const originalPresent = alert?.present;
+    const loadingUrls = [config.url, config.indexURL].filter(
+        (url): url is string => typeof url === 'string' && url.length > 0,
+    );
+    let viewportFailure: unknown;
+    let presented = false;
+    const observePresent = (reason: unknown, callback?: unknown) => {
+        presented = true;
+        if (reason && typeof reason === 'object' && 'message' in reason
+            && loadingUrls.some((url) => String(reason.message).includes(url))) viewportFailure = reason;
+        originalPresent?.call(alert, reason, callback);
+    };
+    if (alert) alert.present = observePresent;
+    let loadedTrack: Record<string, unknown> | undefined;
+    try {
+        loadedTrack = await browser.loadTrack(config);
+    } finally {
+        if (alert?.present === observePresent && originalPresent) alert.present = originalPresent;
+    }
     if (!loadedTrack) throw new Error('IGV did not return the loaded alignment track.');
     if (!isCurrent()) {
         browser.removeTrack(loadedTrack);
         return null;
     }
+    if (viewportFailure) {
+        if (dialog?.body.textContent) failedAlignmentDialogs.set(browser, dialog.body.textContent);
+        browser.removeTrack(loadedTrack);
+        throw viewportFailure;
+    }
     for (const track of previousTracks) {
         if (track !== loadedTrack) browser.removeTrack(track);
     }
+    // Only acknowledge the unchanged error for the source just replaced. Never
+    // dismiss a new failure, unrelated optional-track error, or callback prompt.
+    if (ownsPrecedingError && !presented && dialog && !dialog.callback
+        && dialog.body.textContent === precedingMessage) dialog.ok.click();
+    failedAlignmentDialogs.delete(browser);
     return loadedTrack;
 }
 

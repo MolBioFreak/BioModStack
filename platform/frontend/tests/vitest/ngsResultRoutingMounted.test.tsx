@@ -146,6 +146,25 @@ afterEach(async () => {
 });
 
 describe('preview-independent mounted locus loading', () => {
+    it('keeps every NGS destination in a bounded wrapping navigation group', async () => {
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [], total: 0 } });
+        await act(async () => root.render(
+            <QueryClientProvider client={client}>
+                <MemoryRouter initialEntries={['/ngs?section=analyses']}>
+                    <NGSToolkit />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        ));
+        const nav = container.querySelector('nav[aria-label="NGS navigation"]') as HTMLElement;
+        expect(nav).toBeTruthy();
+        expect(nav.classList.contains('flex-wrap')).toBe(true);
+        expect(nav.classList.contains('max-w-full')).toBe(true);
+        expect(nav.parentElement?.classList.contains('flex-wrap')).toBe(true);
+        for (const label of ['Data Analysis', 'Instrument setup', 'Runs', 'Mol Bio Toolkit']) {
+            expect([...nav.querySelectorAll('button')].some((button) => button.textContent === label)).toBe(true);
+        }
+    });
+
     it.each(['rejected', 'pending'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
         const hash = 'a'.repeat(64);

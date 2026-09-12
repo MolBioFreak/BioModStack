@@ -5,7 +5,7 @@
  * be inspected and edited instead of collapsing everything into name/type/color.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import { FEATURE_COLOR_PALETTE, FEATURE_TYPES, getFeatureColor } from '../featureCatalog';
 import {
@@ -26,6 +26,8 @@ interface FeaturePanelProps {
     onUpdateFeature?: (feature: Feature) => void;
     onJumpToPosition?: (position: number) => void;
 }
+
+const FEATURE_COLOR_NAMES = ['Red', 'Orange', 'Amber', 'Yellow', 'Lime', 'Green', 'Emerald', 'Teal'];
 
 type SortOption = 'position' | 'name' | 'type' | 'length';
 
@@ -312,6 +314,7 @@ export function FeaturePanel({
     onUpdateFeature,
     onJumpToPosition,
 }: FeaturePanelProps) {
+    const addFormRef = useRef<HTMLDetailsElement>(null);
     const [addDraft, setAddDraft] = useState<FeatureDraft>(createEmptyDraft);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterType, setFilterType] = useState<string>('all');
@@ -384,6 +387,7 @@ export function FeaturePanel({
     });
 
     const useSelection = () => {
+        if (addFormRef.current) addFormRef.current.open = true;
         if (!selection || selection.start === selection.end) return;
         const segments = selectionToDraftSegments(selection, sequenceData);
         setAddDraft((current) => ({
@@ -509,7 +513,7 @@ export function FeaturePanel({
     };
 
     return (
-        <div className="feature-panel space-y-3 p-3 text-sm">
+        <div className="feature-panel min-w-0 space-y-3 p-3 text-sm [overflow-wrap:anywhere]">
             <div className="flex items-center justify-between">
                 <div>
                     <h4 className="font-semibold text-slate-200">Features & Qualifiers</h4>
@@ -541,7 +545,7 @@ export function FeaturePanel({
                 </div>
             )}
 
-            <details open className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+            <details ref={addFormRef} className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                 <summary className="cursor-pointer text-sm font-medium text-slate-200">Add Feature</summary>
                 <div className="mt-3 space-y-3">
                     <input
@@ -551,11 +555,11 @@ export function FeaturePanel({
                         className="w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
 
-                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                    <div className="grid grid-cols-1 gap-2">
                         <select
                             value={addDraft.type}
                             onChange={(event) => setAddDraft((current) => updateDraftType(current, event.target.value))}
-                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                            className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         >
                             {Object.entries(
                                 FEATURE_TYPES.reduce<Record<string, typeof FEATURE_TYPES>>((acc, entry) => {
@@ -571,13 +575,16 @@ export function FeaturePanel({
                                 </optgroup>
                             ))}
                         </select>
-                        <div className="flex items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2">
-                            {FEATURE_COLOR_PALETTE.slice(0, 8).map((color) => (
+                        <div className="flex flex-wrap items-center gap-1 rounded border border-slate-700 bg-slate-800 px-2">
+                            {FEATURE_COLOR_PALETTE.slice(0, 8).map((color, index) => (
                                 <button
                                     key={color}
                                     onClick={() => setAddDraft((current) => ({ ...current, color }))}
                                     type="button"
-                                    className={`h-5 w-5 rounded-full border ${addDraft.color === color ? 'border-white' : 'border-slate-700'}`}
+                                    aria-label={`Feature color: ${FEATURE_COLOR_NAMES[index]}`}
+                                    aria-pressed={addDraft.color === color}
+                                    title={FEATURE_COLOR_NAMES[index]}
+                                    className={`h-7 w-7 shrink-0 rounded-full border focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${addDraft.color === color ? 'border-white' : 'border-slate-700'}`}
                                     style={{ backgroundColor: color }}
                                 />
                             ))}
@@ -592,7 +599,7 @@ export function FeaturePanel({
                             placeholder="Start"
                             min={1}
                             max={sequenceData.sequence.length}
-                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                            className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         />
                         <input
                             type="number"
@@ -601,11 +608,11 @@ export function FeaturePanel({
                             placeholder="End"
                             min={1}
                             max={sequenceData.sequence.length}
-                            className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                            className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                         />
                     </div>
 
-                    <div className="flex items-center gap-4 text-xs text-slate-400">
+                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
                         <label className="flex items-center gap-2">
                             <input
                                 type="radio"
@@ -668,17 +675,17 @@ export function FeaturePanel({
             </details>
 
             <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                <div className="grid grid-cols-1 gap-2">
                     <input
                         value={searchQuery}
                         onChange={(event) => setSearchQuery(event.target.value)}
                         placeholder="Search by name, type, description, or qualifier"
-                        className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                        className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     />
                     <select
                         value={filterType}
                         onChange={(event) => setFilterType(event.target.value)}
-                        className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                        className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                     >
                         <option value="all">All types</option>
                         {usedTypes.map((type) => (
@@ -722,7 +729,7 @@ export function FeaturePanel({
                     {features.length === 0 ? 'No features yet.' : 'No features match the current filters.'}
                 </div>
             ) : (
-                <div className="space-y-2 max-h-[34rem] overflow-y-auto pr-1">
+                <div className="space-y-2">
                     {processedFeatures.map((feature) => {
                         const isEditing = editingFeatureId === feature.id;
                         const previews = qualifierPreview(feature.qualifiers || feature.notes);
@@ -737,16 +744,16 @@ export function FeaturePanel({
                             >
                                 {isEditing ? (
                                     <div className="space-y-3">
-                                        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                                        <div className="grid grid-cols-1 gap-2">
                                             <input
                                                 value={editDraft.name}
                                                 onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
-                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                                className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             />
                                             <select
                                                 value={editDraft.type}
                                                 onChange={(event) => setEditDraft((current) => updateDraftType(current, event.target.value))}
-                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                                className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             >
                                                 {FEATURE_TYPES.map((entry) => (
                                                     <option key={entry.value} value={entry.value}>{entry.label}</option>
@@ -759,17 +766,17 @@ export function FeaturePanel({
                                                 type="number"
                                                 value={editDraft.start}
                                                 onChange={(event) => setEditDraft((current) => ({ ...current, start: event.target.value ? Number(event.target.value) : '' }))}
-                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                                className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             />
                                             <input
                                                 type="number"
                                                 value={editDraft.end}
                                                 onChange={(event) => setEditDraft((current) => ({ ...current, end: event.target.value ? Number(event.target.value) : '' }))}
-                                                className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                                                className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
                                             />
                                         </div>
 
-                                        <div className="flex items-center gap-4 text-xs text-slate-400">
+                                        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
                                             <label className="flex items-center gap-2">
                                                 <input
                                                     type="radio"
@@ -786,13 +793,16 @@ export function FeaturePanel({
                                                 />
                                                 Reverse
                                             </label>
-                                            <div className="ml-auto flex items-center gap-1">
-                                                {FEATURE_COLOR_PALETTE.slice(0, 8).map((color) => (
+                                            <div className="flex flex-wrap items-center gap-1">
+                                                {FEATURE_COLOR_PALETTE.slice(0, 8).map((color, index) => (
                                                     <button
                                                         key={color}
                                                         onClick={() => setEditDraft((current) => ({ ...current, color }))}
                                                         type="button"
-                                                        className={`h-5 w-5 rounded-full border ${editDraft.color === color ? 'border-white' : 'border-slate-700'}`}
+                                                        aria-label={`Feature color: ${FEATURE_COLOR_NAMES[index]}`}
+                                                        aria-pressed={editDraft.color === color}
+                                                        title={FEATURE_COLOR_NAMES[index]}
+                                                        className={`h-7 w-7 shrink-0 rounded-full border focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${editDraft.color === color ? 'border-white' : 'border-slate-700'}`}
                                                         style={{ backgroundColor: color }}
                                                     />
                                                 ))}
@@ -850,9 +860,9 @@ export function FeaturePanel({
                                                 onClick={() => jumpToFeature(feature)}
                                                 onMouseEnter={() => highlightFeature(feature)}
                                                 onMouseLeave={() => highlightFeature(null)}
-                                                className="flex-1 text-left"
+                                                className="min-w-0 flex-1 text-left"
                                             >
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex flex-wrap items-center gap-2">
                                                     <span
                                                         className="inline-block h-3 w-3 rounded-sm"
                                                         style={{ backgroundColor: feature.color || getFeatureColor(feature.type) }}
@@ -883,7 +893,7 @@ export function FeaturePanel({
                                                     </div>
                                                 )}
                                             </button>
-                                            <div className="flex gap-1">
+                                            <div className="flex shrink-0 gap-1">
                                                 {onUpdateFeature && (
                                                     <button
                                                         onClick={() => startEdit(feature)}

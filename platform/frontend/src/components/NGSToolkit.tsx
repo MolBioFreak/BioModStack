@@ -4469,7 +4469,7 @@ export function NGSToolkit() {
     };
 
     return (
-        <div className="min-h-screen bg-[var(--bg-primary)] p-6 space-y-6 text-[var(--text-primary)]">
+        <div className="min-h-screen min-w-0 bg-[var(--bg-primary)] p-3 sm:p-6 space-y-6 text-[var(--text-primary)]">
             <AlignmentAccessPageLifetime
                 jobId={selectedJobId}
                 queryClient={queryClient}
@@ -4496,11 +4496,11 @@ export function NGSToolkit() {
                 </aside>
             )}
             <header className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Toolkit</h1>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <nav aria-label="NGS navigation" className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
                         <NgsMolBioProjectHub presentation="launcher-dialog" />
                         <button
                             onClick={() => navigate('/designer')}
@@ -4536,7 +4536,7 @@ export function NGSToolkit() {
                         >
                             Runs
                         </button>
-                    </div>
+                    </nav>
                 </div>
                 <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                     <div className="flex flex-wrap items-center gap-2">

@@ -2359,6 +2359,10 @@ export function MolBioToolkitV2() {
         const handleWindowResize = () => {
             setViewportWidth(window.innerWidth);
             setViewportHeight(window.innerHeight);
+            if (shouldCollapseMolBioPanelsForViewport(window.innerWidth)) {
+                setIsLibraryPanelCollapsed(true);
+                setIsToolPanelCollapsed(true);
+            }
         };
         handleWindowResize();
         window.addEventListener('resize', handleWindowResize);
@@ -2474,11 +2478,13 @@ export function MolBioToolkitV2() {
 
     const toggleLibraryPanel = useCallback(() => {
         setIsLibraryPanelCollapsed((current) => !current);
-    }, []);
+        if (viewerLayout.overlayPanels) setIsToolPanelCollapsed(true);
+    }, [viewerLayout.overlayPanels]);
 
     const toggleToolPanel = useCallback(() => {
         setIsToolPanelCollapsed((current) => !current);
-    }, []);
+        if (viewerLayout.overlayPanels) setIsLibraryPanelCollapsed(true);
+    }, [viewerLayout.overlayPanels]);
 
     // Open auto-annotate settings panel
     const handleAutoAnnotate = useCallback(() => {
@@ -3189,7 +3195,7 @@ export function MolBioToolkitV2() {
             <div
                 ref={toolkitRootRef}
                 tabIndex={-1}
-                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : ''}`}
+                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : 'relative'}`}
                 style={isViewerFullscreen
                     ? undefined
                     : { height: 'clamp(36rem, calc(100vh - 8rem), 96rem)' }}
@@ -3198,7 +3204,8 @@ export function MolBioToolkitV2() {
             >
                 {/* Left: Sequence Library */}
                 {viewerLayout.showLibraryPanel && (
-                    <>
+                    <div className={viewerLayout.overlayPanels ? 'absolute inset-y-0 left-0 z-30 flex max-w-full flex-col bg-slate-800 shadow-xl [&>.sequence-library]:min-h-0 [&>.sequence-library]:flex-1' : 'contents'}>
+                        {viewerLayout.overlayPanels && <button type="button" className="shrink-0 px-3 py-2 text-left text-sm text-blue-300" onClick={toggleLibraryPanel}>Close Shelf</button>}
                         <SequenceLibrary
                             sequences={sequences}
                             demos={demoPlasmids}
@@ -3244,7 +3251,7 @@ export function MolBioToolkitV2() {
                                 className="touch-none w-4 md:w-1.5 flex-shrink-0 cursor-col-resize bg-slate-950/80 transition-colors hover:bg-blue-500/60"
                             />
                         )}
-                    </>
+                    </div>
                 )}
 
                 {/* Center: Viewer */}
@@ -3579,9 +3586,10 @@ export function MolBioToolkitV2() {
                             />
                         )}
                         <div
-                            className="flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden transition-[width] duration-200"
+                            className={`flex-shrink-0 max-w-full border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden transition-[width] duration-200 ${viewerLayout.overlayPanels ? 'absolute inset-y-0 right-0 z-30 shadow-xl' : ''}`}
                             style={{ width: `${viewerLayout.rightPanelWidth}px` }}
                         >
+                            {viewerLayout.overlayPanels && <button type="button" className="shrink-0 px-3 py-2 text-left text-sm text-blue-300" onClick={toggleToolPanel}>Close Tools</button>}
                             <PanelTabs
                                 active={activePanel}
                                 onChange={setActivePanel}

@@ -2,7 +2,8 @@
  * ExportDropdown - Export sequence in multiple formats
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react';
+import { createPortal } from 'react-dom';
 import { jsonToGenbank } from '@teselagen/bio-parsers';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import {
@@ -70,17 +71,54 @@ function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['f
 export function ExportDropdown({ sequenceData, historyJournal = [], className }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const popupRef = useRef<HTMLDivElement>(null);
+    const popupId = useId();
+    const [position, setPosition] = useState({ left: 8, top: 8 });
 
-    // Close dropdown when clicking outside
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+        const reposition = () => {
+            const anchor = buttonRef.current?.getBoundingClientRect();
+            const popup = popupRef.current?.getBoundingClientRect();
+            if (!anchor || !popup) return;
+            setPosition({
+                left: Math.max(8, Math.min(anchor.right - popup.width, window.innerWidth - popup.width - 8)),
+                top: Math.max(8, Math.min(anchor.bottom + 4, window.innerHeight - popup.height - 8)),
+            });
+        };
+        reposition();
+        popupRef.current?.querySelector('button')?.focus();
+        window.addEventListener('resize', reposition);
+        window.addEventListener('scroll', reposition, true);
+        return () => {
+            window.removeEventListener('resize', reposition);
+            window.removeEventListener('scroll', reposition, true);
+        };
+    }, [isOpen]);
+
     useEffect(() => {
-        function handleClickOutside(event: MouseEvent) {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        if (!isOpen) return;
+        const outside = (event: MouseEvent | FocusEvent) => {
+            if (!dropdownRef.current?.contains(event.target as Node)
+                && !popupRef.current?.contains(event.target as Node)) setIsOpen(false);
+        };
+        const escape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
                 setIsOpen(false);
+                buttonRef.current?.focus();
             }
-        }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+        };
+        document.addEventListener('mousedown', outside);
+        document.addEventListener('focusin', outside);
+        document.addEventListener('keydown', escape);
+        return () => {
+            document.removeEventListener('mousedown', outside);
+            document.removeEventListener('focusin', outside);
+            document.removeEventListener('keydown', escape);
+        };
+    }, [isOpen]);
 
     const exportAs = (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
         let content: string;
@@ -158,11 +196,16 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
         URL.revokeObjectURL(url);
 
         setIsOpen(false);
+        buttonRef.current?.focus();
     };
 
     return (
         <div ref={dropdownRef} className={`relative inline-block ${className || ''}`}>
             <button
+                ref={buttonRef}
+                type="button"
+                aria-expanded={isOpen}
+                aria-controls={isOpen ? popupId : undefined}
                 onClick={() => setIsOpen(!isOpen)}
                 className="flex items-center gap-1 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm text-slate-200 transition-colors"
             >
@@ -175,8 +218,10 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                 </svg>
             </button>
 
-            {isOpen && (
-                <div className="absolute right-0 mt-1 w-48 bg-slate-700 border border-slate-600 rounded shadow-lg z-50">
+            {isOpen && createPortal(
+                <div ref={popupRef} id={popupId} role="group" aria-label="Export formats"
+                    style={{ ...position, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}
+                    className="fixed w-56 overflow-y-auto bg-slate-700 border border-slate-600 rounded shadow-lg z-[100]">
                     <button
                         onClick={() => exportAs('genbank')}
                         className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
@@ -213,7 +258,7 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                     >
                         History Text (.txt)
                     </button>
-                </div>
+                </div>, document.body
             )}
         </div>
     );

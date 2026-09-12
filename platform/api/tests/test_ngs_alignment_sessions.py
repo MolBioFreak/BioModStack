@@ -4208,6 +4208,7 @@ def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
 
 
 
+
 def test_result_route_passes_pagination_without_cached_summary(monkeypatch):
     job = SimpleNamespace(id="paged", model_id="nanopore", status="completed", params={"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"}, provenance={})
     app, token = _build_public_ngs_result_test_app(monkeypatch, job, {})
@@ -4222,3 +4223,93 @@ def test_result_route_passes_pagination_without_cached_summary(monkeypatch):
         response = client.get(f"/api/jobs/{job.id}/ngs-result?variant_offset=10&artifact_offset=20&page_size=3&collection=artifacts")
     assert response.status_code == 200
     assert calls == [{"variant_offset": 10, "artifact_offset": 20, "page_size": 3, "collection": "artifacts"}]
+
+
+def test_warm_presentation_reads_do_not_compete_for_generation_slot(tmp_path, monkeypatch):
+    """BAM/BAI/coverage GETs must not rerun a producer after its ready receipt."""
+    from services import ngs_alignment_sessions as service
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    monkeypatch.setattr(service, "get_analysis_cache_dir", lambda: tmp_path / "analysis-cache")
+    common = dict(bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+                  index_sha256=bai_sha, index_size_bytes=bai_size,
+                  source_manifest_sha256="e" * 64, job_id="job-race", session_id="5" * 24,
+                  mode="primary", cache_root=tmp_path / "cache", target_reads=3,
+                  max_output_bytes=1_000_000)
+    first = service.build_alignment_presentation(source, **common)
+    entered, release = threading.Event(), threading.Event()
+    def competing_producer():
+        entered.set()
+        assert release.wait(10)
+    producer = service._serialize_alignment_presentation_generation(competing_producer)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        running = pool.submit(producer)
+        assert entered.wait(5)
+        try:
+            reads = [pool.submit(service.build_alignment_presentation, source, **common) for _ in range(3)]
+            packages = [read.result(timeout=5) for read in reads]
+            assert all(p["manifest_metadata"]["sha256"] == first["manifest_metadata"]["sha256"] for p in packages)
+        finally:
+            release.set()
+            running.result(timeout=5)
+
+
+def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration(tmp_path, monkeypatch):
+    from services import ngs_alignment_sessions as service
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    monkeypatch.setattr(service, "get_analysis_cache_dir", lambda: tmp_path / "analysis-cache")
+    job_id, session_id = "job-http-race", "6" * 24
+    job = SimpleNamespace(id=job_id)
+    @asynccontextmanager
+    async def pinned_root(_job):
+        yield tmp_path
+    monkeypatch.setattr(ngs_routes, "_validated_pinned_result_root", pinned_root)
+    monkeypatch.setattr(ngs_routes, "_job_session_authority", lambda _job: {})
+    monkeypatch.setattr(ngs_routes, "_job_authority", lambda _job: {})
+    monkeypatch.setattr(service, "resolve_alignment_session", lambda *_args, **_kwargs: {
+        "ready": True, "mode": "primary", "artifact_set_sha256": "a" * 64,
+        "alignment_pair_sha256": "b" * 64,
+    })
+    monkeypatch.setattr(service, "resolve_session_alignment_bundle", lambda *_args, **_kwargs: (
+        source, {"sha256": bam_sha, "size_bytes": bam_size, "source_manifest_sha256": "e" * 64,
+                 "relative_path": source.name},
+        index, {"sha256": bai_sha, "size_bytes": bai_size, "relative_path": index.name},
+    ))
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: job
+    with TestClient(app) as client:
+        first = client.get(f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation")
+        assert first.status_code == 200, first.text
+        receipt = first.json()
+        descriptors = [receipt["preview"]["bam"], receipt["preview"]["index"], receipt["coverage"]["artifact"]]
+        entered, release = threading.Event(), threading.Event()
+        def competing_producer():
+            entered.set()
+            assert release.wait(10)
+        producer = service._serialize_alignment_presentation_generation(competing_producer)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            running = pool.submit(producer)
+            assert entered.wait(5)
+            try:
+                futures = [pool.submit(client.get, d["url"], headers={"Range": "bytes=0-15"}) for d in descriptors]
+                responses = [f.result(timeout=5) for f in futures]
+                assert [r.status_code for r in responses] == [206, 206, 206], [r.text for r in responses]
+                assert all(len(r.content) == 16 for r in responses)
+            finally:
+                release.set()
+                running.result(timeout=5)
+        # The producer-observed digest cannot be replaced with a self-consistent
+        # attacker-modified manifest/output pair from the derivative filesystem.
+        authority = receipt["preview"]["bam"]["url"].split("/")[-2]
+        directory = tmp_path / ".alignment-presentations" / job_id / session_id / authority
+        bam = directory / "alignment-preview.bam"
+        bam.write_bytes(b"not scientific BAM")
+        manifest_path = directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest["outputs"]["bam"] = {"sha256": hashlib.sha256(bam.read_bytes()).hexdigest(), "size_bytes": bam.stat().st_size}
+        manifest_path.write_bytes(rfc8785.dumps(manifest))
+        denied = client.get(descriptors[0]["url"], headers={"Range": "bytes=0-15"})
+        assert denied.status_code == 409
+        assert denied.json()["code"] == "NGS_AUTHORITY_CONFLICT"

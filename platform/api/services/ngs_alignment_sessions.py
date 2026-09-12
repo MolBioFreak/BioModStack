@@ -2953,27 +2953,59 @@ def resolve_cached_alignment_presentation(
     return package
 
 
+# Only producer-observed manifest digests can admit a warm derivative. The
+# filesystem's self-declared digest is not authority. Eviction/restart falls back
+# to the existing bounded producer; source/policy/revision changes change the key.
+_presentation_receipts: OrderedDict[tuple[int, int, str], str] = OrderedDict()
+_presentation_receipts_lock = threading.RLock()
+_PRESENTATION_RECEIPT_MAX_ENTRIES = 128
+
+
+@contextmanager
+def _alignment_presentation_generation_slot() -> Iterator[None]:
+    lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    with (lock_root / ".generation.lock").open("a+b") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
 def _serialize_alignment_presentation_generation(function: Any) -> Any:
     @wraps(function)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
-        lock_root.mkdir(parents=True, exist_ok=True)
-        lock_handle = (lock_root / ".generation.lock").open("a+b")
-        try:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+        with _alignment_presentation_generation_slot():
             return function(*args, **kwargs)
-        finally:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                lock_handle.close()
     return wrapped
 
 
-@_serialize_alignment_presentation_generation
+def _load_trusted_presentation(
+    namespace: Path, destination: Path, cache_key: str, manifest_sha256: str,
+) -> dict[str, Any]:
+    lock_fd = os.open(
+        ".generation.lock", os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o640, dir_fd=int(namespace.parts[4]),
+    )
+    with os.fdopen(lock_fd, "a+b") as reader_lock:
+        try:
+            fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+        with open_presentation_authority_root(destination, create=False) as pinned_destination:
+            cached = _load_derived_package(
+                pinned_destination, expected_authority_sha256=cache_key,
+                expected_manifest_sha256=manifest_sha256,
+            )
+        if cached is None:
+            raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+        return cached
+
+
 @_pin_presentation_root(create=True)
 def build_alignment_presentation(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path,
@@ -3026,13 +3058,20 @@ def build_alignment_presentation(
     namespace_parts = namespace.parts
     if not (len(namespace_parts) == 5 and namespace_parts[1:4] == ("proc", "self", "fd") and namespace_parts[4].isdigit()):
         raise AlignmentSessionError("presentation namespace is not pinned")
+    namespace_identity = namespace.stat()
+    receipt_key = (namespace_identity.st_dev, namespace_identity.st_ino, cache_key)
+    with _presentation_receipts_lock:
+        observed_manifest = _presentation_receipts.get(receipt_key)
+    trusted_manifest = expected_manifest_sha256 or observed_manifest
+    if trusted_manifest is not None and destination.exists():
+        return _load_trusted_presentation(namespace, destination, cache_key, trusted_manifest)
     lock_fd = os.open(
         ".generation.lock",
         os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o640,
         dir_fd=int(namespace_parts[4]),
     )
-    with os.fdopen(lock_fd, "a+b") as producer_lock:
+    with os.fdopen(lock_fd, "a+b") as producer_lock, _alignment_presentation_generation_slot():
         try:
             fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -3360,8 +3399,12 @@ def build_alignment_presentation(
             active=destination,
             protected_names=protected_names,
         )
+        with _presentation_receipts_lock:
+            _presentation_receipts[receipt_key] = package["manifest_metadata"]["sha256"]
+            _presentation_receipts.move_to_end(receipt_key)
+            while len(_presentation_receipts) > _PRESENTATION_RECEIPT_MAX_ENTRIES:
+                _presentation_receipts.popitem(last=False)
         return package
-
 
 def build_alignment_preview(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,

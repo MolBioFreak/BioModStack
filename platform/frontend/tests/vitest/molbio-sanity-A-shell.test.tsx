@@ -80,3 +80,27 @@ it('annotation retrieval is invalidated by edit generation before parsing or app
  expect(staleRead).not.toHaveBeenCalled();
  await expect(result).rejects.toThrow('Workspace changed during annotation retrieval');expect(mocks.header.sequenceData.features).toHaveLength(0);
 });
+
+it('shrinking the mounted desktop collapses both panels and still allows dismissible narrow tools', async () => {
+ await create();
+ expect(mocks.header.isLibraryPanelCollapsed).toBe(false);
+ expect(mocks.header.isToolPanelCollapsed).toBe(false);
+ await act(async () => { window.innerWidth = 390; window.dispatchEvent(new Event('resize')); });
+ expect(mocks.header.isLibraryPanelCollapsed).toBe(true);
+ expect(mocks.header.isToolPanelCollapsed).toBe(true);
+ expect(host.querySelector('[data-molbio-panel-resize-handle]')).toBeNull();
+ await act(async () => mocks.header.onToggleToolPanel());
+ const close = [...host.querySelectorAll('button')].find(b => b.textContent === 'Close Tools')!;
+ expect(close).toBeTruthy();
+ expect(close.parentElement!.classList.contains('absolute')).toBe(true);
+ await act(async () => close.click());
+ expect(mocks.header.isToolPanelCollapsed).toBe(true);
+ await act(async () => mocks.header.onToggleLibraryPanel());
+ expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Close Shelf')).toBe(true);
+ await act(async () => mocks.header.onToggleToolPanel());
+ expect(mocks.header.isLibraryPanelCollapsed).toBe(true);
+ await act(async () => { window.innerWidth = 1440; window.dispatchEvent(new Event('resize')); });
+ expect(mocks.header.isLibraryPanelCollapsed).toBe(true);
+ expect(mocks.header.isToolPanelCollapsed).toBe(false);
+ expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Close Tools')).toBe(false);
+});
