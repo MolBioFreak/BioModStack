@@ -543,7 +543,7 @@ process RunMaturationFAMPNN {
 
     "\${PYTHON_BIN}" "${params.code_root}/scripts/analyse_fampnn.py" \\
         --input_dir results \\
-        --chain_id ${analysisChain} \\
+        --chain_id "${analysisChain}" \\
         --ignore_cbeta \\
         --out_dir results
 

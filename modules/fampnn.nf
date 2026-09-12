@@ -168,7 +168,7 @@ process RunFAMPNN {
 
     python /scripts/analyse_fampnn.py \\
         --input_dir results \\
-        --chain_id ${analysis_chain_id} \\
+        --chain_id "${analysis_chain_id}" \\
         --ignore_cbeta \\
         --out_dir results
 

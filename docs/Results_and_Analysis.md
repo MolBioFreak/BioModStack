@@ -110,6 +110,30 @@ Downstream docs and tooling should refer to jobs, designs, analyses, effective
 model settings, configuration identities, and stage outputs together. A loose
 output folder is not an authoritative result.
 
+## FA-MPNN pSCE policy and historical results
+
+`fampnn_avg_psce` is a residue-weighted sidechain error in Å (lower is better),
+not a binding score or pLDDT. The producer and global profile share the numerical
+owner in `scripts/analyse_fampnn.py`. New sidecars persist `psce_policy` with the
+exact chain scope, Cβ inclusion, first-model/amino-acid/alternate-location rules,
+aggregation and policy version. Workflow chain selection and Cβ exclusion remain
+explicit; sequence probability and mutation scores retain their separate native
+contracts. Sidecar scalars use two-decimal rounding; profiles retain precision.
+
+A default global profile request uses that persisted policy. Explicit analysis
+parameters `chain_id` and boolean `ignore_cbeta` request a different policy without
+changing the Design's retained/filter-facing scalar. Both the effective policy
+and request participate in cache identity, and the policy-aware analysis has a
+new code version. Queued analyses reject changed input signatures before execution.
+
+An older scalar without a recorded policy is preserved, but its chain/atom scope
+is **unknown**. Its default profile is explicitly unavailable rather than guessing
+chain A or all chains. Explicit reanalysis of such a structure requires both policy
+parameters and creates a separate analysis. Old cache entries are not reused as
+policy-aware results. A chain-mean-only sidecar cannot reconstruct a residue-weighted
+overall score. Sidecar-free imports still compute their historical all-chain,
+Cβ-included fallback, now labelling the newly derived policy.
+
 ## Practical Reading Order
 
 For operator use:

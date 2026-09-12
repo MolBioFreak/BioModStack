@@ -2963,6 +2963,11 @@ export default function StructureViewerPane({
                     {/* Toolbar - positioned differently based on mode */}
                     <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
                         {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
+                        {fampnnPsceProfile && <div className="text-[10px] text-slate-400">
+                            {fampnnPsceProfile.policy
+                                ? `pSCE policy v${fampnnPsceProfile.policy.version} · ${fampnnPsceProfile.scope === 'all_chains' ? 'All chains' : `Chain ${fampnnPsceProfile.scope}`} · Cβ ${fampnnPsceProfile.ignore_cbeta ? 'excluded' : 'included'} · Å, residue-weighted`
+                                : 'Historical pSCE policy unknown; retained scalar is not reinterpreted.'}
+                        </div>}
                     </div>
 
                     {shapeMetrics && !isFullscreen && (

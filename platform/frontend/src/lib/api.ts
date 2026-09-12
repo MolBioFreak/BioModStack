@@ -2279,8 +2279,11 @@ export interface FampnnPsceProfile {
     design_name: string;
     metric_kind: 'fampnn_psce';
     direction: 'lower_is_better';
-    scope: 'all_chains';
-    ignore_cbeta: boolean;
+    status?: 'ok' | 'unavailable';
+    reason?: string;
+    policy?: { version: number; chain_id: string; ignore_cbeta: boolean } | null;
+    scope: string | null;
+    ignore_cbeta: boolean | null;
     chains: Record<string, FampnnPsceChainMetric>;
 }
 
