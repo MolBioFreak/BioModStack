@@ -346,6 +346,7 @@ export interface CmStateLandscapeAnalysis {
 }
 
 export interface CmResults {
+    section_errors?: Array<{ type: string; key: string; status: 'unavailable'; detail: string }>;
     request_id: string;
     result_contract_id: string;
     records: CmRecord[];

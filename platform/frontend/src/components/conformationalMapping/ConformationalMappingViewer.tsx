@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { parseWorkflowResultViewState, updateWorkflowResultViewSearch, type FrustraMpnnResultScope } from '../frustrampnn/workflowResultViewState';
 
 import { StructureWorkbench } from '../../structureViewer/StructureWorkbench';
 import type { Job } from '../../lib/api';
@@ -51,7 +52,6 @@ import {
     clearStateLandscapeResidueSelectionForCandidate,
     resolveStateLandscapeResidueRef,
     selectStateLandscapeWorkspacePair,
-    stateLandscapeSummaryEnabled,
     stateLandscapeWorkspaceEnabled,
     stateLandscapeRowKey,
     stateLandscapeWorkspaceTabs,
@@ -70,6 +70,8 @@ interface Props {
         getProgress?: typeof getCmProgress;
         getFailureReceipts?: typeof getCmFailureReceipts;
         getResults?: typeof getCmResults;
+        getStateAnalysis?: typeof getCmStateLandscapeAnalysis;
+        getStateAnalysisRows?: typeof getCmStateLandscapeAnalysisRows;
         getLogs?: typeof getCmLogs;
         getLandscape?: typeof getCmLandscape;
         artifactUrl?: typeof cmArtifactUrl;
@@ -178,12 +180,40 @@ export function ConformationalMappingViewer({
     const navigate = useNavigate();
     const location = useLocation();
     const queryClient = useQueryClient();
-    const [selectedCandidateId, setSelectedCandidateId] = useState('');
+    const status = useQuery({
+        queryKey: ['cm-status', requestId], queryFn: () => (services?.getStatus || getCmStatus)(requestId),
+        refetchInterval: (query) => TERMINAL.has(query.state.data?.status || '') ? false : 2000,
+        retry: false,
+    });
+    const params = new URLSearchParams(location.search);
+    const selectedCandidateId = params.get('cm_candidate_id') || '';
+    const invocationId = params.get('frustrampnn_invocation_id') || params.get('invocation_id');
+    const producerModelId = status.data?.backend === 'protenix_v2_ensemble' ? 'protenix_v2' : status.data?.backend === 'external_import' ? 'external_import' : 'confornets';
+    const resultView = parseWorkflowResultViewState(location.search, { availableModelIds: [producerModelId, 'frustrampnn'], primaryModelId: invocationId ? 'frustrampnn' : producerModelId });
+    const modelDataView: ModelDataView = resultView.model === 'frustrampnn' ? 'frustrampnn' : 'producer';
+    const setModelDataView = (model: ModelDataView, scope: FrustraMpnnResultScope = 'this-job') => {
+        const next = new URLSearchParams(updateWorkflowResultViewSearch(location.search, { model: model === 'producer' ? producerModelId : 'frustrampnn', scope }));
+        if (model === 'frustrampnn' && !invocationId && selected) {
+            next.set('cm_candidate_id', selected.candidate_id);
+            next.set('frustrampnn_invocation_id', `frustrampnn:${status.data?.job_id || job?.id || requestId}:${selected.candidate_id}`);
+        }
+        if (model === 'producer' && invocationCandidate) next.set('cm_candidate_id', invocationCandidate);
+        navigate({ pathname: location.pathname, search: `?${next}` });
+    };
+    const setSelectedCandidateId = (candidateId: string) => {
+        const next = new URLSearchParams(location.search);
+        next.set('cm_candidate_id', candidateId);
+        next.delete('invocation_id');
+        next.delete('frustrampnn_invocation_id');
+        next.set('result_model', producerModelId);
+        next.set('frustrampnn_scope', 'this-job');
+        navigate({ pathname: location.pathname, search: `?${next}` });
+    };
     const [addToProjectOpen, setAddToProjectOpen] = useState(false);
     const [overlayIds, setOverlayIds] = useState<string[]>([]);
     const [detailTab, setDetailTab] = useState<DetailTab>('ensemble');
     const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>('progress');
-    const [modelDataView, setModelDataView] = useState<ModelDataView>('producer');
+
 
 
     const [mappingFilter, setMappingFilter] = useState<'all' | 'mapped' | 'issues'>('all');
@@ -229,11 +259,6 @@ export function ConformationalMappingViewer({
 
     const locationReceipt = (location.state as { cmSubmissionReceipt?: CmSubmitReceipt } | null)?.cmSubmissionReceipt;
     const receipt = locationReceipt?.request_id === requestId ? locationReceipt : null;
-    const status = useQuery({
-        queryKey: ['cm-status', requestId], queryFn: () => (services?.getStatus || getCmStatus)(requestId),
-        refetchInterval: (query) => TERMINAL.has(query.state.data?.status || '') ? false : 2000,
-        retry: false,
-    });
     const progress = useQuery({
         queryKey: ['cm-progress', requestId], queryFn: () => (services?.getProgress || getCmProgress)(requestId),
         enabled: Boolean(status.data),
@@ -272,18 +297,22 @@ export function ConformationalMappingViewer({
         if (!results.data) return { data: null, error: null as string | null };
         try {
             const value = requireApprovedCmResults(results.data);
+            if (value.request_id !== requestId) throw new Error('Canonical response request identity mismatch');
             const ensemble = canonicalEnsemble(value);
             const candidates = ensemble.candidates;
-            const analysis = canonicalAnalysis(value);
+            let analysis: ReturnType<typeof canonicalAnalysis> | null = null;
+            let analysisError: string | null = null;
+            try { analysis = canonicalAnalysis(value); }
+            catch (error) { analysisError = error instanceof Error ? error.message : 'Canonical analysis unavailable'; }
             candidates.forEach((candidate) => {
                 candidateStructureArtifact(candidate, value.artifacts);
                 candidateStructureMap(value, candidate.candidate_id);
             });
-            return { data: { value, ensemble, candidates, analysis }, error: null };
+            return { data: { value, ensemble, candidates, analysis, analysisError }, error: null };
         } catch (value) {
             return { data: null, error: value instanceof Error ? value.message : 'Canonical response validation failed.' };
         }
-    }, [results.data]);
+    }, [results.data, requestId]);
     const hasGlobalFrustraMpnnData = Boolean(
         parsed.data && recordsByType(parsed.data.value, 'frustrampnn_result_references').length
     );
@@ -298,14 +327,11 @@ export function ConformationalMappingViewer({
             : parsed.data?.ensemble.backend === 'external_import'
                 ? 'Imported structures'
                 : 'Structural producer';
-    useEffect(() => setModelDataView('producer'), [requestId]);
-    useEffect(() => {
-        if (!hasFrustraMpnnData && modelDataView === 'frustrampnn') setModelDataView('producer');
-    }, [hasFrustraMpnnData, modelDataView]);
+
 
     const analysisRecord = parsed.data?.value.records.find((record) => record.type === 'analysis') || null;
     useEffect(() => {
-        setAnalysisRows(parsed.data?.analysis.results || []);
+        setAnalysisRows(parsed.data?.analysis?.results || []);
         setAnalysisNextOffset(analysisRecord?.pages?.results?.next_offset ?? null);
         setAnalysisPageRequested(false);
     }, [analysisRecord, parsed.data]);
@@ -336,8 +362,8 @@ export function ConformationalMappingViewer({
     }, [parsed.data]);
     const stateAnalysisSummary = useQuery({
         queryKey: ['cm-state-landscape-analysis', requestId],
-        queryFn: () => getCmStateLandscapeAnalysis(requestId),
-        enabled: stateLandscapeSummaryEnabled(stateLandscapeAuthority.data),
+        queryFn: () => (services?.getStateAnalysis || getCmStateLandscapeAnalysis)(requestId),
+        enabled: status.data?.status === 'completed' && APPROVED_CM_CONTRACTS.has(status.data.result_contract_id),
         retry: false,
     });
     const stateAnalysisSummaryParsed = useMemo(() => {
@@ -345,14 +371,18 @@ export function ConformationalMappingViewer({
             return { data: null, error: cmApiError(stateAnalysisSummary.error, 'State-analysis summary is unavailable.') };
         }
         if (!stateAnalysisSummary.data || stateLandscapeAuthority.error) return { data: null, error: stateLandscapeAuthority.error };
-        try { return { data: validateStateLandscapeWorkspaceSummary(stateAnalysisSummary.data, stateLandscapeAuthority.data), error: null as string | null }; }
+        try {
+            const summary = validateStateLandscapeWorkspaceSummary(stateAnalysisSummary.data, stateLandscapeAuthority.data);
+            if (summary.request_id !== requestId) throw new Error('State-analysis request identity mismatch');
+            return { data: summary, error: null as string | null };
+        }
         catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis projection is malformed.' }; }
     }, [stateAnalysisSummary.data, stateAnalysisSummary.error, stateAnalysisSummary.isError, stateLandscapeAuthority.data, stateLandscapeAuthority.error]);
     const stateAnalysisSummaryError = stateAnalysisSummaryParsed.error
         || (stateAnalysisSummary.isError ? cmApiError(stateAnalysisSummary.error, 'State-analysis summary is unavailable.') : null);
     const stateAnalysisPage = useQuery({
         queryKey: ['cm-state-landscape-analysis-rows', requestId, stateAnalysisSummaryParsed.data?.analysis_id, selectedPairId, stateAnalysisOffset],
-        queryFn: () => getCmStateLandscapeAnalysisRows(requestId, stateAnalysisSummaryParsed.data!.analysis_id, selectedPairId, stateAnalysisOffset, 50),
+        queryFn: () => (services?.getStateAnalysisRows || getCmStateLandscapeAnalysisRows)(requestId, stateAnalysisSummaryParsed.data!.analysis_id, selectedPairId, stateAnalysisOffset, 50),
         enabled: stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data) && Boolean(selectedPairId),
         retry: false,
     });
@@ -365,8 +395,12 @@ export function ConformationalMappingViewer({
         catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis rows are malformed.' }; }
     }, [selectedPairId, stateAnalysisOffset, stateAnalysisPage.data, stateAnalysisPage.error, stateAnalysisPage.isError, stateAnalysisSummaryParsed.data]);
 
-    const selected = parsed.data?.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId)
-        || parsed.data?.candidates[0] || null;
+    const invocationCandidate = invocationId?.startsWith(`frustrampnn:${status.data?.job_id || job?.id || requestId}:`)
+        ? invocationId.slice(`frustrampnn:${status.data?.job_id || job?.id || requestId}:`.length) : null;
+    const exactCandidateId = modelDataView === 'frustrampnn' && invocationCandidate ? invocationCandidate : selectedCandidateId;
+    const selected = exactCandidateId
+        ? parsed.data?.candidates.find((candidate) => candidate.candidate_id === exactCandidateId) ?? null
+        : parsed.data?.candidates[0] ?? null;
     const selectedStructureMapRecord = selected && parsed.data
         ? parsed.data.value.records.find((record) => record.type === 'structure_map' && record.key === selected.candidate_id) || null
         : null;
@@ -415,9 +449,7 @@ export function ConformationalMappingViewer({
     const selectCandidateForStateAnalysis = (candidateId: string) => {
         setSelectedCandidateId(clearStateAnalysisResidueSelection(candidateId));
     };
-    useEffect(() => {
-        if (selected && selectedCandidateId !== selected.candidate_id) setSelectedCandidateId(clearStateAnalysisResidueSelection(selected.candidate_id));
-    }, [selected, selectedCandidateId]);
+
     useEffect(() => {
         setOverlayIds((current) => current.filter((id) => id !== selected?.candidate_id));
     }, [selected?.candidate_id]);
@@ -592,11 +624,60 @@ export function ConformationalMappingViewer({
                 {(results.isError || parsed.error) && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200"><div className="font-semibold">Canonical result validation failed closed</div><p className="mt-1 text-sm">{parsed.error || cmApiError(results.error, 'Results could not be loaded through the approved contract.')}</p></div>}
                 {!statusContractError && parsed.data && parsed.data.candidates.length === 0 && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100"><div className="font-semibold">No canonical structural candidates were published</div><p className="mt-1 text-sm">This completed request has no governed candidate structure to display or overlay.</p></div>}
 
-                {!statusContractError && parsed.data && selected && selectedArtifact && <>
+                {[['Analysis page', analysisPage], ['Structure-map page', structureMapPage], ['Support page', evidenceSupportPage], ['Analysis support', evidenceAnalysisSupportPage], ['Clash evidence', evidenceAnalysisClashPage], ['Missingness page', evidenceMissingnessPage]].map(([label, query]) => typeof query !== 'string' && query.isError && <div role="alert" key={String(label)}>{String(label)} unavailable: {cmApiError(query.error, 'Scientific section could not be read.')}</div>)}
+                {parsed.data?.analysisError && <div role="alert">Analysis unavailable: {parsed.data.analysisError}</div>}
+                {results.data?.section_errors?.map((error) => <div role="alert" key={`${error.type}:${error.key}`}>Unavailable {error.type} · {error.key}: {error.detail}</div>)}
+                {exactCandidateId && parsed.data && !selected && <div role="alert">The exact requested candidate is unavailable. No alternative candidate was selected.</div>}
+                {stateAnalysisSummaryError && <StateLandscapeStatusAlert error={stateAnalysisSummaryError} />}
+                    {(detailTab === 'state-analysis' || !parsed.data) && stateAnalysisSummaryParsed.data && <StateLandscapeWorkspacePanel
+                        summary={stateAnalysisSummaryParsed.data}
+                        page={stateAnalysisPage.isError || stateAnalysisPageParsed.error ? null : stateAnalysisRows}
+                        selectedPairId={selectedPairId}
+                        selectedStateRowKey={selectedStateRowKey}
+                        selectedMetric={selectedStateMetric}
+                        inspectorMinimized={stateInspectorMinimized}
+                        loading={stateAnalysisPage.isLoading}
+                        error={stateAnalysisPageParsed.error || (stateAnalysisPage.isError ? cmApiError(stateAnalysisPage.error, 'Bounded state-analysis rows are unavailable.') : null)}
+                        residueSelectionReason={stateResidueSelectionReason}
+                        onSelectPair={(pairId) => {
+                            const next = selectStateLandscapeWorkspacePair({ selectedPairId, selectedStateRowKey, pageOffset: stateAnalysisOffset }, pairId);
+                            setSelectedPairId(next.selectedPairId);
+                            setSelectedStateRowKey(next.selectedStateRowKey);
+                            setStateAnalysisOffset(next.pageOffset);
+                            setStateAnalysisRows(null);
+                            setStateAnalysisResidueSelections([]);
+                            setPendingStateResidue(null);
+                            setStateResidueSelectionReason(null);
+                        }}
+                        onSelectRow={(row) => {
+                            setSelectedStateRowKey(stateLandscapeRowKey(row));
+                            clearStateAnalysisResidueSelection(row.candidate_a_id);
+                            setPendingStateResidue({ candidateId: row.candidate_a_id, row });
+                            setSelectedCandidateId(row.candidate_a_id);
+                        }}
+                        onInspectCandidate={selectCandidateForStateAnalysis}
+                        onSelectMetric={setSelectedStateMetric}
+                        onToggleInspector={() => setStateInspectorMinimized((current) => !current)}
+                        onLoadMore={() => { if (stateAnalysisRows?.next_offset != null) setStateAnalysisOffset(stateAnalysisRows.next_offset); }}
+                    />}
+                {!statusContractError && <>
                     <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Workflow model data views">
                         <button type="button" aria-pressed={modelDataView === 'producer'} onClick={() => setModelDataView('producer')} className={tabClass(modelDataView === 'producer')}>{producerModelLabel} data</button>
-                        {hasFrustraMpnnData && <button type="button" aria-pressed={modelDataView === 'frustrampnn'} onClick={() => setModelDataView('frustrampnn')} className={tabClass(modelDataView === 'frustrampnn')}>FrustraMPNN data</button>}
+                        {(hasFrustraMpnnData || Boolean(status.data?.job_id || job?.id)) && <button type="button" aria-pressed={modelDataView === 'frustrampnn'} onClick={() => setModelDataView('frustrampnn')} className={tabClass(modelDataView === 'frustrampnn')}>FrustraMPNN data</button>}
                     </nav>
+                    {modelDataView === 'frustrampnn' && (hasGlobalFrustraMpnnData || !hasLegacyFrustraMpnnData) && Boolean(status.data?.job_id || job?.id) && (
+                        <FrustraWorkbench
+                            job={frustraMpnnJob}
+                            preferredInvocationId={exactCandidateId ? `frustrampnn:${frustraMpnnJob.id}:${exactCandidateId}` : undefined}
+                            onBack={() => setModelDataView('producer')}
+                            backLabel={`${producerModelLabel} data`}
+                            scope={resultView.scope}
+                            onScopeChange={(scope) => setModelDataView('frustrampnn', scope)}
+                            onOpenJob={(jobId) => { const next = new URLSearchParams(location.search); next.delete('cm_candidate_id'); next.delete('frustrampnn_invocation_id'); next.delete('invocation_id'); navigate(`/designs/${jobId}?${next}`); }}
+                        />
+                    )}
+                </>}
+                {!statusContractError && parsed.data && selected && selectedArtifact && <>
                     {modelDataView === 'producer' && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical structural hypotheses in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Structural hypotheses in API order</h2><p className="mt-1 text-[11px] text-slate-500">Choose the primary coordinate set, then compare immutable alternative candidate coordinates as overlays. These are predicted hypotheses, not time-resolved sampling or state populations.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">{candidate.candidate_id === selected.candidate_id ? `Primary hypothesis · Candidate ${index + 1}` : `Candidate ${index + 1}`}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Compare as structural overlay</label></div>)}</aside>
@@ -638,61 +719,21 @@ export function ConformationalMappingViewer({
                     </section>
 
                     <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
-                    {stateAnalysisSummaryError && <StateLandscapeStatusAlert error={stateAnalysisSummaryError} />}
 
                     {detailTab === 'ensemble' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Canonical ensemble and provenance</h2><div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Backend</span><div className="mt-1 font-mono text-white">{parsed.data.ensemble.backend}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Runtime identity</span><div className="mt-1 break-words text-white">{parsed.data.ensemble.runtime_identity}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Expected candidates</span><div className="mt-1 text-white">{parsed.data.ensemble.expected_cardinality}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Terminal contract state</span><div className="mt-1 text-white">{parsed.data.ensemble.terminal_status}</div></div>{[['Request SHA-256', parsed.data.ensemble.request_sha256], ['Snapshot SHA-256', parsed.data.ensemble.source_snapshot_sha256], ['Feature policy SHA-256', parsed.data.ensemble.feature_policy_sha256], ['Native manifest SHA-256', parsed.data.ensemble.native_manifest_sha256], ['Container digest', parsed.data.ensemble.container_digest], ['Checkpoint SHA-256', parsed.data.ensemble.checkpoint_sha256]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-800 p-3" title={value}><span className="text-slate-500">{label}</span><div className="mt-1 font-mono text-white">{shortHash(value)}</div></div>)}</div><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-amber-500/20 p-3"><h3 className="text-sm font-medium text-amber-100">Producer warnings</h3>{parsed.data.ensemble.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-200">{parsed.data.ensemble.warnings.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No producer warning recorded.</p>}</div><div className="rounded-xl border border-slate-800 p-3"><h3 className="text-sm font-medium text-white">Explicit omissions</h3>{parsed.data.ensemble.omissions.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">{parsed.data.ensemble.omissions.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No omission recorded.</p>}</div></div></section>}
 
-                    {detailTab === 'state-analysis' && stateAnalysisSummaryParsed.data && <StateLandscapeWorkspacePanel
-                        summary={stateAnalysisSummaryParsed.data}
-                        page={stateAnalysisPage.isError || stateAnalysisPageParsed.error ? null : stateAnalysisRows}
-                        selectedPairId={selectedPairId}
-                        selectedStateRowKey={selectedStateRowKey}
-                        selectedMetric={selectedStateMetric}
-                        inspectorMinimized={stateInspectorMinimized}
-                        loading={stateAnalysisPage.isLoading}
-                        error={stateAnalysisPageParsed.error || (stateAnalysisPage.isError ? cmApiError(stateAnalysisPage.error, 'Bounded state-analysis rows are unavailable.') : null)}
-                        residueSelectionReason={stateResidueSelectionReason}
-                        onSelectPair={(pairId) => {
-                            const next = selectStateLandscapeWorkspacePair({ selectedPairId, selectedStateRowKey, pageOffset: stateAnalysisOffset }, pairId);
-                            setSelectedPairId(next.selectedPairId);
-                            setSelectedStateRowKey(next.selectedStateRowKey);
-                            setStateAnalysisOffset(next.pageOffset);
-                            setStateAnalysisRows(null);
-                            setStateAnalysisResidueSelections([]);
-                            setPendingStateResidue(null);
-                            setStateResidueSelectionReason(null);
-                        }}
-                        onSelectRow={(row) => {
-                            setSelectedStateRowKey(stateLandscapeRowKey(row));
-                            clearStateAnalysisResidueSelection(row.candidate_a_id);
-                            setPendingStateResidue({ candidateId: row.candidate_a_id, row });
-                            setSelectedCandidateId(row.candidate_a_id);
-                        }}
-                        onInspectCandidate={selectCandidateForStateAnalysis}
-                        onSelectMetric={setSelectedStateMetric}
-                        onToggleInspector={() => setStateInspectorMinimized((current) => !current)}
-                        onLoadMore={() => { if (stateAnalysisRows?.next_offset != null) setStateAnalysisOffset(stateAnalysisRows.next_offset); }}
-                    />}
+
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 
-                    {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{analysisRows.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div><div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 p-3 text-xs text-slate-400"><span>Showing {analysisRows.length.toLocaleString()} of {(analysisRecord?.pages?.results?.total_count ?? analysisRows.length).toLocaleString()} ranking rows. Dense analysis data remains artifact-backed.</span>{analysisNextOffset != null && <button type="button" disabled={analysisPageRequested || analysisPage.isFetching} onClick={() => setAnalysisPageRequested(true)} className="rounded border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">{analysisPageRequested || analysisPage.isFetching ? 'Loading…' : 'Load next ranking page'}</button>}</div>{!analysisRows.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
+                    {detailTab === 'analysis' && parsed.data.analysis && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{analysisRows.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div><div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 p-3 text-xs text-slate-400"><span>Showing {analysisRows.length.toLocaleString()} of {(analysisRecord?.pages?.results?.total_count ?? analysisRows.length).toLocaleString()} ranking rows. Dense analysis data remains artifact-backed.</span>{analysisNextOffset != null && <button type="button" disabled={analysisPageRequested || analysisPage.isFetching} onClick={() => setAnalysisPageRequested(true)} className="rounded border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">{analysisPageRequested || analysisPage.isFetching ? 'Loading…' : 'Load next ranking page'}</button>}</div>{!analysisRows.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
 
                     {detailTab === 'ensemble' && <section className="grid gap-3 lg:grid-cols-2"><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Selected candidate artifact provenance</summary><div className="mt-3">{json({ artifact_id: selectedArtifact.artifact_id, sha256: selectedArtifact.sha256, bytes: selectedArtifact.bytes, media_type: selectedArtifact.media_type, metadata: selectedArtifact.metadata })}</div></details><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Authoritative sidecar identities</summary><div className="mt-3">{json(selected.sidecar_paths)}</div></details></section>}
 
-                    {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({analysisRecord?.pages?.support_records?.total_count ?? parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisSupportPage.data?.rows || [], total_count: evidenceAnalysisSupportPage.data?.total_count ?? parsed.data.analysis.support_records.length })}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({analysisRecord?.pages?.clash_records?.total_count ?? parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisClashPage.data?.rows || [], total_count: evidenceAnalysisClashPage.data?.total_count ?? parsed.data.analysis.clash_records.length })}</div></details></div></section>}
+                    {detailTab === 'evidence' && parsed.data.analysis && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">{results.data?.section_errors?.some((error) => error.type === 'support') ? 'Support artifact is unavailable; absence is not established.' : 'No separate support record was persisted. Analysis-row support fields remain authoritative.'}</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({analysisRecord?.pages?.support_records?.total_count ?? parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisSupportPage.data?.rows || [], total_count: evidenceAnalysisSupportPage.data?.total_count ?? parsed.data.analysis.support_records.length })}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({analysisRecord?.pages?.clash_records?.total_count ?? parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisClashPage.data?.rows || [], total_count: evidenceAnalysisClashPage.data?.total_count ?? parsed.data.analysis.clash_records.length })}</div></details></div></section>}
 
                     {detailTab === 'downloads' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Native and canonical content-addressed downloads</h2><p className="mt-1 text-xs text-slate-500">Every link uses the authenticated artifact identity returned by the canonical API. Hash, byte count, role, and candidate binding are shown verbatim.</p><div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{parsed.data.value.artifacts.map((artifact) => <a key={artifact.artifact_id} href={cmArtifactUrl(requestId, artifact.artifact_id)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-slate-600 focus:border-orange-400"><div className="truncate font-medium text-slate-200">{artifact.relative_path}</div><div className="mt-1 text-slate-500">{artifact.role} · {artifact.bytes.toLocaleString()} bytes</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600" title={artifact.sha256}>{artifact.sha256}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{artifact.candidate_id || 'request-level'}</div></a>)}</div></section>}
                     </>}
-                    {modelDataView === 'frustrampnn' && hasGlobalFrustraMpnnData && (
-                        <FrustraWorkbench
-                            job={frustraMpnnJob}
-                            preferredInvocationId={selected ? `frustrampnn:${frustraMpnnJob.id}:${selected.candidate_id}` : undefined}
-                            onBack={() => setModelDataView('producer')}
-                            backLabel={`${producerModelLabel} data`}
-                            onOpenJob={(jobId) => navigate(`/results/${jobId}`)}
-                        />
-                    )}
                     {modelDataView === 'frustrampnn' && !hasGlobalFrustraMpnnData && hasLegacyFrustraMpnnData && selected && (
                         <LegacyCmFrustraMpnnView
                             key={`${requestId}:${selected.candidate_id}`}

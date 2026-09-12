@@ -4,7 +4,7 @@ import { test } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
 import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
 import type { CmResults } from '../../src/components/conformationalMapping/conformationalMappingApi.js';
@@ -92,6 +92,8 @@ const mount = async (
     candidateCount: number,
     backend: ProducerBackend = 'protenix_v2_ensemble',
     frustraDataShape: FrustraDataShape = 'global',
+    search = '',
+    unavailable: boolean | 'contradictory-candidate' = false,
 ) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     const captured: Array<{ primary: string; overlays: Array<{ id: string; structureUrl: string }> }> = [];
@@ -100,21 +102,43 @@ const mount = async (
         return <div data-workbench="stub" data-primary={props.structureUrl} data-overlays={JSON.stringify(props.overlayStructures || [])} />;
     };
     const frustraCaptured: Array<{ jobId: string; invocationId?: string }> = [];
+    let locationSearch = '';
+    let locationPath = '';
+    let go: ReturnType<typeof useNavigate>;
+    const LocationProbe = () => { const location = useLocation(); locationSearch = location.search; locationPath = location.pathname; go = useNavigate(); return null; };
     const legacyLandscapeRequests: Array<{ candidateId: string; offset: number; limit: number }> = [];
-    const FrustraWorkbench = (props: { job: { id: string }; preferredInvocationId?: string }) => {
+    const FrustraWorkbench = (props: { job: { id: string }; preferredInvocationId?: string; scope?: string; onScopeChange?: (scope: string) => void; onOpenJob: (id: string) => void }) => {
         frustraCaptured.push({ jobId: props.job.id, invocationId: props.preferredInvocationId });
-        return <div data-frustra-workbench="stub" data-job-id={props.job.id} data-invocation-id={props.preferredInvocationId} />;
+        return <div data-frustra-workbench="stub" data-job-id={props.job.id} data-invocation-id={props.preferredInvocationId} data-scope={props.scope}><button onClick={() => props.onScopeChange?.('whole-experiment')}>Test whole experiment</button><button onClick={() => props.onOpenJob('child-job')}>Test child route</button></div>;
     };
     const services = {
         getStatus: async () => ({
-            request_id: 'request-viewer', status: 'completed', job_id: 'retry-job', job_status: 'completed',
+            request_id: 'request-viewer', backend, status: 'completed', job_id: 'retry-job', job_status: 'completed',
             result_contract_id: backend === 'confornets' ? 'conformational_mapping_confornets_v1' : 'conformational_mapping_protenix_v1', retry_eligible: false,
             progress: { phase: 'completed', completed_coordinates: candidateCount, expected_coordinates: candidateCount },
             failure_receipt: null,
         } as never),
         getProgress: async () => ({ progress: { phase: 'completed', completed_coordinates: candidateCount, expected_coordinates: candidateCount } } as never),
         getFailureReceipts: async () => [],
-        getResults: async () => results(candidateCount, backend, frustraDataShape),
+        getResults: async () => {
+            if (unavailable === true) throw new Error('ancillary artifact unavailable');
+            const value = results(candidateCount, backend, frustraDataShape);
+            if (unavailable === 'contradictory-candidate') value.artifacts[0].sha256 = sha('f');
+            return value;
+        },
+        getStateAnalysis: async () => {
+            if (!unavailable) throw new Error('no normalized state projection in fixture');
+            return {
+                request_id: 'request-viewer', analysis_id: `cm_state_landscape_analysis_${'a'.repeat(32)}`,
+                authority: { content_sha256: sha('a'), source_ensemble_sha256: sha('b'), source_landscape_sha256: sha('c'), source_structure_map_sha256: sha('d'), comparison_sha256: sha('e'), formula_version: 'cm_state_landscape_analysis_v1', formula_sha256: sha('f'), policy_sha256: sha('1') },
+                comparison: { mode: 'pairwise', target_id: 'target-a', scope: 'all_within_target', reference_backend_coordinates: null, reference_candidate_id: null },
+                counts: { pairs: 1, rows: 0, exclusions: 0 }, pairs: [{ pair_id: 'candidate-1__candidate-2', candidate_a_id: 'candidate-1', candidate_b_id: 'candidate-2' }], artifact: null,
+            };
+        },
+        getStateAnalysisRows: async () => ({
+            request_id: 'request-viewer', selected_analysis_id: `cm_state_landscape_analysis_${'a'.repeat(32)}`, offset: 0, limit: 50,
+            applied_filters: { pair_id: 'candidate-1__candidate-2', candidate_id: null, entity_instance_id: null, auth_asym_id: null, sequence_start: null, sequence_end: null }, next_offset: null, rows: [],
+        }),
         getLandscape: async (_requestId: string, candidateId: string, offset: number, limit: number) => {
             legacyLandscapeRequests.push({ candidateId, offset, limit });
             if (frustraDataShape === 'legacy_refetch_error' && legacyLandscapeRequests.length > 1) {
@@ -145,13 +169,13 @@ const mount = async (
     let renderer: ReactTestRenderer;
     await act(async () => {
         renderer = create(
-            <MemoryRouter><QueryClientProvider client={client}>
+            <MemoryRouter initialEntries={[`/designs/retry-job${search}`]}><LocationProbe /><QueryClientProvider client={client}>
                 <ConformationalMappingViewer requestId="request-viewer" services={services as never} Workbench={Workbench as never} FrustraWorkbench={FrustraWorkbench as never} />
             </QueryClientProvider></MemoryRouter>,
         );
     });
     await flush();
-    return { renderer: renderer!, client, captured, frustraCaptured, legacyLandscapeRequests };
+    return { renderer: renderer!, client, captured, frustraCaptured, legacyLandscapeRequests, search: () => locationSearch, pathname: () => locationPath, go: (to: number | string) => go(to as never) };
 };
 
 test('mounted viewer manages governed alternative overlays across candidate cardinalities', async () => {
@@ -307,4 +331,51 @@ test('mounted historical FrustraMPNN view suppresses retained data after a faile
     assert.doesNotMatch(text(mounted.renderer.root), /Landscape provenance identity/i);
     await act(async () => mounted.renderer.unmount());
     mounted.client.clear();
+});
+
+
+test('CM exact URL invocation, candidate handoff, experiment scope, history and canonical child context', async () => {
+    const context = '&workspace_id=p&global_experiment_id=g&domain_experiment_id=d&global_experiment_revision_id=gr&domain_revision_id=dr';
+    const mounted = await mount(3, 'confornets', 'global', '?frustrampnn_invocation_id=frustrampnn:retry-job:candidate-2' + context);
+    const click = async (label: string) => { await act(async () => mounted.renderer.root.findAllByType('button').find(n => text(n) === label)!.props.onClick()); await flush(); };
+    assert.equal(mounted.renderer.root.findByProps({ 'data-frustra-workbench': 'stub' }).props['data-invocation-id'], 'frustrampnn:retry-job:candidate-2');
+    await click('Test whole experiment');
+    assert.match(mounted.search(), /frustrampnn_scope=whole-experiment/);
+    await click('ConforNets data');
+    assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-2$/);
+    await act(async () => mounted.renderer.root.findAllByType('button').find(n => text(n).includes('Candidate 3'))!.props.onClick());
+    await click('FrustraMPNN data');
+    assert.equal(new URLSearchParams(mounted.search()).get('frustrampnn_invocation_id'), 'frustrampnn:retry-job:candidate-3');
+    await act(async () => mounted.go(-1)); await flush();
+    assert.equal(new URLSearchParams(mounted.search()).get('cm_candidate_id'), 'candidate-3');
+    await act(async () => mounted.go(1)); await flush();
+    await click('Test child route');
+    assert.equal(mounted.pathname(), '/designs/child-job');
+    assert.match(mounted.search(), /global_experiment_revision_id=gr/);
+    assert.equal(new URLSearchParams(mounted.search()).has('frustrampnn_invocation_id'), false);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+test('CM exact native workbench remains addressable when the ancillary shell request fails', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?result_model=frustrampnn&frustrampnn_invocation_id=frustrampnn:retry-job:candidate-2', true);
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-frustra-workbench': 'stub' }).length, 1);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /ancillary artifact unavailable/);
+    assert.match(text(mounted.renderer.root), /State-landscape|State landscape|State analysis/i);
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+test('CM unavailable exact candidate never substitutes the first candidate', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?result_model=confornets&cm_candidate_id=missing');
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /exact requested candidate is unavailable/);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+
+test('CM contradictory selected candidate digest fails closed without substituting coordinates', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?cm_candidate_id=candidate-1', 'contradictory-candidate');
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /validation failed closed/);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
 });

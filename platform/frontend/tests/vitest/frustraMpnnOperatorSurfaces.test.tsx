@@ -281,3 +281,44 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         await act(async () => root.unmount());
     });
 });
+
+
+describe('full Frustra workbench retrieval truth', () => {
+    it.each(['error', 'empty', 'exact-detail-error', 'list-detail-error'] as const)('distinguishes %s from confirmed absence', async (mode) => {
+        const { default: Viewer } = await import('../../src/components/FrustraMpnnResultsViewer');
+        const { api } = await import('../../src/lib/api');
+        const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+        const { MemoryRouter } = await import('react-router-dom');
+        const original = api.defaults.adapter;
+        const calls: string[] = [];
+        const failedItem = {
+            invocation_id: 'exact', parent_job_id: 'parent', parent_workflow_id: 'conformational_mapping', candidate_id: 'candidate', operator_label: 'TEST persisted invocation',
+            source_identity: { design_id: null, artifact_id: null, artifact_sha256: 'a'.repeat(64), candidate_id: 'candidate' }, design_id: null,
+            requiredness: 'required', source_artifact_id: null, source_artifact_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), manifest_sha256: 'c'.repeat(64), summary_sha256: 'd'.repeat(64), created_at: '2026-08-09T00:00:00Z',
+            authority_version: 'historical_v1', availability: false, statistics_available: false, missing_fields: [], settings_sha256: null, effective_settings_sha256: null, effective_settings_json: null, capability_inventory_sha256: null, statistics_sha256: null, statistics_json: null, comparison_compatibility_id: null,
+            status: 'failed', component_contract_version: '1.0', runtime_identity: {}, runtime_identity_sha256: null, gpu_provenance: null, failure_class: 'inference_failure', reopen_destination: { surface: 'frustrampnn-workbench', params: { job_id: 'parent', invocation_id: 'exact' } },
+        };
+        api.defaults.adapter = async (config) => {
+            const url = String(config.url); calls.push(url);
+            if (mode !== 'error' && url.endsWith('/jobs/parent/results')) return { data: { items: mode === 'list-detail-error' ? [failedItem] : [], total: mode === 'list-detail-error' ? 1 : 0, limit: 50, offset: 0 }, status: 200, statusText: 'OK', headers: {}, config };
+            throw new Error('TEST retrieval failure');
+        };
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const node = await mount(<MemoryRouter initialEntries={[mode === 'exact-detail-error' ? '/designs/parent?frustrampnn_invocation_id=exact' : '/designs/parent']}><QueryClientProvider client={client}><Viewer job={{ id: 'parent', name: 'Parent', model_id: 'conformational_mapping', status: 'completed', params: {}, created_at: '', design_count: 0 } as never} onBack={() => {}} onOpenJob={() => {}} /></QueryClientProvider></MemoryRouter>);
+        try {
+            for (let i = 0; i < 15; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+            expect(calls.some(url => url.endsWith('/jobs/parent/results'))).toBe(true);
+            if (mode === 'list-detail-error') expect(calls).toContain('/api/frustrampnn/results/exact');
+            if (mode === 'empty') {
+                expect(node.container.textContent).toContain('No persisted FrustraMPNN invocation was returned for this workflow parent');
+            } else {
+                expect(node.container.textContent).toContain('TEST retrieval failure');
+                expect(node.container.textContent).toContain('Retry result retrieval');
+                expect(node.container.textContent).not.toContain('No persisted FrustraMPNN invocation');
+                expect(node.container.textContent).not.toContain('no canonical FrustraMPNN result exists');
+            }
+        } finally {
+            await act(async () => node.root.unmount()); client.clear(); api.defaults.adapter = original;
+        }
+    }, 30000);
+});

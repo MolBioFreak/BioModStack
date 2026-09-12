@@ -3220,13 +3220,24 @@ async def request_results(
             )
         )
     ).scalars().all()
-    try:
-        result_records = [_cm_record_response(row) for row in rows]
-    except (OSError, ScientificArtifactError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail="CM scientific result artifact is unavailable or invalid") from exc
+    result_records = []
+    section_errors = []
+    for row in rows:
+        try:
+            result_records.append(_cm_record_response(row))
+        except (OSError, ScientificArtifactError, TypeError, ValueError):
+            # An unreadable record is not absence and is never projected as valid
+            # science. Independent normalized state and exact Frustra readbacks
+            # retain their own identity/authority checks.
+            section_errors.append({
+                "type": row.record_type, "key": row.record_key,
+                "status": "unavailable",
+                "detail": "CM scientific result artifact is unavailable or invalid",
+            })
     return {
         "request_id": request_id, "result_contract_id": record.result_contract_id,
         "records": result_records,
+        "section_errors": section_errors,
         "artifacts": [
             {
                 "artifact_id": item.artifact_id, "candidate_id": item.candidate_id,

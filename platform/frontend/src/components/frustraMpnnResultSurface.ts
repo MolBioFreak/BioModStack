@@ -26,11 +26,15 @@ export const hasFrustraMpnnResultSurface = (job: FrustraMpnnSurfaceJob | null | 
     return asRecord(job.params)?.run_frustrampnn === true;
 };
 
-/** Child-only receipt/reanalysis authority must never be applied to integrated parents. */
+/** Child-only receipt/reanalysis authority must never be applied to integrated parents.
+ * Explicit read navigation may query an exact result before optional Job counts
+ * arrive; this labels the existing read surface, not proof of persisted science.
+ */
 export const getFrustraMpnnResultContext = (
     job: FrustraMpnnSurfaceJob | null | undefined,
+    explicitResultRead = false,
 ): FrustraMpnnResultContext | null => {
-    if (!hasFrustraMpnnResultSurface(job)) return null;
+    if (!job || (!explicitResultRead && !hasFrustraMpnnResultSurface(job))) return null;
     if ((job?.model_id ?? '').trim().toLowerCase() === 'frustrampnn') {
         return {
             kind: 'scheduler-child',

@@ -112,13 +112,13 @@ export default function FrustraMpnnResultsViewer({
     onScopeChange?: (scope: FrustraMpnnResultScope) => void;
     experimentContext?: FrustraMpnnExperimentContext | null;
 }) {
-    const resultContext = getFrustraMpnnResultContext(job)!;
+    const resultContext = getFrustraMpnnResultContext(job, true)!;
     const queryClient = useQueryClient();
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedInvocation = searchParams.get('frustrampnn_invocation_id') ?? searchParams.get('invocation_id') ?? preferredInvocationId ?? null;
     const requestedComparisonId = searchParams.get('frustrampnn_comparison_id');
     const requestedGuidanceId = searchParams.get('frustrampnn_guidance_id');
-    const [selectedInvocation, setSelectedInvocation] = useState<string | null>(requestedInvocation);
+
     const [resultOffset, setResultOffset] = useState(0);
     const [sceneController, setSceneController] = useState<StructureSceneController | null>(null);
     const [offset, setOffset] = useState(0);
@@ -184,16 +184,6 @@ export default function FrustraMpnnResultsViewer({
             return { item, href: `${item.reopen_uri}${separator}${contextQuery.toString()}` };
         })
     ), [experimentContext, experimentResults.data?.items]);
-    useEffect(() => {
-        const items = results.data?.items ?? [];
-        setSelectedInvocation((current) => (
-            requestedInvocation
-                ? requestedInvocation
-                : current && items.some((item) => item.invocation_id === current)
-                    ? current
-                    : items[0]?.invocation_id ?? null
-        ));
-    }, [job.id, requestedInvocation, results.data?.items]);
     const persistedComparison = useQuery({
         queryKey: ['frustrampnn-comparison-id', requestedComparisonId],
         queryFn: ({ signal }) => fetchFrustraMpnnComparisonById(requestedComparisonId as string, signal),
@@ -204,25 +194,22 @@ export default function FrustraMpnnResultsViewer({
         queryFn: ({ signal }) => fetchFrustraMpnnGuidance(requestedGuidanceId as string, signal),
         enabled: Boolean(requestedGuidanceId),
     });
-    useEffect(() => {
-        const comparison = persistedComparison.data;
-        if (!comparison) return;
-        if (
-            comparison.reference.parent_job_id !== job.id
-            || (requestedInvocation && comparison.reference.invocation_id !== requestedInvocation)
-        ) {
-            setSelectedInvocation(null);
-            return;
-        }
-        setSelectedInvocation(comparison.reference.invocation_id);
-    }, [job.id, persistedComparison.data, requestedInvocation]);
-    useEffect(() => {
-        if (!selectedInvocation || selectedInvocation === requestedInvocation) return;
+    const comparisonReference = persistedComparison.data?.reference;
+    const comparisonIdentityError = Boolean(comparisonReference && (
+        comparisonReference.parent_job_id !== job.id
+        || (requestedInvocation && comparisonReference.invocation_id !== requestedInvocation)
+    ));
+    const selectedInvocation = comparisonIdentityError ? null : requestedInvocation
+        ?? (requestedComparisonId ? comparisonReference?.invocation_id ?? null : results.data?.items[0]?.invocation_id ?? null);
+    const setSelectedInvocation = (invocationId: string | null) => {
         const next = new URLSearchParams(searchParams);
-        next.set('frustrampnn_invocation_id', selectedInvocation);
+        if (invocationId) next.set('frustrampnn_invocation_id', invocationId);
+        else next.delete('frustrampnn_invocation_id');
         next.delete('invocation_id');
-        setSearchParams(next, { replace: true });
-    }, [requestedInvocation, searchParams, selectedInvocation, setSearchParams]);
+        // A new explicit invocation is not the old comparison's reference.
+        next.delete('frustrampnn_comparison_id');
+        setSearchParams(next);
+    };
     useEffect(() => {
         setOffset(pendingRestoreOffset.current ?? 0);
         pendingRestoreOffset.current = null;
@@ -680,9 +667,11 @@ export default function FrustraMpnnResultsViewer({
                         <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed downloads. Runtime filesystem paths and storage topology are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
                 )}
+                {comparisonIdentityError && <div role="alert">Comparison reference does not match the exact requested job and invocation.</div>}
                 {detail.data && !canonicalSucceeded && <div role={canonicalAuthorityError ? 'alert' : 'status'} className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">{detail.data.status === 'failed' ? 'Failed: the selected persisted invocation has no canonical result matrix.' : detail.data.status === 'not_run' ? 'Not run: the selected invocation was explicitly skipped and has no canonical result matrix.' : `Typed result missingness: ${canonicalAuthorityError ?? 'canonical_result_unavailable'}`}</div>}
-                {!detail.data && (state === 'queued' || state === 'running') && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-5 text-sm text-cyan-100">{state === 'queued' ? 'Queued: waiting for scheduler admission.' : 'Running: the persisted child has not published terminal result authority yet.'}</div>}
-                {!detail.data && terminalJob.has(state) && !results.isLoading && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">{state === 'failed' || state === 'cancelled' ? 'Failed: no canonical result was persisted.' : 'Unavailable: the child is terminal but no canonical FrustraMPNN result exists.'}</div>}
+                {!detail.data && (state === 'queued' || state === 'running') && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-5 text-sm text-cyan-100">{state === 'queued' ? 'Queued: waiting for scheduler admission.' : 'Running: this job has not published terminal result authority yet.'}</div>}
+                {!detail.data && !requestedInvocation && !requestedComparisonId && !detail.isError && terminalJob.has(state) && results.isSuccess && !results.isFetching && results.data.total === 0 && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">No persisted FrustraMPNN invocation was returned for this {resultContext.usesChildReceipt ? 'child job' : 'workflow parent'}.</div>}
+                {(results.isError || detail.isError) && <button type="button" onClick={() => { if (results.isError) void results.refetch(); if (detail.isError) void detail.refetch(); }} className="rounded border border-slate-700 px-3 py-2 text-sm">Retry result retrieval</button>}
             </main>
         </div>
     );
