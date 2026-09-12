@@ -987,20 +987,6 @@ def _plan_output_dir_cleanup(
     return deletable, preserved
 
 
-def count_structure_files(output_dir: str) -> int:
-    """Count PDB and CIF structure files in a job output directory."""
-    try:
-        output_path = resolve_output_dir(output_dir)
-        if not output_path or not output_path.exists():
-            return 0
-        
-        pdb_count = len(list(output_path.glob("**/*.pdb")))
-        cif_count = len(list(output_path.glob("**/*.cif")))
-        return pdb_count + cif_count
-    except Exception:
-        return 0
-
-
 def _positive_int(value: Any) -> int:
     try:
         number = int(value)
@@ -7822,9 +7808,6 @@ async def get_job(
     review_count = _review_candidate_count(job)
     if (design_count or 0) == 0 and review_count is not None:
         design_count = review_count
-    result_output_dir = job.child_output_dir or job.output_dir
-    if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and result_output_dir:
-        design_count = count_structure_files(result_output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
     frustrampnn_result_count = int((await session.execute(
         select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
@@ -10256,6 +10239,8 @@ async def get_docking_results(
                 "engine": "diffdock",
                 "name": sdf_file.name,
                 "path": to_allowed_relative(sdf_file),
+                "artifact_path": sdf_file.relative_to(output_path).as_posix(),
+                "format": "sdf",
                 "absolute_path": str(sdf_file),
                 "confidence": confidence,
                 "affinity": None,
@@ -10285,6 +10270,8 @@ async def get_docking_results(
                 "engine": "unidock",
                 "name": pdb_file.name,
                 "path": to_allowed_relative(pdb_file),
+                "artifact_path": pdb_file.relative_to(output_path).as_posix(),
+                "format": "pdb",
                 "absolute_path": str(pdb_file),
                 "confidence": None,
                 "affinity": entry.get('affinity_kcal_mol'),
@@ -10309,7 +10296,7 @@ async def get_docking_results(
     }
 
 
-@router.get("/{job_id}/docking-results/{filename}")
+@router.get("/{job_id}/docking-results/{filename:path}")
 async def get_sdf_content(
     job_id: str,
     filename: str,
@@ -10319,7 +10306,8 @@ async def get_sdf_content(
     Get the content of a specific docking result file for 3D visualization.
     Handles both DiffDock SDF files and Uni-Dock PDB files.
     """
-    from pathlib import Path
+    import os
+    import stat
     from fastapi.responses import PlainTextResponse
     
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -10328,42 +10316,57 @@ async def get_sdf_content(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Security: validate filename
-    if ".." in filename or "/" in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
+    relative = Path(filename)
+    if (not filename or relative.is_absolute() or "\\" in filename
+            or relative.as_posix() != filename or ".." in relative.parts):
+        raise HTTPException(status_code=400, detail="Invalid docking artifact path")
     
     output_path = resolve_output_dir(job.output_dir)
     if not output_path:
         raise HTTPException(status_code=404, detail="No output directory configured")
     
-    # Search both DiffDock and Uni-Dock directories
-    diffdock_dir = output_path / "run" / "diffdock" / "results"
-    unidock_dir = output_path / "run" / "unidock" / "filtered"
-    
-    found_files = []
-    
-    # Search DiffDock results
-    if diffdock_dir.exists():
-        found_files.extend(list(diffdock_dir.rglob(filename)))
-    
-    # Search Uni-Dock results
-    if unidock_dir.exists():
-        found_files.extend(list(unidock_dir.glob(filename)))
-    
-    if not found_files:
-        raise HTTPException(status_code=404, detail="Docking result file not found")
-    
-    file_path = found_files[0]
-    content = file_path.read_text()
-    
-    # Set appropriate media type based on file extension
-    if file_path.suffix.lower() == ".sdf":
-        media_type = "chemical/x-mdl-sdfile"
-    elif file_path.suffix.lower() == ".pdb":
-        media_type = "chemical/x-pdb"
-    else:
-        media_type = "text/plain"
-    
+    # Historical basename URLs must identify exactly one pose. New readers carry
+    # the job-relative engine/complex path from the listing, never a first match.
+    if len(relative.parts) == 1:
+        candidates = [
+            path for directory, pattern in (
+                (output_path / "run/diffdock/results", "*.sdf"),
+                (output_path / "run/unidock/filtered", "*.pdb"),
+            ) for path in directory.rglob(pattern) if path.name == filename
+        ]
+        if not candidates:
+            raise HTTPException(status_code=404, detail="Docking result file not found")
+        if len(candidates) != 1:
+            raise HTTPException(status_code=409, detail="Ambiguous docking pose; use its listed artifact_path")
+        relative = candidates[0].relative_to(output_path)
+    media_type = {
+        ("run/diffdock/results", ".sdf"): "chemical/x-mdl-sdfile",
+        ("run/unidock/filtered", ".pdb"): "chemical/x-pdb",
+    }.get(("/".join(relative.parts[:3]), relative.suffix.lower()))
+    if media_type is None or len(relative.parts) < 4:
+        raise HTTPException(status_code=400, detail="Not a published docking pose path")
+
+    # Descriptor-relative walking prevents a symlink from substituting another
+    # complex/job between validating and reading either a directory or the leaf.
+    descriptor = -1
+    try:
+        descriptor = os.open(output_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for index, part in enumerate(relative.parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+            if index < len(relative.parts) - 1:
+                flags |= os.O_DIRECTORY
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise HTTPException(status_code=400, detail="Docking pose is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            content = stream.read()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Docking result file is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     return PlainTextResponse(content, media_type=media_type)
 
 

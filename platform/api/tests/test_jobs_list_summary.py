@@ -102,6 +102,11 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     )
     assert "group by designs.job_id" in summary_job_query
     assert "group by jobs.id" not in summary_job_query
+    # This one bounded scalar projection is required by remote result-policy
+    # presentation; fetching the complete params JSON is still forbidden.
+    policy_projection = "json_extract(jobs.params, ?) as remote_result_policy"
+    assert summary_job_query.count(policy_projection) == 1
+    summary_without_policy = summary_job_query.replace(policy_projection, "remote_result_policy")
     for forbidden_column in (
         "params",
         "provenance",
@@ -110,7 +115,7 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
         "awaiting_payload",
         "decision_history",
     ):
-        assert f"jobs.{forbidden_column}" not in summary_job_query
+        assert f"jobs.{forbidden_column}" not in summary_without_policy
 
     full_response = client.get("/api/jobs", params={"limit": 10})
     assert full_response.status_code == 200

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { parseSdf } from 'molstar/lib/commonjs/mol-io/reader/sdf/parser.js';
 
 import type { StructureSceneState } from '../src/structureViewer/contracts/sceneState.js';
 import { documentsForDirectMolstar } from '../src/structureViewer/runtime/directSceneDocuments.js';
@@ -26,6 +27,18 @@ test('direct scene bridge maps governed coordinate formats exactly', () => {
     assert.deepEqual(documentsForDirectMolstar(state('sdf')), {
         status: 'ok', value: [{ id: 'doc', url: '/structure', format: 'sdf' }],
     });
+});
+
+test('the installed SDF decoder reads native ligand atoms instead of an empty PDB', async () => {
+    const sdf = 'complex-b\nBMS test fixture\n\n  1  0  0  0  0  0            999 V2000\n    1.2500    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\nM  END\n$$$$\n';
+    const result = await parseSdf(sdf).run();
+    assert.equal(result.isError, false);
+    assert.equal(result.result.compounds.length, 1);
+    const ligand = result.result.compounds[0].molFile;
+    assert.equal(ligand.title, 'complex-b');
+    assert.equal(ligand.atoms.count, 1);
+    assert.equal(ligand.atoms.type_symbol.value(0), 'C');
+    assert.equal(ligand.atoms.x.value(0), 1.25);
 });
 
 test('trajectory and volume documents fail closed until extensions are integrated', () => {

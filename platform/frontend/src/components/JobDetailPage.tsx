@@ -19,6 +19,8 @@ import { remoteResultsState } from './remoteResultsState';
 interface DockingResult {
     name: string;
     path: string;
+    artifact_path: string;
+    format: 'sdf' | 'pdb';
     absolute_path: string;
     confidence: number | null;
     affinity: number | null;
@@ -70,7 +72,7 @@ export function JobDetailPage() {
     const isNgsResultJob = job ? isNgsJob(job) : false;
 
     // Fetch docking results
-    const { data: dockingData, isLoading: dockingLoading } = useQuery({
+    const { data: dockingData, isLoading: dockingLoading, error: dockingError } = useQuery<{ sdfs: DockingResult[] }>({
         queryKey: ['docking-results', jobId],
         queryFn: async () => {
             const res = await fetch(`/api/jobs/${jobId}/docking-results`);
@@ -225,6 +227,8 @@ export function JobDetailPage() {
                             <div className="flex items-center justify-center py-8">
                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
                             </div>
+                        ) : dockingError ? (
+                            <div role="alert" className="text-red-300">Docking results could not be loaded: {dockingError.message}</div>
                         ) : poses.length > 0 ? (
                             <div>
                                 {/* Pose Selector */}
@@ -241,8 +245,8 @@ export function JobDetailPage() {
                                                 ? (pose.affinity !== null ? `(${pose.affinity.toFixed(1)} kcal/mol)` : '')
                                                 : (pose.confidence !== null ? `(conf: ${pose.confidence.toFixed(2)})` : '');
                                             return (
-                                                <option key={idx} value={idx}>
-                                                    {pose.name} {scoreLabel}
+                                                <option key={pose.artifact_path} value={idx}>
+                                                    {pose.engine} · {pose.complex_name ?? pose.ligand ?? ''} · {pose.name} {scoreLabel}
                                                 </option>
                                             );
                                         })}
@@ -256,8 +260,8 @@ export function JobDetailPage() {
                                 <div className="bg-slate-900/50 rounded-xl overflow-hidden">
                                     {currentSdf ? (
                                         <MolstarViewer
-                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.name}`}
-                                            format="pdb"
+                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.artifact_path.split('/').map(encodeURIComponent).join('/')}`}
+                                            format={currentSdf.format}
                                             height={500}
                                             backgroundColor="#0f172a"
                                             alphafoldView={false}
