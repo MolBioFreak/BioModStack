@@ -6,8 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-plotly.js', () => ({
-    default: ({ data, layout }: { data?: Array<{ type?: string }>; layout?: { title?: { text?: string } } }) => (
-        <div data-testid="scientific-plot" data-trace-types={(data || []).map((trace) => trace.type || '').join(',')}>
+    default: ({ data, layout }: { data?: Array<{ type?: string }>; layout?: { title?: { text?: string }; xaxis?: { title?: { text?: string } } } }) => (
+        <div data-testid="scientific-plot" data-trace-types={(data || []).map((trace) => trace.type || '').join(',')} data-xaxis-title={layout?.xaxis?.title?.text}>
             {layout?.title?.text || 'plot'}
         </div>
     ),
@@ -169,6 +169,18 @@ describe('ONT FASTQ-QC decision report', () => {
             await act(async () => button.click());
         }
         expect(onOpenViewer.mock.calls.length).toBe(readiness === 'ready' ? viewerButtons.length : 0);
+    });
+
+    it('labels coverage with the actual bound reference rather than a historical fixture', async () => {
+        const result = resultFixture();
+        result.verification.summary.reference_name = 'pGM12_pEb-HS2-fluc';
+        await act(async () => root.render(
+            <OntFastqQcResultPanel result={result} loading={false} error={null} />,
+        ));
+        const coverage = container.querySelectorAll<HTMLElement>('[data-testid="scientific-plot"]')[1];
+        expect(coverage.textContent).toBe('Deletion-excluding aligned-base coverage by pGM12_pEb-HS2-fluc coordinate');
+        expect(coverage.dataset.xaxisTitle).toBe('pGM12_pEb-HS2-fluc coordinate (1-based)');
+        expect(coverage.textContent).not.toContain('eGFP');
     });
 
     it('offers bounded manual recovery for an alignment-access denial', async () => {

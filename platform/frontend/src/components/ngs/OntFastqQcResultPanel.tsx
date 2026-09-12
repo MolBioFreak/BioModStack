@@ -360,8 +360,8 @@ export function OntFastqQcResultPanel({
                             hovertemplate: 'Coordinate %{x:,}<br>Base-covering alignment records %{y:,}<extra></extra>',
                         }]}
                         layout={{
-                            title: { text: 'Deletion-excluding aligned-base coverage by eGFP coordinate' },
-                            xaxis: { title: { text: 'eGFP coordinate (1-based)' } },
+                            title: { text: `Deletion-excluding aligned-base coverage by ${verification.summary.reference_name} coordinate` },
+                            xaxis: { title: { text: `${verification.summary.reference_name} coordinate (1-based)` } },
                             yaxis: { title: { text: 'Base-covering alignment records' }, rangemode: 'tozero' },
                             margin: { l: 72, r: 18, t: 44, b: 56 },
                             height: 300,
