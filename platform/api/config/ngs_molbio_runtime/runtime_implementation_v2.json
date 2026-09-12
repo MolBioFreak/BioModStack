@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "dd34a7da7f07b4b70a52c21befb37b1ff76c7bf597d26d48d574d472d85e1a8d",
+  "content_sha256": "d12945d5aa472d2f2cb88c59423b24420e96fc185c62eb0f46fd9305b26af02b",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -584,8 +584,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/adapters.py",
-      "sha256": "d102acf331cfc17ed14e46e7eaae63d882ce84256a04af8e004d9e45c002d9d6",
-      "size_bytes": 167610
+      "sha256": "39ea7f8acc808a8c436efb9072253cf51baabc4be4b442329f2462846f2d17b6",
+      "size_bytes": 162727
     },
     {
       "path": "platform/api/services/global_experiments/launch_contexts.py",
@@ -599,13 +599,13 @@
     },
     {
       "path": "platform/api/services/global_experiments/receipts.py",
-      "sha256": "4b5d59ebe557aadaecad5fca23ed715531d16d2f221bdd1e59d55e4a854ad55b",
-      "size_bytes": 30793
+      "sha256": "035b3ef95a63039dbb9e6ecb7fd1ea8b9754dcfa6962c4e4301bbba888fc1f4d",
+      "size_bytes": 31773
     },
     {
       "path": "platform/api/services/global_experiments/result_surfaces.py",
-      "sha256": "8c69cf2852697e69d5baedeb987a4eae07bb111b0636ddb6d478933e6d35215c",
-      "size_bytes": 20810
+      "sha256": "21c186a4150c6bd2cd8e0c4c44036fcd816de18a422c83b5e76c89883927d85e",
+      "size_bytes": 21631
     },
     {
       "path": "platform/api/services/global_experiments/worker.py",
@@ -869,8 +869,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "bd9e215715ebc9739fb3cc29cb0e41741528f61a53fd9d29d7103febdbd99384",
-      "size_bytes": 173586
+      "sha256": "4e66bb787a0359424fc32f9ccbdd5d610214b30fe208c0b72940b0fafcff50c8",
+      "size_bytes": 175415
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -1099,13 +1099,13 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
-      "sha256": "84c774f7502070b43ea28cb39fef5b898a2fb5e7aee0e590e75ae158a66326e5",
-      "size_bytes": 2500
+      "sha256": "857adc174684871cc28814c5e27285d4a9536e3641329e33b4be703824b69d95",
+      "size_bytes": 2978
     },
     {
       "path": "platform/frontend/src/components/project-manager/protein/ProteinProjectWorkspace.tsx",
-      "sha256": "e2aed7d95d25d8b12ed8f109ed686024e86104300e916bfac6b72166d80e38c3",
-      "size_bytes": 25117
+      "sha256": "9407c6e6cde49334a785d3fa84f442097bb87ca6eea5deee62dc23a01a33929e",
+      "size_bytes": 24908
     },
     {
       "path": "platform/frontend/src/index.css",
@@ -1114,8 +1114,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "613ab9b2f5227a42a0b536899cd171c28cc6475ad8ba83f7fdb813aaa63d0d3e",
-      "size_bytes": 212020
+      "sha256": "99b80ae8fe60805efe2e9247a498b149acab09fde989c89761d2721f56317a81",
+      "size_bytes": 212279
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1149,8 +1149,8 @@
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
-      "sha256": "06838154c51ff0e0a88c7f20782b19f749f9f4195933f11dd462796cb29ff516",
-      "size_bytes": 122278
+      "sha256": "70df14cd862c4adcfb94ec00c3dc704691a598dab668d6f362132d2633b1a687",
+      "size_bytes": 126357
     },
     {
       "path": "platform/frontend/src/lib/restrictionAnalysis.ts",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "4c0838df2bb805a1b085eca58ee7a2e7f2cf25555edc6976c3b19ea546a6aa0e",
-      "size_bytes": 70841
+      "sha256": "643cb1bc2242870c9e7b2988fb0be9b693afcc7b78b2c2486c200bb7e7b86d00",
+      "size_bytes": 69592
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentSession.test.ts",
@@ -1204,8 +1204,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "46d97d779dc25c109f3b9afeef67e4eba99b15470a093d68fc51c7c147ce34ce",
-      "size_bytes": 5757
+      "sha256": "0a78316a9441f9e0dd4506e93966c8c34b1e2a32f16ae1a88ccad01773405eee",
+      "size_bytes": 5943
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1432,8 +1432,8 @@
     "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "760f0b8342d36c1e98168fc90c214b1fd4bb5ead",
-  "successor_source_tree": "0f06a4de32757f1bb6f9bd1eb6fa9bc535f6e276",
+  "successor_source_commit": "08369ef8fe9217580c44d1871d8a9baa97979845",
+  "successor_source_tree": "34e57e9f5943136c98828906e43ebbcb6d6dedfa",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
