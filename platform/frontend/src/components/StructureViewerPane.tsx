@@ -72,7 +72,7 @@ interface ViewerAnalysisBundle {
     chainMetricsBusy?: boolean;
     fampnnPsceProfileRun?: PersistedAnalysisRun<FampnnPsceProfile> | null;
     fampnnPsceProfile?: FampnnPsceProfile | null;
-    onRunFampnnPsceProfile?: () => void;
+    onRunFampnnPsceProfile?: (params?: { chain_id: string; ignore_cbeta: boolean } | Record<string, never>) => void;
     fampnnPsceBusy?: boolean;
     paeMatrixRun?: PersistedAnalysisRun<unknown> | null;
     paeMatrixData?: unknown;
@@ -561,6 +561,12 @@ export default function StructureViewerPane({
 
     const fampnnPsceProfileRun = viewerAnalyses?.fampnnPsceProfileRun ?? null;
     const fampnnPsceProfile = viewerAnalyses?.fampnnPsceProfile ?? null;
+    const [psceChainDraft, setPsceChainDraft] = useState('');
+    const [psceCbetaDraft, setPsceCbetaDraft] = useState('');
+    useEffect(() => {
+        setPsceChainDraft(fampnnPsceProfile?.policy?.chain_id ?? '');
+        setPsceCbetaDraft(fampnnPsceProfile?.policy ? (fampnnPsceProfile.policy.ignore_cbeta ? 'exclude' : 'include') : '');
+    }, [selectedDesignId, fampnnPsceProfile?.policy?.chain_id, fampnnPsceProfile?.policy?.ignore_cbeta]);
     const fampnnPsceChains = useMemo(() => (fampnnPsceProfile?.chains ?? {}) as Record<string, FampnnPsceChainMetric>, [fampnnPsceProfile?.chains]);
     const fampnnPsceBusy = viewerAnalyses?.fampnnPsceBusy ?? false;
     const onRunFampnnPsceProfile = viewerAnalyses?.onRunFampnnPsceProfile;
@@ -1873,7 +1879,7 @@ export default function StructureViewerPane({
                                             </div>
                                             <button
                                                 type="button"
-                                                onClick={onRunFampnnPsceProfile}
+                                                onClick={() => onRunFampnnPsceProfile?.()}
                                                 disabled={!onRunFampnnPsceProfile || fampnnPsceBusy}
                                                 className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
                                                     ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
@@ -2639,7 +2645,7 @@ export default function StructureViewerPane({
                         </div>
                         <button
                             type="button"
-                            onClick={onRunFampnnPsceProfile}
+                            onClick={() => onRunFampnnPsceProfile?.()}
                             disabled={!onRunFampnnPsceProfile || fampnnPsceBusy}
                             className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${fampnnPsceBusy
                                 ? 'cursor-wait border-slate-700 bg-slate-800 text-slate-500'
@@ -2968,6 +2974,28 @@ export default function StructureViewerPane({
                                 ? `pSCE policy v${fampnnPsceProfile.policy.version} · ${fampnnPsceProfile.scope === 'all_chains' ? 'All chains' : `Chain ${fampnnPsceProfile.scope}`} · Cβ ${fampnnPsceProfile.ignore_cbeta ? 'excluded' : 'included'} · Å, residue-weighted`
                                 : 'Historical pSCE policy unknown; retained scalar is not reinterpreted.'}
                         </div>}
+                        {designLens === 'fampnn' && <fieldset className="my-2 flex flex-wrap items-end gap-2 text-xs" disabled={fampnnPsceBusy || !onRunFampnnPsceProfile}>
+                            <legend>pSCE reanalysis (does not change retained scores)</legend>
+                            <label>Chain scope
+                                <input aria-label="pSCE chain scope" list={`psce-chains-${selectedDesignId}`} value={psceChainDraft}
+                                    onChange={(event) => setPsceChainDraft(event.target.value)} placeholder="Select chain or all_chains" className="block bg-slate-800 p-1" />
+                                <datalist id={`psce-chains-${selectedDesignId}`}>
+                                    <option value="all_chains">All chains</option>
+                                    {[...new Set([...(structureAnalysis?.chain_ids ?? []), ...Object.keys(chainMetrics), ...fampnnPsceChainIds])].map((chain) => <option key={chain} value={chain} />)}
+                                </datalist>
+                            </label>
+                            <label>Cβ policy
+                                <select aria-label="pSCE C-beta policy" value={psceCbetaDraft} onChange={(event) => setPsceCbetaDraft(event.target.value)} className="block bg-slate-800 p-1">
+                                    <option value="">Choose Cβ policy</option><option value="exclude">Exclude Cβ</option><option value="include">Include Cβ</option>
+                                </select>
+                            </label>
+                            <button type="button" disabled={!psceChainDraft.trim() || !psceCbetaDraft}
+                                onClick={() => onRunFampnnPsceProfile?.({ chain_id: psceChainDraft.trim(), ignore_cbeta: psceCbetaDraft === 'exclude' })}>
+                                Analyze pSCE with selected policy
+                            </button>
+                            <button type="button" onClick={() => onRunFampnnPsceProfile?.({})}>Use recorded pSCE policy</button>
+                            {fampnnPsceProfileRun?.error_message && <span role="alert">{fampnnPsceProfileRun.error_message}</span>}
+                        </fieldset>}
                     </div>
 
                     {shapeMetrics && !isFullscreen && (

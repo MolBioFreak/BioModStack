@@ -115,7 +115,7 @@ output folder is not an authoritative result.
 `fampnn_avg_psce` is a residue-weighted sidechain error in Å (lower is better),
 not a binding score or pLDDT. The producer and global profile share the numerical
 owner in `scripts/analyse_fampnn.py`. New sidecars persist `psce_policy` with the
-exact chain scope, Cβ inclusion, first-model/amino-acid/alternate-location rules,
+exact chain scope, Cβ inclusion, original all-model/all-residue/all-alternate-atom rules,
 aggregation and policy version. Workflow chain selection and Cβ exclusion remain
 explicit; sequence probability and mutation scores retain their separate native
 contracts. Sidecar scalars use two-decimal rounding; profiles retain precision.
