@@ -4914,6 +4914,15 @@ async def ingest_job_results(
     try:
         current_job = await session.get(Job, job_id)
         model_id = str(current_job.model_id or "").strip().lower() if current_job else ""
+        # Bind native full-root aggregate evidence before any candidate mutation.
+        # Interactive stage publications legitimately have no closeout yet.
+        closeout = None
+        if current_job is not None:
+            from services.result_contracts import antibody_pipeline_closeout
+            native_root = Path(output_dir)
+            native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
+                           else get_data_root() / output_dir)
+            closeout = antibody_pipeline_closeout(current_job, native_root)
         # Native primary owners publish full scientific projections first. Component
         # results attach to those rows; they must never replace primary ingestion.
         count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
@@ -4932,6 +4941,9 @@ async def ingest_job_results(
             )
             if model_id == "frustrampnn":
                 count = component_count or 0
+        if closeout is not None and current_job is not None:
+            current_job.provenance = {**(current_job.provenance or {}),
+                                      "antibody_pipeline_result": closeout}
         if commit:
             await session.commit()
         else:

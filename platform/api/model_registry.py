@@ -512,6 +512,13 @@ class ModelRegistry:
             elif (model_id, mode_id) == ('template_antibody_denovo', 'maturation_child'):
                 model = self.get_model('antibody_denovo')
                 native_required = ('pdb_paths',)
+            elif model_id == 'template_antibody_denovo' and mode_id in {
+                    'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
+                model = self.get_model('antibody_denovo')
+                # Full refinement consumes the existing normalized selection,
+                # not the de novo generator's target/epitope inputs.
+                if mode_id == 'antibody_refinement_pipeline':
+                    native_required = ('selected_input_dir',)
             elif raw is not None:
                 model = raw
         if not model:
@@ -536,6 +543,13 @@ class ModelRegistry:
                 errors.append('PPIFlow generation requires a seed complex or seed input directory')
             if params.get('ppiflow_mode', 'backbone_refine') != 'backbone_refine':
                 errors.append('generator_backbone_refine requires backbone_refine')
+
+        # Both public spellings share the same full-root native input contract.
+        if model_id in {'antibody_denovo', 'template_antibody_denovo'}:
+            if mode_id == 'antibody_refinement_pipeline':
+                native_required = ('selected_input_dir',)
+            elif mode_id == 'antibody_denovo_pipeline':
+                native_required = ('target_pdb', 'epitope_residues')
 
         # Check required parameters
         if native_required is not None:
@@ -647,6 +661,16 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if model is None and native_internal_contexts.get((model_id, mode)) == workflow:
         availability = 'internal'
         authority = 'platform/api/services/nextflow.py:MODEL_MODE_WORKFLOW_ENTRYPOINTS'
+    # Only the two declared full roots inherit public parent availability.
+    # Compiler-only default/maturation aliases and private children remain internal.
+    if (model is None and model_id == 'template_antibody_denovo'
+            and mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}
+            and entrypoint == 'workflows/antibody_denovo.nf'):
+        parent = registry.get_model('antibody_denovo')
+        if parent is not None and mode in {item.id for item in parent.modes}:
+            model = parent
+            availability = 'public'
+            authority = parent.execution_authority
     components, dynamic, dependencies, roles, services, blockers = [], [], {}, [], [], []
 
     def native_bool(key, default=False):
