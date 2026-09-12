@@ -673,7 +673,7 @@ async def test_core_publication_flushes_parent_before_bounded_mapping_inserts(
 
 @pytest.mark.asyncio
 async def test_dense_parquet_stores_row_identity_without_repeated_invocation_provenance(
-    tmp_path: Path, db
+    tmp_path: Path, db, monkeypatch
 ) -> None:
     module = _persistence()
     _, terminal = _bundle(tmp_path / "compact-provenance-bundle")
@@ -696,9 +696,35 @@ async def test_dense_parquet_stores_row_identity_without_repeated_invocation_pro
             / receipt.relative_path
         )
         schema_names = set(pq.read_schema(artifact_path).names)
+        writer = importlib.import_module("services.scientific_artifacts.writer")
+        query_module = importlib.import_module("services.scientific_artifacts.query")
+        writer._digest_memo.clear()
+        io = {"bytes": 0, "connections": 0}
+        original_read = writer.os.pread
+        original_connection = query_module._query_connection
+
+        def tracked_read(fd, size, offset):
+            block = original_read(fd, size, offset)
+            io["bytes"] += len(block)
+            return block
+
+        def tracked_connection(path):
+            io["connections"] += 1
+            return original_connection(path)
+
+        monkeypatch.setattr(writer.os, "pread", tracked_read)
+        monkeypatch.setattr(query_module, "_query_connection", tracked_connection)
         page = await module.landscape_page(
             session, result.parent_job_id, result.invocation_id, limit=1
         )
+        assert io == {"bytes": receipt.size_bytes, "connections": 1}
+        next_page = await module.landscape_page(
+            session, result.parent_job_id, result.invocation_id, limit=1, offset=1
+        )
+        assert next_page["total"] == page["total"]
+        assert next_page["items"][0]["id"] != page["items"][0]["id"]
+        assert io == {"bytes": receipt.size_bytes, "connections": 2}
+        print("FRUSTRA_IO", {"size": receipt.size_bytes, "two_pages": io})
         raw_csv = (
             await session.execute(
                 select(FrustraMPNNArtifact).where(

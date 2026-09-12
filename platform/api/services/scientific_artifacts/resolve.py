@@ -1,6 +1,7 @@
 """Resolve compact JSON references through the verified artifact data plane."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -12,7 +13,7 @@ from .contracts import (
     require_row_reference,
     reconstruct_envelope,
 )
-from .query import count_rows, query_rows
+from .query import ArtifactQuery, artifact_query, query_rows
 from .writer import read_rows
 
 
@@ -65,24 +66,24 @@ def resolve_json_envelope_fields(
     keys: Sequence[str],
     root: Path | str | None = None,
     max_items_per_key: int = 128,
+    query: ArtifactQuery | None = None,
 ) -> dict[str, Any]:
     """Resolve a closed, small field projection from a JSON-envelope artifact."""
     if not keys:
         raise ValueError("JSON-envelope field projection cannot be empty")
     rows: list[dict[str, Any]] = []
-    for key in dict.fromkeys(keys):
-        total = count_rows(reference, root=str(root) if root is not None else None, filters={"key": key})
-        if total > max_items_per_key:
-            raise ValueError(f"JSON-envelope field {key!r} exceeds the bounded projection")
-        rows.extend(query_rows(
-            reference,
-            columns=["key", "item_index", "payload_json"],
-            limit=max(1, total),
-            root=str(root) if root is not None else None,
-            max_limit=max_items_per_key,
-            filters={"key": key},
-            order_by=["item_index"],
-        ))
+    with nullcontext(query) if query is not None else artifact_query(reference, root=root) as reader:
+        for key in dict.fromkeys(keys):
+            projected = reader.query_rows(
+                columns=["key", "item_index", "payload_json"],
+                limit=max_items_per_key + 1,
+                max_limit=max_items_per_key + 1,
+                filters={"key": key},
+                order_by=["item_index"],
+            )
+            if len(projected) > max_items_per_key:
+                raise ValueError(f"JSON-envelope field {key!r} exceeds the bounded projection")
+            rows.extend(projected)
     return reconstruct_envelope(rows)
 
 
@@ -94,27 +95,27 @@ def query_json_envelope_page(
     limit: int,
     root: Path | str | None = None,
     max_limit: int = 100,
+    query: ArtifactQuery | None = None,
 ) -> dict[str, Any]:
     """Read one bounded list field from a verified JSON-envelope artifact."""
     if not key or offset < 0 or not 1 <= limit <= max_limit:
         raise ValueError("JSON-envelope page is outside the supported bounds")
-    total = count_rows(reference, root=str(root) if root is not None else None, filters={"key": key})
-    rows = query_rows(
-        reference,
-        columns=["key", "item_index", "payload_json"],
-        limit=limit + 1,
-        offset=offset,
-        root=str(root) if root is not None else None,
-        max_limit=max_limit + 1,
-        filters={"key": key},
-        order_by=["item_index"],
-    )
+    with nullcontext(query) if query is not None else artifact_query(reference, root=root) as reader:
+        total = reader.count_rows(filters={"key": key})
+        rows = reader.query_rows(
+            columns=["key", "item_index", "payload_json"],
+            limit=limit,
+            offset=offset,
+            max_limit=max_limit,
+            filters={"key": key},
+            order_by=["item_index"],
+        )
     page = rows[:limit]
     decoded = [json.loads(str(row["payload_json"])) for row in page]
     empty_collection = len(decoded) == 1 and page[0]["item_index"] == -1 and decoded[0] == []
     values = [] if empty_collection else decoded
     logical_total = 0 if empty_collection else total
-    next_offset = offset + len(values) if len(rows) > limit else None
+    next_offset = offset + len(values) if offset + len(values) < logical_total else None
     return {
         "key": key,
         "offset": offset,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from services.scientific_artifacts.query import artifact_query
+
 import hashlib
 import httpx
 import json
@@ -3151,28 +3153,30 @@ def _bounded_cm_record_payload(
         }, {}, artifact
 
     root = artifact_root()
-    payload = resolve_json_envelope_fields(reference, keys=fields, root=root)
-    pages: dict[str, dict[str, Any]] = {}
-    for collection in collections:
-        initial_limit = (
-            _CM_RESULT_INITIAL_PAGE_SIZE
-            if (row.record_type == "analysis" and collection == "results")
-            or row.record_type == "structure_map"
-            else 1
-        )
-        page = query_json_envelope_page(
-            reference,
-            key=collection,
-            offset=0,
-            limit=initial_limit,
-            root=root,
-            max_limit=_CM_RESULT_PAGE_SIZE,
-        )
-        payload[collection] = page["rows"] if initial_limit > 1 else []
-        descriptor = _cm_page_descriptor(page)
-        if initial_limit == 1 and page["total_count"]:
-            descriptor["next_offset"] = 0
-        pages[collection] = descriptor
+    with artifact_query(reference, root=root) as query:
+        payload = resolve_json_envelope_fields(reference, keys=fields, root=root, query=query)
+        pages: dict[str, dict[str, Any]] = {}
+        for collection in collections:
+            initial_limit = (
+                _CM_RESULT_INITIAL_PAGE_SIZE
+                if (row.record_type == "analysis" and collection == "results")
+                or row.record_type == "structure_map"
+                else 1
+            )
+            page = query_json_envelope_page(
+                reference,
+                key=collection,
+                offset=0,
+                limit=initial_limit,
+                root=root,
+                max_limit=_CM_RESULT_PAGE_SIZE,
+                query=query,
+            )
+            payload[collection] = page["rows"] if initial_limit > 1 else []
+            descriptor = _cm_page_descriptor(page)
+            if initial_limit == 1 and page["total_count"]:
+                descriptor["next_offset"] = 0
+            pages[collection] = descriptor
     return payload, pages, artifact
 
 
