@@ -38,7 +38,7 @@ test('workflow result model and scope are URL-owned with workflow-primary defaul
                 primaryModelId: 'structure_prediction',
             },
         ),
-        { model: 'structure_prediction', scope: 'this-job' },
+        { model: 'frustrampnn', scope: 'whole-experiment' },
     );
 
     const next = module.updateWorkflowResultViewSearch(

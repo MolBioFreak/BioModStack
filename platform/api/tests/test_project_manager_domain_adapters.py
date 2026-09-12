@@ -349,7 +349,7 @@ async def test_core_rfd3_cm_and_frustrampnn_verify_native_authorities(adapter_st
         guidance_receipt = await _class("FrustraMpnnGuidanceAdapter")().verify(session, "guidance-1")
 
     assert core_receipt["content_digest"] == structure_sha
-    assert core_receipt["reopen_uri"] == "/designs/core-job-1"
+    assert core_receipt["reopen_uri"].startswith("/designs/core-job-1?design_id=design-1")
     assert rfd3_receipt["entity_id"] == "rfd3-request-1"
     assert rfd3_receipt["content_digest"] == rfd3_manifest_sha
     assert rfd3_receipt["metadata"]["job_status"] == "completed"
@@ -1117,7 +1117,7 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         assert surface["route"] == {
             "template_id": "bms.route.verified-external-entity.v1",
             "path": "/native/results/entity-1",
-            "query": {"adapter": adapter["adapter_id"], "view": "summary/details"},
+            "query": {"adapter": adapter["adapter_id"], "view": "summary/details", **({"design_id": "entity-1"} if entity_kind == "design" else {})},
         }
         assert surface["native_summary"]["payload"] == acknowledgement["metadata"]
 

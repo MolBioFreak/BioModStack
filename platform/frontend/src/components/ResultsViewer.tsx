@@ -81,7 +81,7 @@ import {
     type WorkflowResultModel,
 } from './frustrampnn/workflowResultViewState';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
-import { buildWorkflowModelResults, filterDesignsForResultModel } from './frustrampnn/workflowModelResults';
+import { buildWorkflowModelResults, primaryWorkflowResultModel } from './frustrampnn/workflowModelResults';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
@@ -554,27 +554,6 @@ const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
         mode.includes('antibody') ||
         Boolean(params.antibody_chains)
     );
-};
-
-const normalizeValidationDesignName = (name: string): string => {
-    let normalized = name;
-    while (/^\d+_/.test(normalized)) {
-        normalized = normalized.replace(/^\d+_/, '');
-    }
-    return normalized;
-};
-
-const validationDesignPreference = (
-    design: { job_id: string; pdb_path?: string | null },
-    selectedJobId: string
-): number => {
-    const path = design.pdb_path || '';
-    let score = 0;
-    if (design.job_id === selectedJobId) score += 100;
-    if (path.includes('/validated_designs/') || path.includes('/collected/structure_validation/')) score += 50;
-    if (path.endsWith('.pdb')) score += 10;
-    if (path.includes('/pdb_files/predictions/')) score += 5;
-    return score;
 };
 
 const titleCaseWords = (value: string): string => value.replace(/\b([a-z])/g, (match) => match.toUpperCase());
@@ -1701,16 +1680,21 @@ export function ResultsViewer() {
     const queryClient = useQueryClient();
 
     // State
-    const [selectedJobId, setSelectedJobId] = useState<string>(jobId || '');
+    const selectedJobId = jobId || ''; // The route is the sole Job selection authority.
     const [showJobSelectorMenu, setShowJobSelectorMenu] = useState(false);
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
-    const [resultSurface, setResultSurfaceState] = useState<WorkflowResultModel>('workflow');
-    const [frustraMpnnScope, setFrustraMpnnScopeState] = useState<FrustraMpnnResultScope>('this-job');
-    const [selectedDesignId, setSelectedDesignId] = useState<string>('');
+    const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
+    const [localDesignId, setSelectedDesignId] = useState<string>('');
+    const selectedDesignId = requestedDesignId || localDesignId;
+    const selectDesign = useCallback((id: string) => {
+        const params = new URLSearchParams(location.search);
+        params.set('design_id', id);
+        navigate(`${location.pathname}?${params}`, { replace: true });
+    }, [location.pathname, location.search, navigate]);
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
@@ -1886,6 +1870,8 @@ export function ResultsViewer() {
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
     );
+    const primaryResultModelId = activeJob ? primaryWorkflowResultModel(activeJob) : 'workflow';
+    const { model: resultSurface, scope: frustraMpnnScope } = parseWorkflowResultViewState(location.search, { availableModelIds: [], primaryModelId: primaryResultModelId });
     useEffect(() => {
         const params = activeJob?.params;
         if (!params) return;
@@ -2239,76 +2225,21 @@ export function ResultsViewer() {
         }
     }, []);
 
-    // Sync URL with selection
     useEffect(() => {
-        if (jobId && routedJob && isNgsJob(routedJob)) {
+        if (routedJob && isNgsJob(routedJob)) {
             navigate(ngsResultHref(routedJob.id, location.search), { replace: true });
-            return;
         }
-        if (nonNgsJobs.length === 0) {
-            if (jobsLoading || jobsError || (jobId && (routedJobLoading || routedJobError))) {
-                return;
-            }
-            if (selectedJobId) {
-                setSelectedJobId('');
-                setSelectedDesignId('');
-            }
-            if (jobId) {
-                navigate('/designs', { replace: true });
-            }
-            return;
-        }
-
-        if (jobId) {
-            const requestedJob = nonNgsJobs.find((j: Job) => j.id === jobId);
-            if (requestedJob) {
-                if (selectedJobId !== requestedJob.id) {
-                    setSelectedJobId(requestedJob.id);
-                    setSelectedDesignId('');
-                }
-                return;
-            }
-
-            if (jobsLoading || jobsError || routedJobLoading || routedJobError) {
-                return;
-            }
-
-            if (selectedJobId) {
-                setSelectedJobId('');
-                setSelectedDesignId('');
-            }
-            navigate('/designs', { replace: true });
-            return;
-        }
-
-        if (selectedJobId && !activeJob) {
-            setSelectedJobId('');
-            setSelectedDesignId('');
-        }
-    }, [
-        jobId,
-        routedJob,
-        nonNgsJobs,
-        selectedJobId,
-        activeJob,
-        navigate,
-        jobsLoading,
-        jobsError,
-        routedJobLoading,
-        routedJobError,
-        location.search,
-    ]);
+    }, [routedJob, location.search, navigate]);
 
     useEffect(() => {
-        if (!activeJob?.parent_job_id || !activeParentJob) return;
+        if (requestedDesignId || !activeJob?.parent_job_id || !activeParentJob) return;
         if ((activeJob.design_count || 0) > 0) return;
         const parentOwnsInteractiveReview = Boolean(activeParentJob.awaiting_input) || activeParentJob.status === 'awaiting_input';
         if (!parentOwnsInteractiveReview) return;
         if (selectedJobId === activeParentJob.id) return;
-        setSelectedJobId(activeParentJob.id);
         setSelectedDesignId('');
         setCurrentPage(1);
-        navigate(`/designs/${activeParentJob.id}`, { replace: true });
+        navigate(`/designs/${activeParentJob.id}${location.search}`, { replace: true });
     }, [
         activeJob?.design_count,
         activeJob?.id,
@@ -2316,10 +2247,12 @@ export function ResultsViewer() {
         activeParentJob,
         navigate,
         selectedJobId,
+        requestedDesignId,
+        location.search,
     ]);
 
     useEffect(() => {
-        if (!activeJob) return;
+        if (requestedDesignId || !activeJob) return;
         if (Boolean(activeJob.awaiting_input) || activeJob.status === 'awaiting_input') return;
         if ((activeJob.design_count || 0) > 0) return;
 
@@ -2329,29 +2262,29 @@ export function ResultsViewer() {
         const childJob = designBearingChildren[0];
         if (!childJob?.id || selectedJobId === childJob.id) return;
 
-        setSelectedJobId(childJob.id);
         setSelectedDesignId('');
         setCurrentPage(1);
-        navigate(`/designs/${childJob.id}`, { replace: true });
+        navigate(`/designs/${childJob.id}${location.search}`, { replace: true });
     }, [
         activeChildJobs,
         activeJob,
         navigate,
         selectedJobId,
+        requestedDesignId,
+        location.search,
     ]);
 
     const handleSelectJob = useCallback((newId: string, replace = false) => {
-        setSelectedJobId(newId);
         setSelectedDesignId('');
         setCurrentPage(1); // Reset pagination when switching jobs
         setShowJobSelectorMenu(false);
         setJobSelectorSearch('');
         if (newId) {
-            navigate(`/designs/${newId}`, replace ? { replace: true } : undefined);
+            navigate(`/designs/${newId}${location.search}`, replace ? { replace: true } : undefined);
         } else {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
-    }, [navigate]);
+    }, [navigate, location.search]);
     const handleSelectLineageGroup = useCallback((family: string) => {
         if (!activeLineageRootJob?.id) return;
         const sourceFilter = isScopedOutputSourceFilter(family) ? family : 'all';
@@ -2360,11 +2293,10 @@ export function ResultsViewer() {
         setOutputSourceFilter(sourceFilter);
         setAntibodySourceFilter(sourceFilter);
         setSelectedBackboneId(null);
-        setSelectedJobId(activeLineageRootJob.id);
         setSelectedDesignId('');
         setCurrentPage(1);
-        navigate(`/designs/${activeLineageRootJob.id}`, { replace: true });
-    }, [activeLineageRootJob, navigate]);
+        navigate(`/designs/${activeLineageRootJob.id}${location.search}`, { replace: true });
+    }, [activeLineageRootJob, navigate, location.search]);
     const toggleExpandedLineageGroup = useCallback((groupKey: string) => {
         setExpandedLineageGroups((current) => {
             const next = new Set(current);
@@ -2435,18 +2367,16 @@ export function ResultsViewer() {
         return '';
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
-    const requiresClientModelFiltering = resultSurface !== 'workflow'
-        && resultSurface !== 'frustrampnn'
-        && resultSurface !== activeJob?.model_id;
-    const useClientSourcePagination = outputSourceFilter !== 'all'
-        || resultSetFilter !== 'all'
-        || requiresClientModelFiltering;
+    const scopedModelId = resultSurface !== 'workflow' && resultSurface !== 'frustrampnn' && resultSurface !== primaryResultModelId
+        ? resultSurface : undefined;
+    const useClientSourcePagination = outputSourceFilter !== 'all' || resultSetFilter !== 'all';
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
     const forceBulkLoadForSorting = useClientSourcePagination || requiresClientOnlySort;
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         job_id: selectedJobId,
+        model_id: scopedModelId,
         include_children: !isReviewStageJob,
         design_ids: activeSavedSubsetDesignIds,
         q: filterText.trim() || undefined,
@@ -2476,7 +2406,8 @@ export function ResultsViewer() {
         rfd_rog_max: rfdRogMaxValue,
         artifact_group: activeRfArtifactGroup,
         include_summary: true,
-    }), [selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
+    }), [scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
+    useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); }, [selectedJobId, resultSurface]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
         limit: MAX_BULK_SELECTION_DESIGNS,
@@ -2511,52 +2442,19 @@ export function ResultsViewer() {
     const clientDerivedResultsBlocked = !clientDerivedResultsPolicy.allowed;
     const canClientSortLoadedDesigns = clientDerivedResultsPolicy.allowed
         && (forceBulkLoadForSorting || serverTotalDesigns <= rawDesigns.length);
-    const designs = useMemo(() => {
-        const deduped: typeof rawDesigns = [];
-        const validationIndices = new Map<string, number>();
-
-        for (const design of rawDesigns) {
-            if (inferDesignOutputSource(design as UntypedApiValue) !== 'validation') {
-                deduped.push(design);
-                continue;
-            }
-
-            const key = normalizeValidationDesignName(design.name);
-            const existingIndex = validationIndices.get(key);
-            if (existingIndex == null) {
-                validationIndices.set(key, deduped.length);
-                deduped.push(design);
-                continue;
-            }
-
-            const existing = deduped[existingIndex];
-            if (validationDesignPreference(design, selectedJobId) > validationDesignPreference(existing, selectedJobId)) {
-                deduped[existingIndex] = design;
-            }
-        }
-
-        return deduped;
-    }, [rawDesigns, selectedJobId]);
+    // Design IDs, unlike display names, distinguish models, candidates and attempts.
+    const designs = useMemo(() => Array.from(new Map(rawDesigns.map((design) => [design.id, design])).values()), [rawDesigns]);
     const orderedDesigns = useMemo(() => {
         if (!canClientSortLoadedDesigns) return designs;
         return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
     }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
     const resultModelHierarchy = useMemo(() => activeJob ? buildWorkflowModelResults({
         job: activeJob,
-        designs: orderedDesigns,
+        modelCounts: designsData?.data.model_counts ?? {},
         frustraMpnnAvailable: frustraMpnnSurfaceAvailable,
-    }) : [], [activeJob, frustraMpnnSurfaceAvailable, orderedDesigns]);
-    const primaryResultModelId = resultModelHierarchy[0]?.modelId ?? activeJob?.model_id ?? '';
-    useEffect(() => {
-        if (!activeJob || !primaryResultModelId) return;
-        const viewState = parseWorkflowResultViewState(location.search, {
-            availableModelIds: resultModelHierarchy.map((item) => item.modelId),
-            primaryModelId: primaryResultModelId,
-        });
-        setResultSurfaceState(viewState.model);
-        setFrustraMpnnScopeState(viewState.scope);
-    }, [activeJob, location.search, primaryResultModelId, resultModelHierarchy]);
+    }) : [], [activeJob, frustraMpnnSurfaceAvailable, designsData?.data.model_counts]);
     const setResultSurface = useCallback((model: WorkflowResultModel) => {
+        setCurrentPage(1);
         const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
         navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
     }, [frustraMpnnScope, location.pathname, location.search, navigate]);
@@ -2570,13 +2468,16 @@ export function ResultsViewer() {
         supportsViewerCapability(design, 'ppiflow_maturation_metrics')
     );
 
-    const { data: selectedDesignDetailData } = useQuery({
-        queryKey: ['design', selectedDesignId],
-        queryFn: () => (selectedDesignId ? fetchDesignById(selectedDesignId).then((response) => response.data) : null),
+    const { data: selectedDesignDetailData, isError: selectedDesignError, isLoading: selectedDesignLoading } = useQuery({
+        queryKey: ['design', selectedDesignId, selectedJobId],
+        queryFn: () => (selectedDesignId ? fetchDesignById(selectedDesignId, selectedJobId).then((response) => response.data) : null),
         enabled: !!selectedDesignId,
         staleTime: 30_000,
     });
-    const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
+    const selectedDesign = selectedDesignError ? undefined : selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
+    useEffect(() => {
+        if (requestedDesignId && selectedDesignDetailData?.id === requestedDesignId && supportsViewerCapability(selectedDesignDetailData, 'structure_viewer')) setActiveTab('structure');
+    }, [requestedDesignId, selectedDesignDetailData?.id]);
     const selectedDesignUnsupported = isUnsupportedResult(selectedDesign);
     const selectedDesignUnsupportedReason = getUnsupportedResultReason(selectedDesign);
     const selectedDesignSupportsStructureViewer = supportsViewerCapability(selectedDesign, 'structure_viewer');
@@ -3173,9 +3074,8 @@ export function ResultsViewer() {
         const resultSetFiltered = resultSetFilter === 'all'
             ? sourceFiltered
             : sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
-        if (resultSurface === primaryResultModelId || resultSurface === 'frustrampnn') return resultSetFiltered;
-        return filterDesignsForResultModel(resultSetFiltered, resultSurface);
-    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, primaryResultModelId, resultSetFilter, resultSurface]);
+        return resultSetFiltered;
+    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -5207,6 +5107,16 @@ export function ResultsViewer() {
         </nav>
     ) : null;
 
+    if (activeJob && !['conformational_mapping', 'confornets_experimental'].includes(activeJob.model_id)
+        && !designsLoading && new URLSearchParams(location.search).has('result_model')
+        && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
+        return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
+    }
+    if (requestedDesignId && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
+        || (scopedModelId && selectedDesign && selectedDesign.provenance?.model_id !== scopedModelId))) {
+        return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
+    }
+
     if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
         if (!activeJob.conformational_mapping_request_id) {
             return <div role="alert" className="mx-auto mt-12 max-w-3xl rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
@@ -5417,7 +5327,9 @@ export function ResultsViewer() {
                     />
                 )}
 
-                {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />}
+                {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
+                    <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
+                )}
                 {activeJob && (
                     isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
@@ -7131,8 +7043,8 @@ export function ResultsViewer() {
                                         <div className="p-4 space-y-3">
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}
-                                                setSelectedDesignId={setSelectedDesignId}
-                                                designs={tableDesigns}
+                                                setSelectedDesignId={selectDesign}
+                                                designs={selectedDesign && !tableDesigns.some(design => design.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns}
                                                 selectedDesign={selectedDesign}
                                                 colorMode={colorMode}
                                                 setColorMode={setColorMode}
@@ -7175,7 +7087,7 @@ export function ResultsViewer() {
                                                                 <div className="relative">
                                                                     <select
                                                                         value={selectedDesignId ?? ''}
-                                                                        onChange={(e) => setSelectedDesignId(e.target.value)}
+                                                                        onChange={(e) => selectDesign(e.target.value)}
                                                                         className="appearance-none rounded-lg border border-slate-600/50 bg-slate-700/60 px-3 py-2 pr-8 text-xs text-blue-300 transition-colors hover:bg-slate-600/60 min-w-[280px]"
                                                                     >
                                                                         {SCOPED_OUTPUT_SOURCE_FILTERS
@@ -8450,7 +8362,7 @@ export function ResultsViewer() {
                                                                     }`}
                                                                 onClick={() => {
                                                                     if (shouldSuppressTableClick()) return;
-                                                                    setSelectedDesignId(d.id);
+                                                                    selectDesign(d.id);
                                                                     setActiveTab('structure');
                                                                 }}
                                                             >

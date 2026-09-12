@@ -803,7 +803,7 @@ export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
-export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
+export const fetchDesignById = (id: string, jobId?: string) => api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId } });
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
     dataset_name: string;
@@ -2072,6 +2072,7 @@ export interface DesignAggregateSummary {
 }
 
 export interface DesignListResponse {
+    model_counts?: Record<string, number>;
     designs: Design[];
     total: number;
     summary?: DesignAggregateSummary | null;
@@ -2079,6 +2080,7 @@ export interface DesignListResponse {
 
 export interface DesignFilters {
     job_id?: string;
+    model_id?: string;
     include_children?: boolean;
     design_ids?: string[];
     q?: string;

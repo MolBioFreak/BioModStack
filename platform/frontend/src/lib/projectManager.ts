@@ -2016,6 +2016,68 @@ export async function getResultSurface(projectId: string, receiptId: string, sig
     return parseResultSurface(response.data);
 }
 
+export interface ProjectResultContext {
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    global_experiment_revision_id: string;
+    domain_revision_id: string;
+    return_uri: string;
+}
+
+/** Same hierarchy and safe-return contract for both Project result entrypoints. */
+export function verifiedProjectReturnUri(context: Pick<LaunchContext, 'project_id' | 'global_experiment_id' | 'domain_experiment_id' | 'return_uri'>): string | null {
+    const raw = context.return_uri;
+    if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return null;
+    try {
+        const uri = new URL(raw, 'https://bms.local');
+        if (uri.origin !== 'https://bms.local' || uri.hash) return null;
+        const path = decodeURIComponent(uri.pathname);
+        const query = uri.searchParams;
+        if (Array.from(query.keys()).length !== new Set(query.keys()).size) return null;
+        if (path === `/projects/${context.project_id}`) {
+            if (Array.from(query.keys()).some(key => !['focus', 'selected'].includes(key))
+                || query.get('focus') !== context.global_experiment_id || !query.get('selected')) return null;
+        } else if (path === `/projects/${context.project_id}/experiments/${context.global_experiment_id}/domains/${context.domain_experiment_id}`) {
+            if (Array.from(query.keys()).some(key => !['workspace', 'section'].includes(key))
+                || query.get('workspace') !== 'protein'
+                || !['overview', 'targets', 'datasets', 'plans', 'runs', 'results', 'comparisons', 'evidence', 'history', 'technical'].includes(query.get('section') ?? '')) return null;
+        } else return null;
+        return `${uri.pathname}${uri.search}`;
+    } catch { return null; }
+}
+
+export async function getProjectResultContext(projectId: string, globalExperimentId: string, domainExperimentId: string, returnUri: string): Promise<ProjectResultContext> {
+    const [project, global, domain] = await Promise.all([
+        getProject(projectId), getGlobalExperiment(projectId, globalExperimentId), getDomainExperiment(projectId, globalExperimentId, domainExperimentId),
+    ]);
+    if (project.id !== projectId || global.id !== globalExperimentId || global.parent_id !== projectId
+        || domain.id !== domainExperimentId || domain.parent_id !== globalExperimentId
+        || !global.current_revision_id || !domain.current_revision_id) throw new Error('Exact Project result hierarchy is unavailable.');
+    const context = {
+        project_id: projectId, global_experiment_id: globalExperimentId, domain_experiment_id: domainExperimentId,
+        global_experiment_revision_id: global.current_revision_id, domain_revision_id: domain.current_revision_id, return_uri: returnUri,
+    };
+    if (!verifiedProjectReturnUri(context)) throw new Error('The Project result return destination is invalid.');
+    return context;
+}
+
+export function projectResultHref(route: NonNullable<ResultSurface['route']>, context: ProjectResultContext): string {
+    const destination = new URL(internalRouteHref(route), window.location.origin);
+    if (destination.origin !== window.location.origin) throw new Error('The canonical result route is not local to BioModStack.');
+    destination.searchParams.delete('project_id');
+    destination.searchParams.delete('launch_context_id');
+    destination.searchParams.set('workspace_id', context.project_id);
+    destination.searchParams.set('global_experiment_id', context.global_experiment_id);
+    destination.searchParams.set('domain_experiment_id', context.domain_experiment_id);
+    destination.searchParams.set('global_experiment_revision_id', context.global_experiment_revision_id);
+    destination.searchParams.set('domain_revision_id', context.domain_revision_id);
+    const returnUri = verifiedProjectReturnUri(context);
+    if (!returnUri) throw new Error('The Project result return destination is invalid.');
+    destination.searchParams.set('return_uri', returnUri);
+    return `${destination.pathname}${destination.search}`;
+}
+
 export async function createLaunchContext(
     projectId: string,
     globalExperimentId: string,

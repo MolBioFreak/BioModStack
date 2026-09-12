@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { fetchMolBioNgsDomainState, fetchProjectHub } from '../lib/api';
 import {
-    createLaunchContext,
+    getProjectResultContext,
     getDomainRunGroup,
     getDomainWorkflowPlan,
     getProjectSummary,
     getResultSurface,
-    internalRouteHref,
+    projectResultHref,
     isPermissionError,
     issuePreparedLaunchContext,
     listNgsMolBioProjectLinks,
@@ -573,31 +573,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             if (!globalExperimentId || !domainExperimentId) {
                 throw new Error('The selected surface has no validated Domain Experiment launch context.');
             }
-            const selectedNode = [...summary.map.nodes, ...summary.tree.nodes]
-                .find((node) => node.node_key === summary.selection.node_key);
-            const workflowId = selectedNode?.node_type === 'workflow'
-                ? selectedNode.canonical_identity.entity_id
-                : null;
-            const workflowRevisionId = workflowId && typeof summary.selection.summary.current_revision_id === 'string'
-                ? summary.selection.summary.current_revision_id
-                : null;
             const returnQuery = new URLSearchParams();
             returnQuery.set('focus', globalExperimentId);
             returnQuery.set('selected', summary.selection.node_key);
             const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
-            const launchContext = await createLaunchContext(
-                projectId,
-                globalExperimentId,
-                domainExperimentId,
-                {
-                    workflow_id: workflowId,
-                    workflow_revision_id: workflowRevisionId,
-                    return_uri: returnUri,
-                },
-            );
-            const route = new URL(internalRouteHref(surface.route), window.location.origin);
-            route.searchParams.set('launch_context_id', launchContext.launch_context_id);
-            return `${route.pathname}${route.search}`;
+            const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId, returnUri);
+            return projectResultHref(surface.route, context);
         },
         onSuccess: (route) => navigate(route),
     });
@@ -835,14 +816,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     focus: globalExperimentId,
                     selected: `workflow_run:${run.run_id}`,
                 });
-                const launchContext = await createLaunchContext(projectId, globalExperimentId, domainExperimentId, {
-                    workflow_id: run.workflow_id,
-                    workflow_revision_id: null,
-                    return_uri: `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`,
-                });
-                const route = new URL(internalRouteHref(surface.route), window.location.origin);
-                route.searchParams.set('launch_context_id', launchContext.launch_context_id);
-                return { kind: 'route' as const, route: `${route.pathname}${route.search}` };
+                const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId,
+                    `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`);
+                return { kind: 'route' as const, route: projectResultHref(surface.route, context) };
             }
             throw new Error(`Unsupported server-issued run action: ${action}`);
         },

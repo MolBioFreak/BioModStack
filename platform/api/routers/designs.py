@@ -428,10 +428,12 @@ class DesignList(BaseModel):
     designs: List[DesignResponse]
     total: int
     summary: Optional[DesignAggregateSummary] = None
+    model_counts: Dict[str, int] = Field(default_factory=dict)
 
 
 class DesignQueryRequest(BaseModel):
     job_id: Optional[str] = None
+    model_id: Optional[str] = None
     include_children: Optional[bool] = True
     design_ids: Optional[List[str]] = None
     q: Optional[str] = None
@@ -2282,23 +2284,11 @@ async def _resolve_design_query_job_ids(
     if not include_children:
         return [job_id]
 
-    resolved_job = job
-    if resolved_job is None:
-        job_result = await session.execute(select(Job).where(Job.id == job_id))
-        resolved_job = job_result.scalar_one_or_none()
-
-    parent_design_count = await session.scalar(
-        select(func.count(Design.id)).where(
-            Design.job_id == job_id,
-            Design.source_stage.is_(None),
-        )
-    )
-    if parent_design_count and not bool(getattr(resolved_job, "awaiting_input", False)):
-        return [job_id]
-
-    child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
-    child_job_ids = [row[0] for row in child_result.all()]
-    return [job_id] + child_job_ids
+    # Parent rows are not proof that every child model/candidate is mirrored.
+    # Resolve descendants in SQL, not from a capped browser Job list.
+    descendants = select(Job.id).where(Job.id == job_id).cte(name="design_lineage", recursive=True)
+    descendants = descendants.union(select(Job.id).join(descendants, Job.parent_job_id == descendants.c.id))
+    return list((await session.execute(select(descendants.c.id))).scalars())
 
 
 # --- Endpoints ---
@@ -2352,6 +2342,7 @@ async def list_reusable_structures(
 @router.get("", response_model=DesignList)
 async def list_designs(
     job_id: Optional[str] = None,
+    model_id: Optional[str] = None,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
     design_ids: Optional[List[str]] = Query(None, description="Restrict to explicit design ids"),
     q: Optional[str] = Query(None, description="Case-insensitive name search"),
@@ -2486,9 +2477,9 @@ async def list_designs(
     
     order_col = sort_field_map.get(sort_by, Design.created_at)
     if sort_desc:
-        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.desc().nulls_last())
+        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.desc().nulls_last(), Design.id.asc())
     else:
-        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.asc().nulls_last())
+        query = select(Design).options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS)).order_by(order_col.asc().nulls_last(), Design.id.asc())
     
     # Apply filters - handle include_children for job_id
     conditions = []
@@ -2511,6 +2502,17 @@ async def list_designs(
         conditions.append(Design.source_stage.is_(None))
     elif not job_id:
         conditions.append(Design.source_stage.is_(None))
+    # Lineage-wide model summary deliberately precedes display filters/pagination.
+    model_identity = func.lower(func.trim(Design.provenance["model_id"].as_string()))
+    model_query = select(model_identity, func.count(Design.id)).group_by(model_identity)
+    if conditions:
+        model_query = model_query.where(and_(*conditions))
+    model_counts = {
+        identity: int(count) for identity, count in (await session.execute(model_query)).all()
+        if identity
+    }
+    if model_id:
+        conditions.append(model_identity == model_id.strip().lower())
     clean_design_ids = [design_id.strip() for design_id in (design_ids or []) if design_id and design_id.strip()]
     if clean_design_ids:
         conditions.append(Design.id.in_(clean_design_ids))
@@ -2644,6 +2646,7 @@ async def list_designs(
         designs=responses,
         total=total,
         summary=summary,
+        model_counts=model_counts,
     )
 
 
@@ -2655,6 +2658,7 @@ async def query_designs(
     """List designs via POST for large explicit design-id subsets."""
     return await list_designs(
         job_id=request.job_id,
+        model_id=request.model_id,
         include_children=True if request.include_children is None else request.include_children,
         design_ids=request.design_ids,
         q=request.q,
@@ -2844,7 +2848,8 @@ async def get_backbone_summary(
 @router.get("/{design_id}", response_model=DesignResponse)
 async def get_design(
     design_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    job_id: Optional[str] = None,
 ):
     """Get a specific design by ID."""
     result = await session.execute(select(Design).where(Design.id == design_id))
@@ -2853,6 +2858,10 @@ async def get_design(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
+    if job_id:
+        lineage_job_ids = await _resolve_design_query_job_ids(session, job_id, include_children=True)
+        if design.job_id not in lineage_job_ids:
+            raise HTTPException(status_code=404, detail="Design not found in requested Job lineage")
     owners = await owning_jobs(session, [design])
     response = _design_to_response(design, include_fampnn_structure_fallback=True,
                                    job=owners.get(design.job_id))
