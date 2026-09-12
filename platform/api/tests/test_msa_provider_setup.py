@@ -87,7 +87,7 @@ def test_missing_key_does_not_disable_colabfold(tmp_path, monkeypatch):
     monkeypatch.delenv('BMS_NEUROSNAP_API_KEY_FILE', raising=False)
     import biomodstack_msa_controller as controller
     monkeypatch.setenv('BMS_MSA_CONTROLLER_CONFIG', str(tmp_path / 'config.json'))
-    monkeypatch.setattr(controller, 'validate_controller_config', lambda path: {'fixture': True})
+    monkeypatch.setattr(controller, 'validate_controller_config', lambda path: {'state_dir': str(tmp_path / 'outer-state')})
     result = setup.provider_readiness()
     assert result['providers']['colabfold_api']['configured'] is True
     assert result['providers']['neurosnap_api']['configured'] is False

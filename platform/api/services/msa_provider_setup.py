@@ -98,6 +98,28 @@ def _credential_configured() -> bool:
             and not info.st_mode & 0o077 and os.access(path, os.R_OK))
 
 
+def _directory_blockers(label: str, root: Path, blockers: list[str]) -> None:
+    """Inspect an owned root or its nearest existing parent; never create it."""
+    if not root.is_absolute():
+        blockers.append(f'{label} must be absolute')
+        return
+    if any(path.is_symlink() for path in (root, *root.parents)):
+        blockers.append(f'{label} must not traverse symlinks')
+        return
+    if root.exists():
+        info = root.stat()
+        if not stat.S_ISDIR(info.st_mode):
+            blockers.append(f'{label} must be a directory')
+            return
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            blockers.append(f'{label} must be service-owned and not group/world writable')
+    parent = root
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+        blockers.append(f'{label} parent is not writable by the service')
+
+
 def provider_readiness() -> dict:
     """Inspect configuration without reading keys or making provider requests."""
     blockers: list[str] = []
@@ -105,24 +127,7 @@ def provider_readiness() -> dict:
         roots = [('MSA cache', cache_root()), ('MSA controller state', Path(os.environ.get(
             'BMS_MSA_API_STATE_ROOT', str(Path.home() / '.cache/biomodstack/msa-api-controller'))))]
         for label, root in roots:
-            if not root.is_absolute():
-                blockers.append(f'{label} must be absolute')
-                continue
-            if any(path.is_symlink() for path in (root, *root.parents)):
-                blockers.append(f'{label} must not traverse symlinks')
-                continue
-            if root.exists():
-                info = root.stat()
-                if not stat.S_ISDIR(info.st_mode):
-                    blockers.append(f'{label} must be a directory')
-                    continue
-                if info.st_uid != os.getuid() or info.st_mode & 0o022:
-                    blockers.append(f'{label} must be service-owned and not group/world writable')
-            parent = root
-            while not parent.exists() and parent != parent.parent:
-                parent = parent.parent
-            if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
-                blockers.append(f'{label} parent is not writable by the service')
+            _directory_blockers(label, root, blockers)
     except (OSError, ValueError):
         blockers.append("MSA cache/controller state configuration is invalid")
     result = {}
@@ -132,7 +137,8 @@ def provider_readiness() -> dict:
         if provider == "colabfold_api":
             from biomodstack_msa_controller import validate_controller_config
             try:
-                validate_controller_config(controller_config_path())
+                config = validate_controller_config(controller_config_path())
+                _directory_blockers('ColabFold controller state', Path(config['state_dir']), errors)
             except (OSError, ValueError, RuntimeError, KeyError, TypeError):
                 errors.append('Configure BMS_MSA_CONTROLLER_CONFIG with qualified single-egress controller settings')
         if provider == "neurosnap_api":
