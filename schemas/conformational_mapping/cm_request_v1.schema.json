@@ -108,7 +108,8 @@
         },
         "protein_msa_enabled": {"type": "boolean"},
         "templates_enabled": {"type": "boolean"},
-        "rna_msa_enabled": {"type": "boolean"}
+        "rna_msa_enabled": {"type": "boolean"},
+        "msa_settings": {"type": "object", "description": "Existing global msa_search_policy.json provider/settings, validated by FeaturePolicy"}
       }
     },
     "runtime_policy": {

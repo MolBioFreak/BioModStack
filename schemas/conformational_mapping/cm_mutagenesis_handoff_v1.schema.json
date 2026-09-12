@@ -30,7 +30,8 @@
       "properties": {
         "mode": {"enum": ["regenerate_mutated_protein_v1", "paired_regenerate_changed_protein_v1", "features_disabled_control_v1"]},
         "per_entity_hashes": {"type": "object", "additionalProperties": {"$ref": "#/$defs/sha256"}},
-        "protein_msa_enabled": {"type": "boolean"}, "templates_enabled": {"type": "boolean"}, "rna_msa_enabled": {"type": "boolean"}
+        "protein_msa_enabled": {"type": "boolean"}, "templates_enabled": {"type": "boolean"}, "rna_msa_enabled": {"type": "boolean"},
+        "msa_settings": {"type": "object", "description": "Existing global msa_search_policy.json provider/settings, validated by FeaturePolicy"}
       }
     }
   }

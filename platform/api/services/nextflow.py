@@ -4922,14 +4922,25 @@ def compile_nextflow_invocation(
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
             raise ValueError("conformational_mapping supports only mode=map")
+        from services.conformational_mapping.request_builder import canonical_msa_params
+        cm_request = _native_plan_metadata_settings(model_id, params).get('cm_request')
+        if not cm_request:
+            raise ValueError("cm_request_path is required")
+        msa_params = canonical_msa_params(cm_request)
         unknown = sorted(set(params) - {
             "cm_request_path", "gpu_id", "resume_work_dir", "run_frustrampnn",
+            *msa_params,
         })
         if unknown:
             raise ValueError(
                 "canonical conformational-mapping launch parameters fail closed: "
                 + ", ".join(unknown)
             )
+        for key, value in msa_params.items():
+            if key in params and params[key] != value:
+                raise ValueError("CM hosted MSA launch conflicts with immutable feature_policy: " + key)
+        params.update(msa_params)
+        native_parameters.update(msa_params)
         request_path = str(params.get("cm_request_path") or "").strip()
         if not request_path:
             raise ValueError("cm_request_path is required")
@@ -4976,6 +4987,8 @@ def compile_nextflow_invocation(
         if job_id:
             command.extend(["--job_id", str(job_id)])
         command.extend(["--cm_request_path", request_path])
+        for key, value in msa_params.items():
+            command.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
         command.extend([
             "--run_frustrampnn", "true",
             "--gpu_id", str(normalized_gpu_id),

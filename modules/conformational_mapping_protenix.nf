@@ -197,8 +197,25 @@ PY
       STEPS="\$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_policy"]["n_step"])' "\$REQUEST")"
       EXTRA+=(--cycle "\$CYCLES" --step "\$STEPS")
     fi
+    # Preserve the original request-derived input/composition audit. Hydrate a
+    # separate native input, through the same declared controller service.
+    PROTENIX_INPUT=prepared_protenix/protenix_input.json
+    if [ "\$USE_RNA_MSA" = true ]; then
+      printf '%s\\n' 'CM RNA-MSA is unsupported by the hosted protein-MSA artifact contract' >&2
+      exit 1
+    fi
+    if [ "\$USE_MSA" = true ]; then
+      python3 ${params.code_root}/scripts/prepare_protenix_msa.py \
+        --generated-service protenix:generated_msa \
+        --input_json "\$PROTENIX_INPUT" \
+        --output_json native_protenix/runtime/msa-input.json \
+        --out_dir native_protenix/runtime/msa-prepared \
+        --report_json native_protenix/runtime/msa-prepared/msa-report.json \
+        --backend "${params.msa_provider}"
+      PROTENIX_INPUT=native_protenix/runtime/msa-input.json
+    fi
     COMMAND_ARGS=(
-      --input prepared_protenix/protenix_input.json
+      --input "\$PROTENIX_INPUT"
       --out_dir native_protenix/predictions
       --model_name protenix-v2 --seeds "\$SEEDS" --sample "\$SAMPLES"
       --use_default_params "\$USE_DEFAULT"
