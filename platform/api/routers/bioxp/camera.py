@@ -346,11 +346,11 @@ async def get_camera_status(
     frame_age = status["frame_age_seconds"]
     freshness_budget = status["freshness_budget_seconds"]
     state = (
-        "unavailable"
-        if not available
+        "stale"
+        if frame_age is not None and frame_age > freshness_budget
         else "live"
-        if frame_age <= freshness_budget
-        else "stale"
+        if available
+        else "unavailable"
     )
     return {
         "schema_version": status["schema_version"],

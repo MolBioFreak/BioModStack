@@ -30,7 +30,7 @@ export function deriveBioXpCameraPresentation({
     if (error) {
         return { label: 'UNAVAILABLE', detail: error, effectiveFrameAgeSeconds: null };
     }
-    if (!status || !status.available || status.state === 'unavailable'
+    if (!status || (!status.available && status.state !== 'stale') || status.state === 'unavailable'
         || !Number.isInteger(status.provider_generation) || status.provider_generation < 0
         || !Number.isFinite(status.freshness_budget_seconds) || status.freshness_budget_seconds <= 0) {
         return {

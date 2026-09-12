@@ -138,8 +138,12 @@ class _CameraStatusResponse(BaseModel):
         )
         if self.available and any(value is None for value in frame_values):
             raise ValueError("available camera status requires complete frame metadata")
-        if not self.available and any(value is not None for value in frame_values):
-            raise ValueError("unavailable camera status cannot claim frame metadata")
+        stale_frame = (
+            all(value is not None for value in frame_values)
+            and self.frame_age_seconds > self.freshness_budget_seconds
+        )
+        if not self.available and any(value is not None for value in frame_values) and not stale_frame:
+            raise ValueError("unavailable camera status cannot claim fresh or incomplete frame metadata")
         return self
 
 
