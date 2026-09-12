@@ -2702,21 +2702,24 @@ async def cancel_local_result_transfer(job: Job, *, timeout: float = 5.0, guard_
 
     receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
     digest = receipt.get('result_manifest_sha256')
-    if not digest:
-        return True  # no terminal manifest has authorized a result download
     try:
-        incoming = staging_path(job, digest)
+        # Generated-input preparation/uploads own the same controller guard
+        # before a terminal result manifest exists. Their lifetime must join too.
+        incoming = staging_path(job, digest) if digest else None
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            stopped = await cancel_owned_transfer(incoming, timeout=max(0.01, deadline - asyncio.get_running_loop().time()))
+            stopped = (await cancel_owned_transfer(incoming, timeout=max(0.01, deadline - asyncio.get_running_loop().time()))
+                       if incoming is not None else None)
             if stopped is True:
                 return True
             if guard_owned:
-                prepare_transfer(incoming)
+                if incoming is not None:
+                    prepare_transfer(incoming)
                 return True
             with _controller_attempt_guard(str(job.id)) as owned:
                 if owned:
-                    prepare_transfer(incoming)
+                    if incoming is not None:
+                        prepare_transfer(incoming)
                     return True
             if asyncio.get_running_loop().time() >= deadline:
                 return False
