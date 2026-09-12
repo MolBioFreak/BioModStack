@@ -47,6 +47,7 @@ export interface CandidateResultSummary {
 }
 
 export interface Job {
+    execution_plan_approval?: string | null;
     execution_policy?: ExecutionPolicy;
     result_summary?: CandidateResultSummary;
     fampnn_analysis_overrides?: import('../components/FampnnAnalysisControls').FampnnAnalysisOverrides;
@@ -1064,8 +1065,21 @@ export const prepareJobSubmission = (jobData: Partial<Job>, options: { launchCon
     return payload;
 };
 
-export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
-    return api.post('/api/jobs', prepareJobSubmission(jobData, options), options.launchContext !== false
+export const previewJobExecutionPlan = (jobData: Partial<Job>) =>
+    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
+        '/api/jobs/execution-plan/preview', jobData);
+
+export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    // Freeze the reviewed science and placement even if a form changes while the
+    // operator reads the preview. All existing browser launchers share this path.
+    const payload = structuredClone(prepareJobSubmission(jobData, options));
+    if (payload.execution_target_id && !payload.execution_plan_approval) {
+        const preview = (await previewJobExecutionPlan(payload)).data;
+        const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
+        if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
+        payload.execution_plan_approval = preview.approval_digest;
+    }
+    return api.post('/api/jobs', payload, options.launchContext !== false
         ? undefined
         : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
 };

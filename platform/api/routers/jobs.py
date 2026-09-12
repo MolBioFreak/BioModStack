@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, cast
+from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, Literal, cast
 from dataclasses import dataclass
 from types import SimpleNamespace
 from copy import deepcopy
@@ -5703,6 +5703,101 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     return job_data
 
 
+class JobExecutionPlanPreview(BaseModel):
+    """Read-only browser/agent approval authority; not an executable plan."""
+    schema_name: Literal['bms.job.execution-preview.v1'] = Field(alias='schema')
+    approval_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
+    admissible: bool
+    request: dict
+    plan: dict
+    input_identities: list[dict]
+    generated_inputs: list[dict]
+    deferred_preparation: list[str]
+    blockers: list[dict]
+
+
+@dataclass(frozen=True)
+class ApprovedExecutionPlan:
+    """Server-only native preview handoff; never a public parent-id bypass."""
+    request_json: bytes
+    preview_json: bytes
+
+
+def _execution_plan_preview(job_data: JobCreate) -> dict[str, Any]:
+    """Read-only native compiler authority, separate from prepared execution.
+
+    Never bind an executable MSA package here. Only the known hosted adapter's
+    declared service edge can defer its input-roster blocker until dispatch.
+    """
+    from dataclasses import replace
+    from component_runtime import digest
+    from services.nextflow import compile_workflow_provision_request
+    from paths import get_data_root, get_inputs_dir, get_results_dir
+    from scripts.lib.portable_inputs import discover_native_input_references
+    import yaml
+
+    request = job_data.model_copy(deep=True)
+    request.execution_plan_approval = None
+    invocation = compile_workflow_provision_request(request)
+    plan = invocation.execution_plan
+    if plan is None:
+        raise ValueError('Native compiler did not produce a selected execution plan')
+    metadata = plan.metadata
+    roles = {row.role_id: row for row in metadata.artifact_roles}
+    resolvable = set()
+    for service in metadata.external_services:
+        if (service.logical_id in {'protenix:msa', 'boltz2:msa'}
+                and service.provider in {'colabfold_api', 'neurosnap_api'}
+                and 'platform/api/services/model_msa_handoff.py' in service.authority
+                and service.state in {'unresolved', 'planned', 'supplied_or_prepared'}
+                and service.input_role_ids and service.output_role_ids
+                and all(key in roles for key in (*service.input_role_ids, *service.output_role_ids))
+                and all(roles[key].category == 'native_chain_alignments'
+                        for key in service.output_role_ids)):
+            resolvable.add(service.logical_id)
+    deferred = tuple(row for row in metadata.blockers if row.field == 'external_service_roles' and (
+        (row.component_or_dependency_id in resolvable
+         and row.needed_authority == 'platform/api/services/model_msa_handoff.py; biomodstack_msa_handoff.py')
+        or (row.component_or_dependency_id == 'GenerateLocalMSA' and 'boltz2:msa' in resolvable
+            and row.needed_authority == 'scripts/run_local_msa.py')))
+    remaining = tuple(row for row in metadata.blockers if row not in deferred)
+    admissible = replace(metadata, blockers=remaining).complete
+
+    # Existing typed native source-roster authority, not arbitrary path walking.
+    # Compiler-generated payloads are bound below without writing preview files.
+    inputs = discover_native_input_references(
+        request.model_id, request.mode, request.params, (),
+        output_dir=Path(invocation.native_parameters['out_dir']),
+        allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
+        yaml_loader=yaml.safe_load)
+    authority = {
+        'schema': 'bms.job.execution-preview.v1',
+        'request': request.model_dump(mode='json', exclude={'execution_plan_approval'}),
+        'plan': plan.to_dict(),
+        'input_identities': inputs,
+        'generated_inputs': [{ 'relative_path': item.relative_path,
+            'sha256': hashlib.sha256(item.payload).hexdigest() }
+            for item in invocation.generated_inputs],
+    }
+    return {**authority, 'approval_digest': digest(authority), 'admissible': admissible,
+        'deferred_preparation': [row.component_or_dependency_id for row in deferred],
+        'blockers': replace(metadata, blockers=remaining).to_dict()['blockers']}
+
+
+@router.post('/execution-plan/preview', response_model=JobExecutionPlanPreview)
+async def preview_job_execution_plan(job_data: JobCreate, session: AsyncSession = Depends(get_session)):
+    """Browser and agent use the exact same typed, nonexecuting preview."""
+    from services.remote_execution.targets import target_eligible
+    if job_data.execution_target_id:
+        target = await session.get(ExecutionTarget, job_data.execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise HTTPException(status_code=422, detail='execution_target_id is not an active ready execution target')
+    try:
+        return await asyncio.to_thread(_execution_plan_preview, job_data)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
@@ -5712,6 +5807,7 @@ async def _create_job(
     _md_output_creation: Any = Depends(lambda: None),
     _md_input_resolver: Any = Depends(lambda: None),
     _trusted_workflow_adapter: Any = Depends(lambda: False),
+    _approved_execution_plan: Any = Depends(lambda: None),
 ):
     """Create and queue a new pipeline job."""
     from services import core_protein_scientific_contract as scientific_contract
@@ -5722,6 +5818,8 @@ async def _create_job(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from copy import deepcopy
+    approval_request = job_data.model_copy(deep=True)
+    execution_preview = None
     original_requested_params = deepcopy(job_data.params)
     from services.msa_policy import apply_msa_policy
     try:
@@ -5791,6 +5889,25 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if selected_execution_target is not None:
+        approval_request.execution_target_id = job_data.execution_target_id
+        if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
+            from component_runtime import canonical_bytes
+            if canonical_bytes(approval_request.model_dump(mode='json')) != _approved_execution_plan.request_json:
+                raise HTTPException(status_code=409, detail='Trusted native preview request changed')
+            execution_preview = json.loads(_approved_execution_plan.preview_json)
+        else:
+            if not job_data.execution_plan_approval:
+                raise HTTPException(status_code=409, detail='Remote submission requires explicit execution-plan preview approval')
+            execution_preview = await preview_job_execution_plan(approval_request, session)
+        if not execution_preview['admissible']:
+            raise HTTPException(status_code=422, detail={'message': 'Selected execution plan is unsupported', 'blockers': execution_preview['blockers']})
+        if (not isinstance(_approved_execution_plan, ApprovedExecutionPlan)
+                and execution_preview['approval_digest'] != job_data.execution_plan_approval):
+            raise HTTPException(status_code=409, detail='Execution plan approval is stale; preview and approve the current request')
+        source = execution_preview['plan']['source_identity']
+        if (source['revision'], source['tree']) != (inherited_source_revision, inherited_source_tree):
+            raise HTTPException(status_code=409, detail='Execution preview source changed before admission')
     if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
         try:
             job_data.params = normalize_plr_structure_validators(job_data.params or {})
@@ -6528,6 +6645,15 @@ async def _create_job(
         # replace the submitted settings with scheduler-effective values.
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
 
+        if execution_preview is not None:
+            provenance_payload['execution_plan_approval'] = {
+                'approval_digest': execution_preview['approval_digest'],
+                'plan_sha256': execution_preview['plan']['plan_sha256'],
+                'plan': execution_preview['plan'],
+                'source_identity': execution_preview['plan']['source_identity'],
+                'deferred_preparation': execution_preview['deferred_preparation'],
+            }
+
         # Create job record with queue fields
         job = Job(
             id=job_id,
@@ -7028,6 +7154,7 @@ async def create_job(
     _md_input_resolver: Any = Depends(lambda: None),
     _typed_md_project_launch: Any = Depends(lambda: None),
     experiment_session: AsyncSession = Depends(get_experiment_session),
+    _approved_execution_plan: Any = Depends(lambda: None),
 ) -> JobResponse:
     """Canonical Job submission, optionally bound by one opaque launch context."""
     launch_context_id = str(job_data.launch_context_id or "").strip()
@@ -7053,6 +7180,7 @@ async def create_job(
             _commit=_commit,
             _md_output_creation=_md_output_creation,
             _md_input_resolver=_md_input_resolver,
+            _approved_execution_plan=_approved_execution_plan,
         )
     if current_launch_context_id.get() != launch_context_id:
         raise HTTPException(
@@ -7178,6 +7306,7 @@ async def create_job(
             _commit=_commit,
             _md_output_creation=_md_output_creation,
             _md_input_resolver=_md_input_resolver,
+            _approved_execution_plan=_approved_execution_plan,
             _trusted_workflow_adapter=True,
         )
     except HTTPException:

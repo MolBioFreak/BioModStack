@@ -643,6 +643,29 @@ async def _compile_typed_preview(
             profile=profile,
             current_catalog_digest=view.catalog_digest,
         )
+        if intent.execution_target_id:
+            from component_runtime import SourceIdentity, digest
+            from services.nextflow import build_selected_execution_plan
+            from services.remote_execution.bundle import current_source_identity, RemoteBundleError
+            normalized = await normalize_md_provision_request(intent, session)
+            try:
+                source = SourceIdentity(*current_source_identity())
+            except RemoteBundleError as exc:
+                raise StartingStructureError('MD_REMOTE_SOURCE_UNAVAILABLE',
+                    'Committed BMS source identity is unavailable.', status_code=503) from exc
+            plan = build_selected_execution_plan(
+                model_id=normalized.model_id, mode=normalized.mode,
+                entrypoint=normalized.entrypoint, requested=normalized.requested_params,
+                effective=normalized.effective_params, metadata_settings=normalized.effective_params,
+                native_parameters={'input_bindings': normalized.input_bindings},
+                source_identity=source)
+            preview.execution_plan = plan.to_dict()
+            preview.preview_digest = digest({'native_preview_digest': preview.preview_digest,
+                                            'execution_plan': preview.execution_plan})
+            if not plan.complete:
+                raise StartingStructureError('MD_REMOTE_PLAN_UNSUPPORTED',
+                    'Selected shared MD execution plan is incomplete: ' + '; '.join(row.reason for row in plan.blockers),
+                    status_code=422)
         return preview, resolved, profile or {}
     except Exception:
         resolved.close()
@@ -731,6 +754,14 @@ async def launch_typed_md_job(
             "_md_output_creation": {},
             "_md_input_resolver": trusted_source_resolver,
         }
+        if request.intent.execution_target_id:
+            from component_runtime import canonical_bytes
+            from routers.jobs import ApprovedExecutionPlan
+            call_kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
+                canonical_bytes(job_data.model_dump(mode='json')),
+                canonical_bytes({'approval_digest': preview.preview_digest,
+                    'plan': preview.execution_plan, 'admissible': True,
+                    'deferred_preparation': [], 'blockers': []}))
         if request.intent.launch_context_id is None:
             return await create_job(
                 job_data,
@@ -918,8 +949,7 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
         lineage_root = parent.lineage_root_job_id or parent.id
         source_stage_key = parent.stage_mode or parent.child_stage or parent.mode
         input_resolver = _trusted_reorchestration_input_resolver(parent, dict(run.normalized_request or {}))
-        created = await create_job(
-            JobCreate(name=parent.name, model_id="molecular_dynamics", mode="simulate", params={
+        job_data = JobCreate(name=parent.name, model_id="molecular_dynamics", mode="simulate", params={
                 "md_job_spec": raw,
                 "lineage_root_job_id": lineage_root,
                 "source_stage_job_id": parent.id,
@@ -929,9 +959,22 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
                execution_target_id=parent.execution_target_id,
                execution_policy=ExecutionPolicy.from_params(parent.params),
                parent_job_id=None, child_stage=None, batch_id=None, batch_name=None,
-               sequence_length=None, launch_context_id=None),
-            BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
+               sequence_length=None, launch_context_id=None)
+        approved_plan = None
+        if parent.execution_target_id:
+            from component_runtime import canonical_bytes
+            from routers.jobs import ApprovedExecutionPlan
+            approved = (parent.provenance or {}).get('execution_plan_approval') or {}
+            if not approved.get('approval_digest') or not isinstance(approved.get('plan'), dict):
+                raise HTTPException(status_code=409, detail='Remote MD re-orchestration requires its retained approved plan; launch a new typed preview')
+            approved_plan = ApprovedExecutionPlan(canonical_bytes(job_data.model_dump(mode='json')),
+                canonical_bytes({'approval_digest': approved['approval_digest'], 'plan': approved['plan'],
+                    'admissible': approved['plan'].get('complete') is True,
+                    'deferred_preparation': [], 'blockers': approved['plan'].get('blockers', [])}))
+        created = await create_job(
+            job_data, BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
             _md_output_creation=output_creation, _md_input_resolver=input_resolver,
+            _approved_execution_plan=approved_plan,
         )
         new_job = await session.get(Job, created.id)
         new_run = await session.get(MdRun, created.id)

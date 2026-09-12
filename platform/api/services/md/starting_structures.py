@@ -315,6 +315,7 @@ class MdLaunchNotice(_ClosedModel):
 
 
 class MdLaunchPreview(_ClosedModel):
+    execution_plan: dict[str, Any] | None = None
     execution_target_id: str | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     schema_version: Literal["bms.md.launch-preview.v1"]
