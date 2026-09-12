@@ -3416,7 +3416,7 @@ def _write_selection_manifest(
         "designs": manifest_items,
     }
     _selection_manifest_path(selection_dir).write_text(json.dumps(manifest, indent=2))
-    if fixed_positions_by_pdb:
+    if fixed_positions_by_pdb is not None:
         (selection_dir / "mutation_fixed_positions.json").write_text(json.dumps(fixed_positions_by_pdb, indent=2, sort_keys=True))
 
 
@@ -3603,15 +3603,29 @@ def _materialize_seed_selection_from_completed_designs(
     designs: List[Design],
     design_job_map: Dict[str, Job],
     action: str,
+    selection_dir: Optional[Path] = None,
 ) -> tuple[Path, Path]:
-    selection_dir = _create_antibody_selection_dir(action)
+    if selection_dir is None:
+        selection_dir = _create_antibody_selection_dir(action)
+    elif selection_dir.exists():
+        # Retry the same admitted expansion, not a new selection/preparation.
+        # The caller verifies every retained byte and fixed-position derivation.
+        return selection_dir, selection_dir / 'mutation_fixed_positions.json'
+    else:
+        selection_dir.mkdir(parents=True, exist_ok=False)
     manifest_items: List[Dict[str, Any]] = []
     fixed_positions_by_pdb: Dict[str, str] = {}
 
     for idx, design in enumerate(designs, start=1):
         source_path = _resolve_design_structure_path(design.pdb_path)
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        link_mode = _link_selection_input(source_path, dest_path)
+        if root_job.execution_target_id:
+            # Remote input authority requires a regular immutable snapshot,
+            # not a mutable reference into an imported result generation.
+            shutil.copyfile(source_path, dest_path)
+            link_mode = 'copy'
+        else:
+            link_mode = _link_selection_input(source_path, dest_path)
 
         design_job = design_job_map.get(design.job_id)
         params = design_job.params if design_job and isinstance(design_job.params, dict) else {}
@@ -5712,6 +5726,7 @@ class JobExecutionPlanPreview(BaseModel):
     plan: dict
     input_identities: list[dict]
     generated_inputs: list[dict]
+    declared_expansions: list[dict] = Field(default_factory=list)
     deferred_preparation: list[str]
     blockers: list[dict]
 
@@ -5740,7 +5755,7 @@ class ApprovedExecutionPlan:
     preview_json: bytes
 
 
-def _execution_plan_preview(job_data: JobCreate) -> dict[str, Any]:
+def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> dict[str, Any]:
     """Read-only native compiler authority, separate from prepared execution.
 
     Never bind an executable MSA package here. Only the known hosted adapter's
@@ -5754,6 +5769,8 @@ def _execution_plan_preview(job_data: JobCreate) -> dict[str, Any]:
     import yaml
 
     request = job_data.model_copy(deep=True)
+    if request.params.get('mutation_seed_refinement_trigger') and declared_expansions is None:
+        raise ValueError('Mutation seed preview requires resolved parent expansion authority')
     request.execution_plan_approval = None
     invocation = compile_workflow_provision_request(request)
     plan = invocation.execution_plan
@@ -5792,6 +5809,7 @@ def _execution_plan_preview(job_data: JobCreate) -> dict[str, Any]:
         'request': request.model_dump(mode='json', exclude={'execution_plan_approval'}),
         'plan': plan.to_dict(),
         'input_identities': inputs,
+        'declared_expansions': declared_expansions or [],
         'generated_inputs': [{ 'relative_path': item.relative_path,
             'sha256': hashlib.sha256(item.payload).hexdigest() }
             for item in invocation.generated_inputs],
@@ -5825,7 +5843,9 @@ async def preview_job_execution_plan(
         if target is None or not target_eligible(target):
             raise HTTPException(status_code=422, detail='execution_target_id is not an active ready execution target')
     try:
-        return await asyncio.to_thread(_execution_plan_preview, job_data)
+        from services.declared_job_expansion import declarations
+        expansions = await declarations(job_data, session)
+        return await asyncio.to_thread(_execution_plan_preview, job_data, expansions)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -5928,11 +5948,24 @@ async def _create_job(
             if canonical_bytes(approval_request.model_dump(mode='json')) != _approved_execution_plan.request_json:
                 raise HTTPException(status_code=409, detail='Trusted native preview request changed')
             execution_preview = json.loads(_approved_execution_plan.preview_json)
+            if 'expansion_approval' in execution_preview:
+                from services.declared_job_expansion import approve_derived
+                expansion_parent = await session.get(Job, execution_preview['expansion_approval']['parent_job_id'])
+                if expansion_parent is None:
+                    raise HTTPException(status_code=409, detail='Reviewed expansion parent is unavailable')
+                try:
+                    refreshed = await approve_derived(approval_request, expansion_parent, session)
+                except (ValueError, OSError) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                if refreshed.preview_json != _approved_execution_plan.preview_json:
+                    raise HTTPException(status_code=409, detail='Derived child inputs or plan changed before admission')
         else:
             if not job_data.execution_plan_approval:
                 raise HTTPException(status_code=409, detail='Remote submission requires explicit execution-plan preview approval')
             try:
-                execution_preview = await asyncio.to_thread(_execution_plan_preview, approval_request)
+                from services.declared_job_expansion import declarations
+                expansions = await declarations(approval_request, session, lock=True)
+                execution_preview = await asyncio.to_thread(_execution_plan_preview, approval_request, expansions)
             except (ValueError, OSError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not execution_preview['admissible']:
@@ -6265,11 +6298,8 @@ async def _create_job(
                     "boltz_cp_experimental design)."
                 ),
             )
-        if mutagenesis_variants:
-            raise HTTPException(
-                status_code=422,
-                detail="API MSA preparation does not use the legacy local mutagenesis batch launcher.",
-            )
+        # Each canonical variant uses the same hosted launch preparation as a
+        # direct Job. Never create a legacy local-search MSA batch for it.
         from services.msa_provider_setup import preflight_msa_provider
         try:
             preflight_msa_provider(job_data.model_id, job_data.params)
@@ -6369,7 +6399,7 @@ async def _create_job(
             logger.info(f"[QUEUE] FASTQ-only nanopore job '{job_data.name}': CPU-only, vram_estimate=0")
     
     # Generate batch_id if creating multiple jobs
-    batch_id = str(uuid.uuid4()) if num_jobs > 1 else None
+    batch_id = str(uuid.uuid4()) if num_jobs > 1 or original_requested_params.get('mutation_seed_refinement_trigger') else None
     batch_name = job_data.name if num_jobs > 1 else None
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -6383,7 +6413,7 @@ async def _create_job(
 
     
     # Mutagenesis: generate per-variant MSAs when using MSA
-    if mutagenesis_variants and num_jobs > 1:
+    if mutagenesis_variants and num_jobs > 1 and msa_provider not in {'colabfold_api', 'neurosnap_api'}:
         use_msa = job_data.params.get('boltz_use_msa', True) or job_data.params.get('rf3_use_msa', False)
         if use_msa:
             sequences_for_msa = []
@@ -6687,6 +6717,9 @@ async def _create_job(
                 'plan': execution_preview['plan'],
                 'source_identity': execution_preview['plan']['source_identity'],
                 'deferred_preparation': execution_preview['deferred_preparation'],
+                'declared_expansions': execution_preview.get('declared_expansions', []),
+                **({'expansion_approval': execution_preview['expansion_approval']}
+                   if 'expansion_approval' in execution_preview else {}),
             }
 
         # Create job record with queue fields
@@ -6795,6 +6828,10 @@ async def _create_job(
         if first_job is None:
             first_job = job
     
+    if execution_preview is not None and execution_preview.get('declared_expansions'):
+        from services.declared_job_expansion import retain
+        retain(msa_job or first_job, created_jobs, execution_preview)
+
     if _commit is False:
         await session.flush()
     else:

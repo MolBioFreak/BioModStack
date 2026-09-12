@@ -1490,6 +1490,7 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
     from database import Job, Design
     from sqlalchemy import select, func, or_, update
     from uuid import uuid5, NAMESPACE_URL
+    from paths import get_inputs_dir
 
     try:
         # Callers may hold a stale ORM object after terminal publication. Bind
@@ -1510,6 +1511,16 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         )
         msa_job = msa_result.scalar_one_or_none()
         if not msa_job:
+            # Hosted preparation has no legacy msa_batch Job. Its existing
+            # first canonical variant retains the reviewed once-only expansion.
+            from services.declared_job_expansion import KEY
+            candidates = list((await session.scalars(select(Job).where(
+                Job.batch_id == job.batch_id, Job.job_phase == 'inference')
+                .execution_options(populate_existing=True))).all())
+            owners = [row for row in candidates if KEY in (row.provenance or {})]
+            if len(owners) == 1:
+                msa_job = owners[0]
+        if not msa_job:
             return
 
         trigger_cfg = msa_job.params.get("mutation_seed_refinement_trigger") if isinstance(msa_job.params, dict) else None
@@ -1517,6 +1528,10 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             return
         if msa_job.params.get("_mutation_seed_refinement_triggered"):
             return
+
+        if msa_job.execution_target_id:
+            from services.declared_job_expansion import validate
+            await validate(msa_job, session)
 
         variant_result = await session.execute(
             select(func.count(Job.id)).where(
@@ -1546,9 +1561,14 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
                 Job.job_phase == "inference",
                 Job.status == "completed",
             )
-            .order_by(Job.created_at.asc())
+            .order_by(Job.created_at.asc(), Job.id.asc())
         )
         successful_jobs = successful_jobs_result.scalars().all()
+        from services.declared_job_expansion import KEY
+        retained = (msa_job.provenance or {}).get(KEY)
+        if retained:
+            order = {row['id']: index for index, row in enumerate(retained['members'])}
+            successful_jobs.sort(key=lambda row: order[row.id])
 
         if not successful_jobs:
             logger.warning(f"[MUT-SEED] No successful variant jobs found for batch {job.batch_id[:8]}")
@@ -1574,7 +1594,7 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         ordered_designs: List[Design] = []
         design_job_map: Dict[str, Job] = {}
         for variant_job in successful_jobs:
-            matched_designs = design_by_job.get(str(variant_job.id), [])
+            matched_designs = sorted(design_by_job.get(str(variant_job.id), []), key=lambda row: row.id)
             for design in matched_designs:
                 ordered_designs.append(design)
                 design_job_map[str(design.job_id)] = variant_job
@@ -1631,6 +1651,8 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
             designs=ordered_designs,
             design_job_map=design_job_map,
             action="mutation_seeded_refinement",
+            selection_dir=(get_inputs_dir() / 'design_selections' / 'antibody' / follow_on_id)
+                if retained else None,
         )
         param_overrides = dict(trigger_cfg.get("param_overrides") or {})
         param_overrides.update({
@@ -1651,8 +1673,13 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
         logger.info(
             f"[MUT-SEED] Launching seeded refinement from {len(ordered_designs)} rebuilt designs for batch {job.batch_id[:8]}"
         )
+        approved = None
+        if msa_job.execution_target_id:
+            from services.declared_job_expansion import approve_derived
+            approved = await approve_derived(launch_request, msa_job, session)
         await create_job(launch_request, BackgroundTasks(), session,
-                         _preallocated_job_id=follow_on_id, _commit=False)
+                         _preallocated_job_id=follow_on_id, _commit=False,
+                         _approved_execution_plan=approved)
         await session.commit()
 
     except Exception as e:
