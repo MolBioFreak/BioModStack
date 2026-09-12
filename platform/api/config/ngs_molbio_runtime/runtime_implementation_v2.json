@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "133f073648a0aadf835508d05d2df087d7729a49de8bb9c6c961927ab7c02c3a",
+  "content_sha256": "e0fd572a54ced5cf788a9016153cc2f926fb043893899f555a104a87c0e66417",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -464,8 +464,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "b1a49ca4d0f8f880e4420c63719e5819ccd9900940bb72614068ccf172237b82",
-      "size_bytes": 442412
+      "sha256": "62565f4e384df92d1266e3d09dfc84cf804df9d80557bf2327c93fccac6bac36",
+      "size_bytes": 443329
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -659,8 +659,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "bb37d0e00338877a5f3ba2fd649739338717a9af55010aaf9a110519bea79f99",
-      "size_bytes": 188978
+      "sha256": "4f3355c219681e1a3df35955148064ebd2b9a1de82148c4c543e5025528c92b0",
+      "size_bytes": 188644
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -809,8 +809,8 @@
     },
     {
       "path": "platform/api/services/scientific_artifacts/__init__.py",
-      "sha256": "91f85fa3a3edf3961f4facf656bb96fd0701e8dc613cd79619e532e128b5e9fb",
-      "size_bytes": 1440
+      "sha256": "888a6d76b17ec6163f814b40440635288fdfb80b22fdab5da404b4c764581329",
+      "size_bytes": 1831
     },
     {
       "path": "platform/api/services/scientific_artifacts/contracts.py",
@@ -824,18 +824,18 @@
     },
     {
       "path": "platform/api/services/scientific_artifacts/query.py",
-      "sha256": "9100c8b87ae2fb4792ea5f9c9cc012cf75ca47a8b55cd309c96fc339c4e81fd0",
-      "size_bytes": 7355
+      "sha256": "045394f6d8a1a097803694697410244322297f67132a60defc1b75cae66dc624",
+      "size_bytes": 8910
     },
     {
       "path": "platform/api/services/scientific_artifacts/resolve.py",
-      "sha256": "d5a745f0b4010f43b61f9364be932b68082b318c914bee68338ee0600ef03750",
-      "size_bytes": 4321
+      "sha256": "ff77dfa94a2c21489f38c292adfcc052f42568b45402641b26aa588088c07d8d",
+      "size_bytes": 4505
     },
     {
       "path": "platform/api/services/scientific_artifacts/writer.py",
-      "sha256": "abefb12ca6b1eb8e6941a0a1931ddc83731ef855052d599b38a2dc145c168ccd",
-      "size_bytes": 13580
+      "sha256": "8b9209d751d82a81973103a7233584ed81aebc74b8a3dff53cb9fbd4c7f4ada4",
+      "size_bytes": 16508
     },
     {
       "path": "platform/api/services/sqlite_schema_attestation.py",
@@ -1104,8 +1104,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "b560f42da07d7985223ab298671cea46bce4957efb0ce7f96f7acb1f1df1ea39",
-      "size_bytes": 210643
+      "sha256": "d8d4b1ee22893a6c7bf5d4d9b1f1a9eef2cc4875aaf19aa4bf831c72dc2b57da",
+      "size_bytes": 210721
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1194,8 +1194,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "1759db79b3d97b90b9a3bcbab453dcc007cd8260376499ce30cacc0d10612f7c",
-      "size_bytes": 5644
+      "sha256": "d8ea733c5fb2ea4eb70f92eecd31fdc37da0044473d2908b6568b45200ddbf6a",
+      "size_bytes": 5712
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1422,8 +1422,8 @@
     "content_sha256": "91810471a320c5d8f49e3e0ab31ca96af5bbb98339da3733a23a3a4b8cb3b822",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "da29367918b6397f6105ff1bc4dc2ddccd12767b",
-  "successor_source_tree": "9a541019b6965a48b74a78afb0b61c8a94945b61",
+  "successor_source_commit": "d382afa8031ac4363e3591b82184559e117224cd",
+  "successor_source_tree": "08b12e436bdbcfd3691a76fcf36b6e9487fe76bf",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
