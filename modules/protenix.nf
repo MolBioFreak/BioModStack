@@ -540,6 +540,7 @@ PY
             echo "[PROTENIX-COMPLEX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            ${!prepared_msa && (params.plr_validator_suite_active == true || params.plr_validator_suite_active == 'true') ? '--generated-service protenix:generated_msa' : ''} \\
             ${prepared_msa ? '--prepared-inputs "' + prepared_msa + '" --prepared-sha256 "' + params.protenix_prepared_msa_sha256 + '"' : ''} \\
             --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\

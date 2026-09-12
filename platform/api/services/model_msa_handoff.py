@@ -20,7 +20,9 @@ def generated_msa_service_supported(service) -> bool:
     return (get('logical_id') == 'protenix:generated_msa'
             and get('state') == 'planned_from_generated_candidates'
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
-            and 'modules/antibody_batch.nf:BatchProtenixValidation' in (get('authority') or '').split('; '))
+            and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
+                      'modules/protenix.nf:ProtenixFromComplex'}
+                     .intersection((get('authority') or '').split('; '))))
 
 
 def generated_protenix_request(payload: list) -> list:
