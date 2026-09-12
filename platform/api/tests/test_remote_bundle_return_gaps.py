@@ -5,6 +5,9 @@ import tempfile
 
 import pytest
 
+from database import Job
+from test_remote_lifecycle_gaps import store
+from test_remote_manual_result_pull import success
 from services.remote_execution import executor, transport
 
 
@@ -61,18 +64,14 @@ def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_
 
 
 @pytest.mark.asyncio
-async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypatch):
+async def test_incoming_transfer_stages_on_results_filesystem(store, tmp_path, monkeypatch):
     with tempfile.TemporaryDirectory(prefix='bms-return-', dir='/dev/shm') as directory:
         output = Path(directory)/'results/job'
         output.parent.mkdir()
-        job = SimpleNamespace(id='job', execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None,
-                              execution_source_revision='a'*40, execution_source_tree='b'*40,
-                              execution_bundle_sha256='c'*64, provenance={})
-        class Session:
-            async def get(self, *args, **kwargs):
-                return SimpleNamespace()
-            async def commit(self):
-                pass
+        async with store() as session:
+            job = await session.get(Job, 'job')
+            job.output_dir = str(output)
+            await session.commit()
         monkeypatch.setattr(executor, 'get_data_root', lambda: tmp_path/'state')
         monkeypatch.setattr(executor, '_connection_for_attempt', lambda *_: (None, '/remote/attempt'))
         async def fetch(connection, remote, incoming, job, status):
@@ -82,5 +81,7 @@ async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypa
             return SimpleNamespace(artifacts=[])
         monkeypatch.setattr(executor, '_fetch_result_manifest', fetch)
         monkeypatch.setattr(executor, '_verify_result_package', lambda *args: SimpleNamespace(artifacts=[]))
-        _, incoming = await executor.collect_remote_results(Session(), job, SimpleNamespace(result_manifest_sha256='d'*64))
+        async with store() as session:
+            job = await session.get(Job, 'job')
+            _, incoming = await executor.collect_remote_results(session, job, success().model_copy(update={'result_manifest_sha256': 'd'*64}))
         assert incoming.exists()
