@@ -148,6 +148,16 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP operator critical and exhaustive controls', () => {
+    it('uses plain headings without generation counters and retains raw source evidence', async () => {
+        await act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
+        expect(container.querySelector('h2')?.textContent).toBe('Advanced Controls');
+        expect([...container.querySelectorAll('dt')].map(node => node.textContent)).not.toEqual(expect.arrayContaining(['ownership generation', 'BMS generation', 'OEM source']));
+        expect(container.textContent).toContain('Controller source');
+        expect(container.textContent).toContain('OEM source'); // unchanged robot-published source_anchor
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(state.stopCalls).toHaveLength(0);
+    });
+
     it.each(['stop', 'emergency'])('submits published %s during a held normal action and retains both receipts', async (safety) => {
         state.catalog.data.actions = [
             { ...action('normal-motion', 'Normal motion', 'motion', '/motion/gripper/open'), safety_class: 'motion' },

@@ -1434,12 +1434,19 @@ export const useBioXpOperatorControlCatalog = (
     lifecycleState?: string | null,
 ) => useQuery({
     queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null],
-    queryFn: async () => (
-        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
+    // This catalog also owns live gripper/door availability, not just labels.
+    // An expired cached response triggers a refresh on the robot; read again
+    // rather than leaving every remaining manual control disabled indefinitely.
+    queryFn: async ({ signal }) => (
+        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000 })
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: (query) => enabled && connectionGeneration > 0
+        ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
+        : false,
+    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({

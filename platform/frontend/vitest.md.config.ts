@@ -53,6 +53,7 @@ export default defineConfig({
             './tests/vitest/bioxpOperatorPipetteMounted.test.tsx',
             './tests/vitest/bioxpReceiptTerminality.test.ts',
             './tests/vitest/bioxpHistoryPolling.test.tsx',
+            './tests/vitest/bioxpManualAvailabilityRecovery.test.tsx',
             './tests/vitest/bioxpErrorBounds.test.ts',
             './tests/vitest/ontInstrumentPanel.test.tsx',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',

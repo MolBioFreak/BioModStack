@@ -183,7 +183,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
         exportMutation.mutate({ format, filters: appliedFilters, limit: 1000 }, {
             onSuccess: (result) => {
                 setExportDownload(result.download);
-                setExportMessage(`${format.toUpperCase()} export ${result.export_id} is ready. SHA-256 ${result.sha256}.`);
+                setExportMessage(`${format.toUpperCase()} export ${result.export_id} is ready.`);
             },
             onError: (error) => setExportMessage(`Export failed: ${display(error)}`),
         });
@@ -197,7 +197,6 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                     <p className="mt-1 text-sm text-slate-400">Robot-owned audit data. BMS stores no duplicate command history.</p>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-300">
-                    <span className="rounded bg-slate-900 px-2 py-1 font-mono">generation {generation || '—'}</span>
                     <button type="button" className="rounded border border-slate-700 px-2 py-1 hover:border-cyan-500" onClick={() => void Promise.all([summaryQuery.refetch(), commandsQuery.refetch(), eventsQuery.refetch(), pipetteQuery.refetch(), pressureQuery.refetch(), exportsQuery.refetch()])} disabled={!connected || summaryQuery.isFetching}>
                         Refresh
                     </button>

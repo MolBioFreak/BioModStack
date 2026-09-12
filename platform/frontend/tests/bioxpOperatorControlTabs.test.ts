@@ -11,7 +11,7 @@ const pipettePanel = readFileSync(resolve('src/components/BioXpPipetteControlPan
 
 test('catalog-driven control plane renders every action, critical groups, meta actions, and logs as separate panes', () => {
     for (const label of [
-        'OEM Route Control Plane', 'Individual Controls', 'Critical Controls', 'All Individual Controls',
+        'Advanced Controls', 'Individual Controls', 'Critical Controls', 'All Individual Controls',
         'Motion Power', 'Transport / Evidence', 'Safety / Recovery', 'Initialization',
         'Meta Actions', 'Logs', 'role="tablist"', 'role="tab"', 'role="tabpanel"',
         'Run exactly this action', 'Search individual controls',

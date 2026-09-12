@@ -192,7 +192,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 className="font-semibold text-amber-100">Four-channel pipette controls</h3>
-                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical controls dispatch robot-owned OEM actions through the same admission gate as the X/Y/Z and gripper controls; the no-motion application planner stays plan-only.</p>
+                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical pipette actions use the same safety checks as X/Y/Z and gripper controls. The application planner does not move hardware.</p>
                 </div>
                 <div className="text-right text-xs text-slate-300">
                     <p>Cached projection · live query performed {String(pipettes?.live_query_performed ?? false)}</p>
@@ -217,7 +217,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         <p className="text-slate-400">Explicit POST query; separate from the cached dashboard and the no-motion application planner.</p>
                     </div>
                     <div className="flex items-center gap-3">
-                        <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include OEM data sweep</label>
+                        <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>
                         <button type="button" disabled={!connected || readback.isPending || Boolean(readback.submission)} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
                             {readback.isPending ? 'Reading hardware…' : 'Read live hardware'}
                         </button>
@@ -255,14 +255,14 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 {PHYSICAL_CONTROLS.map((label) => {
                     const actionId = physicalActionIdFor(label);
                     const enabled = physicalActionEnabled(actionId);
-                    const reason = physicalActionReason(actionId, 'Robot-owned physical primitive; not the full OEM pipette-panel workflow.');
+                    const reason = physicalActionReason(actionId, 'Robot-owned physical primitive; not the full pipette-panel workflow.');
                     return (
                         <button
                             key={label}
                             type="button"
                             data-physical-pipette-control
                             disabled={!connected || catalogLoading || invokePending || !enabled}
-                            title={enabled ? 'Robot-owned physical primitive; not the full OEM pipette-panel workflow' : reason}
+                            title={enabled ? 'Robot-owned physical primitive; not the full pipette-panel workflow' : reason}
                             onClick={() => dispatchPhysical(label)}
                             className={enabled
                                 ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-xs text-amber-50 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-35'

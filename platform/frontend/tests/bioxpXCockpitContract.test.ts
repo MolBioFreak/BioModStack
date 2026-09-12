@@ -78,7 +78,7 @@ test('X authority panel is a normal read-only truth surface with governed moveme
     assert.match(panel, /Last X failure/);
     assert.match(panel, /Latest X authority receipt/);
     assert.match(panel, /SAP12\/13 observed/);
-    assert.match(panel, /Recovered OEM X initialization writes neither register/);
+    assert.match(panel, /X initialization writes neither register/);
     assert.match(panel, /Software reference state \(not physical proof\)/);
     assert.match(panel, /Software Abort \(cancel waiters\)/);
     assert.match(panel, /motors may continue/);

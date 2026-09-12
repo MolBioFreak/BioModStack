@@ -219,6 +219,8 @@ const state = vi.hoisted(() => ({
     softwarePending: false,
     interruptSlot: 0,
     connected: true,
+    connectionReachable: null as boolean | null,
+    statusError: false,
     deckInvokeError: null as unknown,
     deckInvokePending: false,
     deckDeferred: false,
@@ -415,15 +417,17 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         data: {
             connection: {
                 active: state.connected,
-                reachable: state.connected,
+                reachable: state.connectionReachable ?? state.connected,
                 configured: true,
                 runtime_ready: true,
                 generation: state.connectionGeneration,
                 freshness_budget_seconds: 1800,
                 last_error: null,
             },
+            mutation_access: { enabled: true },
         },
-        error: null,
+        error: state.statusError ? new Error('status read failed') : null,
+        isError: state.statusError,
         };
     },
     useBioXpOperatorDashboard: (_generation: number, enabled: boolean) => {
@@ -584,7 +588,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     },
 }));
 
-vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
+vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
 vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: (props: Record<string, unknown>) => { state.quickDashboardProps = props; return null; } }));
@@ -817,7 +821,7 @@ describe('primary cockpit query ownership', () => {
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!.disabled).toBe(true);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Home')!.disabled).toBe(true);
                 expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Stop')!.disabled).toBe(false);
-                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic OEM position)')!.disabled).toBe(true);
+                if (axis === 'Z') expect([...axisPanel.querySelectorAll('button')].find(node => node.textContent === 'Z Clear (automatic position)')!.disabled).toBe(true);
             }
         };
         assertAxesHeld();
@@ -948,6 +952,8 @@ beforeEach(() => {
     state.interruptPending = false;
     state.softwarePending = false;
     state.connected = true;
+    state.connectionReachable = null;
+    state.statusError = false;
     state.deckInvokeError = null;
     state.deckInvokePending = false;
     state.deckDeferred = false;
@@ -1044,8 +1050,8 @@ beforeEach(() => {
         expected_board_epoch_by_board: { '4': 2, '5': 8 },
         required_references: ['x', 'y', 'z', 'g'],
         destination_options: [
-            { target: 'LOC_TC', label: 'LOC_TC', aliases: ['Thermal Cycler'], location_id: 2, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
-            { target: 'LOC_OC', label: 'LOC_OC', aliases: ['OC chiller', 'Output Chiller', 'Output Tray'], location_id: 1, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
+            { target: 'LOC_TC', label: 'Thermal Cycler', aliases: ['Thermal Cycler'], location_id: 2, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
+            { target: 'LOC_OC', label: 'Output Chiller', aliases: ['OC chiller', 'Output Chiller', 'Output Tray'], location_id: 1, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
         ],
     });
     state.history.data.items = [];
@@ -1560,13 +1566,23 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         expect(panel).toBeTruthy();
         expect(panel.textContent).toContain('LOC_TC');
         expect(panel.textContent).toContain('2');
-        expect(panel.textContent).toContain('a'.repeat(64));
-        expect(panel.textContent).toContain('b'.repeat(64));
+        expect(panel.textContent).not.toContain('a'.repeat(64));
+        expect(panel.textContent).not.toContain('b'.repeat(64));
+        expect(panel.textContent).toContain('Current location');
+        expect(panel.textContent).toContain('Current well');
+        for (const clutter of ['PositionTable revision', 'Catalog revision', 'Canonical key', 'Operator label']) {
+            expect(panel.textContent).not.toContain(clutter);
+        }
+        expect(container.textContent).not.toContain('Connection generation');
+        expect(container.textContent).not.toContain('Board lifecycle generation');
         const selector = panel.querySelector('select') as HTMLSelectElement;
+        const destinations = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
+            .find(action => action.action_id === 'oem.deck.move_to_location')!.destination_options as Array<{ target: string; label: string }>;
+        expect([...selector.options].map(option => ({ target: option.value, label: option.textContent }))).toEqual(destinations.map(({ target, label }) => ({ target, label })));
         await act(async () => {
             const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
             setter?.call(selector, 'LOC_OC');
@@ -1592,7 +1608,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it('prefers a newer authoritative dashboard deck command over terminal local ownership', async () => {
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         state.deckReceipt.data = {
@@ -1624,7 +1640,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         catalogDashboard().latest_receipts = terminal ? [internalReceipt] : [];
 
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         expect(move.disabled).toBe(true);
         expect(panel.textContent).toContain('Existing deck command requires reconciliation; do not resubmit.');
@@ -1665,7 +1681,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
 
@@ -1681,7 +1697,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         expect(move.disabled).toBe(true);
         expect(panel.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable.');
@@ -1694,7 +1710,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     ])('uses embedded %s authority without trusting a separately fetched dashboard', async (_label, mutate) => {
         mutate();
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         if (_label === 'ownership') {
             // Connection identity and a retired dashboard do not override the
@@ -1719,7 +1735,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             enabled: false, disabled_reason: 'Robot denied stale ownership generation.',
         });
         await act(async () => root.render(<BioXpCockpit />));
-        const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('OEM Deck Movement'))!;
+        const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('Deck Movement'))!;
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move to destination')!;
         expect(move.disabled).toBe(true);
         expect(panel.textContent).toContain('Robot denied stale ownership generation.');
@@ -1730,7 +1746,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('renders receipt unavailable and outcome uncertain instead of inventing queued state', async () => {
         state.deckReceipt.error = new Error('detail parse failed');
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         expect(panel.textContent).toContain('receipt unavailable / outcome uncertain');
@@ -1741,7 +1757,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('keeps a recovered wrong-action receipt uncertain instead of confirming deck completion', async () => {
         state.deckDeferred = true;
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         await act(async () => state.deckCallbacks?.onError?.({
@@ -1780,7 +1796,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('ignores a deferred deck enqueue completion after connection generation changes', async () => {
         state.deckDeferred = true;
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         await act(async () => move.click());
         const oldCallbacks = state.deckCallbacks;
@@ -1794,7 +1810,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         state.yInvokeError = { response: { status: 409, data: { detail: { error: 'y_conflict' } } } };
         state.deckInvokeError = { response: { status: 502, data: { detail: { error: 'deck_uncertain' } } } };
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const deck = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const deck = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const y = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const deckMove = [...deck.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         const yMove = [...y.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
@@ -1966,7 +1982,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
-        const zClear = [...zArticle.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic OEM position)') as HTMLButtonElement;
+        const zClear = [...zArticle.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)') as HTMLButtonElement;
         // The original fixture had no action identity: R3 does not permit a
         // blanket pending exemption. Establish actual read-only authority
         // before calling this request unrelated to normal motion submission.
@@ -2246,7 +2262,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section).toBeTruthy();
         const manualControls = section.closest('section') as HTMLElement;
-        expect(manualControls.querySelector('h2')?.textContent).toBe('Exact OEM Manual Controls');
+        expect(manualControls.querySelector('h2')?.textContent).toBe('Manual Controls');
         expect(manualControls.textContent).toContain('X Axis');
         expect(manualControls.textContent).toContain('Z Axis');
         expect(manualControls.textContent).toContain('Gripper');
@@ -2393,7 +2409,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it.each(['interruptPending', 'lifecycleInvokePending', 'deckInvokePending'] as const)('holds Z Clear visibly during %s and restores it after submission', async (pending) => {
         await act(async () => root.render(<BioXpCockpit />));
-        const clear = () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic OEM position)')!;
+        const clear = () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic position)')!;
         expect(clear().disabled).toBe(false);
         state[pending] = true;
         await act(async () => root.render(<BioXpCockpit />));
@@ -2519,6 +2535,39 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"status": 100');
     });
 
+    it.each(['status-error', 'unreachable-observation'])('retains the passive camera session during %s without admitting motion', async (failure) => {
+        await act(async () => root.render(<BioXpCockpit />));
+        const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
+        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
+        if (failure === 'status-error') state.statusError = true;
+        else state.connectionReachable = false;
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: false });
+        const xy = container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+        expect([...xy.querySelectorAll('button')].every(button => button.disabled)).toBe(true);
+        if (failure === 'status-error') expect(container.textContent).toContain('Connection status refresh failed; checking again.');
+        expect(state.xyCalls).toHaveLength(0);
+        expect(state.invokeCalls).toHaveLength(0);
+        state.statusError = false;
+        state.connectionReachable = null;
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 1, mutationEnabled: true });
+    });
+
+    it('fences the passive camera on real disconnect and binds its new connection generation', async () => {
+        await act(async () => root.render(<BioXpCockpit />));
+        const camera = () => JSON.parse(container.querySelector('[data-testid="camera-session"]')!.textContent!);
+        state.connected = false;
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(camera()).toMatchObject({ connected: false, connectionGeneration: null, mutationEnabled: false });
+        state.connected = true;
+        state.connectionGeneration = 2;
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(camera()).toMatchObject({ connected: true, connectionGeneration: 2 });
+        expect(state.xyCalls).toHaveLength(0);
+        expect(state.invokeCalls).toHaveLength(0);
+    });
+
     it('edits both combined targets directly, retains drafts across polls, and submits one exact XY request', async () => {
         await act(async () => root.render(<BioXpCockpit />));
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
@@ -2526,6 +2575,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const y = panel.querySelector('[aria-label="Combined Y target (steps)"]') as HTMLInputElement;
         expect(x).not.toBeNull();
         expect(y).not.toBeNull();
+        expect(x.disabled || x.readOnly).toBe(false);
+        expect(y.disabled || y.readOnly).toBe(false);
+        const operatorLabels = [...container.querySelectorAll('h1, h2, h3, h4, label, button, [title]')]
+            .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ');
+        expect(operatorLabels).not.toMatch(/\bOEM\b/);
+        const stop = [...container.querySelectorAll('button')].find(button => button.textContent === 'Stop X')!;
+        const abort = [...container.querySelectorAll('button')].find(button => button.textContent === 'Software Abort (cancel waiters)')!;
+        expect(stop.title).toContain('Immediate X stop');
+        expect(abort.title).toContain('cancels waiters only; motors may continue');
+        expect(container.textContent).toContain('This is not a physical emergency stop; physical stopping remains unverified.');
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
         const home = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Home X + Y')!;
         const edit = async (input: HTMLInputElement, value: string) => act(async () => {
@@ -2586,7 +2645,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
         expect(panel).not.toBeNull();
         expect(panel.textContent).toContain('Combined XY Capability');
-        expect(panel.textContent).toContain('one backend OEM moveXY transaction');
+        expect(panel.textContent).toContain('one combined command, not two independent axis commands');
         const buttons = [...panel.querySelectorAll('button')] as HTMLButtonElement[];
         const move = buttons.find((button) => button.textContent === 'Move X + Y together') as HTMLButtonElement;
         const home = buttons.find((button) => button.textContent === 'Home X + Y') as HTMLButtonElement;

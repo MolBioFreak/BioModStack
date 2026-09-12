@@ -140,6 +140,9 @@ describe('mounted BioXP four-channel pipette panel', () => {
         const cards = [...container.querySelectorAll('[data-pipette-channel]')];
         expect(cards).toHaveLength(4);
         expect(cards.map((card) => card.getAttribute('data-pipette-channel'))).toEqual(['0', '1', '2', '3']);
+        expect(container.textContent).toContain('Include data sweep');
+        expect([...container.querySelectorAll('h3, h4, label, button, [title]')]
+            .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ')).not.toMatch(/\bOEM\b/);
         expect(container.textContent).toContain('Channel 1');
         expect(container.textContent).toContain('Channel 4');
         expect(cards[1].textContent).toContain('Unavailable — channel missing from projection');

@@ -136,7 +136,6 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
         : 'receipt_id' in receipt
             ? receipt.receipt_id
             : 'legacy unindexed record';
-    const ownershipGeneration = 'ownership_generation' in receipt ? receipt.ownership_generation : 'unknown';
     const remoteAcknowledged = 'remote_acknowledged' in receipt
         ? receipt.remote_acknowledged
         : 'truth' in receipt
@@ -157,7 +156,7 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
                 <span className="font-mono text-cyan-200">{actionId}</span>
                 <span>{status} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
             </div>
-            <p className="mt-1 font-mono text-slate-400">{commandId} · generation {ownershipGeneration}</p>
+            <p className="mt-1 font-mono text-slate-400">{commandId}</p>
             <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
             {bioXpReceiptFailureText(receipt) && <p className="mt-1 text-red-300">{bioXpReceiptFailureText(receipt)}</p>}
             {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
@@ -391,8 +390,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         <section className="rounded-xl border border-cyan-800/60 bg-slate-950/70 p-4" data-bioxp-operator-control-tabs>
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h2 className="text-lg font-semibold">OEM Route Control Plane</h2>
-                    <p className="text-sm text-slate-400">Robot-owned action catalog; one tab and one auditable receipt per action. Meta actions execute only robot-owned stage sequences.</p>
+                    <h2 className="text-lg font-semibold">Advanced Controls</h2>
+                    <p className="text-sm text-slate-400">Select a control to view its inputs and results. Multi-step actions follow the robot’s defined sequence.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" className={paneClass(pane === 'primitive')} onClick={() => setPane('primitive')}>Individual Controls</button>
@@ -402,12 +401,10 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             </div>
 
             {authoritativeCatalog && (
-                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
                     <div><dt className="text-slate-500">machine</dt><dd>{authoritativeCatalog.machine_serial}</dd></div>
                     <div><dt className="text-slate-500">actions</dt><dd>{authoritativeCatalog.actions.length}</dd></div>
                     <div><dt className="text-slate-500">source authority</dt><dd>{String(authoritativeCatalog.source_authority_verified)}</dd></div>
-                    <div><dt className="text-slate-500">ownership generation</dt><dd>{authoritativeCatalog.ownership_generation}</dd></div>
-                    <div><dt className="text-slate-500">BMS generation</dt><dd>{generation}</dd></div>
                 </dl>
             )}
             {contractError && <p className="mt-3 text-sm text-red-300">Catalog unavailable: {contractError}</p>}
@@ -505,7 +502,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                             <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                                 <div><dt className="text-slate-500">Robot route</dt><dd className="font-mono">{selected.informational_method} {selected.informational_path}</dd></div>
                                 <div><dt className="text-slate-500">Timeout</dt><dd>{selected.timeout_seconds}s</dd></div>
-                                <div className="sm:col-span-2"><dt className="text-slate-500">OEM source</dt><dd>{selected.source_anchor ?? 'No source anchor published'}</dd></div>
+                                <div className="sm:col-span-2"><dt className="text-slate-500">Controller source</dt><dd>{selected.source_anchor ?? 'No source anchor published'}</dd></div>
                             </dl>
                             {selected.stages.length > 0 && <p className="mt-2 text-xs text-slate-400">Stages: {selected.stages.join(' → ')}</p>}
                             <div className="mt-4 grid gap-3 md:grid-cols-2">

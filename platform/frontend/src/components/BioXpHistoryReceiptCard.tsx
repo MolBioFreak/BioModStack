@@ -20,7 +20,7 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
                 {receipt.status.replaceAll('_', ' ')} · {bioXpReceiptTimestampText(receipt.finished_at ?? receipt.accepted_at)}
             </span>
         </div>
-        <p className="mt-1 break-all font-mono text-xs text-slate-400">{receipt.command_id} · generation {receipt.ownership_generation}</p>
+        <p className="mt-1 break-all font-mono text-xs text-slate-400">{receipt.command_id}</p>
         {evidence.source === 'retained' && <p className="mt-1 text-xs text-amber-300">Retained legacy record — not current control authority.</p>}
         {receipt.status === 'ambiguous' && <p className="mt-1 text-amber-300">Outcome ambiguous; do not resubmit; reconciliation required.</p>}
         {receipt.error && <p className="mt-1 whitespace-pre-wrap text-red-300">{receipt.error.code}: {receipt.error.message}</p>}

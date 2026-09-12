@@ -29,12 +29,12 @@ test('main Z minus and plus preserve opposite signed payloads', () => {
 
 test('main Z surface keeps pseudo-home authority on the robot', () => {
   assert.match(source, /submitV2\(\{ \.\.\.envelope, action_id: 'oem\.z\.clear', inputs: \{\} \}\)/);
-  assert.match(source, /Z Clear \(automatic OEM position\)/);
-  assert.match(source, /OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target/);
+  assert.match(source, /Z Clear \(automatic position\)/);
+  assert.match(source, /Z movement uses the robot’s current pseudo-home as a dynamic minimum target/);
   assert.match(source, /A request below the current value is replaced with that value before dispatch/);
   assert.match(source, /Z does not automatically return to pseudo-home after every movement/);
   assert.match(source, /Z Clear returns to the selected pseudo-home/);
-  assert.match(source, /Manual Home follows the OEM homing sequence and establishes controller coordinate 0/);
+  assert.match(source, /Manual Home follows the homing sequence and establishes controller coordinate 0/);
   assert.doesNotMatch(source, /Tips loaded · 500/);
   assert.doesNotMatch(source, /No tips · 65,000/);
 });
@@ -78,7 +78,7 @@ test('typed Z absolute target keeps local bounds and v2 admission authority dist
 test('manual Home and Clear remain distinct typed robot-owned operations', () => {
   assert.match(source, /action_id: 'oem\.z\.manual_home', inputs: \{\}/);
   assert.match(source, /action_id: 'oem\.z\.clear', inputs: \{\}/);
-  assert.match(source, /Manual Home follows the OEM homing sequence and establishes controller coordinate 0/);
+  assert.match(source, /Manual Home follows the homing sequence and establishes controller coordinate 0/);
   assert.match(source, /Z Clear returns to the selected pseudo-home/);
 });
 

@@ -387,7 +387,7 @@ export function BioXpCockpit() {
                             : connection?.hardware_fresh !== true ? 'Hardware observation is stale or not reported; motion availability is unknown.'
                                 : null;
     const motionLabel = motionControlsAvailable === true
-        ? 'Available — exact recovered-OEM controls admitted'
+        ? 'Available — robot controls ready'
         : motionControlsAvailable === false
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
             : `Unknown — ${telemetryUnavailableReason ?? 'Telemetry is unavailable.'}`;
@@ -500,7 +500,7 @@ export function BioXpCockpit() {
         if (actionId === 'oem.y.move_absolute' && !yTargetInputValid) {
             return `Absolute target must be an integer from ${BIOXP_Y_ABSOLUTE_MIN_STEPS} through ${BIOXP_Y_ABSOLUTE_MAX_STEPS}.`;
         }
-        return 'Direct recovered-OEM command.';
+        return 'Direct robot command.';
     };
     const actionUnavailableReason = (actionId: string, fallback: string) => {
         const action = operatorActionById(actionId);
@@ -629,9 +629,6 @@ export function BioXpCockpit() {
     const xMaxAcceleration = xLiveStatus?.max_acceleration ?? 'unknown';
     const xMaxCurrent = xLiveStatus?.max_current ?? 'unknown';
     const xStallGuard = xLiveStatus?.stall_guard ?? 'unknown';
-    const xGeneration = xProvider?.current_generation ?? 'unknown';
-    const xBoardGeneration = xProvider?.current_board_lifecycle_generation ?? 'unknown';
-    const xBoardGenerationFresh = xProvider?.board_generation_fresh;
     const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
     const xHistoryReceipt = historyPagination.cursor === null ? historyQuery.data?.items?.find(
         (receipt) => receipt.action_id.startsWith('oem.x.'),
@@ -967,7 +964,7 @@ export function BioXpCockpit() {
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
             <header>
                 <h1 className="text-2xl font-bold">BioXP 3200</h1>
-                <p className="mt-1 text-sm text-slate-400">Direct OEM operator controls</p>
+                <p className="mt-1 text-sm text-slate-400">Operator controls</p>
             </header>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
@@ -977,6 +974,7 @@ export function BioXpCockpit() {
                         <p className={`text-sm ${active ? 'text-emerald-300' : 'text-slate-400'}`}>
                             {connectedLabel}
                         </p>
+                        {statusQuery.isError && <p role="status" className="mt-1 text-sm text-amber-200">Connection status refresh failed; checking again. Motion controls are unavailable until status recovers.</p>}
                         {connection?.last_error && <p className="mt-1 break-words text-sm text-red-300">{connection.last_error}</p>}
                     </div>
                     <div className="flex gap-2">
@@ -994,7 +992,7 @@ export function BioXpCockpit() {
                         >Disconnect</button>
                     </div>
                 </div>
-                <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Transport / USB / Router</dt>
                         <dd className="mt-1 break-words font-mono text-slate-100">{ownershipLabel}</dd>
@@ -1002,10 +1000,6 @@ export function BioXpCockpit() {
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Motion</dt>
                         <dd className={`mt-1 break-words ${motionControlsAvailable === false ? 'text-amber-200' : 'text-slate-100'}`}>{motionLabel}</dd>
-                    </div>
-                    <div className="rounded bg-slate-900/70 p-3">
-                        <dt className="text-slate-400">Connection generation</dt>
-                        <dd className="mt-1 font-mono text-slate-100">{generation || '—'}</dd>
                     </div>
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Last robot observation</dt>
@@ -1031,12 +1025,12 @@ export function BioXpCockpit() {
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
-                <p className="mt-1 text-sm text-slate-400">Robot-owned serial-206 activation and typed non-homing recovery. BMS does not maintain a second command registry or receipt ledger.</p>
+                <p className="mt-1 text-sm text-slate-400">Prepare the controller for motion, or recover it without homing.</p>
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
                         disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy || lifecycleStatusRecoveryPending}
-                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Robot-owned OEM activation'}
+                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Activate the robot controller'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Activate 24 V / Prepare Motion</button>
@@ -1076,9 +1070,9 @@ export function BioXpCockpit() {
             </section>
 
             <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
-                <h2 className="text-lg font-semibold">OEM Deck Movement</h2>
-                <p className="mt-1 text-sm text-slate-300">Finite robot-owned destinations and robot-selected source semantics.</p>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <h2 className="text-lg font-semibold">Deck Movement</h2>
+                <p className="mt-1 text-sm text-slate-300">Choose a destination. The robot selects the movement sequence.</p>
+                <div className="mt-3 grid gap-3">
                     <label className="text-sm text-slate-300">
                         Robot destination
                         <select
@@ -1088,28 +1082,22 @@ export function BioXpCockpit() {
                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
                         >
                             {deckDestinations.map((destination) => (
-                                <option key={destination.target} value={destination.target}>{destination.label} · {destination.target}</option>
+                                <option key={destination.target} value={destination.target}>{destination.label}</option>
                             ))}
                         </select>
                     </label>
-                    <div className="rounded bg-slate-950/60 p-3 text-sm">
-                        <p>Canonical key: <span className="font-mono">{selectedDeckDestination?.target ?? '—'}</span></p>
-                        <p>Operator label: {selectedDeckDestination?.label ?? '—'}</p>
-                    </div>
                 </div>
-                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current semantic location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current semantic well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">PositionTable revision</dt><dd className="font-mono">{deckAction?.position_table_revision ?? currentDashboardV2?.deck?.position_table_revision ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Catalog revision</dt><dd className="font-mono">{deckAction?.destination_catalog_revision ?? currentDashboardV2?.deck?.destination_catalog_revision ?? '—'}</dd></div>
+                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
                 </dl>
                 <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-emerald-300'}`}>
-                    {deckDisabledReason ?? 'Robot action enabled for the selected finite destination.'}
+                    {deckDisabledReason ?? 'Ready to move to the selected destination.'}
                 </p>
                 <button
                     type="button"
                     disabled={deckDisabledReason !== null || invokeDeckAction.isPending}
-                    title={deckDisabledReason ?? 'Submit one durable robot command'}
+                    title={deckDisabledReason ?? 'Move to the selected destination'}
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
                 >Move to destination</button>
@@ -1152,8 +1140,8 @@ export function BioXpCockpit() {
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
                 <div className="min-w-0">
-                <h2 className="text-lg font-semibold">Exact OEM Manual Controls</h2>
-                <p className="mt-1 text-sm text-slate-400">Relative moves use the literal OEM <code>moveSteps(axis, steps)</code> route. Home/Open/Close use the axis-specific OEM mechanisms.</p>
+                <h2 className="text-lg font-semibold">Manual Controls</h2>
+                <p className="mt-1 text-sm text-slate-400">Relative moves use a number of steps. Home, Open and Close use the selected axis controls.</p>
                 {operatorCatalog.isError && (
                     <p className="mt-1 break-words text-sm text-red-300">Robot manual-control catalog unavailable: {bioXpErrorText(operatorCatalog.error)}</p>
                 )}
@@ -1163,13 +1151,13 @@ export function BioXpCockpit() {
                         disabled={!linkConnected || operatorActionForPath('/motion/oem/machine_config')?.enabled !== true || invokeOperatorAction.isPending}
                         onClick={() => invokeOperatorPath('/motion/oem/machine_config', {})}
                         className={actionClass}
-                    >Show OEM axis/config tables</button>
+                    >Show axis settings</button>
                     <button
                         type="button"
                         disabled={!linkConnected || operatorActionForPath('/motion/oem/position_table')?.enabled !== true || invokeOperatorAction.isPending}
                         onClick={() => invokeOperatorPath('/motion/oem/position_table', {})}
                         className={actionClass}
-                    >Show OEM position table</button>
+                    >Show position table</button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                     <article data-testid="serial206-y-authority-panel" style={{ order: 2 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
@@ -1178,7 +1166,7 @@ export function BioXpCockpit() {
                                 <h3 className="font-semibold">Y Axis</h3>
                                 <p className="mt-1 text-xs text-slate-400">Y absolute requests return before motion stops.</p>
                             </div>
-                            <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35">Stop</button>
+                            <button type="button" disabled={yStopDisabled} title="Stop the Y motor independently of normal command submission." onClick={interruptY} className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35">Stop</button>
                         </div>
                         <div className="mt-3 grid gap-2">
                             <label className="block text-xs text-slate-300">Relative move steps<input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
@@ -1187,7 +1175,7 @@ export function BioXpCockpit() {
                                     <button key={steps} type="button" onClick={() => setYStepInput(steps)} className={`rounded px-2 py-1 text-xs ${yStepInput === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>{steps.toLocaleString()}</button>
                                 ))}
                             </div>
-                            <label className="block text-xs text-slate-300">OEM absolute target (steps)<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                            <label className="block text-xs text-slate-300">Absolute target (steps)<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={Number.isFinite(yTargetInput) ? yTargetInput : ''} onChange={(event) => setYTargetInput(event.target.valueAsNumber)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                             <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
@@ -1234,7 +1222,7 @@ export function BioXpCockpit() {
                     </article>
                     <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
                         <h3 className="font-semibold">Combined XY Capability</h3>
-                        <p className="mt-1 text-xs text-slate-300">Submits one backend OEM <code>moveXY</code> transaction so X and Y execute the robot-owned combined move. Use this for named XY destinations such as tip waste rather than issuing two independent axis commands.</p>
+                        <p className="mt-1 text-xs text-slate-300">Moves X and Y together in one combined command, not two independent axis commands. For named destinations such as tip waste, use Deck Movement.</p>
                         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                             <label className="rounded bg-slate-950/60 p-2 text-slate-300">
                                 X target (steps)
@@ -1278,10 +1266,10 @@ export function BioXpCockpit() {
                                             ? generation <= 0 || (axis === 'x' ? interruptPending('oem.x.stop') : interruptPending('oem.z.stop'))
                                             : generation <= 0 || operatorActionForPath('/motion/diagnostics/stop')?.enabled !== true || operatorActionForPath('/motion/diagnostics/stop')?.safety_class !== 'stop' || componentStop.isPending)}
                                         title={axis === 'x'
-                                            ? actionUnavailableReason('oem.x.stop', 'Immediate OEM X motor stop')
+                                            ? actionUnavailableReason('oem.x.stop', 'Immediate X motor stop')
                                             : axis === 'z'
-                                                ? actionUnavailableReason('oem.z.stop', 'Immediate OEM Z motor stop')
-                                                : 'Immediate OEM motor stop for this component'}
+                                                ? actionUnavailableReason('oem.z.stop', 'Immediate Z motor stop')
+                                                : 'Immediate motor stop for this component'}
                                         onClick={() => stopAxis(axis)}
                                         className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35"
                                     >Stop</button>
@@ -1289,7 +1277,7 @@ export function BioXpCockpit() {
                                         <button
                                             type="button"
                                             disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true}
-                                            title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'OEM software Abort cancels waiters only; motors may continue. Use addressed Stops for motors.'}
+                                            title={v2InterruptActionById('oem.abort_all')?.disabled_reason ?? 'Software Abort cancels waiters only; motors may continue. Use addressed Stops for motors.'}
                                             onClick={abortXAggregate}
                                             className="rounded bg-red-950 px-3 py-1.5 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35"
                                         >Software Abort (cancel waiters)</button>
@@ -1328,7 +1316,7 @@ export function BioXpCockpit() {
                                         ))}
                                     </div>
                                     <label className="block text-xs text-slate-300">
-                                        OEM absolute target (steps)
+                                        Absolute target (steps)
                                         <div className="mt-1 flex gap-2">
                                             <input
                                                 type="number"
@@ -1351,7 +1339,7 @@ export function BioXpCockpit() {
                                             <button
                                                 type="button"
                                                 disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true)}
-                                                title={axis === 'x' ? xAbsoluteDisabledReason ?? 'Robot-owned exact OEM X absolute move' : axis === 'z' ? zAbsoluteDisabledReason ?? 'Robot-owned exact OEM absolute move' : undefined}
+                                                title={axis === 'x' ? xAbsoluteDisabledReason ?? 'Move X to the absolute target' : axis === 'z' ? zAbsoluteDisabledReason ?? 'Move to the absolute target' : undefined}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
                                             >Go absolute</button>
@@ -1360,18 +1348,17 @@ export function BioXpCockpit() {
                                         {axis === 'x' && (
                                         <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-sky-100">
                                             <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
-                                            <h4 className="mt-2 font-semibold text-sky-50">X OEM authority</h4>
+                                            <h4 className="mt-2 font-semibold text-sky-50">X readiness</h4>
                                             <p className="mt-1"><strong>Position:</strong> {xPosition} · <strong>Software reference state (not physical proof):</strong> {xReference}</p>
                                             <p className="mt-1"><strong>Lifecycle:</strong> {xLifecycle} · <strong>Authority:</strong> {xAuthority}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {xLeftSwitchState} / {xRightSwitchState} · <strong>GAP13/12 disabled:</strong> {String(xLeftSwitchDisabled)} / {String(xRightSwitchDisabled)}</p>
                                             <p className="mt-1"><strong>Configured GAP4/5/6/205:</strong> {xMaxSpeed} / {xMaxAcceleration} / {xMaxCurrent} / {xStallGuard}</p>
                                             <p className="mt-1"><strong>Catalog absolute bounds:</strong> {xAbsoluteMinimum ?? 'unbounded'}..{xAbsoluteMaximum ?? 'unbounded'} · <strong>Catalog relative magnitude:</strong> {xRelativeMaximum ?? 'unbounded'}</p>
-                                            <p className="mt-1"><strong>Connection generation:</strong> {xGeneration} · <strong>Board lifecycle generation:</strong> {xBoardGeneration} · <strong>Fresh:</strong> {xBoardGenerationFresh === true ? 'yes' : xBoardGenerationFresh === false ? 'no' : 'unknown'}</p>
-                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(xSwitchMaskTuple?.['12'] ?? 'unknown')} / {String(xSwitchMaskTuple?.['13'] ?? 'unknown')}. Recovered OEM X initialization writes neither register. Profile {xProfileVerified === true ? 'verified' : xProfileVerified === false ? 'not verified' : 'unknown'}.</p>
+                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(xSwitchMaskTuple?.['12'] ?? 'unknown')} / {String(xSwitchMaskTuple?.['13'] ?? 'unknown')}. X initialization writes neither register. Profile {xProfileVerified === true ? 'verified' : xProfileVerified === false ? 'not verified' : 'unknown'}.</p>
                                             <p className="mt-1 text-sky-200/80">Controller/software reference is reported exactly as published by the robot provider; it is not independent evidence of the physical X location.</p>
                                             <div className="mt-2 flex flex-wrap gap-2">
-                                                <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.x.stop')} title="Immediate OEM X stop" onClick={() => stopAxis('x')}>Stop X</button>
-                                                <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true} title="OEM software Abort cancels waiters only; motors may continue" onClick={abortXAggregate}>Software Abort (cancel waiters)</button>
+                                                <button type="button" className="rounded bg-red-800 px-3 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.x.stop')} title="Immediate X stop" onClick={() => stopAxis('x')}>Stop X</button>
+                                                <button type="button" className="rounded bg-red-950 px-3 py-2 text-sm font-semibold text-red-100 ring-1 ring-red-600 hover:bg-red-900 disabled:opacity-35" disabled={!linkConnected || generation <= 0 || interruptPending('oem.abort_all') || v2InterruptActionById('oem.abort_all')?.enabled !== true} title="Software Abort cancels waiters only; motors may continue" onClick={abortXAggregate}>Software Abort (cancel waiters)</button>
                                             </div>
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
                                             {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
@@ -1380,11 +1367,11 @@ export function BioXpCockpit() {
                                         {axis === 'z' && (
                                         <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-cyan-100">
                                             <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
-                                            <p className="mt-2"><strong>Dynamic OEM pseudo-home floor:</strong> OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
-                                            <p className="mt-1"><strong>Clear and Home:</strong> Z Clear returns to the selected pseudo-home. Manual Home follows the OEM homing sequence and establishes controller coordinate 0.</p>
+                                            <p className="mt-2"><strong>Dynamic pseudo-home floor:</strong> Z movement uses the robot’s current pseudo-home as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
+                                            <p className="mt-1"><strong>Clear and Home:</strong> Z Clear returns to the selected pseudo-home. Manual Home follows the homing sequence and establishes controller coordinate 0.</p>
                                             <p className="mt-1"><strong>Position:</strong> {dashboard?.z_axis?.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboard?.z_axis?.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboard?.z_axis?.provider.state ?? 'unknown'}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {dashboard?.z_axis?.status?.left_switch_state ?? 'unknown'} / {dashboard?.z_axis?.status?.right_switch_state ?? 'unknown'} · <strong>GAP13/12 disabled:</strong> {String(dashboard?.z_axis?.status?.left_switch_disabled ?? 'unknown')} / {String(dashboard?.z_axis?.status?.right_switch_disabled ?? 'unknown')}</p>
-                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['12'] ?? 'unknown')} / {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['13'] ?? 'unknown')}. Recovered OEM Z initialization writes neither register.</p>
+                                            <p className="mt-1"><strong>SAP12/13 observed:</strong> {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['12'] ?? 'unknown')} / {String(dashboard?.z_axis?.provider.switch_mask_tuple?.['13'] ?? 'unknown')}. Z initialization writes neither register.</p>
                                             <div className="mt-2 flex flex-wrap gap-2">
                                                 <button
                                                     type="button"
@@ -1395,7 +1382,7 @@ export function BioXpCockpit() {
                                                         const envelope = v2NormalEnvelope();
                                                         if (envelope) submitV2({ ...envelope, action_id: 'oem.z.clear', inputs: {} });
                                                     }}
-                                                >Z Clear (automatic OEM position)</button>
+                                                >Z Clear (automatic position)</button>
                                             </div>
                                             {dashboard?.z_axis?.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
                                         </details>
@@ -1478,7 +1465,7 @@ export function BioXpCockpit() {
                                             key={operation}
                                             type="button"
                                             disabled={!linkConnected || operatorCatalog.isLoading || !enabled}
-                                            title={enabled ? 'Robot-owned exact OEM action' : unavailableReason}
+                                            title={enabled ? 'Robot control' : unavailableReason}
                                             onClick={() => runControl(axis, operation)}
                                             className={actionClass}
                                         >{controlLabel}</button>
@@ -1528,20 +1515,20 @@ export function BioXpCockpit() {
                 </div>
                 <details className="order-first w-full max-w-xs self-start rounded-lg border border-slate-800 bg-slate-950/70 p-2 xl:sticky xl:top-4 xl:order-last" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Camera</summary>
-                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={linkConnected} connectionGeneration={linkConnected ? generation : null} mutationEnabled={status?.mutation_access?.enabled === true} /></div>}
+                    {cameraOpen && <div className="mt-2"><BioXpCameraPanel connected={active} connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>}
                 </details>
                 </div>
             </section>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">Additional service, recovery and diagnostic controls.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
             </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <h2 className="text-lg font-semibold text-red-200">OEM Software Abort</h2>
+                        <h2 className="text-lg font-semibold text-red-200">Software Abort</h2>
                         <p className="max-w-3xl text-sm text-red-200/70">
                             Cancels software waiters, not motor motion. Motors may continue. Use the separate addressed X, Y, Z and Gripper Stops for motor stop requests. This is not a physical emergency stop; physical stopping remains unverified. Source completion, controller ACK, and terminal readback are separate evidence.
                         </p>
