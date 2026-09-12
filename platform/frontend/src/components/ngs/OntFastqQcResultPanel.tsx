@@ -380,7 +380,7 @@ export function OntFastqQcResultPanel({
                 <h4 className="mb-2 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Normalized variants</h4>
                 {pageControls('variants')}
                 {verification.variants.length === 0 ? (
-                    <p className="text-sm text-[var(--text-secondary)]">{result.pagination?.variants.total ? 'Variant details are available on demand; the scientific summary includes the full result.' : 'No normalized variants.'}</p>
+                    <p className="text-sm text-[var(--text-secondary)]">{result.pagination?.variants.total ? 'Variant details are available on demand; the scientific summary includes the full result.' : 'No normalized variant records available; see sequence-identity status and reasons.'}</p>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-xs">

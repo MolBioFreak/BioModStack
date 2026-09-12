@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
 import React, { act, useLayoutEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -14,9 +17,14 @@ const alignmentMocks = vi.hoisted(() => ({
     describeNgsError: vi.fn((_reason: unknown, fallback: string) => fallback),
     disposeAlignmentAccess: vi.fn(),
     fetchAlignmentSessions: vi.fn(),
+    fetchAlignmentPresentation: vi.fn(),
+    createAlignmentLocusSlice: vi.fn(),
     isAlignmentAccessDenied: vi.fn(),
     rotateAlignmentAccess: vi.fn(),
 }));
+const igvMocks = vi.hoisted(() => ({ createBrowser: vi.fn(), removeBrowser: vi.fn() }));
+vi.mock('igv', () => ({ default: { ...igvMocks, version: () => '3.7.3' } }));
+
 const contextMocks = vi.hoisted(() => ({
     updateQueryParams: vi.fn(),
 }));
@@ -53,6 +61,7 @@ vi.mock('../../src/components/conformationalMapping/ConformationalMappingViewer'
     ConformationalMappingViewer: () => <div>Conformational mapping</div>,
 }));
 
+import { api } from '../../src/lib/api';
 import { JobDetailPage } from '../../src/components/JobDetailPage';
 import { NGSToolkit } from '../../src/components/NGSToolkit';
 import {
@@ -103,6 +112,7 @@ async function waitUntil(assertion: () => void) {
 
 beforeEach(() => {
     vi.useRealTimers();
+    vi.spyOn(api, 'get').mockRejectedValue(new Error('Unrelated API read blocked by mounted test'));
     ngsApiMocks.fetchFullJob.mockReset();
     ngsApiMocks.fetchJobStages.mockReset();
     ngsApiMocks.fetchJobs.mockReset();
@@ -130,8 +140,122 @@ afterEach(async () => {
     vi.unstubAllGlobals();
     await act(async () => root.unmount());
     client.clear();
+    vi.restoreAllMocks();
     document.body.replaceChildren();
     vi.useRealTimers();
+});
+
+describe('preview-independent mounted locus loading', () => {
+    it.each(['rejected', 'pending'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const hash = 'a'.repeat(64);
+        const artifact = (role: string, size = 1024) => ({
+            artifact_id: role, url: `/api/jobs/job-123/artifacts/${role}`, sha256: hash,
+            source_manifest_sha256: hash, size_bytes: size, mime_type: 'application/octet-stream', range_capable: true,
+        });
+        const session = {
+            schema: 'bms.ngs.alignment-session.v1', job_id: 'job-123', session_id: 'session-123',
+            mode: 'primary', ready: true, unavailable_reason: null,
+            reads_url: '/api/jobs/job-123/alignment-sessions/session-123/reads',
+            sequence_qc_manifest_sha256: hash, verification_manifest_sha256: hash,
+            artifact_set_sha256: hash, alignment_pair_sha256: hash,
+            reference: { contig: 'plasmid', length_bp: 1000, topology: 'circular',
+                normalized_sequence_sha256: hash, fasta_sha256: hash, fai_sha256: hash },
+            artifacts: { alignment: artifact('alignment', 67_000_000), alignment_index: artifact('alignment_index'),
+                reference: artifact('reference'), reference_index: artifact('reference_index') },
+        };
+        const result = parseOntFastqQcResult(JSON.parse(readFileSync(resolve(process.cwd(),
+            '../api/tests/fixtures/ont_fastq_qc_result_retry3_v1.json'), 'utf8').replaceAll(
+            '31f02bd5-830f-4558-aa78-3873c515de68', 'job-123')), 'job-123');
+        client.setQueryData(['ont-fastq-qc-result', 'job-123', 'completed', 'ont_fastq_qc'], result);
+        const job = { id: 'job-123', name: 'Oversized FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc',
+            status: 'completed', created_at: '2026-08-10T00:00:00Z', output_dir: '/results/job-123',
+            params: { workflow_id: 'ont_fastq_qc', fastq_path: '/inputs/reads.fastq' } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { stages: [] } });
+        alignmentMocks.fetchAlignmentSessions.mockResolvedValue([session]);
+        alignmentMocks.fetchAlignmentPresentation.mockReset();
+        alignmentMocks.createAlignmentLocusSlice.mockReset();
+        let resolvePreview!: (value: unknown) => void;
+        const preview = new Promise((resolve) => { resolvePreview = resolve; });
+        alignmentMocks.fetchAlignmentPresentation.mockImplementation(() => previewState === 'rejected'
+            ? Promise.reject(new Error('preview unavailable')) : preview);
+        let resolveSlice!: (value: unknown) => void;
+        alignmentMocks.createAlignmentLocusSlice.mockImplementation(() => new Promise((resolve) => { resolveSlice = resolve; }));
+        type Track = { type?: string; name?: string; url?: string; id?: string };
+        const tracks: Track[] = [];
+        const browser = {
+            // Deliberately never emit locuschange: initialization must seed the authoritative locus.
+            on: vi.fn(), off: vi.fn(), search: vi.fn().mockResolvedValue(undefined), trackViews: [],
+            findTracks: vi.fn((predicate: (track: Track) => boolean) => tracks.filter(predicate)),
+            removeTrack: vi.fn((track: Track) => { tracks.splice(tracks.indexOf(track), 1); }),
+            loadTrack: vi.fn(async (config: Track) => { const track = { ...config }; tracks.push(track); return track; }),
+        };
+        igvMocks.createBrowser.mockReset();
+        igvMocks.createBrowser.mockResolvedValue(browser);
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+            if (String(input) === session.artifacts.reference.url) return new Response(`>plasmid\n${'A'.repeat(1000)}\n`);
+            throw new Error(`Unexpected mounted-test network request: ${String(input)}`);
+        }));
+        await act(async () => root.render(
+            <QueryClientProvider client={client}>
+                <MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                    <Routes><Route path="/ngs" element={<NGSToolkit />} /></Routes>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        ));
+        const button = (label: string) => [...document.querySelectorAll('button')].find((entry) => entry.textContent === label);
+        await waitUntil(() => expect(button('Open local IGV')?.disabled).toBe(false));
+        await act(async () => button('Open local IGV')!.click());
+        await waitUntil(() => expect(igvMocks.createBrowser).toHaveBeenCalledTimes(1));
+        await waitUntil(() => expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalled());
+        for (let index = 0; index < 5; index += 1) await flush();
+        expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
+        expect(browser.loadTrack).not.toHaveBeenCalled();
+        await waitUntil(() => expect(button('Load locus reads')?.disabled).toBe(false));
+        await act(async () => button('Load locus reads')!.click());
+        expect(alignmentMocks.createAlignmentLocusSlice).toHaveBeenCalledWith('job-123', 'session-123', {
+            contig: 'plasmid', start: 1, end: 1000,
+        });
+        const slice = {
+            schema: 'bms.ngs.alignment-locus-slice.v1', job_id: 'job-123', session_id: 'session-123',
+            slice_id: hash, state: 'ready', contig: 'plasmid', start_1based: 1, end_1based: 1000,
+            overlapping_read_count: 7000, selected_read_count: 5000, selected_record_count: 5100, capped: true,
+            policy: { id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5000,
+                max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 60 },
+            bam: { ...artifact('locus-bam'), kind: 'alignment_locus_slice' },
+            index: { ...artifact('locus-bai'), kind: 'alignment_locus_slice_index' },
+            manifest: { ...artifact('locus-manifest'), kind: 'alignment_locus_slice_manifest' },
+        };
+        if (previewState === 'pending') {
+            await act(async () => resolvePreview({
+                schema: 'bms.ngs.alignment-presentation.v1', job_id: 'job-123', session_id: 'session-123',
+                mode: 'primary', state: 'ready', source: { primary_read_count: 10000, alignment_size_bytes: 67_000_000,
+                    package_manifest_sha256: hash, alignment_sha256: hash, alignment_index_sha256: hash,
+                    alignment_index_size_bytes: 1024, alignment_record_count: 10500 },
+                policy: { id: 'primary-read-presentation-v3', version: 3, target_reads: 2000,
+                    max_preview_bytes: 67_108_864, max_coverage_bins: 10000, max_seconds: 120 },
+                preview: { kind: 'primary_read_preview', selected_read_count: 2000, selected_record_count: 2000,
+                    selected_read_set_sha256: hash, forward_count: 1000, reverse_count: 1000,
+                    bam: { ...artifact('preview-bam'), kind: 'alignment_preview' },
+                    index: { ...artifact('preview-bai'), kind: 'alignment_preview_index' } },
+                coverage: { kind: 'full_source_primary_coverage', bin_width_bp: 10, primary_read_count: 10000,
+                    artifact: { ...artifact('preview-coverage'), kind: 'full_source_primary_coverage', mime_type: 'text/plain' } },
+                manifest: { ...artifact('preview-manifest'), kind: 'alignment_presentation_manifest', mime_type: 'application/json' },
+            }));
+            for (let index = 0; index < 5; index += 1) await flush();
+            expect(browser.loadTrack).not.toHaveBeenCalled();
+        }
+        await act(async () => resolveSlice(slice));
+        await waitUntil(() => expect(tracks.some((track) => track.url === slice.bam.url)).toBe(true));
+        await waitUntil(() => expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads'));
+        for (let index = 0; index < 5; index += 1) await flush();
+        expect(alignmentMocks.fetchAlignmentPresentation).toHaveBeenCalledTimes(1);
+        expect(tracks.filter((track) => track.type === 'alignment').map((track) => track.url)).toEqual([slice.bam.url]);
+        expect(browser.loadTrack.mock.calls.every(([config]) => config.url === slice.bam.url)).toBe(true);
+        expect(document.querySelector('.ngs-alignment-presentation-status')?.textContent).toBe('Locus reads · 5,000 of 7,000 reads');
+    });
 });
 
 describe('completed NGS result routing', () => {

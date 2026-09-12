@@ -19,7 +19,7 @@
 5. The preview is capped by selected reads, alignment records, and compressed output bytes.
 6. The presentation receipt records source package-manifest identity, source BAM/BAI hashes and sizes, policy/runtime versions, selected-read-set digest, selection counts, flag/strand summaries, coverage bin size, and output hashes.
 7. First materialization may scan the complete source. BAM/BAI and receipt delivery after materialization must not resolve or hash the complete source again.
-8. The global presentation package is derived viewer data, materialized on demand and reused. It is not a prerequisite for scientific completion or result access. A presentation failure affects the viewer action, not the native result. Locus slices use a bounded cache with explicit byte, entry, and concurrency limits.
+8. The global presentation package is derived viewer data, materialized on demand and reused. It is not a prerequisite for scientific completion, result access, or explicit full-source locus inspection. A presentation failure affects only the preview; it does not trigger automatic retry loops or disable the independent locus action. A direct locus request supersedes late preview completion. Locus slices use a bounded cache with explicit byte, entry, and concurrency limits.
 9. Whole-reference coverage comes from all mapped primary source records, not the preview.
 10. A user-triggered locus operation uses the full governed BAM/BAI, enforces contig/span/read/record/byte/time bounds, and reports selected versus overlapping reads.
 11. The UI always shows `Full alignment`, `Primary-read preview`, or `Bounded full-source locus slice` while the track is loaded.

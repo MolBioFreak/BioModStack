@@ -117,6 +117,24 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(onOpenViewer).toHaveBeenCalledWith('eGFP_plasmid:3416-3616');
     });
 
+    it('does not interpret absent variant records as a completed negative analysis', async () => {
+        const payload = resultFixture();
+        payload.verification.verdict = 'FAIL';
+        payload.verification.reason_codes = ['CONSENSUS_UNAVAILABLE'];
+        payload.verification.summary.sequence_identity_fraction = null;
+        payload.verification.variants = [];
+        if (payload.pagination) payload.pagination.variants.total = 0;
+        Object.assign(payload.verification.checks.sequence_identity, {
+            status: 'not_evaluated', reason_codes: ['CONSENSUS_UNAVAILABLE'], metrics: {}, units: {},
+        });
+        await act(async () => {
+            root.render(<OntFastqQcResultPanel result={payload} loading={false} error={null} />);
+        });
+        expect(container.textContent).toContain('No normalized variant records available; see sequence-identity status and reasons.');
+        expect(container.textContent).toContain('CONSENSUS_UNAVAILABLE');
+        expect(container.textContent).not.toContain('No normalized variants.');
+    });
+
     it.each(['ready', 'unavailable'] as const)('renders sparse FAIL evidence and null identity with alignment %s', async (readiness) => {
         const payload = resultFixture();
         payload.verification.verdict = 'FAIL';
