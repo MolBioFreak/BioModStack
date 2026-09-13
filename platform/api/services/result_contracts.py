@@ -250,6 +250,20 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         notes="Structure prediction/validation outputs. Binder semantics require a separate explicit role contract.",
     ),
     ResultContractDefinition(
+        contract_id="conformational_mapping_ensemble_v1",
+        # Root aggregate only. Candidate/analysis profiles remain independently
+        # resolved and validated by the canonical CM bundle ingester/readers.
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["request_id", "request_sha256", "source_snapshot_sha256",
+                         "backend", "expected_coordinates", "candidates",
+                         "native_manifest_sha256", "terminal_status"],
+        required_artifacts=["ensemble_manifest", "native_manifest"],
+        notes="Native cm_ensemble_v1 aggregate and cm_native_artifacts_v1; "
+              "services.conformational_mapping.persistence.ingest_result_bundle "
+              "validates request, coordinate and content identities. Not a Design result.",
+    ),
+    ResultContractDefinition(
         contract_id="conformational_mapping_protenix_v1",
         model_ids=["conformational_mapping"],
         artifact_classes=["monomer_conformation"],
@@ -401,6 +415,11 @@ def resolve_result_contract(
 
     family = _token(stage_family)
     model_id = _token(model_type) or _token((provenance or {}).get("model_id"))
+    if (model_id == "conformational_mapping" and _token(stage_mode) == "map"
+            and not family and not _token(artifact_class)):
+        definition = _definition_by_id("conformational_mapping_ensemble_v1")
+        assert definition is not None
+        return _contract_from_definition(definition)
     if (model_id in {"antibody_denovo", "template_antibody_denovo"}
             and _token(stage_mode) in {"antibody_denovo_pipeline", "antibody_refinement_pipeline"}
             and not family and not _token(artifact_class)):
