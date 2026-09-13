@@ -5,6 +5,9 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/msaServerMenu.test.tsx',
+            './tests/vitest/frontendPollingMounted.test.tsx',
+            './tests/vitest/batchAnalyticsTransport.test.tsx',
             './tests/vitest/remoteCloseFollowonMounted.test.tsx',
             './tests/vitest/remoteAdmissionMounted.test.tsx',
             './tests/vitest/remoteCloseCmMsaMounted.test.tsx',

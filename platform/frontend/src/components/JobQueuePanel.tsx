@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     fetchQueue,
-    fetchSystemStatus,
     pauseQueueJob,
     resumeQueueJob,
     cancelQueueJob,
@@ -18,6 +17,7 @@ import {
     forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob as isNgsJobIdentity } from '../lib/ngsResultRouting';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
@@ -357,13 +357,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         enabled: showCancelled,
     });
 
-    const { data: systemData } = useQuery({
-        queryKey: ['system'],
-        queryFn: fetchSystemStatus,
-        refetchInterval: (query) => jobPollingInterval(5000, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
+    const { data: systemData } = useSystemStatus();
     const gpuCatalog = useMemo(
         () => buildGpuCatalog(systemData?.data.gpus ?? []),
         [systemData?.data.gpus]

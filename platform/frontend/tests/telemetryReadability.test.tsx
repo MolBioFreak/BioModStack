@@ -40,7 +40,7 @@ test('mounted CPU, RAM and GPU panels pass raw units and preserve absent GPU rea
     const gpu = { index: 0, name: 'Test GPU', utilization: 20, memory_total_mb: 24576, memory_used_mb: 4096,
         reserved_memory_mb: 1024, power_draw_w: 325, power_limit_w: 300, max_power_watts: 350,
         min_power_watts: 100, temperature: 72, processes: [] };
-    client.setQueryData(['infra-live-shared'], { data: {
+    client.setQueryData(['system'], { data: {
         cpu: { name: 'Test CPU', utilization: 12, frequency_current_mhz: 3250, power_watts: 150, temperature: 55 },
         ram: { total_gb: 32, used_gb: 12, available_gb: 20, utilization: 37.5, swap_percent: 2 },
         gpus: [gpu], timestamp: new Date(4000).toISOString(),

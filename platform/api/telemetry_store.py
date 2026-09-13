@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import os
@@ -532,10 +533,10 @@ def _expected_v2_schema_objects() -> dict[tuple[str, str], str]:
     global _EXPECTED_V2_SCHEMA_OBJECTS
     if _EXPECTED_V2_SCHEMA_OBJECTS is None:
         connection = sqlite3.connect(":memory:", isolation_level=None)
-        connection.create_function("telemetry_retention_authorized", 0, lambda: 0)
-        connection.create_function("telemetry_writer_authorized", 0, lambda: 0)
-        connection.create_function("telemetry_partition_authorized", 0, lambda: 0)
         try:
+            connection.create_function("telemetry_retention_authorized", 0, lambda: 0)
+            connection.create_function("telemetry_writer_authorized", 0, lambda: 0)
+            connection.create_function("telemetry_partition_authorized", 0, lambda: 0)
             connection.executescript(_V2_SCHEMA)
             _EXPECTED_V2_SCHEMA_OBJECTS = _schema_objects(connection)
         finally:
@@ -625,19 +626,27 @@ def _connect(
     publisher: bool = False,
 ) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=30, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys=ON")
-    connection.execute("PRAGMA busy_timeout=30000")
-    connection.create_function("telemetry_retention_authorized", 0, lambda: 1 if maintenance else 0)
-    connection.create_function("telemetry_writer_authorized", 0, lambda: 1 if writer else 0)
-    connection.create_function("telemetry_partition_authorized", 0, lambda: 1 if publisher else 0)
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.create_function("telemetry_retention_authorized", 0, lambda: 1 if maintenance else 0)
+        connection.create_function("telemetry_writer_authorized", 0, lambda: 1 if writer else 0)
+        connection.create_function("telemetry_partition_authorized", 0, lambda: 1 if publisher else 0)
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
 def open_read_only(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=30)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -1188,7 +1197,7 @@ class TelemetryStore:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.partition_root.mkdir(parents=True, exist_ok=True)
-        with _connect(self.path) as connection:
+        with closing(_connect(self.path)) as connection, connection:
             tables = {
                 str(row[0])
                 for row in connection.execute(
@@ -1264,6 +1273,9 @@ class TelemetryStore:
         except (sqlite3.Error, RuntimeError) as error:
             connection.close()
             raise RuntimeError("telemetry store schema is unavailable or invalid") from error
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     def verify_integrity(self) -> None:
@@ -1446,7 +1458,7 @@ class TelemetryStore:
             )
 
     def append_sample(self, payload: dict[str, Any]) -> None:
-        with _connect(self.path, writer=True) as connection:
+        with closing(_connect(self.path, writer=True)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 self._insert_payload(connection, prefix="raw", payload=payload, sample_count=1)
@@ -1814,7 +1826,7 @@ class TelemetryStore:
     def finalize_completed_minutes(self, now_ms: int) -> int:
         open_bucket = (int(now_ms) // 60_000) * 60_000
         finalized = 0
-        with _connect(self.path, writer=True, publisher=True, maintenance=True) as connection:
+        with closing(_connect(self.path, writer=True, publisher=True, maintenance=True)) as connection, connection:
             while True:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
@@ -1856,7 +1868,7 @@ class TelemetryStore:
         raw_cutoff = int(now_ms) - RAW_RETENTION_SECONDS * 1000
         minute_cutoff = int(now_ms) - AGGREGATE_RETENTION_SECONDS * 1000
         retiring_paths: list[tuple[Path, Path]] = []
-        with _connect(self.path, maintenance=True) as connection:
+        with closing(_connect(self.path, maintenance=True)) as connection, connection:
             raw_deleted = self._retire_published_raw(connection, int(now_ms))
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -1976,7 +1988,7 @@ class TelemetryStore:
         if not 1 <= int(limit) <= MAX_HISTORY_POINTS:
             raise ValueError("limit is outside the supported range")
         prefix: Literal["raw", "minute"] = resolution
-        with self._validated_read_connection() as connection:
+        with closing(self._validated_read_connection()) as connection, connection:
             rows, payloads = self._read_payloads(
                 connection,
                 prefix=prefix,
@@ -2041,7 +2053,7 @@ class TelemetryStore:
             raise ValueError("chart cursor is outside the requested range")
         aligned_start = start - (start % bucket)
         effective_start = aligned_start if cursor is None else max(aligned_start, cursor - (cursor % bucket))
-        with self._validated_read_connection() as connection:
+        with closing(self._validated_read_connection()) as connection, connection:
             rows = connection.execute(
                 """SELECT timestamp_ms - (timestamp_ms % ?) AS bucket_start_ms,
                           COUNT(*) AS sample_count,
@@ -2127,7 +2139,7 @@ class TelemetryStore:
         if int(stale_after_ms) <= 0:
             raise ValueError("telemetry freshness threshold must be positive")
         observed_now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
-        with self._validated_read_connection() as connection:
+        with closing(self._validated_read_connection()) as connection, connection:
             # A wall-clock rollback must not let old future-dated samples mask
             # a collector that has resumed writing at the corrected time.
             # Read both bounds in one SQLite snapshot; preserve all history.
@@ -2169,7 +2181,7 @@ class TelemetryStore:
             value.get("timestamp")
             or datetime.fromtimestamp(int(bucket_ms) / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
         )
-        with _connect(self.path, writer=True) as connection:
+        with closing(_connect(self.path, writer=True)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 self._insert_payload(

@@ -5,6 +5,7 @@ Analytics API router - Aggregated metrics and batch comparisons.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from sqlalchemy.orm import defer
 from typing import List, Dict, Any, Optional
 import numpy as np
 from pydantic import BaseModel
@@ -148,6 +149,20 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
     return metrics
 
 
+def _scalar_design_query():
+    """Avoid unrelated per-residue/matrix hydration for scalar endpoints.
+
+    Native publication consumers still perform their own unchanged persisted
+    reads and byte verification. These are not canonical metric projections.
+    """
+    return select(Design).options(
+        defer(Design.pae_matrix, raiseload=True),
+        defer(Design.stability_data, raiseload=True),
+        defer(Design.residue_plddt, raiseload=True),
+        defer(Design.chain_metrics, raiseload=True),
+    )
+
+
 async def _load_designs_for_job(
     session: AsyncSession,
     job_id: str,
@@ -165,7 +180,7 @@ async def _load_designs_for_job(
         child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
         job_ids.extend(str(child_id) for child_id in child_result.scalars().all())
 
-    result = await session.execute(select(Design).where(Design.job_id.in_(job_ids)))
+    result = await session.execute(_scalar_design_query().where(Design.job_id.in_(job_ids)))
     return result.scalars().all()
 
 
@@ -297,7 +312,7 @@ async def get_batch_analytics(
     
     # Simple loop for now - optimal would be single query with group_by
     for jid in job_ids:
-        query = select(Design).where(Design.job_id == jid)
+        query = _scalar_design_query().where(Design.job_id == jid)
         result = await session.execute(query)
         designs = result.scalars().all()
         

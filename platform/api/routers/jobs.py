@@ -5176,7 +5176,9 @@ async def list_jobs(
     offset: int = Query(0, ge=0),
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    *,
+    request: Request = None,
 ):
     """List jobs with optional filters.
 
@@ -5400,7 +5402,18 @@ async def list_jobs(
             conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
         ))
     
-    return JobList(jobs=job_responses, total=total)
+    result = JobList(jobs=job_responses, total=total)
+    if summary and request is not None:
+        # Validate/project every request before comparing: counts, removals and
+        # all visible fields participate, with no stale server-side cache.
+        body = result.model_dump_json().encode("utf-8")
+        etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache", "Vary": "Cookie, Authorization"}
+        validators = request.headers.get("if-none-match", "").split(",")
+        if any(value.strip().removeprefix("W/") in {etag, "*"} for value in validators):
+            return Response(status_code=304, headers=headers)
+        return Response(content=body, media_type="application/json", headers=headers)
+    return result
 
 
 @router.post("/imports/proteinbase", response_model=JobResponse, status_code=201)

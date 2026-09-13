@@ -49,6 +49,7 @@ import type {
     PollPreset,
     WindowPreset,
 } from './infraTelemetryHistory';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
@@ -56,7 +57,6 @@ const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
 const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
-const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
 const EMPTY_HISTORY_POINTS: TelemetryChartPoint[] = [];
 
 const POLL_PRESETS: ReadonlyArray<{ value: PollPreset; label: string }> = [
@@ -1250,13 +1250,7 @@ export function InfraLiveTelemetry({
     const chartRefreshLabel = useTelemetryChartRefresh(
         historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes,
     );
-    const liveStatusQuery = useQuery({
-        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
-        queryFn: fetchSystemStatus,
-        refetchInterval: pollIntervalMs,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
+    const liveStatusQuery = useSystemStatus(pollIntervalMs);
     const historyPoints = historyQuery.data?.points ?? EMPTY_HISTORY_POINTS;
     const samples = useMemo(() => historyPoints
         .filter(isRenderableTelemetryChartPoint)
@@ -1361,11 +1355,9 @@ export function InfraLiveTelemetry({
             return { discovery, system };
         },
         onSuccess: ({ discovery, system }) => {
-            queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_POWER_CONTROL_QUERY_KEY, { data: discovery.data.power_control });
             queryClient.setQueryData(SHARED_FAN_CONTROL_QUERY_KEY, { data: discovery.data.fan_control });
-            queryClient.invalidateQueries({ queryKey: INFRA_LIVE_SHARED_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
