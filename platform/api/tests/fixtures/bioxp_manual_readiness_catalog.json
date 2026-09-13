@@ -1,0 +1,1134 @@
+{
+  "True": {
+    "initial": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 40.009,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 40.009,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "137163c34f8d4f8b9ac5ea3cdf0b4b7d",
+          "freshness": {
+            "state": "stale",
+            "age_s": 40.009,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": true,
+          "unavailable_reason": null,
+          "enabled": true,
+          "disabled_reason": null,
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 1.009,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    },
+    "cached": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 42.011539246110246,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 42.011539246110246,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "137163c34f8d4f8b9ac5ea3cdf0b4b7d",
+          "freshness": {
+            "state": "stale",
+            "age_s": 42.011539246110246,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": true,
+          "unavailable_reason": null,
+          "enabled": true,
+          "disabled_reason": null,
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 3.0115392461102455,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    },
+    "recovered": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016677269702777267,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016677269702777267,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "b750ee915c2548d5aa697b6c9f0b902d",
+          "freshness": {
+            "state": "fresh",
+            "age_s": 0.0016677269702777267,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": true,
+          "unavailable_reason": null,
+          "enabled": true,
+          "disabled_reason": null,
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016677269702777267,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    }
+  },
+  "False": {
+    "initial": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 29.009,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 29.009,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "b66de1c61c90485cab1dbb373bd8b625",
+          "freshness": {
+            "state": "fresh",
+            "age_s": 29.009,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": true,
+          "unavailable_reason": null,
+          "enabled": true,
+          "disabled_reason": null,
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 29.009,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    },
+    "cached": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 31.011469066996128,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 31.011469066996128,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "b66de1c61c90485cab1dbb373bd8b625",
+          "freshness": {
+            "state": "stale",
+            "age_s": 31.011469066996128,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": false,
+          "unavailable_reason": "Canonical motion snapshot is stale.",
+          "enabled": false,
+          "disabled_reason": "Canonical motion snapshot is stale.",
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": false,
+              "reason": "Canonical motion snapshot is stale."
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "stale",
+            "age_s": 31.011469066996128,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    },
+    "recovered": {
+      "schema_name": "bioxp.operator_control_catalog",
+      "schema_version": "bioxp.operator_control_catalog.v1",
+      "machine_serial": "206",
+      "ownership_generation": 1,
+      "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "source_authority_verified": true,
+      "dashboard": {
+        "schema_version": "bioxp.operator_dashboard.v1",
+        "ownership_generation": 1,
+        "connection": {
+          "live": true,
+          "ownership": {
+            "transport": "owned",
+            "usb": "service",
+            "router": "running",
+            "CAN_READY": true
+          }
+        },
+        "motion": {
+          "enabled": true,
+          "reason": null
+        },
+        "operation": {
+          "state": "stopped",
+          "reason": null
+        },
+        "enclosure": {
+          "door_closed": true,
+          "latch_closed": true
+        },
+        "axes": [],
+        "x_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "physical_position_verified": false
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016877960404381156,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "latest_receipt": null,
+          "authority": "unbound",
+          "physical_position_verified": false
+        },
+        "z_axis": {
+          "status": null,
+          "provider": {
+            "bound": true,
+            "expected_startup_stage": null,
+            "startup_terminal_state": null,
+            "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+            "switch_mask_tuple": null
+          },
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016877960404381156,
+            "fresh_for_s": 30.0
+          },
+          "last_failure": null,
+          "authority": "Serial206OemInitializationProvider"
+        },
+        "temperatures": [],
+        "pipettes": {},
+        "snapshot": {
+          "snapshot_id": "5e0dab1d65694ff4abab6584c09fd675",
+          "freshness": {
+            "state": "fresh",
+            "age_s": 0.0016877960404381156,
+            "fresh_for_s": 30.0
+          },
+          "collection_triggered": false
+        }
+      },
+      "actions": [
+        {
+          "action_id": "route.source_call_motion_gripper_open_post.3c25c6a5",
+          "label": "Source Call",
+          "subsystem": "motion.gripper",
+          "category": "route",
+          "kind": "primitive",
+          "safety_class": "motion",
+          "description": "Exact existing robot route: POST /motion/gripper/open",
+          "source_anchor": null,
+          "informational_method": "POST",
+          "informational_path": "/motion/gripper/open",
+          "required_provider_capability": null,
+          "provider_available": true,
+          "provider_unavailable_reason": null,
+          "available": true,
+          "unavailable_reason": null,
+          "enabled": true,
+          "disabled_reason": null,
+          "dependencies": [
+            {
+              "key": "provider_available",
+              "label": "Provider available",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "transport_live",
+              "label": "Robot transport live",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "operation_allows_motion",
+              "label": "Operation state allows motion",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "can_ready",
+              "label": "Same-epoch CAN ready",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "canonical_snapshot",
+              "label": "Canonical hardware snapshot",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "snapshot_fresh",
+              "label": "Motion observations fresh",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_enabled",
+              "label": "Motion enabled",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "power_ready",
+              "label": "24 V rail sensor valid",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "enclosure_ready",
+              "label": "Door closed and latched",
+              "met": true,
+              "reason": null
+            },
+            {
+              "key": "motion_arm",
+              "label": "Motion arm confirmed",
+              "met": true,
+              "reason": null
+            }
+          ],
+          "requires_confirmation": true,
+          "timeout_seconds": 120.0,
+          "inputs": [
+            {
+              "name": "body",
+              "wire_name": "body",
+              "label": "Body",
+              "value_type": "json",
+              "location": "body",
+              "required": false,
+              "description": "Request JSON body",
+              "unit": null,
+              "enum_values": [],
+              "minimum": null,
+              "maximum": null,
+              "exclusive_minimum": null,
+              "exclusive_maximum": null,
+              "default": null
+            }
+          ],
+          "stages": [],
+          "snapshot_freshness": {
+            "state": "fresh",
+            "age_s": 0.0016877960404381156,
+            "fresh_for_s": 30.0
+          }
+        }
+      ]
+    }
+  }
+}

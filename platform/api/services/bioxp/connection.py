@@ -915,16 +915,17 @@ class BioXpConnectionService:
 
     async def _snapshot_refresh_loop(self) -> None:
         assert self.snapshot_refresh_interval_seconds is not None
+        delay = self.snapshot_refresh_interval_seconds
         try:
             while True:
-                await asyncio.sleep(self.snapshot_refresh_interval_seconds)
-                await self._snapshot_refresh_once()
+                await asyncio.sleep(delay)
+                delay = await self._snapshot_refresh_once() or self.snapshot_refresh_interval_seconds
         except asyncio.CancelledError:
             raise
         except (ConnectionStateError, TargetPolicyError):
             return
 
-    async def _snapshot_refresh_once(self) -> None:
+    async def _snapshot_refresh_once(self) -> float | None:
         async with self._transition_lock:
             client = self._client
             generation = self._generation
@@ -951,6 +952,44 @@ class BioXpConnectionService:
         async with self._transition_lock:
             if client is self._client and generation == self._generation:
                 self._apply_probe_payload(payload, request_started_at=request_started_at)
+                return self._snapshot_refresh_delay(payload)
+
+    def _snapshot_refresh_delay(self, payload: Mapping[str, Any]) -> float | None:
+        """Schedule this same worker from returned evidence, never renew its TTL.
+
+        The client refreshes at half the source freshness budget. Collection
+        time is already included in the returned observation age; a full sleep
+        after that work can consume the remaining lifetime a second time.
+        Foreground deferral is an observation retry, never a command retry.
+        """
+        interval = self.snapshot_refresh_interval_seconds
+        if interval is None:
+            return None
+        capabilities = payload.get("capabilities")
+        if (payload.get("runtime_ready", payload.get("runtime_available")) is not True
+                or not isinstance(capabilities, (list, tuple, set))
+                or "collect_hardware_snapshot" not in capabilities):
+            return interval
+        refresh = payload.get("automatic_snapshot_refresh")
+        if isinstance(refresh, Mapping):
+            retry = refresh.get("retry_after_s")
+            if (refresh.get("retry_deferred") is True and isinstance(retry, (int, float)) and not isinstance(retry, bool)
+                    and isfinite(retry) and retry > 0):
+                return min(interval, float(retry))
+            if refresh.get("error"):
+                return interval  # retain the client's transport-failure backoff
+        freshness = payload.get("freshness")
+        if isinstance(freshness, Mapping) and freshness.get("state") == "fresh":
+            age, window = freshness.get("age_s"), freshness.get("fresh_for_s")
+            if (isinstance(age, (int, float)) and not isinstance(age, bool)
+                    and isinstance(window, (int, float)) and not isinstance(window, bool)
+                    and isfinite(age) and isfinite(window) and age >= 0 and window > 0):
+                remaining = window / 2.0 - age
+                if remaining > 0:
+                    return min(interval, remaining)
+        # Missing/invalid evidence or a collection already past its refresh
+        # threshold must not spin this worker in a zero-delay retry loop.
+        return interval
 
     def _clear_observation(self) -> None:
         self._invalidate_v2_query_cache()
