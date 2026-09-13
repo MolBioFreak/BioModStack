@@ -40,6 +40,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly onMeasurementsChange?: (measurements: readonly ViewerMeasurement[]) => void;
     readonly jobId?: string;
     readonly showM6Workbench?: boolean;
+    /** Collapse custom panels without resetting their state or the molecular scene. */
+    readonly workbenchCollapsed?: boolean;
 }
 
 const EMPTY_METRIC_LAYERS: readonly MetricLayer[] = [];
@@ -101,6 +103,7 @@ export default function StructureViewerHost({
     showMeasurements = true,
     showComplexWorkbench = true,
     showM6Workbench = true,
+    workbenchCollapsed = false,
     jobId,
     artifactJobId: requestedArtifactJobId,
     derivedComponents = [],
@@ -379,7 +382,7 @@ export default function StructureViewerHost({
                 </button>
             )}
             {(showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent && (
-                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
+                <aside hidden={workbenchCollapsed} className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
                             <span>Metrics</span>
