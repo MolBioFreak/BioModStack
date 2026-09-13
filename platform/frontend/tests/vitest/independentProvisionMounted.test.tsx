@@ -29,9 +29,13 @@ let target: ExecutionTarget;
 let posts: Array<{ url: string; body: Record<string, string> }>;
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 const changed = vi.fn(async () => {});
-const render = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={changed} /></QueryClientProvider>); }); await act(async () => { await settle(); }); };
+const render = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={changed} /></QueryClientProvider>); }); await act(async () => { await settle(); }); await act(async () => { const details = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.includes('Prepare worker')); if (details && !details.open) { details.open = true; details.dispatchEvent(new Event('toggle')); } await settle(); }); };
 const button = (text: string) => [...container.querySelectorAll('button')].find(b => b.textContent === text)!;
 const click = async (text: string, twice = false) => { await act(async () => { const b = button(text); b.click(); if (twice) b.click(); await settle(); }); };
+const disclose = async (label: string) => { await act(async () => {
+  const details = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.startsWith(label))!;
+  details.open = !details.open; details.dispatchEvent(new Event('toggle')); await settle();
+}); };
 const select = async (label: string, value: string) => { await act(async () => { const s = container.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!; s.value = value; s.dispatchEvent(new Event('change', { bubbles: true })); await settle(); }); };
 beforeEach(() => {
   target = { ...ready }; posts = []; changed.mockClear();
@@ -40,9 +44,12 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   api.defaults.adapter = async config => {
-    if (config.method === 'get') return response(config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
+    if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
     const body = config.data ? JSON.parse(String(config.data)) : undefined;
     posts.push({ url: String(config.url), body });
+    if (config.url === '/api/jobs/execution-plan/preview') return response({ schema: 'bms.job.execution-preview.v1', approval_digest: 'd'.repeat(64), admissible: true,
+      request: body, plan: { requested_json: body.params, effective_json: body.params, source_identity: { revision: 'a'.repeat(40), tree: 'b'.repeat(40) },
+        metadata: { static_components: [], dynamic_templates: [], external_services: [] } }, deferred_preparation: [], blockers: [] });
     return response(config.url?.endsWith('/preview') ? preview(body) : target);
   };
 });
@@ -92,6 +99,9 @@ it('uses operation-bound cancellation and keeps uncertain recovery blocked', asy
     artifact_progress: [{ ...artifacts[0], state: 'interrupted' }] };
   await render();
   expect(container.textContent).toContain('Sequence 4');
+  expect(container.textContent).not.toContain('interrupted');
+  await disclose('Artifact progress');
+  expect(posts).toEqual([]);
   expect(container.textContent).toContain('interrupted');
   expect(button('Retry provision with fresh preview').disabled).toBe(true);
   await click('Recheck cancellation quiescence', true);
@@ -118,6 +128,9 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   expect(posts).toEqual([]);
   await click('Preview artifact downloads', true);
   expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'model', model_id: 'protenix' } }]);
+  expect(container.textContent).not.toContain(artifacts[0].name);
+  await disclose('Cache artifacts');
+  expect(posts).toHaveLength(1);
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('1,234 bytes');
   expect(container.textContent).toContain(artifacts[0].name);
   expect(container.textContent).toContain(artifacts[0].sha256);
@@ -273,7 +286,12 @@ it('the real de-novo typed form provisions the same unsaved request as launch an
   const launch = [...container.querySelectorAll('button')].find(item => item.textContent?.includes('Launch') && item.textContent?.includes('RFD3'))!;
   expect(launch).toBeTruthy();
   await act(async () => { launch.click(); await settle(); });
-  expect(posts.find(post => post.url === '/api/jobs')?.body).toEqual(approved.workflow_request);
+  expect(posts.find(post => post.url === '/api/jobs')?.body).toBeUndefined();
+  for (let attempt = 0; attempt < 50 && ![...document.querySelectorAll('button')].some(item => item.textContent === 'Approve and submit'); attempt++) {
+    await act(async () => { await settle(); });
+  }
+  await act(async () => { [...document.querySelectorAll('button')].find(item => item.textContent === 'Approve and submit')!.click(); await settle(); });
+  expect(posts.find(post => post.url === '/api/jobs')?.body).toEqual({ ...approved.workflow_request, execution_plan_approval: 'd'.repeat(64) });
 });
 
 it.each(['start', 'retry', 'cancel'] as const)('refreshes the target once after provision %s', async action => {
@@ -315,4 +333,34 @@ it('invalidates the picker preview immediately on execution-policy and target ch
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
   await click('Vast · Worker'); expect(button('Start provision').disabled).toBe(true);
   expect(posts).toHaveLength(2);
+});
+
+it('discovers the shared launcher workflows and full model registry without granting unsupported preparation', async () => {
+  await render();
+  expect(container.textContent).toContain('Other registered model — independent preparation unavailable');
+  await select('Provision model', 'unsupported');
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  await select('Provision scope', 'workflow');
+  expect(container.textContent).toContain('De Novo Nanobody Toolkit');
+  expect(container.textContent).toContain('De Novo Design');
+  expect(container.textContent).toContain('Molecular Dynamics');
+  await select('Preparation workflow', 'antibody_denovo');
+  expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=antibody_denovo');
+  expect(container.textContent).toContain('Workflows without that control do not support unsaved preparation');
+  expect(posts).toEqual([]);
+});
+
+it('lazily discloses exact dependency files without hiding blockers or posting', async () => {
+  await render(); await select('Provision model', 'protenix');
+  vi.spyOn(api, 'post').mockResolvedValueOnce(response({ ...preview(catalog[0]),
+    asset_states: [{ ...artifacts[0], state: 'unknown' }], blockers: ['Keep visible'] }));
+  await click('Preview artifact downloads');
+  expect(container.textContent).not.toContain(artifacts[0].name);
+  expect(container.textContent).toContain('Keep visible');
+  await disclose('Exact dependency states');
+  expect(container.textContent).toContain(artifacts[0].name);
+  await disclose('Exact dependency states');
+  expect(container.textContent).not.toContain(artifacts[0].name);
+  expect(posts).toEqual([]); // Preview uses the explicitly mocked post; disclosures never call it.
+  expect(api.post).toHaveBeenCalledTimes(1);
 });

@@ -1,9 +1,11 @@
+import { ArtifactDetails } from './ArtifactDetails';
+import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../../lib/launcherCatalog';
 import { useRef, useState } from 'react';
 import { ManagedRuntimeInventoryPanel } from './ManagedRuntimeInventoryPanel';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchProvisionCatalog, previewExecutionTargetProvision, provisionExecutionTarget,
+  fetchModels, fetchTemplates, fetchProvisionCatalog, previewExecutionTargetProvision, provisionExecutionTarget,
   cancelExecutionTargetProvision, retryExecutionTargetProvision,
   provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection,
   type CachedArtifactReceipt, type ExecutionTarget, type ProvisionSelection,
@@ -20,12 +22,12 @@ function errorText(error: unknown) {
     ? error.response.data.detail : error instanceof Error ? error.message : 'Provisioning request failed';
 }
 function ArtifactList({ artifacts }: { artifacts: CachedArtifactReceipt[] }) {
-  return <ul className="max-h-64 space-y-2 overflow-auto text-xs" aria-label="Cache artifacts">
+  return <ArtifactDetails label="Cache artifacts" count={artifacts.length}>{() => <ul className="space-y-2 text-xs" aria-label="Cache artifacts">
     {artifacts.map(artifact => <li key={artifact.name} className="break-all">
       <p className="font-mono">{artifact.name}</p>
       <p>{artifact.size_bytes.toLocaleString()} bytes · SHA256 <span className="font-mono">{artifact.sha256}</span></p>
     </li>)}
-  </ul>;
+  </ul>}</ArtifactDetails>;
 }
 
 /** All POSTs require clicks. Keyed boundaries discard stale/in-flight previews. */
@@ -40,28 +42,48 @@ export function IndependentProvisionPanel(props: Props) {
   return <ProvisionChooser key={binding} {...props} />;
 }
 function ProvisionChooser({ target, onChanged }: Props) {
-  const [kind, setKind] = useState<CatalogProvisionSelection['kind']>('model');
+  const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('model');
   const [modelId, setModelId] = useState('');
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
-  const selections = catalog.isError ? [] : (catalog.data ?? []).filter(item => item.kind === kind && typeof item.model_id === 'string');
-  const valid = selections.some(item => item.model_id === modelId);
+  const models = useQuery({ queryKey: ['models'], queryFn: () => fetchModels(), retry: false });
+  const templates = useQuery({ queryKey: ['templates'], queryFn: () => fetchTemplates(), retry: false });
+  const selections = catalog.isError ? [] : (catalog.data ?? []).filter(item => item.kind === kind);
+  const modelEntries = models.isError ? [] : (models.data?.data ?? []);
+  const workflows = [...new Map([
+    ...visibleLauncherTemplates(templates.isError ? [] : templates.data?.data ?? [], Boolean((window as Window & { __DEBUG_MODE__?: boolean }).__DEBUG_MODE__)),
+    ...launcherWorkflowTemplates, ...launcherExperimentalTemplates,
+  ].map(item => [item.id, item])).values()];
+  const entries = kind === 'workflow' ? workflows : modelEntries;
+  const valid = kind !== 'workflow' && !models.isError && modelEntries.some(item => item.id === modelId)
+    && selections.some(item => item.model_id === modelId);
+  const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
   const inventory = target.artifact_inventory;
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
-    <h4 className="font-medium">Provision model or image asset releases</h4>
-    <p className="text-xs text-[var(--text-muted)]">No saved Job required. Model includes its reviewed runtime dependencies; image downloads only the container. Preview hashes managed source files without transferring them. Provisioning does not launch inference.</p>
+    <h4 className="font-medium">Prepare worker for a model or workflow</h4>
+    <p className="text-xs text-[var(--text-muted)]">No saved Job required. Preparation copies managed runtime assets to this worker; it does not launch inference. Models come from the model registry and workflows from the same catalog as the job launcher. Exact workflow dependencies depend on your typed settings; configure them in the existing launcher before previewing downloads.</p>
     <div className="grid gap-3 sm:grid-cols-2">
-      <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind']); setModelId(''); }}>
-        <option value="model">Model and runtime dependencies</option><option value="image">Container image only</option>
+      <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
+        <option value="workflow">Workflow (configure exact dependencies)</option><option value="model">Model and runtime dependencies</option><option value="image">Container image only</option>
       </select></label>
-      <label className="text-sm">Provision model<select aria-label="Provision model" className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={catalog.isPending || catalog.isError}>
-        <option value="">Select a reviewed model</option>
-        {selections.map(item => <option key={item.model_id} value={item.model_id}>{item.model_id}</option>)}
+      <label className="text-sm">{kind === 'workflow' ? 'Preparation workflow' : 'Provision model'}<select aria-label={kind === 'workflow' ? 'Preparation workflow' : 'Provision model'} className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={kind !== 'workflow' && (models.isPending || models.isError)}>
+        <option value="">Select a model or workflow</option>
+        {entries.map(item => <option key={item.id} value={item.id}>{item.name}{kind !== 'workflow' && !selections.some(selection => selection.model_id === item.id) ? ' — independent preparation unavailable' : ''}</option>)}
       </select></label>
     </div>
     {catalog.isPending && <p role="status">Loading provisioning catalog…</p>}
     {catalog.isError && <div role="alert"><p>{errorText(catalog.error)}</p><button type="button" className={buttonClass} onClick={() => void catalog.refetch()}>Retry catalog</button></div>}
-    {!catalog.isPending && !catalog.isError && selections.length === 0 && <p>No reviewed selections available.</p>}
-    <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />
+    {kind !== 'workflow' && !catalog.isPending && !catalog.isError && selections.length === 0 && <p>No reviewed selections available.</p>}
+    {[models, templates].map((query, index) => query.isError && <div role="alert" key={index}>
+      <p>{index === 0 ? 'Model registry' : 'Workflow catalog'}: {errorText(query.error)}</p>
+      <button type="button" className={buttonClass} onClick={() => void query.refetch()}>Retry {index === 0 ? 'models' : 'workflows'}</button>
+    </div>)}
+    {kind !== 'workflow' && modelId && !valid && <p role="status">Independent preparation is unavailable for this model and scope. This is not a statement of scientific readiness. Use a configured workflow's dependency preview where supported; unsupported workflows remain blocked by the shared compiler.</p>}
+    {selectedWorkflow && <div className="space-y-2 text-sm">
+      <p>{selectedWorkflow.description}</p>
+      <p>Configure scientific settings and select this worker in the launcher, then use “Preview artifact downloads”. Workflows without that control do not support unsaved preparation. Opening the launcher does not prepare assets or launch a Job.</p>
+      <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
+    </div>}
+    {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
     <div aria-label="Last independent provision receipt" className="space-y-2 border-t border-[var(--border-primary)] pt-3 text-sm">
       <h5 className="font-medium">Last independent provision — cache receipt</h5>
       <p className="text-xs text-[var(--text-muted)]">Not a full installed inventory. Cache download verification is not scientific readiness or runtime activation. This last-cache receipt remains separate from the installed observation below.</p>
@@ -141,7 +163,7 @@ function ProvisionActions({ target, onChanged, selection, retryOperationId }: Pr
       <p>Transfer upper bound: {data.transfer_bytes?.toLocaleString() ?? 'unknown'} bytes · Selected storage: {data.storage_bytes?.toLocaleString() ?? 'unknown'} bytes. Neither is free disk capacity or an ETA.</p>
       <ul aria-label="Provision blockers">{data.blockers?.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>
       {data.plan_sha256 && <p className="break-all font-mono">Plan SHA256 {data.plan_sha256}</p>}
-      {data.asset_states && <ul aria-label="Exact dependency states">{data.asset_states.map(asset => <li key={asset.name} className="break-all">{asset.name} · {asset.state} · {asset.size_bytes.toLocaleString()} bytes · SHA256 {asset.sha256}</li>)}</ul>}
+      {data.asset_states && <ArtifactDetails label="Exact dependency states" count={data.asset_states.length}>{() => <ul aria-label="Exact dependency states">{data.asset_states?.map(asset => <li key={asset.name} className="break-all">{asset.name} · {asset.state} · {asset.size_bytes.toLocaleString()} bytes · SHA256 {asset.sha256}</li>)}</ul>}</ArtifactDetails>}
       {data.effective_params && <details><summary>Effective workflow settings (read only)</summary><SettingValues value={data.effective_params} /></details>}
       <p className="break-all text-xs font-mono">Preview SHA256 {data.preview_sha256}</p>
       <ArtifactList artifacts={data.artifacts} />
@@ -177,7 +199,7 @@ function ProvisionOperation({ target, onChanged }: Props) {
     <p>{provisionSelectionLabel(operation.selection)} · {operation.phase} · Sequence {operation.sequence ?? 'not reported'}</p>
     <p>{operation.message} · Updated {operation.updated_at}</p>
     {operation.artifact && <p>Active artifact: {operation.artifact}</p>}
-    <ul aria-label="Artifact progress">{operation.artifact_progress?.map(artifact => <li key={artifact.name} className="break-all">{artifact.name} · {artifact.state} · {artifact.size_bytes.toLocaleString()} declared bytes · SHA256 {artifact.sha256}</li>)}</ul>
+    <ArtifactDetails label="Artifact progress" count={operation.artifact_progress?.length ?? 0}>{() => <ul aria-label="Artifact progress">{operation.artifact_progress?.map(artifact => <li key={artifact.name} className="break-all">{artifact.name} · {artifact.state} · {artifact.size_bytes.toLocaleString()} declared bytes · SHA256 {artifact.sha256}</li>)}</ul>}</ArtifactDetails>
     <p className="text-xs">Artifact states are reported activity, not invented byte percentages or scientific acceptance. Completed verified objects are retained for retry.</p>
     {(operation.cancel_requested || operation.recovery_required) && <p role="status">Cancellation requested or recovery required. Ownership is not released until the server proves underlying transport stopped. No automatic retry.</p>}
     {cancellable && <button type="button" className={buttonClass} disabled={active > 0} onClick={() => void requestCancel()}>{cancel.isPending ? 'Requesting cancellation…' : operation.phase === 'recovery_blocked' ? 'Recheck cancellation quiescence' : 'Cancel provision'}</button>}
