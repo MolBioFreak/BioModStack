@@ -55,6 +55,27 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
+it('keeps optional preparation closed on load and polling, retaining a form choice when reopened', async () => {
+  const mount = async () => { await act(async () => {
+    root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={changed} /></QueryClientProvider>);
+    await settle();
+  }); };
+  await mount();
+  const details = container.querySelector<HTMLDetailsElement>('[aria-label="Remote preload and activity"] > details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')?.textContent).toContain('optional dependency downloads');
+  await mount();
+  expect(details.open).toBe(false);
+  await act(async () => { details.querySelector('summary')!.click(); await settle(); });
+  await select('Provision model', 'protenix');
+  await act(async () => { details.querySelector('summary')!.click(); await settle(); });
+  await act(async () => { await client.invalidateQueries(); await settle(); });
+  expect(details.open).toBe(false);
+  await act(async () => { details.querySelector('summary')!.click(); await settle(); });
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision model"]')?.value).toBe('protenix');
+  expect(posts).toEqual([]);
+});
+
 it('keeps attached runtime-unready workers disabled for independent provisioning', async () => {
   target = { ...ready, state: 'unavailable', active: true, last_error: 'Mount namespaces unavailable; use a compatible VM' };
   await render(); await select('Provision model', 'protenix');

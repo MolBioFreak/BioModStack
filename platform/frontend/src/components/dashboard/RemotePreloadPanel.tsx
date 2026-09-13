@@ -34,6 +34,11 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     mutation.mutate(jobId);
   }
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
+    <details>
+      <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
+        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase}` : ''}</span>
+      </summary>
+      <div className="mt-3 space-y-3">
     <IndependentProvisionPanel target={target} onChanged={onChanged} />
     <h4 className="font-medium">Preload source and runtime files</h4>
     <p className="text-xs text-[var(--text-muted)]">Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.</p>
@@ -59,5 +64,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       {progress.activity && <p>{progress.activity.stage}: {progress.activity.state}</p>}
       <p className="text-xs text-[var(--text-muted)]">Job {progress.job_id} · Updated {progress.updated_at}</p>
     </div>}
+      </div>
+    </details>
   </section>;
 }
