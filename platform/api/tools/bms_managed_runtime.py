@@ -68,7 +68,9 @@ def link_referent(row):
     if not isinstance(target, str) or not target or PurePosixPath(target).is_absolute():
         raise ValueError('invalid_runtime_link')
     path = PurePosixPath(posixpath.normpath(str(PurePosixPath(row['name']).parent / target)))
-    if (not path.is_relative_to('support-python') or path == PurePosixPath('support-python')
+    namespace = PurePosixPath(row['name']).parts[0]
+    if (namespace not in {'support-python', 'weights'} or not path.is_relative_to(namespace)
+            or path == PurePosixPath(namespace)
             or PurePosixPath(row['name']).is_relative_to(path)):
         raise ValueError('invalid_runtime_link')
     return str(path)
@@ -99,7 +101,7 @@ def validate_manifest(value, cache):
         fields = {'name', 'sha256', 'size_bytes', 'mode'}
         if row.get('kind') == 'runtime_image':
             fields.add('kind')
-        elif row.get('kind') == 'runtime_link' and critical is not None:
+        elif row.get('kind') == 'runtime_link':
             fields.update(('kind', 'target'))
         if set(row) != fields:
             raise ValueError('invalid_artifact')
@@ -121,7 +123,8 @@ def validate_manifest(value, cache):
         if row.get('kind') == 'runtime_link':
             referent = link_referent(row)
             data = row['target'].encode('utf-8')
-            if (not row['name'].startswith('support-python/') or row['mode'] != 0o777
+            prefix = 'support-python/' if critical is not None else 'weights/'
+            if (not row['name'].startswith(prefix) or not referent.startswith(prefix) or row['mode'] != 0o777
                     or row['size_bytes'] != len(data) or row['sha256'] != hashlib.sha256(data).hexdigest()
                     or referent not in names | directories
                     or by_name.get(referent, {}).get('kind') == 'runtime_link'):
@@ -534,7 +537,7 @@ def install(root, manifest, expected_boot, cache):
                     now = os.fstat(current)
                     if (now.st_dev, now.st_ino) != identity:
                         raise ValueError('managed_directory_changed')
-        for row in missing:
+        for row in sorted(missing, key=lambda row: row.get('kind') == 'runtime_link'):
             fence()
             if boot_id() != expected_boot:
                 raise ValueError('worker_boot_changed')

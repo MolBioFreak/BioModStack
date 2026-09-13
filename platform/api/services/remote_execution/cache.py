@@ -328,14 +328,10 @@ def independent_plan(selection):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
         for record in _records_for_source(path, prefix, 'runtime'):
-            # Cache-only tree links are not installed; reject rather than claim
-            # an incomplete model download. Launch's existing link path is unchanged.
-            if record.link_target is not None:
-                raise ValueError('Independent provisioning does not support runtime symlinks')
             suffix = record.relative_path[len(prefix):].lstrip('/')
             entries.append(CacheTransferArtifact(path / suffix if suffix else path,
                 record.relative_path, record.sha256, record.size_bytes, record.mode,
-                'image' if ref.kind == 'image' else 'runtime'))
+                'image' if ref.kind == 'image' else 'runtime', link_target=record.link_target))
     return entries
 
 
@@ -393,12 +389,11 @@ def workflow_plan(selection, *, compiled_plan=None):
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
             json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan):
         for record in _records_for_source(path, prefix, 'runtime'):
-            if record.link_target is not None:
-                raise ValueError('Managed provisioning does not support runtime symlinks')
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = path / suffix if suffix else path
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
-                record.size_bytes, record.mode, 'image' if _is_runtime_image(local, record.relative_path) else 'runtime'))
+                record.size_bytes, record.mode, 'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
+                link_target=record.link_target))
     verify_selected_runtime_hashes(plan, {entry.remote_destination: entry.sha256 for entry in entries})
     verify_selected_preparation_inputs(plan)
     return entries, plan
@@ -474,6 +469,10 @@ def independent_preview(selection, target, *, compiled_plan=None):
     entries = list(unique.values())
     artifacts = [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes) for e in entries]
     source = current_source_identity()
+    if any(e.link_target is not None for e in entries):
+        from .managed_inventory import manifest_for
+        from tools import bms_managed_runtime, bms_artifact_cache
+        bms_managed_runtime.validate_manifest(manifest_for(selection, entries, source), bms_artifact_cache)
     if plan is not None and source != (plan.source_identity.revision, plan.source_identity.tree):
         raise ValueError('Workflow provision source identity changed')
     identity = dict(scope='managed_asset_activation.v1', selection=selection.model_dump(mode='json'),
@@ -497,9 +496,9 @@ def independent_preview(selection, target, *, compiled_plan=None):
                     known[key] = row.state
     states = [dict(row, state=known.get((row['name'], row['sha256'], row['size_bytes']), 'unknown'))
               for row in artifacts]
-    objects = {(e.role == 'image', e.sha256, e.size_bytes) for e in entries}
+    objects = {(e.role == 'image', e.sha256, e.size_bytes) for e in entries if e.link_target is None}
     missing = {(e.role == 'image', e.sha256, e.size_bytes) for e, row in zip(entries, states, strict=True)
-               if row['state'] != 'verified'}
+               if row['state'] != 'verified' and e.link_target is None}
     return ProvisionPreview(selection=selection, preview_sha256=digest,
         dependencies=dependencies, blockers=blockers, estimates_complete=not blockers,
         artifacts=[CachedArtifactReceipt.model_validate(r) for r in artifacts],
@@ -511,11 +510,13 @@ def independent_preview(selection, target, *, compiled_plan=None):
         transfer_bytes=sum(size for _, _, size in missing),
         # Conservative space estimate: one immutable cache object plus each
         # non-image installed destination. Images are never copied into releases.
-        storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image')), entries
+        storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image' and e.link_target is None)), entries
 
 
 async def provision_cache(*, connection, entries, operation_id, progress, check_fence):
-    entries = tuple(entries)
+    # Alias identities are carried by the release manifest, not byte objects.
+    # Its existing authenticated link publisher runs after verified leaves.
+    entries = tuple(e for e in entries if e.link_target is None)
     receipts = await _cache_artifacts(connection=connection, artifacts=entries,
         operation_id=operation_id, progress=progress, check_fence=check_fence, track_artifacts=True)
     # Read back exact installed cache-object identities after all transfers. This

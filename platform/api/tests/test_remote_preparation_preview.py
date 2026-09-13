@@ -8,6 +8,7 @@ from database import ExecutionTarget, Job, get_session
 from routers.execution_targets import router
 from services.remote_execution import preloading
 from test_remote_independent_provisioning import assets
+from test_remote_cache_integration import local_transport
 from test_remote_preloading import store
 
 
@@ -114,3 +115,96 @@ async def test_unsaved_workflow_missing_assets_keeps_native_settings(assets, mon
     import json
     expected = nextflow.compile_workflow_provision_request(selection.workflow_request).execution_plan
     assert preview.effective_params == json.loads(expected.effective_json)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["model", "workflow"])
+async def test_hf_weight_aliases_prepare_without_duplicate_objects(store, assets, local_transport, tmp_path, monkeypatch, kind):
+    from services.remote_execution import cache
+    from services.remote_execution.contracts import ProvisionSelection
+    from types import SimpleNamespace
+    from services.remote_execution import bundle
+    from component_runtime import SourceIdentity
+    from paths import get_code_root
+    source = SourceIdentity.from_checkout(get_code_root())
+    monkeypatch.setattr(cache, 'current_source_identity', lambda: (source.revision, source.tree))
+    monkeypatch.setattr(bundle, 'get_container_dir', lambda: assets[0])
+    monkeypatch.setattr(bundle, 'get_weights_root', lambda: assets[1])
+    (assets[0] / 'esmfold2.sif').write_bytes(b'controlled image')
+    root = assets[1] / 'esmfold2'
+    (root / 'snapshots/revision').mkdir(parents=True)
+    (root / 'model.pt').write_bytes(b'controlled weight')
+    (root / 'snapshots/revision/model.pt').symlink_to('../../model.pt')
+    target = SimpleNamespace(id='one', host='worker', port=22, username='root', remote_root='/worker', host_key_sha256='c'*64)
+    selection = {'kind': 'model', 'model_id': 'esmfold2'} if kind == 'model' else {
+        'kind': 'workflow', 'workflow_request': {'name': 'Unsaved HF', 'model_id': 'esmfold2', 'mode': 'predict',
+        'params': {'sequence': 'ACDE', 'pred_method': 'esmfold2', 'model_variant': 'fast', 'local_files_only': True, 'run_frustrampnn': False}}}
+    from services.remote_execution.contracts import WorkflowProvisionSelection
+    selected = ProvisionSelection(**selection) if kind == 'model' else WorkflowProvisionSelection(**selection)
+    preview, entries = cache.independent_preview(selected, target)
+    assert not preview.blockers
+    assert len(entries) == 3
+    async with store() as session:
+        await session.execute(delete(Job))
+        row = await session.get(ExecutionTarget, 'vast:1')
+        row.remote_root = str(tmp_path / 'worker')
+        await session.commit()
+    controller = preloading.PreloadController(store)
+    app = FastAPI()
+    app.include_router(router, prefix='/execution-targets')
+    app.state.preload_controller = controller
+    async def sessions():
+        async with store() as session:
+            yield session
+    app.dependency_overrides[get_session] = sessions
+    from test_remote_preloading import settle
+    prefix = '/execution-targets/vast:1/provision'
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+            response = await client.post(prefix + '/preview', json=selection)
+            assert response.status_code == 200, response.text
+            approved = response.json()
+            response = await client.post(prefix, json={**selection, 'preview_sha256': approved['preview_sha256']})
+            assert response.status_code == 202, response.text
+            await settle(controller)
+            async with store() as session:
+                row = await session.get(ExecutionTarget, 'vast:1')
+                assert row.provider_metadata['preload']['phase'] == 'source_download_ready', row.provider_metadata['preload']
+            installed = list((tmp_path / 'worker/managed-assets/v1/releases').rglob('snapshots/revision/model.pt'))
+            assert len(installed) == 1
+            assert installed[0].is_symlink() and installed[0].readlink().as_posix() == '../../model.pt'
+            assert installed[0].read_bytes() == (root / 'model.pt').read_bytes()
+            calls, uploads = local_transport
+            assert len(uploads) == 2  # image + one physical weight; never dereference aliases
+            # Warm preparation reuses physical objects and authenticates aliases again.
+            response = await client.post(prefix, json={**selection, 'preview_sha256': approved['preview_sha256']})
+            assert response.status_code == 202, response.text
+            await settle(controller)
+            assert len(uploads) == 2
+            async with store() as session:
+                row = await session.get(ExecutionTarget, 'vast:1')
+                assert row.provider_metadata['preload']['phase'] == 'source_download_ready'
+                assert len(row.provider_metadata['artifact_inventory']['artifacts']) == 2
+                observed = row.provider_metadata['managed_inventory']['observation']['releases'][0]
+                assert len(observed['artifacts']) == 3
+                assert all(a['state'] == 'verified' for a in observed['artifacts'])
+            from services.remote_execution.managed_inventory import manifest_for
+            from tools import bms_managed_runtime as managed, bms_artifact_cache as artifacts
+            manifest = manifest_for(selected, entries, (source.revision, source.tree))
+            link = next(r for r in manifest['artifacts'] if r.get('kind') == 'runtime_link')
+            import copy, hashlib
+            for bad_target in ('/etc/passwd', '../../../outside', '../../absent', 'model.pt'):
+                bad = copy.deepcopy(manifest)
+                bad_link = next(r for r in bad['artifacts'] if r.get('kind') == 'runtime_link')
+                bad_link.update(target=bad_target, sha256=hashlib.sha256(bad_target.encode()).hexdigest(), size_bytes=len(bad_target))
+                with pytest.raises(ValueError):
+                    managed.validate_manifest(bad, artifacts)
+            # Same-path alias replacement invalidates the previously approved preview.
+            (root / 'other.pt').write_bytes(b'other controlled weight')
+            (root / 'snapshots/revision/model.pt').unlink()
+            (root / 'snapshots/revision/model.pt').symlink_to('../../other.pt')
+            changed = (await client.post(prefix + '/preview', json=selection)).json()
+            assert changed['preview_sha256'] != approved['preview_sha256']
+            assert (await client.post(prefix, json={**selection, 'preview_sha256': approved['preview_sha256']})).status_code == 409
+    finally:
+        await controller.close()

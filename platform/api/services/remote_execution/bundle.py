@@ -66,6 +66,7 @@ class CacheTransferArtifact:
     mode: int
     role: str
     aliases: tuple[str, ...] = ()
+    link_target: str | None = None
 
 
 def bind_resource_admission(bundle: PreparedRemoteBundle, admission: dict, *,

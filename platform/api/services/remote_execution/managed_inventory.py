@@ -114,7 +114,9 @@ def manifest_for(selection, entries, source) -> dict[str, Any]:
             wire_selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
     return dict(selection=wire_selection, source_revision=source[0], source_tree=source[1],
         artifacts=[dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes,
-                        mode=e.mode, **({'kind': 'runtime_image'} if e.role == 'image' else {}))
+                        mode=0o777 if e.link_target is not None else e.mode,
+                        **({'kind': 'runtime_link', 'target': e.link_target} if e.link_target is not None else
+                           {'kind': 'runtime_image'} if e.role == 'image' else {}))
                    for e in entries])
 
 
