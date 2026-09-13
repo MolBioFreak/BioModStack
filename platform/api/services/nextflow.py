@@ -4105,6 +4105,9 @@ def compile_workflow_provision_request(request):
         if native_entrypoint != MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('antibody_denovo', typed.mode)):
             raise ValueError('Native model/mode does not match canonical compiler routing')
         model = registry.get_model('antibody_denovo')
+    if (typed.model_id, typed.mode) == ('conformational_mapping', 'map'):
+        native_entrypoint = MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((typed.model_id, typed.mode))
+        model = registry.get_internal_model_definition(typed.model_id)
     if model is None or typed.mode not in {mode.id for mode in model.modes}:
         raise ValueError('Workflow provision requires a supported typed model and mode')
     typed.params = apply_msa_policy(typed.model_id, typed.params)

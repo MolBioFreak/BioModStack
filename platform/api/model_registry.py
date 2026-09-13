@@ -519,6 +519,12 @@ class ModelRegistry:
                 # not the de novo generator's target/epitope inputs.
                 if mode_id == 'antibody_refinement_pipeline':
                     native_required = ('selected_input_dir',)
+            elif (model_id, mode_id) == ('conformational_mapping', 'map'):
+                # Dedicated CM materialization persists the complete scientific
+                # request. The native compiler validates that immutable document;
+                # it is not the generic launcher's unmaterialized parameter DTO.
+                model = raw
+                native_required = ('cm_request_path',)
             elif raw is not None:
                 model = raw
         if not model:
