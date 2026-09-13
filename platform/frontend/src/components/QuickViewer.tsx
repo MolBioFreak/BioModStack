@@ -129,6 +129,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     const [selectedStructure, setSelectedStructure] = useState<StructureFile | null>(null);
     const [viewerSize, setViewerSize] = useState<QuickViewerSize>('large');
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Use external ID if provided, otherwise internal
@@ -303,6 +304,16 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                     </div>
                     <button
                         type="button"
+                        onClick={() => setSettingsOpen((open) => !open)}
+                        disabled={!structureUrl}
+                        aria-label="Quick Viewer settings"
+                        aria-expanded={settingsOpen}
+                        className={`${BMS_CONTROL} px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-slate-700 disabled:opacity-50`}
+                    >
+                        {settingsOpen ? 'Hide settings' : 'Settings'}
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => void toggleFullscreen()}
                         className={`${BMS_CONTROL} px-3 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-slate-700`}
                         title={isFullscreen ? 'Exit fullscreen' : 'Open fullscreen'}
@@ -369,6 +380,7 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         format={selectedStructure?.type || 'pdb'}
                         alphafoldView={true}
                         hideControls={hideViewerControls}
+                        workbenchCollapsed={!settingsOpen}
                         jobId={quickViewerJobId ?? undefined}
                         height={viewerHeight}
                         backgroundColor="#0f172a"
