@@ -40,6 +40,7 @@ from services.ngs_molbio_runtime_status import NgsMolBioRuntimeAuthorityError, r
 _SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.container_runtime import container_executable
 from lib.shared_runtime_images import SharedRuntimeImageError, publish_image, verify_image
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
@@ -898,7 +899,7 @@ class _PinnedSamtoolsCommand:
 
 
 _samtools_runtime_lock = threading.RLock()
-_samtools_runtime_cache: dict[tuple[str, str], _PinnedSamtoolsCommand] = {}
+_samtools_runtime_cache: dict[tuple[str, str, str], _PinnedSamtoolsCommand] = {}
 
 
 def _clear_samtools_runtime_cache() -> None:
@@ -1037,7 +1038,10 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
     if not runtime_sif.is_absolute():
         raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
     store_root = _runtime_image_store(runtime_sif)
-    key = (os.fspath(runtime_sif), os.fspath(store_root))
+    apptainer = container_executable()
+    if not apptainer:
+        raise AlignmentSessionError("Scientific container runtime is unavailable for the pinned NGS runtime")
+    key = (os.fspath(runtime_sif), os.fspath(store_root), apptainer)
     with _samtools_runtime_lock:
         # The small canonical lock stays fresh even when image bytes are cached.
         expected_digest, expected_version = _ngs_runtime_identity()
@@ -1049,9 +1053,6 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                 raise AlignmentSessionError("cached NGS runtime does not match the canonical lock")
             cached.verify_runtime()
             return cached
-        apptainer = shutil.which("apptainer")
-        if not apptainer:
-            raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
         (
             runtime_fd,
             runtime_size,
@@ -1070,10 +1071,6 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                     apptainer,
                     "exec",
                     "--no-home",
-                    "--pid",
-                    "--net",
-                    "--network",
-                    "none",
                     f"/proc/self/fd/{runtime_fd}",
                     "samtools",
                 ),

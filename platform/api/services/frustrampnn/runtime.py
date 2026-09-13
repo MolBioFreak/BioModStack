@@ -19,6 +19,7 @@ from paths import get_container_path, get_container_dir
 _SCRIPTS_ROOT = Path(__file__).resolve().parents[4] / "scripts"
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.container_runtime import container_executable
 from lib.shared_runtime_images import verify_image, SharedRuntimeImageError
 
 
@@ -348,7 +349,7 @@ def container_sha256(
 ) -> str:
     """Hash one in-container asset through the inherited pinned SIF descriptor."""
 
-    executable = os.fspath(apptainer)
+    executable = container_executable(apptainer)
     if not isinstance(executable, str) or not executable or "\x00" in executable:
         raise RuntimeValidationError("Apptainer executable is invalid")
     target = _validate_container_internal_path(internal_path, label="container asset")
@@ -707,7 +708,7 @@ def build_frustrampnn_command(
         or physical_gpu_id < 0
     ):
         raise RuntimeValidationError("assigned FrustraMPNN physical GPU ID must be a non-negative integer")
-    executable = os.fspath(apptainer)
+    executable = container_executable(apptainer)
     if not isinstance(executable, str) or not executable or "\x00" in executable:
         raise RuntimeValidationError("Apptainer executable is invalid")
     container_path = _absolute_safe_host_path(container, label="container")
@@ -742,7 +743,6 @@ def build_frustrampnn_command(
     argv = (
         executable,
         "exec",
-        "--containall",
         "--writable-tmpfs",
         "--nv",
         "--env",
@@ -791,7 +791,7 @@ def build_frustrampnn_predict_batch_command(
         raise RuntimeValidationError(
             "assigned FrustraMPNN physical GPU ID must be a non-negative integer"
         )
-    executable = os.fspath(apptainer)
+    executable = container_executable(apptainer)
     if not isinstance(executable, str) or not executable or "\x00" in executable:
         raise RuntimeValidationError("Apptainer executable is invalid")
     container_path = _absolute_safe_host_path(container, label="container")
@@ -893,7 +893,6 @@ def build_frustrampnn_predict_batch_command(
     argv = (
         executable,
         "exec",
-        "--containall",
         "--writable-tmpfs",
         "--nv",
         "--env",

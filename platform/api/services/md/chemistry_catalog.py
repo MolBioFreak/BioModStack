@@ -7,6 +7,7 @@ import math
 import os
 import re
 import subprocess
+from scripts.lib.container_runtime import container_executable
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -253,7 +254,7 @@ exit 2
 """.strip()
     try:
         completed = runner(
-            ["apptainer", "exec", str(image), "sh", "-c", probe_script],
+            [container_executable("apptainer"), "exec", str(image), "sh", "-c", probe_script],
             check=False,
             capture_output=True,
             text=True,
@@ -326,7 +327,7 @@ root=/opt/md-preparation/dat/leap
 """.strip()
     try:
         completed = runner(
-            ["apptainer", "exec", str(image), "sh", "-c", probe_script],
+            [container_executable("apptainer"), "exec", str(image), "sh", "-c", probe_script],
             check=False,
             capture_output=True,
             text=True,

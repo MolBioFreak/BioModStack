@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from scripts.lib.container_runtime import container_executable
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -122,7 +123,7 @@ async def preview_design_spec(request: BoltzGenPreviewRequest) -> BoltzGenPrevie
 
         check_out_dir = tmp_path / "check"
         check_cmd = [
-            "apptainer",
+            container_executable("apptainer"),
             "exec",
             str(boltzgen_sif),
             "boltzgen",

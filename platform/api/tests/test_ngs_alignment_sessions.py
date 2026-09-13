@@ -1085,12 +1085,17 @@ def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_samtools_command_uses_pinned_no_network_ont_runtime(
+@pytest.mark.parametrize("selected_runtime", [None, "/test/bms-container"])
+def test_samtools_command_uses_pinned_ont_runtime(
+    selected_runtime,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from services import ngs_alignment_sessions as service
 
+    if selected_runtime:
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", selected_runtime)
     container_dir = tmp_path / "apptainer"
     container_dir.mkdir()
     image = container_dir / "dorado-v1.3.1-samtools-v1.24.sif"
@@ -1118,13 +1123,9 @@ def test_samtools_command_uses_pinned_no_network_ont_runtime(
     try:
         command = service._samtools_command()
         assert tuple(command) == (
-            "/usr/bin/apptainer",
+            selected_runtime or "/usr/bin/apptainer",
             "exec",
             "--no-home",
-            "--pid",
-            "--net",
-            "--network",
-            "none",
             f"/proc/self/fd/{command.pass_fds[0]}",
             "samtools",
         )

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import subprocess
+from scripts.lib.container_runtime import container_executable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -169,7 +170,7 @@ def get_container_supported_sm_tokens(container_path_str: str) -> tuple[str, ...
     try:
         result = subprocess.run(
             [
-                "apptainer",
+                container_executable("apptainer"),
                 "exec",
                 "--nv",
                 str(container_path),
@@ -258,7 +259,7 @@ def resolve_anarcii_runtime(
 
 
 def build_apptainer_exec_command(runtime: ANARCIIRuntime, inner_cmd: Iterable[str]) -> list[str]:
-    cmd = ["apptainer", "exec"]
+    cmd = [container_executable("apptainer"), "exec"]
     if runtime.mode == "gpu" and runtime.gpu_id is not None:
         cmd.extend(
             [

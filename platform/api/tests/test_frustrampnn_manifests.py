@@ -707,6 +707,24 @@ def test_manifest_rejects_fully_rehashed_request_to_artifact_contradictions(
         _build(tmp_path)
 
 
+@pytest.mark.parametrize("launcher", ["apptainer", "/test/bms-container"])
+def test_manifest_accepts_explicit_binds_without_namespace_claim(tmp_path: Path, launcher: str) -> None:
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    module = _manifests(); _bundle(tmp_path)
+    path = tmp_path / "frustrampnn_execution_receipt_v1.json"
+    receipt = canonical_json_loads(path.read_bytes())
+    receipt["argv"].remove("--containall")
+    receipt["argv"][0] = launcher
+    receipt["working_directory_policy"] = "explicit_input_output_binds_v1"
+    path.write_bytes(canonical_json_bytes(receipt))
+    _rehash_bundle(tmp_path)
+    _build(tmp_path)
+    receipt["argv"].insert(2, "--net")
+    with pytest.raises(module.ManifestValidationError):
+        module._validate_receipt_argv(receipt)
+
+
 def test_manifest_rejects_fully_rehashed_receipt_with_unbound_runtime_argv(tmp_path: Path) -> None:
     from services.frustrampnn.contracts import canonical_json_loads
 

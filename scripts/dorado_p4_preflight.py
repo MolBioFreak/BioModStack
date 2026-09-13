@@ -16,6 +16,7 @@ from typing import Any
 
 # Also support importlib-based qualification consumers.
 sys.path.insert(0, str(Path(__file__).absolute().parent))
+from lib.container_runtime import container_executable
 from lib.shared_runtime_images import verify_image
 
 
@@ -167,7 +168,7 @@ def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[st
     observed: dict[str, dict[str, Any]] = {}
     for name, command in commands.items():
         completed = subprocess.run(
-            ["apptainer", "exec", str(runtime_sif), *command],
+            [container_executable("apptainer"), "exec", str(runtime_sif), *command],
             text=True,
             capture_output=True,
             check=False,
@@ -209,7 +210,7 @@ def _verify_runtime_capabilities(runtime_sif: Path, lock: dict[str, Any], *, mod
     evidence: dict[str, Any] = {"scientific_tools": _verify_scientific_tools(runtime_sif, lock)}
     for command, options in sorted(commands.items()):
         completed = subprocess.run(
-            ["apptainer", "exec", str(runtime_sif), "dorado", command, "--help"],
+            [container_executable("apptainer"), "exec", str(runtime_sif), "dorado", command, "--help"],
             text=True, capture_output=True, check=False, timeout=60,
         )
         help_text = (completed.stdout or "") + "\n" + (completed.stderr or "")
@@ -538,7 +539,7 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         runtime_sif, image_identity = _verified_runtime_location(
             Path(runtime_sif), lock["dorado"]["sif_sha256"]
         )
-        completed = subprocess.run(["apptainer", "exec", str(runtime_sif), "dorado", "--version"], text=True, capture_output=True, check=False, timeout=60)
+        completed = subprocess.run([container_executable("apptainer"), "exec", str(runtime_sif), "dorado", "--version"], text=True, capture_output=True, check=False, timeout=60)
         version = (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ""
         if completed.returncode != 0 or version != lock["dorado"]["version"]:
             raise ValueError("Dorado runtime version identity mismatch")

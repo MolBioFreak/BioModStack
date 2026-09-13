@@ -638,7 +638,7 @@ def _run_component_v1(
             "schema_version": 1,
             "invocation_id": request_value["invocation_id"],
             "argv": argv,
-            "working_directory_policy": "apptainer_containall_v1",
+            "working_directory_policy": "explicit_input_output_binds_v1",
             "bind_policy": bind_policy,
             "sif_path": str(pinned.proc_path),
             "configured_sif_path": configured_container,

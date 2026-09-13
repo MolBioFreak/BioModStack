@@ -70,6 +70,18 @@ def test_resolve_anarcii_runtime_falls_back_to_cpu_without_compatible_gpu(monkey
     assert runtime.gpu_id is None
 
 
+def test_selected_runtime_survives_thread_handoff(monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+    monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/test/bms-container")
+    runtime = ANARCIIRuntime(mode="gpu", gpu_id=3, reason="test", container_path=Path("/test/image.sif"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        command = pool.submit(build_apptainer_exec_command, runtime, ["python3", "-V"]).result()
+    assert command[0] == "/test/bms-container"
+    assert "CUDA_VISIBLE_DEVICES=3" in command
+    assert command[-3:] == ["/test/image.sif", "python3", "-V"]
+
+
 def test_build_apptainer_exec_command_adds_gpu_env() -> None:
     runtime = ANARCIIRuntime(
         mode="gpu",

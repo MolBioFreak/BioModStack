@@ -971,13 +971,21 @@ def _argv_artifact(value: str, expected_name: str) -> None:
         raise ManifestValidationError(f"receipt argv artifact must name {expected_name} lexically")
 
 
+def _receipt_namespace_flags(argv: list[str]) -> list[str]:
+    """Recognize retained Apptainer receipts without claiming userspace isolation."""
+    launcher = argv[0] if argv else ""
+    name = launcher.split("/")[-1]
+    if name not in {"apptainer", "bms-container"} or (name == "bms-container" and not launcher.startswith("/")):
+        raise ManifestValidationError("receipt launcher executable is not a supported scientific runtime")
+    return ["--containall"] if name == "apptainer" and argv[2:3] == ["--containall"] else []
+
+
 def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
     argv = receipt["argv"]
-    if len(argv) != 24:
+    namespace_flags = _receipt_namespace_flags(argv)
+    if len(argv) != 23 + len(namespace_flags):
         raise ManifestValidationError("receipt launcher argv has an unexpected token count")
     launcher = argv[0]
-    if not launcher or launcher.split("/")[-1] != "apptainer":
-        raise ManifestValidationError("receipt launcher executable must be Apptainer")
     sif_path = receipt["sif_path"]
     if (
         not sif_path.startswith("/proc/self/fd/")
@@ -986,7 +994,7 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
         raise ManifestValidationError("receipt SIF path is not a pinned proc-fd path")
     expected = [
         launcher,
-        "exec", "--containall", "--writable-tmpfs", "--nv",
+        "exec", *namespace_flags, "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
         "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
         "--bind", receipt["bind_policy"][0] if len(receipt["bind_policy"]) == 2 else "",
@@ -1020,7 +1028,8 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
         raise ManifestValidationError("receipt read-only input collides with writable output bind")
 
     identity = _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
-    if receipt["working_directory_policy"] != "apptainer_containall_v1":
+    policy = "apptainer_containall_v1" if namespace_flags else "explicit_input_output_binds_v1"
+    if receipt["working_directory_policy"] != policy:
         raise ManifestValidationError("receipt working-directory policy is not canonical")
     if receipt["task_visible_device_index"] != 0:
         raise ManifestValidationError("receipt task-visible GPU index must be zero")
@@ -1952,15 +1961,15 @@ def summarize_landscape_v3(landscape: Mapping[str, Any], effective: Any) -> dict
 def _validate_receipt_argv_predict_batch(receipt: Mapping[str, Any]) -> None:
     command = receipt["commands"][0]
     argv = command["argv"]
-    if len(argv) < 26 or argv[:9] != [
-        argv[0], "exec", "--containall", "--writable-tmpfs", "--nv",
+    namespace_flags = _receipt_namespace_flags(argv)
+    prefix_length = 8 + len(namespace_flags)
+    if len(argv) < 25 + len(namespace_flags) or argv[:prefix_length] != [
+        argv[0], "exec", *namespace_flags, "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
         "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
     ]:
         raise ManifestValidationError("v3 predict_batch launcher prefix is invalid")
-    if not argv[0] or argv[0].split("/")[-1] != "apptainer":
-        raise ManifestValidationError("v3 predict_batch launcher executable must be Apptainer")
-    cursor = 9
+    cursor = prefix_length
     binds: list[str] = []
     while cursor + 1 < len(argv) and argv[cursor] == "--bind":
         binds.append(argv[cursor + 1])
@@ -1998,20 +2007,19 @@ def _validate_receipt_argv_v2(receipt: Mapping[str, Any], configuration: Any) ->
             tail.extend(["--chains", ",".join(command["chains"])])
         if command["positions"] is not None:
             tail.extend(["--positions", ",".join(map(str, command["positions"]))])
-        base_length = 24
+        namespace_flags = _receipt_namespace_flags(argv)
+        base_length = 23 + len(namespace_flags)
         if len(argv) != base_length + len(tail):
             raise ManifestValidationError("v2 receipt launcher argv has an unexpected token count")
         launcher = argv[0]
-        if not launcher or launcher.split("/")[-1] != "apptainer":
-            raise ManifestValidationError("v2 receipt launcher executable must be Apptainer")
-        sif_path = argv[13]
+        sif_path = argv[12 + len(namespace_flags)]
         if not sif_path.startswith("/proc/self/fd/") or not sif_path[14:].isdigit():
             raise ManifestValidationError("v2 receipt SIF path is not descriptor pinned")
         binds = [argv[index + 1] for index, token in enumerate(argv) if token == "--bind"]
         if len(binds) != 2:
             raise ManifestValidationError("v2 receipt bind policy is not exact")
         expected = [
-            launcher, "exec", "--containall", "--writable-tmpfs", "--nv",
+            launcher, "exec", *namespace_flags, "--writable-tmpfs", "--nv",
             "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
             "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
             "--bind", binds[0], "--bind", binds[1], sif_path,
