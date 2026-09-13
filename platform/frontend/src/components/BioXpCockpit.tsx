@@ -241,7 +241,7 @@ export function BioXpCockpit() {
     const [cameraOpen, setCameraOpen] = useState(true);
     const [pipettesOpen, setPipettesOpen] = useState(false);
     const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
-    const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, linkConnected);
+    const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, active);
     // One catalog snapshot owns admission and its embedded dashboard. Cache
     // receipt time never renews the upstream observation's freshness budget.
     const [authorityNow, setAuthorityNow] = useState(Date.now);
@@ -319,8 +319,8 @@ export function BioXpCockpit() {
     const interruptAggregateAbort = useInterruptBioXpOperatorActionV1();
     const invokeXYAction = useInvokeBioXpOperatorActionV2();
     const [xySubmission, setXYSubmission] = useState<{ generation: number; commandId: string; receipt: BioXpOperatorReceiptV2 | null } | null>(null);
-    const currentXYSubmission = linkConnected && xySubmission?.generation === generation ? xySubmission : null;
-    const xyReceiptQuery = useBioXpOperatorReceiptV2(currentXYSubmission?.commandId ?? null, generation, linkConnected);
+    const currentXYSubmission = active && xySubmission?.generation === generation ? xySubmission : null;
+    const xyReceiptQuery = useBioXpOperatorReceiptV2(currentXYSubmission?.commandId ?? null, generation, active);
     const xyReceipt = currentXYSubmission == null ? null
         : xyReceiptQuery.data?.command_id === currentXYSubmission.commandId ? xyReceiptQuery.data : currentXYSubmission.receipt;
     const xyOutcomeUnresolved = currentXYSubmission != null && (xyReceipt == null || !xyReceipt.terminal || xyReceipt.status === 'ambiguous' || xyReceiptQuery.isError);
@@ -422,7 +422,7 @@ export function BioXpCockpit() {
         resetInterruptAggregateAbort();
         resetInvokeXYAction();
         setXYSubmission(null);
-    }, [generation, linkConnected, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZStop, resetInvokeDeckAction, resetInvokeLifecycleAction, resetInvokeXYAction, resetInvokeYAction]);
+    }, [generation, active, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZStop, resetInvokeDeckAction, resetInvokeLifecycleAction, resetInvokeXYAction, resetInvokeYAction]);
     const interruptMutation = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => {
         if (actionId === 'oem.x.stop') return interruptXStop;
         if (actionId === 'oem.y.stop') return interruptYStop;

@@ -849,6 +849,27 @@ describe('primary cockpit query ownership', () => {
         expect(state.catalogArgs.at(-1)).toEqual(original);
         expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(true);
     });
+    it.each(['status-error', 'unreachable'])('retains XY reconciliation identity during %s while normal motion stays blocked', async (fault) => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({ command_id: 'xy-retained', status: 'dispatched', terminal: false }); });
+        if (fault === 'status-error') state.statusError = true;
+        else state.connectionReachable = false;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(state.receiptHookCalls).toContainEqual({ commandId: 'xy-retained', generation: 1, enabled: true });
+        expect(panel().textContent).toContain('XY command pending');
+        expect(button().disabled).toBe(true);
+        state.xyReceipt = { data: { command_id: 'xy-retained', status: 'failed', terminal: true }, error: null, isError: false };
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain('XY command failed');
+        expect(button().disabled).toBe(true);
+        state.statusError = false;
+        state.connectionReachable = true;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain('XY command failed');
+        expect(state.xyCalls).toHaveLength(1);
+    });
     it.each(['completed', 'failed', 'interrupted', 'stopped', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
         await act(async () => { root.render(<BioXpCockpit />); });
         const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;

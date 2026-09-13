@@ -1097,6 +1097,7 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
     # report unknown, not infer either ACK or a Z move from successful delivery.
     expected = copy.deepcopy(compact)
     expected["z_move"] = None
+    expected["xy_failure"] = None
     expected["interrupt_evidence"].update({
         "first_stop_acknowledged": None,
         "second_stop_acknowledged": None,

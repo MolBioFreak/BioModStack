@@ -4320,6 +4320,7 @@ class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
     requested_inputs: dict[str, Any] | None = Field(default=None, max_length=64)
     z_move: OperatorZMoveEvidence | None = None
+    xy_failure: dict[str, JsonValue] | None = None
     canonical_inputs: dict[str, JsonValue] = Field(default_factory=dict)
     requested_values: dict[str, JsonValue] = Field(default_factory=dict)
     effective_values: dict[str, JsonValue] = Field(default_factory=dict)
@@ -5276,6 +5277,7 @@ class OperatorActionReceiptV2(BaseModel):
     physical_effect_verified: StrictBool
     interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
     z_move: OperatorZMoveEvidence | None = None
+    xy_failure: dict[str, JsonValue] | None = None
     error: OperatorReceiptErrorV2 | None
     transport_exchanges: list[OperatorTransportExchangeV2] = Field(default_factory=list)
     transport_retention_errors: list[OperatorTransportRetentionErrorV2] = Field(default_factory=list)

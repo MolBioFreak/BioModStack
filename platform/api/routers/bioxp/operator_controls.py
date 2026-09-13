@@ -1009,7 +1009,7 @@ async def operator_action_receipt(
         payload = await runtime.connection.request_active_query(
             "operator_action_receipt",
             expected_generation=snapshot.generation,
-            require_fresh=True,
+            require_fresh=False,
             path_params={"command_id": command_id},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:

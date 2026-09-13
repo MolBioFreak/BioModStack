@@ -56,8 +56,9 @@ class CameraStreamPayload(BaseModel):
     provenance: str | None = None
 
 
-def _reject_unknown_query(request: Request) -> None:
-    unknown = set(request.query_params.keys()) - _CAMERA_QUERY_FIELDS
+def _reject_unknown_query(request: Request, *, reader_identity: bool = False) -> None:
+    allowed = _CAMERA_QUERY_FIELDS | ({"stream_id"} if reader_identity else set())
+    unknown = set(request.query_params.keys()) - allowed
     if unknown:
         raise HTTPException(
             status_code=422,
@@ -243,9 +244,13 @@ async def _iter_validated_mjpeg(chunks: Any):
 async def proxy_camera_mjpeg(
     request: Request,
     expected_generation: int = Query(ge=1),
+    stream_id: str | None = Query(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> StreamingResponse:
-    _reject_unknown_query(request)
+    # A camera owner can change inside one BMS connection. A distinct image
+    # URL prevents browser decoded-image cache reuse of an ended MJPEG reader.
+    # This is read-only reader identity, not authority or a producer start.
+    _reject_unknown_query(request, reader_identity=True)
     lease = runtime.connection.active_query_lease(
         expected_generation=expected_generation,
         require_fresh=False,
