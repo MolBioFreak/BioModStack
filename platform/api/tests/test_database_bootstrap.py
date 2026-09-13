@@ -45,7 +45,7 @@ def test_full_clean_lifecycle_and_repeat(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     with sqlite3.connect(tmp_path / "core.db") as conn:
         ledger = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
-        assert [row[0] for row in ledger] == list(range(1, 47))
+        assert [row[0] for row in ledger] == list(range(1, 48))
         assert all(len(row[3]) == 64 for row in ledger)
         tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
         for (name,) in tables:
