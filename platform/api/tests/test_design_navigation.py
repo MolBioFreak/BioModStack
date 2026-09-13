@@ -74,8 +74,8 @@ async def test_persisted_producer_identity_drives_every_design_read(tmp_path, mo
         raise AssertionError('model navigation must remain metadata-only')
     monkeypatch.setattr(plr_workflow_results, 'build_protein_local_redesign_result_surface', no_artifact_surface)
     monkeypatch.setattr(plr_workflow_results, '_sha256', no_artifact_surface)
-    # Explicit producer metadata overrides upstream/workflow identity. Without it,
-    # disagreements are unknown; stage tags and filenames alone are not producers.
+    # Keep the recorded producer/model identity ahead of upstream sequence metadata.
+    # Stage tags and filenames alone are not producers.
     cases = [
         ('sequence', {'model_call_family': 'fampnn', 'sequence_design_model': 'fampnn'}, 'fampnn'),
         ('family', {'model_call_family': ' FAMPNN '}, 'fampnn'),
@@ -85,8 +85,8 @@ async def test_persisted_producer_identity_drives_every_design_read(tmp_path, mo
         ('unknown', {'producer_model_id': 'future_model'}, 'future_model'),
         ('missing', None, None),
         ('blank', {'model_id': ' ', 'model_call_family': None}, None),
-        ('conflict', {'model_call_family': 'boltz2', 'sequence_design_model': 'fampnn'}, None),
-        ('stored-conflict', {'model_id': 'boltz2', 'model_call_family': 'fampnn'}, None),
+        ('upstream-sequence', {'model_call_family': 'boltz2', 'sequence_design_model': 'fampnn'}, 'boltz2'),
+        ('stored-model', {'model_id': 'boltz2', 'model_call_family': 'fampnn'}, 'boltz2'),
         ('agree', {'model_id': 'fampnn', 'model_call_family': ' FAMPNN ', 'sequence_design_model': 'fampnn'}, 'fampnn'),
     ]
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'producers.db'}")

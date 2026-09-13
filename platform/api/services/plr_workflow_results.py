@@ -168,7 +168,7 @@ def design_model_identity_expression():
 
     Uses only owning Job/Design metadata, never builds or hashes artifact surfaces.
     Explicit producer identity is distinct from workflow/upstream model identity.
-    Without it, disagreeing persisted model identities remain ungrouped.
+    Recorded model identity keeps precedence over upstream sequence metadata.
     """
     from sqlalchemy import and_, case, func, or_, select
     from database import Design, Job
@@ -208,10 +208,9 @@ def design_model_identity_expression():
     def persisted(key):
         return func.nullif(normalized(Design.provenance[key].as_string()), "")
 
-    identities = [persisted(key) for key in ("model_id", "model_call_family", "sequence_design_model")]
-    candidate = func.coalesce(*identities)
-    agreed = and_(*(or_(identity.is_(None), identity == candidate) for identity in identities))
-    stored = func.coalesce(persisted("producer_model_id"), case((agreed, candidate), else_=None))
+    stored = func.coalesce(*(persisted(key) for key in (
+        "producer_model_id", "model_id", "model_call_family", "sequence_design_model"
+    )))
     # PLR source/reference rows have no native producer, even when an ingester
     # persisted the workflow model_id on every row.
     return select(case((plr_job, native), else_=stored)).where(
