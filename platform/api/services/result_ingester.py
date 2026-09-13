@@ -595,6 +595,16 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
     return fields
 
 
+def _fampnn_producer_identity(payload: Any, structure_path: Optional[Path]) -> Optional[str]:
+    # The native sidecar binds the produced structure, not an upstream sequence
+    # whose scores may also accompany a later prediction. No path/name inference.
+    if (not isinstance(payload, dict) or payload.get("producer_model_id") != "fampnn"
+            or not structure_path or not payload.get("producer_structure_sha256")):
+        return None
+    return ("fampnn" if hashlib.sha256(structure_path.read_bytes()).hexdigest()
+            == payload["producer_structure_sha256"] else None)
+
+
 def _default_fampnn_metrics() -> Dict[str, Any]:
     return {
         "avg_psce": None,
@@ -1910,6 +1920,7 @@ async def ingest_esmfold2_results(
         }
 
         design_fields = {
+            "producer_model_id": "esmfold2",
             "pdb_path": str(structure_path),
             "json_path": str(metrics_path) if metrics_path else (str(manifest_path) if manifest_path.exists() else None),
             "stage_family": "esmfold2",
@@ -2527,6 +2538,7 @@ async def ingest_confornets_results(
         existing_design = _match_existing_confornets_design(existing_designs, structure_path, manifest_entry, sample_entry)
         if existing_design is not None:
             incoming_conf = payload.get("confidence_metrics")
+            existing_design.producer_model_id = "confornets"
             existing_design.name = payload["name"]
             existing_design.pdb_path = payload["pdb_path"]
             existing_design.json_path = payload["json_path"]
@@ -2553,6 +2565,7 @@ async def ingest_confornets_results(
             id=str(uuid.uuid4()),
             job_id=job_id,
             **payload,
+            producer_model_id="confornets",
             is_favorite=False,
             created_at=datetime.utcnow(),
         )
@@ -2874,6 +2887,7 @@ async def _ingest_shape_result_manifest(
             name=name,
             pdb_path=str(structure),
             source_pdb_path=str(source_backbone),
+            producer_model_id="rfd3" if request_spec["sequence_policy"] == "skip" else "esmfold2",
             json_path=str(metrics_path),
             lineage_root_job_id=str(job.id),
             stage_family="shape_blueprint",
@@ -3946,6 +3960,7 @@ def _protein_design_projection_values(
     description = row.get("description", "")
     values: dict[str, Any] = {
         "name": description if description != "" else design.name,
+        "producer_model_id": row.get("producer_method"),
         "backbone_id": (
             parse_backbone_id(description)
             if isinstance(description, str) and description != ""
@@ -4441,6 +4456,7 @@ async def _ingest_rfd3_generation_manifest(
                 id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}")),
                 job_id=job.id,
                 name=candidate["candidate_id"],
+                producer_model_id="rfd3",
                 pdb_path=structure["resolved_path"],
                 json_path=metadata["resolved_path"],
                 lineage_root_job_id=job.lineage_root_job_id or job.id,
@@ -4586,6 +4602,7 @@ async def _ingest_protenix_primary_publications(
     if prior_inventory is not None and not _strict_canonical_json_equal(prior_inventory, inventory):
         raise RuntimeError("Protenix native publication inventory replay conflicts")
     for design, candidate, artifacts in prepared.values():
+        design.producer_model_id = candidate["producer_method"]
         design.provenance = {**(design.provenance or {}), "native_producer": candidate}
         design.confidence_metrics = {**(design.confidence_metrics or {}), "core_protein_candidate_artifacts": artifacts}
     job.provenance = {**(job.provenance or {}), "protenix_primary_publication": inventory,
@@ -4890,7 +4907,7 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
         session.add(Design(
             id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms:sequence-design:{job.id}:{name}')),
             job_id=job.id, name=name, pdb_path=str(structure), json_path=str(metrics),
-            stage_family=job.model_id, stage_mode=job.mode, **fields,
+            stage_family=job.model_id, stage_mode=job.mode, producer_model_id=job.model_id, **fields,
             provenance=provenance, confidence_metrics={job.model_id: native_metrics},
             mpnn_score=safe_float(native_metrics.get('score')) if job.model_id == 'proteinmpnn' else None,
             fampnn_psce=safe_float(native_metrics.get('fampnn_avg_psce')) if job.model_id == 'fampnn' else None,
@@ -4908,11 +4925,16 @@ async def ingest_job_results(
     *,
     commit: bool = True,
 ) -> int:
-    """Import native results in one transaction, or join the caller's transaction."""
+    """Import native results atomically, or join a caller-owned transaction.
+
+    With commit=False the caller owns both commit and rollback, including after
+    partial writes. Native prevalidation failures must not discard its pending work.
+    """
     session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
     current_job = None
     try:
-        current_job = await session.get(Job, job_id)
+        with session.no_autoflush:
+            current_job = await session.get(Job, job_id)
         model_id = str(current_job.model_id or "").strip().lower() if current_job else ""
         # Bind native full-root aggregate evidence before any candidate mutation.
         # Interactive stage publications legitimately have no closeout yet.
@@ -4949,15 +4971,10 @@ async def ingest_job_results(
         else:
             await session.flush()
         return count
-    except Exception as exc:
+    except Exception:
         session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
-        if not commit and isinstance(exc, ShapeNoCandidates) and isinstance(exc.shape_publication, dict):
-            from .result_state_integrity import _authoritative_result_count
-            if current_job is not None and await _authoritative_result_count(session, current_job) == 0:
-                # Native finalization owns this validated no-yield disposition and
-                # must retain the caller's generation/publication transaction.
-                raise
-        await session.rollback()
+        if commit:
+            await session.rollback()
         raise
 
 
@@ -5453,6 +5470,7 @@ async def _ingest_job_results(
                     ) or str(uuid.uuid4())
                     design = Design(
                         id=design_id,
+                        producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
                         job_id=job_id,
                         name=design_name,
                         pdb_path=str(structure_path) if structure_path else None,
@@ -6607,6 +6625,7 @@ async def ingest_published_maturation_structures(
             json_path=str(fam_json_path) if fam_json_path else None,
             backbone_id=parse_backbone_id(design_name),
             **_design_lineage_fields(job_context, lineage),
+            producer_model_id="ppiflow",
             stage_family=job_context.get("stage_family") or "ppiflow",
             stage_mode=job_context.get("stage_mode") or "maturation",
             selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -6768,6 +6787,7 @@ async def ingest_collected_ppiflow_structures(
                     or job_context.get("artifact_class")
                 ),
             ),
+            producer_model_id="ppiflow",
             stage_family="ppiflow",
             stage_mode=ingested_stage_mode,
             selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -7091,6 +7111,7 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(structure_path),
                     json_path=str(json_file) if json_file else (str(fam_json_path) if fam_json_path.exists() else None),
+                    producer_model_id="boltz2",
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
@@ -7253,6 +7274,7 @@ async def ingest_loose_files(
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
+                    producer_model_id="rf3",
                     
                     # Metrics
                     plddt_overall=safe_float(plddt),
@@ -7447,6 +7469,7 @@ async def ingest_loose_files(
                     stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
+                    producer_model_id="protenix",
                     **_geometry_design_fields(geometry_fields),
 
                     plddt_overall=safe_float(plddt),
@@ -7752,6 +7775,7 @@ async def ingest_loose_files(
                     stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
+                    producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
                     

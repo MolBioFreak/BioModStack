@@ -816,7 +816,7 @@ export interface HardwareDiscoveryResponse {
 
 // API functions
 // API functions
-export const fetchJobs = (params?: {
+export const fetchJobs = async (params?: {
     status?: string;
     q?: string;
     model_id?: string;
@@ -825,13 +825,22 @@ export const fetchJobs = (params?: {
     offset?: number;
     include_children?: boolean;
     summary?: boolean;
-}) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
-    params: {
-        ...params,
-        limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
-        summary: params?.summary ?? true,
-    },
-});
+}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }) => {
+    const etag = previous?.headers.etag;
+    const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
+        params: {
+            ...params,
+            limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
+            summary: params?.summary ?? true,
+        },
+        headers: typeof etag === 'string' ? { 'If-None-Match': etag } : undefined,
+        validateStatus: status => (status >= 200 && status < 300) || (status === 304 && !!previous),
+    });
+    // The validator and payload belong to the caller's exact query entry.
+    // Keep ordinary auth/network failures rejected, never serve stale-on-error.
+    if (response.status === 304 && previous) return { ...response, data: previous.data };
+    return response;
+};
 // Bound live telemetry requests so a half-open connection cannot permanently
 // occupy the shared collector and suppress its recovery/backoff loop.
 export interface TelemetryHistoryPoint {
@@ -2535,7 +2544,7 @@ export const fetchJobDesignMetrics = (jobId: string) =>
     api.get<unknown>(`/api/analytics/job/${jobId}/designs`).then(response => ({...response, data: parseMetricPoints(response.data)}));
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
-    api.post<BatchAnalytics>('/api/analytics/batch', { job_ids: jobIds }).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
+    api.post<BatchAnalytics>('/api/analytics/batch', jobIds).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 // Structure Analysis (Biotite-powered)
 export interface StructureAnalysis {

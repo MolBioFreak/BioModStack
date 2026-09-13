@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "4c2014bd50792010784242f6250a16dd5eb48a4634532ed6bab1b23dda86b9af",
+  "content_sha256": "0c0d60e1c42e205430345d755c210762e01fa227460d2d89a2a4b98c8c5b9fe2",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -69,8 +69,8 @@
     },
     {
       "path": "biomodstack_services.py",
-      "sha256": "00ffd142098fcdd77bb614a48323e13a14bd135a4431a9ee235cba9ac1637f39",
-      "size_bytes": 114380
+      "sha256": "f9d20c6b6a7fa9ae4876c47e28304996f1af9589af03839e8f413e2c4f7e8a25",
+      "size_bytes": 114420
     },
     {
       "path": "config/ngs/dorado_v1.3.1.lock.json",
@@ -289,8 +289,8 @@
     },
     {
       "path": "platform/api/database.py",
-      "sha256": "0d5cb7e25f599720848c7295e80689ae5474945c5c8c9e9664a57f11a79a3e1a",
-      "size_bytes": 158519
+      "sha256": "e2027cfbfe8569e6d683fbe018591e9ea4632f0597d4607542df2a7e6c980d13",
+      "size_bytes": 158667
     },
     {
       "path": "platform/api/experiment_database.py",
@@ -359,8 +359,8 @@
     },
     {
       "path": "platform/api/migrations/runner.py",
-      "sha256": "44133716c816cba5ad5140a1d5381c5a2f91b2f02545a57f1bdbd628c65b5db2",
-      "size_bytes": 24337
+      "sha256": "6428a71d1e783274c739ef7d792cda1a64f7a58838acf1c48df433a1a78872d6",
+      "size_bytes": 24518
     },
     {
       "path": "platform/api/migrations/seal_ont_external_move_bam_receipt_binding.py",
@@ -464,8 +464,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "0e10f57ce1f762654ea011a20519bd9db87f67edcf5dde85cc7e588ca4b708f2",
-      "size_bytes": 481177
+      "sha256": "5ddae0664cae5744b4266d89213f0729ab89e8a40edc3ce9936ba027fc9842e4",
+      "size_bytes": 481959
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -849,13 +849,13 @@
     },
     {
       "path": "platform/api/telemetry_store.py",
-      "sha256": "755b64e321d753f0e3211bb692e4926d47eb4d296f97e2a126d66ad7bd4735c7",
-      "size_bytes": 96841
+      "sha256": "7d84432cf951e3efd7ac2a22477eeba66e8292f8ee360e84147c6e50ac3159c0",
+      "size_bytes": 97315
     },
     {
       "path": "platform/api/tests/test_biomodstack_services.py",
-      "sha256": "a54374a3350571d0d09fdc82ac207dfb7a7d535c76e9f230a37c21620685f8d7",
-      "size_bytes": 82369
+      "sha256": "b004cc84110abd35a902c8ca367e6aab14b7e13d50689302dd584e507768757d",
+      "size_bytes": 82933
     },
     {
       "path": "platform/api/tests/test_core_runtime_workflow_guard.py",
@@ -1114,8 +1114,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "155d14cc508232e8d4679736f2edb1719cad128d522ad4b1c9ba667427edd10b",
-      "size_bytes": 221483
+      "sha256": "cbc1581edd1d8d38e7195adaf1a4c85927a586e22da1df1a0c02a5e43488747c",
+      "size_bytes": 222111
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1204,8 +1204,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "d0c79e708aa655cc1b83c5d3da6b18b51d0042e16f103c82567dc7b685bf1845",
-      "size_bytes": 6409
+      "sha256": "519ac36c5fa12f112fd130481e7889c26b4dd8944fdc8f249ccd271b40dba543",
+      "size_bytes": 6587
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1432,8 +1432,8 @@
     "content_sha256": "46e82fdb7f6d526dd02c231efb6675a4f47c5709284a9cafd1e8758cf30a924f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "acc8d8deedd9bcb194a99083162647949fdce93c",
-  "successor_source_tree": "9e99af1e1bf9cbfcc6339619dae876c327206d78",
+  "successor_source_commit": "836778cda7af3961c95248a0d5b5bdfb6fb5e10b",
+  "successor_source_tree": "1b28b7ff4478ec1138bdbad0cd74debb20191871",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

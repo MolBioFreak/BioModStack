@@ -5127,7 +5127,7 @@ export function ResultsViewer() {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
     }
     if (requestedDesignId && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
-        || (scopedModelId && selectedDesign && (selectedDesign.provenance?.producer_model_id ?? selectedDesign.provenance?.model_id) !== scopedModelId))) {
+        || (scopedModelId && selectedDesign && selectedDesign.provenance?.producer_model_id !== scopedModelId))) {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
 

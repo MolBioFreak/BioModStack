@@ -188,7 +188,6 @@ export function resampleTelemetrySamples(samples: readonly LiveSample[], bucketI
             timestamp,
             timestampMs: bucketStartMs,
             pollIntervalMs: bucket.at(-1)?.pollIntervalMs ?? 1000,
-            clock: timestamp.slice(11, 19),
             cpuUtil: average(bucket.map((sample) => sample.cpuUtil)),
             cpuFreqMhz: average(bucket.map((sample) => sample.cpuFreqMhz)),
             cpuPower: averageNullable(bucket.map((sample) => sample.cpuPower)),
@@ -210,7 +209,6 @@ export interface LiveSample {
     timestamp: string;
     timestampMs: number;
     pollIntervalMs: PollPreset;
-    clock: string;
     cpuUtil: number;
     cpuFreqMhz: number;
     cpuPower: number | null;

@@ -426,7 +426,7 @@ export const parseFrustraMpnnSettingsValidationPreview = (
     if (payload.queue_resolution_requirement !== 'submission_must_re_resolve_governed_source') {
         throw new Error('queue_resolution_requirement is invalid');
     }
-    const effective = parseFrustraMpnnEffectiveSettingsProjection(payload.effective_settings, true);
+    const effective = parseFrustraMpnnEffectiveSettingsProjection(payload.effective_settings);
     const configurationKeys = [
         'configuration_id', 'schema_name', 'schema_version', 'tool_id', 'tool_version',
         'effective_settings', 'settings_value_origin', 'requested_settings_sha256', 'effective_settings_sha256',
@@ -466,7 +466,7 @@ export const parseFrustraMpnnSettingsValidationPreview = (
     fmSha256(configuration.structure_map_sha256, 'execution_configuration.structure_map_sha256');
     fmSha256(configuration.normalized_pdb_sha256, 'execution_configuration.normalized_pdb_sha256');
     fmSha256(configuration.configuration_sha256, 'execution_configuration.configuration_sha256');
-    parseFrustraMpnnEffectiveSettingsProjection(configuration.effective_settings, true);
+    parseFrustraMpnnEffectiveSettingsProjection(configuration.effective_settings);
     const runtime = fmClosedProjection(
         configuration.runtime,
         'execution_configuration.runtime',
@@ -873,12 +873,12 @@ export interface FrustraMpnnEffectiveSettingsProjection {
         entity: FrustraMpnnInspectableEntity;
         pdb_chain_id: string;
         residues: Array<FrustraMpnnInspectableResidue & {
-            label_seq_id?: number | null;
+            label_seq_id: number | null;
             pdb_chain_id: string;
-            pdb_residue_id?: number;
-            pdb_insertion_code?: string;
+            pdb_residue_id: number;
+            pdb_insertion_code: string;
             model_position: number;
-            residue_name?: string;
+            residue_name: string;
         }>;
     }>;
     normalization_policy_id: 'frustrampnn_structure_normalizer';
@@ -1581,9 +1581,13 @@ const parsePersistedRequestedSettingsProjection = (
     const payload = fmClosedProjection(
         wire,
         label,
-        keys,
+        [...keys, 'batching_enabled', 'structures_per_job'],
         keys,
     );
+    if (historical && (
+        ('batching_enabled' in payload && payload.batching_enabled !== false)
+        || ('structures_per_job' in payload && payload.structures_per_job !== 1)
+    )) throw new Error(`${label} v1 batching defaults are invalid`);
     if (payload.settings_value_origin !== 'bms_default' && payload.settings_value_origin !== 'operator_request') {
         throw new Error(`${label}.settings_value_origin is invalid`);
     }
@@ -1614,7 +1618,6 @@ const fmValueOrigin = (value: unknown, label: string): 'bms_default' | 'operator
 
 export const parseFrustraMpnnEffectiveSettingsProjection = (
     value: unknown,
-    requireResidueAnnotations = false,
 ): FrustraMpnnEffectiveSettingsProjection => {
     const keys = [
         'schema_name', 'schema_version', 'requested_settings', 'settings_value_origin', 'resolved_chains',
@@ -1656,29 +1659,26 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             residues: chain.residues.map((residueValue, residueIndex) => {
                 const residueLabel = `${chainLabel}.residues[${residueIndex}]`;
                 const residueKeys = ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'label_seq_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index', 'wt', 'pdb_chain_id', 'pdb_residue_id', 'pdb_insertion_code', 'model_position', 'residue_name'] as const;
-                const historicalAnnotations = ['label_seq_id', 'pdb_residue_id', 'pdb_insertion_code', 'residue_name'];
-                const residue = fmClosedProjection(residueValue, residueLabel, residueKeys,
-                    payload.schema_version === 1 && !requireResidueAnnotations ? residueKeys.filter((key) => !historicalAnnotations.includes(key)) : residueKeys);
+                const residue = fmClosedProjection(residueValue, residueLabel, residueKeys, residueKeys);
                 const wt = fmString(residue.wt, `${residueLabel}.wt`);
                 if (!/^[ACDEFGHIKLMNPQRSTVWY]$/.test(wt)) throw new Error(`${residueLabel}.wt is invalid`);
-                const pdbResidueId = 'pdb_residue_id' in residue
-                    ? fmInteger(residue.pdb_residue_id, `${residueLabel}.pdb_residue_id`, -999) : undefined;
-                if (pdbResidueId !== undefined && pdbResidueId > 9999) throw new Error(`${residueLabel}.pdb_residue_id is invalid`);
+                const pdbResidueId = fmInteger(residue.pdb_residue_id, `${residueLabel}.pdb_residue_id`, -999);
+                if (pdbResidueId > 9999) throw new Error(`${residueLabel}.pdb_residue_id is invalid`);
                 return {
                     entity_instance_id: fmString(residue.entity_instance_id, `${residueLabel}.entity_instance_id`),
                     source_entity_id: fmNullableString(residue.source_entity_id, `${residueLabel}.source_entity_id`),
                     label_asym_id: fmNullableString(residue.label_asym_id, `${residueLabel}.label_asym_id`),
-                    ...('label_seq_id' in residue ? { label_seq_id: fmOptionalInteger(residue.label_seq_id, `${residueLabel}.label_seq_id`, 1) } : {}),
+                    label_seq_id: fmOptionalInteger(residue.label_seq_id, `${residueLabel}.label_seq_id`, 1),
                     auth_asym_id: fmString(residue.auth_asym_id, `${residueLabel}.auth_asym_id`),
                     auth_seq_id: fmInteger(residue.auth_seq_id, `${residueLabel}.auth_seq_id`),
                     insertion_code: fmString(residue.insertion_code, `${residueLabel}.insertion_code`, true),
                     sequence_index: fmInteger(residue.sequence_index, `${residueLabel}.sequence_index`, 1),
                     wt,
                     pdb_chain_id: fmString(residue.pdb_chain_id, `${residueLabel}.pdb_chain_id`),
-                    ...(pdbResidueId !== undefined ? { pdb_residue_id: pdbResidueId } : {}),
-                    ...('pdb_insertion_code' in residue ? { pdb_insertion_code: fmPdbInsertionCode(residue.pdb_insertion_code, `${residueLabel}.pdb_insertion_code`) } : {}),
+                    pdb_residue_id: pdbResidueId,
+                    pdb_insertion_code: fmPdbInsertionCode(residue.pdb_insertion_code, `${residueLabel}.pdb_insertion_code`),
                     model_position: fmInteger(residue.model_position, `${residueLabel}.model_position`, 0),
-                    ...('residue_name' in residue ? { residue_name: fmResidueName(residue.residue_name, `${residueLabel}.residue_name`) } : {}),
+                    residue_name: fmResidueName(residue.residue_name, `${residueLabel}.residue_name`),
                 };
             }),
         };
@@ -1690,7 +1690,7 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
     const valueSources = fmClosedProjection(
         payload.value_sources,
         'effective_settings.value_sources',
-        valueSourceKeys,
+        ['batching_enabled', 'structures_per_job', 'protein_selection', 'source_structure', 'classification_policy'],
         valueSourceKeys,
     );
     const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'regions', 'residues'], ['mode', 'entities', 'residues']);
@@ -1720,10 +1720,10 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             normalized_pdb_sha256: fmSha256(resolution.normalized_pdb_sha256, 'effective_settings.resolution_identity.normalized_pdb_sha256'),
         },
         value_sources: {
-            batching_enabled: payload.schema_version === 1
+            batching_enabled: valueSources.batching_enabled === undefined
                 ? settingsValueOrigin
                 : fmValueOrigin(valueSources.batching_enabled, 'effective_settings.value_sources.batching_enabled'),
-            structures_per_job: payload.schema_version === 1
+            structures_per_job: valueSources.structures_per_job === undefined
                 ? settingsValueOrigin
                 : fmValueOrigin(valueSources.structures_per_job, 'effective_settings.value_sources.structures_per_job'),
             protein_selection: {
@@ -1819,7 +1819,7 @@ export const parseFrustraMpnnChildReceipt = (
             structure_map_sha256: fmOptionalSha256(candidate.structure_map_sha256, `${label}.structure_map_sha256`),
             settings_value_origin: candidateOrigin,
             requested_settings_sha256: fmOptionalSha256(candidate.requested_settings_sha256, `${label}.requested_settings_sha256`),
-            effective_settings: candidate.effective_settings === null ? null : parseFrustraMpnnEffectiveSettingsProjection(candidate.effective_settings, true),
+            effective_settings: candidate.effective_settings === null ? null : parseFrustraMpnnEffectiveSettingsProjection(candidate.effective_settings),
             effective_settings_sha256: fmOptionalSha256(candidate.effective_settings_sha256, `${label}.effective_settings_sha256`),
             capability_inventory_byte_sha256: fmOptionalSha256(candidate.capability_inventory_byte_sha256, `${label}.capability_inventory_byte_sha256`),
             classification_policy_sha256: fmOptionalSha256(candidate.classification_policy_sha256, `${label}.classification_policy_sha256`),

@@ -40,6 +40,28 @@ def test_frontend_install_uses_repository_pnpm_workspace_lock(tmp_path: Path) ->
     assert cwd == tmp_path
 
 
+def test_start_selects_nonprofiling_frontend_without_switching_isolated_api(tmp_path: Path, monkeypatch) -> None:
+    from argparse import Namespace
+
+    manager = load_manager_module()
+    worktree = tmp_path / "worktree"
+    (worktree / "platform/frontend/node_modules").mkdir(parents=True)
+    receipt = {"worktree": str(worktree), "state_root": str(tmp_path / "state"), "api_port": 19001, "web_port": 19002}
+    commands = []
+    monkeypatch.setattr(manager, "load_receipt", lambda _: receipt)
+    monkeypatch.setattr(manager, "save_receipt", lambda _: None)
+    monkeypatch.setattr(manager, "systemctl", lambda *args, **kwargs: None)
+    monkeypatch.setattr(manager, "wait_http", lambda _: None)
+    monkeypatch.setattr(manager, "run", lambda command: commands.append(command))
+    manager.command_start(Namespace(id="test-memory"))
+    api, web = commands
+    assert "--setenv=NODE_ENV=production" in web
+    assert not any("NODE_ENV" in arg for arg in api)
+    assert "--setenv=BMS_API_MODE=dev" in api
+    assert "--setenv=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:19001" in web
+    assert web[-1] == "19002"
+
+
 def run(*args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     if env:

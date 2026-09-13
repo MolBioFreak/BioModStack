@@ -429,6 +429,80 @@ async def test_replay_json_types_reject_without_repair_or_autoflush(tmp_path, da
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('owner', ['ingester', 'finalizer', 'reingest_route'])
+async def test_publication_owner_rolls_back_after_native_rows_flushed(tmp_path, monkeypatch, owner):
+    from database import Job
+    from services import result_ingester
+    from services.result_state_integrity import finalize_successful_job
+    from routers.jobs import reingest_job_results
+
+    publication(tmp_path, count=2)
+    factory, engine = await setup(tmp_path)
+    reached = []
+
+    async def fail_component(current, output, session, **kwargs):
+        # The real native writer has deleted stage rows, inserted both candidates,
+        # and flushed its publication receipt before this later component fails.
+        rows = list((await session.execute(select(Design))).scalars())
+        assert len(rows) == 2 and all(row.source_stage is None for row in rows)
+        assert 'core_protein_candidate_publication' in current.provenance
+        reached.append(True)
+        raise RuntimeError('injected component failure after native flush')
+
+    monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', fail_component)
+    try:
+        async with factory() as session:
+            current = job(tmp_path)
+            session.add_all([current, Design(id='review', job_id='job', name='keep',
+                                            source_stage='review', pdb_path='review.pdb')])
+            await session.commit()
+            if owner == 'ingester':
+                with pytest.raises(RuntimeError, match='injected component failure'):
+                    await ingest_job_results('job', str(tmp_path), session)
+            elif owner == 'finalizer':
+                result = await finalize_successful_job(current, str(tmp_path), session)
+                assert not result.completed
+            else:
+                result = await reingest_job_results('job', include_children=False, session=session)
+                assert result['designs_created'] == result['designs_deleted'] == 0
+        assert reached == [True]
+        async with factory() as observer:
+            rows = list((await observer.execute(select(Design))).scalars())
+            assert [(row.id, row.name) for row in rows] == [('review', 'keep')]
+            current = await observer.get(Job, 'job')
+            assert 'core_protein_candidate_publication' not in current.provenance
+            assert current.status != 'completed'
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_invalid_publication_uncached_job_read_does_not_flush_caller(tmp_path):
+    from sqlalchemy import event
+    publication(tmp_path)
+    factory, engine = await setup(tmp_path)
+    try:
+        async with factory() as session:
+            current = job(tmp_path)
+            session.add(current)
+            await session.commit()
+            session.expunge(current)
+            pending = Design(id='caller', job_id='job', name='pending', source_stage='review', pdb_path='review.pdb')
+            session.add(pending)
+            (tmp_path / 'scientific/boltz/sample/producer_candidates.json').write_text('{}')
+            flushed = []
+            event.listen(session.sync_session, 'before_flush', lambda *args: flushed.append(True))
+            with pytest.raises(RuntimeError):
+                await ingest_job_results('job', str(tmp_path), session, commit=False)
+            assert not flushed and pending in session.new
+            await session.commit()
+        async with factory() as observer:
+            assert (await observer.get(Design, 'caller')).name == 'pending'
+    finally:
+        await engine.dispose()
+
+
 def test_transport_keeps_task_scoped_manifest_and_native_artifacts():
     source = (ROOT / 'modules/structure_prediction.nf').read_text()
     for process in ['BoltzFromSequenceTask', 'BoltzFromSequenceWithMSATask', 'BoltzFromComplex']:

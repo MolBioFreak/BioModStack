@@ -287,7 +287,7 @@ async def ingest_verified_boltz(job, root, session, *, commit):
     await session.execute(delete(Design).where(Design.job_id == job.id, Design.source_stage.is_not(None)))
     for document, candidate in prepared.items():
         artifacts = candidate['artifacts']
-        session.add(Design(id=candidate['id'], job_id=job.id, name=document,
+        session.add(Design(id=candidate['id'], job_id=job.id, name=document, producer_model_id='boltz2',
             pdb_path=artifacts['structure']['path'], json_path=artifacts['metrics']['path'],
             # Existing review/analysis admission needs the actual artifact, not
             # a copied readiness claim. Scientific reads still reverify native

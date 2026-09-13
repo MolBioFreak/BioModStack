@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_ENV=production vite",
     "build": "tsc -b && vite build",
     "build:isolated": "BMS_FRONTEND_BUILD_OUT_DIR=${BMS_FRONTEND_BUILD_OUT_DIR:-.artifacts/frontend-dist} pnpm run build",
     "lint": "eslint .",

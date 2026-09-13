@@ -36,8 +36,10 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.doesNotMatch(telemetrySource, /'minute'|mergeMinuteHistoryWithRawTail|downsampleTelemetryTail|MINUTE_LIVE_TAIL_MS/);
     assert.match(telemetrySource, /refetchInterval: usesRangeAwareDisplay \? false : displayIntervalMs/);
     assert.match(telemetrySource, /useTelemetryChartRefresh\(\s*historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes/);
-    assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
-    assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
+    assert.match(telemetrySource, /const liveStatusQuery = useSystemStatus\(pollIntervalMs\)/);
+    const collectorSource = readFileSync('src/lib/useSystemStatus.ts', 'utf8');
+    assert.match(collectorSource, /queryFn: fetchSystemStatus/);
+    assert.match(collectorSource, /jobPollingInterval\(interval, query\)/);
     assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data;/);
     assert.doesNotMatch(
         telemetrySource,
@@ -238,7 +240,6 @@ test('raw telemetry is averaged into aligned buckets with an in-place partial en
         timestamp: new Date(timestampMs).toISOString(),
         timestampMs,
         pollIntervalMs: 1000,
-        clock: '',
         cpuUtil: value,
         cpuFreqMhz: value * 100,
         cpuPower: value,

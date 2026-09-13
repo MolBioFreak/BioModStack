@@ -253,7 +253,27 @@ async def test_concurrent_completion_creates_one_child(admission, monkeypatch):
     _, factory = admission
     owner, members, pdb = await admit_seed(admission, monkeypatch)
     await complete(factory, members, pdb)
+    # Force both real finalizers past approval validation before either may
+    # claim. Retain the physical driver identities: distinct Sessions alone
+    # would not prove a race if a fixture regressed to StaticPool.
+    import services.declared_job_expansion as expansion
+    original_validate = expansion.validate
+    participants = []
+    ready = asyncio.Event()
+    async def rendezvous(coordinator, session):
+        result = await original_validate(coordinator, session)
+        if len(participants) < len(members):
+            connection = await session.connection()
+            raw = await connection.get_raw_connection()
+            participants.append(raw.driver_connection)
+            if len(participants) == len(members):
+                ready.set()
+            await asyncio.wait_for(ready.wait(), timeout=5)
+        return result
+    monkeypatch.setattr(expansion, 'validate', rendezvous)
     await asyncio.gather(*(trigger(factory, key) for key in members))
+    assert len(participants) == len(members) and len(members) > 1
+    assert len({id(connection) for connection in participants}) == len(members)
     await trigger(factory, members[0])
     async with factory() as session:
         assert await session.get(Job, child_id(owner)) is not None

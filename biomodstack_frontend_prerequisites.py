@@ -281,6 +281,9 @@ def launch(project_root: Path, args: list[str]) -> None:
         if not vite.is_file():
             raise PrerequisiteError("environment_missing", "Vite missing; run ./start_ui.sh frontend-bootstrap")
         resolved = dict(node=node, vite=str(vite), cwd=str(vite.parents[3]), env=environment(location(project_root)))
+    # React's development performance tracks retain render diagnostics indefinitely.
+    # This selects the non-profiling runtime, not the API environment or Vite mode.
+    resolved["env"]["NODE_ENV"] = "production"
     os.chdir(resolved["cwd"])
     os.execve(resolved["node"], [resolved["node"], resolved["vite"], *args], resolved["env"])
 

@@ -13,11 +13,8 @@ interface TimeSeriesLine {
     axis?: AxisConfig;
     x?: Array<string | number | null>;
     y?: Array<number | null>;
-    customdata?: unknown[];
     name?: string;
-    mode?: string;
-    line?: { color?: string; width?: number; shape?: string; simplify?: boolean };
-    hovertemplate?: string;
+    line?: { color?: string; width?: number };
 }
 interface TimeSeriesPlotProps {
     height: number;
@@ -25,9 +22,6 @@ interface TimeSeriesPlotProps {
     yAxis: AxisConfig;
     series: TimeSeriesLine[];
     showXAxisLabels?: boolean;
-    traceType?: 'scatter' | 'scattergl';
-    compact?: boolean;
-    redrawKey?: string | number;
     xDomain?: [number, number];
 }
 

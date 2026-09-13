@@ -5,15 +5,17 @@
  * Can be controlled externally via selectedJobId prop for integration with other components
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { StructureViewerErrorBoundary } from '../structureViewer/StructureViewerErrorBoundary';
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchFullJob, fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob } from '../lib/ngsResultRouting';
 import { getJobOutputSummary } from '../lib/jobOutputSummary';
+
+const StructureWorkbench = lazy(() => import('../structureViewer/StructureWorkbench').then(module => ({ default: module.StructureWorkbench })));
 
 const QUICK_VIEWER_COMPACT_KEY = 'bms_dashboard_quick_viewer_compact_v1';
 type QuickViewerSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -141,10 +143,11 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         }
     };
 
+    const queryClient = useQueryClient();
     // Fetch jobs
     const { data: jobsData } = useQuery({
         queryKey: ['jobs', 'quick-viewer-summary'],
-        queryFn: () => fetchJobs({ status: 'completed', limit: 100, summary: true }),
+        queryFn: ({ queryKey }) => fetchJobs({ status: 'completed', limit: 100, summary: true }, queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey)),
         refetchInterval: (query) => jobPollingInterval(3000, query),
     });
     const { data: selectedJobData } = useQuery({
@@ -358,6 +361,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                 style={{ position: 'relative', zIndex: 0 }}
             >
                 {structureUrl ? (
+                    <StructureViewerErrorBoundary resetKey={structureUrl} height={viewerHeight}>
+                    <Suspense fallback={<div role="status" style={{ height: viewerHeight }}>Loading structure viewer…</div>}>
                     <StructureWorkbench
                         mode="compact"
                         structureUrl={structureUrl}
@@ -368,6 +373,8 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
                         height={viewerHeight}
                         backgroundColor="#0f172a"
                     />
+                    </Suspense>
+                    </StructureViewerErrorBoundary>
                 ) : (
                     <div
                         className="flex items-center justify-center text-slate-500 text-sm transition-all duration-300"

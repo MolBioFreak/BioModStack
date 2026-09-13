@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -49,6 +49,7 @@ import type {
     PollPreset,
     WindowPreset,
 } from './infraTelemetryHistory';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
@@ -56,7 +57,7 @@ const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
 const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
-const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
+const EMPTY_HISTORY_POINTS: TelemetryChartPoint[] = [];
 
 const POLL_PRESETS: ReadonlyArray<{ value: PollPreset; label: string }> = [
     { value: 1000, label: '1s' },
@@ -164,15 +165,6 @@ const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSiz
     },
 };
 
-
-function formatClock(timestamp: string): string {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    });
-}
 
 function PanelFrame({
     title,
@@ -325,15 +317,13 @@ function shouldBreakBetweenSamples(previous: LiveSample, current: LiveSample, de
     return current.timestampMs - previous.timestampMs > sampleGapAllowance(previous, current, defaultGapBreakMs);
 }
 
-function buildGapAwareTraceData<T = number>(
+function buildGapAwareTraceData(
     samples: LiveSample[],
     gapBreakMs: number,
     valueForSample: (sample: LiveSample) => number | null,
-    customForSample?: (sample: LiveSample) => T | null,
-): { x: string[]; y: Array<number | null>; customdata?: Array<T | null> } {
+): { x: string[]; y: Array<number | null> } {
     const x: string[] = [];
     const y: Array<number | null> = [];
-    const customdata: Array<T | null> = [];
 
     for (let index = 0; index < samples.length; index += 1) {
         const sample = samples[index];
@@ -341,17 +331,13 @@ function buildGapAwareTraceData<T = number>(
         if (previous && shouldBreakBetweenSamples(previous, sample, gapBreakMs)) {
             x.push(sample.timestamp);
             y.push(null);
-            if (customForSample) customdata.push(null);
         }
 
         x.push(sample.timestamp);
         y.push(valueForSample(sample));
-        if (customForSample) {
-            customdata.push(customForSample(sample));
-        }
     }
 
-    return customForSample ? { x, y, customdata } : { x, y };
+    return { x, y };
 }
 
 function toPercent(value: number, maxValue: number): number {
@@ -808,9 +794,7 @@ function CpuPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     current: SystemStatus['cpu'];
@@ -819,9 +803,7 @@ function CpuPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const cpuPowerSubtitle = current.power_telemetry && !current.power_telemetry.available
@@ -831,18 +813,15 @@ function CpuPanel({
         samples,
         gapBreakMs,
         (sample) => sample.cpuFreqMhz / 1000,
-        (sample) => sample.cpuFreqMhz / 1000,
     );
     const cpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
         (sample) => sample.cpuPower,
-        (sample) => sample.cpuPower == null ? null : sample.cpuPower,
     );
     const cpuTempTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.cpuTemp ?? null,
         (sample) => sample.cpuTemp ?? null,
     );
 
@@ -853,52 +832,38 @@ function CpuPanel({
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
                     yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
                     xDomain={xDomain}
                     series={[
                         {
                             x: cpuUtilTrace.x,
                             y: cpuUtilTrace.y,
                             axis: { title: 'CPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
-                            mode: 'lines',
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'CPU %{y:.1f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: cpuFreqTrace.x,
                             y: cpuFreqTrace.y,
                             axis: { title: 'Frequency', color: PLOT_TICK, suffix: ' GHz' },
-                            customdata: cpuFreqTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Freq', `${(current.frequency_current_mhz / 1000).toFixed(2)} GHz`),
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Freq %{customdata:.2f} GHz<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                         {
                             x: cpuPowerTrace.x,
                             y: cpuPowerTrace.y,
                             axis: { title: 'Package power', color: PLOT_TICK, suffix: ' W' },
-                            customdata: cpuPowerTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Power', current.power_watts != null ? `${current.power_watts.toFixed(0)}W` : 'n/a'),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Package %{customdata:.0f} W<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: cpuTempTrace.x,
                             y: cpuTempTrace.y,
                             axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
-                            customdata: cpuTempTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Temp', current.temperature != null ? `${current.temperature.toFixed(1)}C` : 'n/a'),
-                            line: { color: '#f472b6', width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Temp %{customdata:.1f} C<extra></extra>',
+                            line: { color: '#f472b6', width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -912,9 +877,7 @@ function RamPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     current: SystemStatus['ram'];
@@ -923,21 +886,17 @@ function RamPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const ramUsedTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
         (sample) => sample.ramUsed,
-        (sample) => sample.ramUsed,
     );
     const ramFreeTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.ramFree,
         (sample) => sample.ramFree,
     );
     const ramUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.ramUtil);
@@ -950,51 +909,38 @@ function RamPanel({
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
                     yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
                     xDomain={xDomain}
                     series={[
                         {
                             x: ramUsedTrace.x,
                             y: ramUsedTrace.y,
                             axis: { title: 'Used memory', color: PLOT_TICK, suffix: ' GB' },
-                            customdata: ramUsedTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Used', `${current.used_gb.toFixed(1)} GB`),
-                            line: { color: UI_LINK, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'Used %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_LINK, width: 1.55 },
                         },
                         {
                             x: ramFreeTrace.x,
                             y: ramFreeTrace.y,
                             axis: { title: 'Available memory', color: PLOT_TICK, suffix: ' GB' },
-                            customdata: ramFreeTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Free', `${current.available_gb.toFixed(1)} GB`),
-                            line: { color: UI_SUCCESS, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Free %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.4 },
                         },
                         {
                             x: ramUtilTrace.x,
                             y: ramUtilTrace.y,
                             axis: { title: 'RAM utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
-                            mode: 'lines',
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'RAM %{y:.1f}%<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: ramSwapTrace.x,
                             y: ramSwapTrace.y,
                             axis: { title: 'Swap utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
-                            mode: 'lines',
                             name: legendName('Swap', `${current.swap_percent.toFixed(1)}%`),
-                            line: { color: UI_ACCENT, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Swap %{y:.1f}%<extra></extra>',
+                            line: { color: UI_ACCENT, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -1008,10 +954,8 @@ function GpuPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     powerControls,
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     gpu: GPUStatus;
@@ -1020,10 +964,8 @@ function GpuPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     powerControls?: GpuInlinePowerControlProps;
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const totalGb = gpu.memory_total_mb / 1024;
@@ -1033,18 +975,15 @@ function GpuPanel({
         samples,
         gapBreakMs,
         (sample) => sample.gpu[gpu.index]?.vram ?? null,
-        (sample) => sample.gpu[gpu.index]?.vram ?? null,
     );
     const gpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
         (sample) => sample.gpu[gpu.index]?.power ?? null,
-        (sample) => sample.gpu[gpu.index]?.power ?? null,
     );
     const gpuTempTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.gpu[gpu.index]?.temp ?? null,
         (sample) => sample.gpu[gpu.index]?.temp ?? null,
     );
 
@@ -1059,52 +998,38 @@ function GpuPanel({
                     height={plotHeight ?? (compact ? 240 : 256)}
                     samples={samples}
                     yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
                     xDomain={xDomain}
                     series={[
                         {
                             x: gpuUtilTrace.x,
                             y: gpuUtilTrace.y,
                             axis: { title: 'GPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
-                            mode: 'lines',
                             name: legendName('Util', `${gpu.utilization.toFixed(0)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'GPU %{y:.0f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: gpuVramTrace.x,
                             y: gpuVramTrace.y,
                             axis: { title: 'VRAM used + reserved', color: PLOT_TICK, suffix: ' GB' },
-                            customdata: gpuVramTrace.customdata,
-                            mode: 'lines',
                             name: legendName('VRAM', `${currentVramGb.toFixed(1)} / ${totalGb.toFixed(0)} GB`),
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'VRAM %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                         {
                             x: gpuPowerTrace.x,
                             y: gpuPowerTrace.y,
                             axis: { title: 'Power draw', color: PLOT_TICK, suffix: ' W' },
-                            customdata: gpuPowerTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Power', `${gpu.power_draw_w.toFixed(1)}W`),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Power %{customdata:.1f} W<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: gpuTempTrace.x,
                             y: gpuTempTrace.y,
                             axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
-                            customdata: gpuTempTrace.customdata,
-                            mode: 'lines',
                             name: legendName('Temp', `${gpu.temperature.toFixed(0)}C`),
-                            line: { color: '#f472b6', width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Temp %{customdata:.0f} C<extra></extra>',
+                            line: { color: '#f472b6', width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -1126,7 +1051,6 @@ function buildChartSample(point: TelemetryChartPoint, pollIntervalMs: PollPreset
         timestamp,
         timestampMs: point.timestamp_ms,
         pollIntervalMs,
-        clock: formatClock(timestamp),
         cpuUtil: point.cpu_utilization!,
         cpuFreqMhz: point.cpu_frequency_current_mhz!,
         cpuPower: point.cpu_power_watts,
@@ -1143,17 +1067,13 @@ function HistoricalTelemetryFallback({
     samples,
     showXAxisLabels,
     compact,
-    traceType,
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     samples: LiveSample[];
     showXAxisLabels: boolean;
     compact: boolean;
-    traceType: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const cpuTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
@@ -1170,29 +1090,22 @@ function HistoricalTelemetryFallback({
                     height={compact ? 168 : 256}
                     samples={samples}
                     yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={`${redrawKey}:historical-host`}
                     xDomain={xDomain}
                     series={[
                         {
                             x: cpuTrace.x,
                             y: cpuTrace.y,
-                            mode: 'lines',
                             name: 'CPU',
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'CPU %{y:.1f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: ramTrace.x,
                             y: ramTrace.y,
-                            mode: 'lines',
                             name: 'RAM',
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'RAM %{y:.1f}%<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </PanelFrame>
 
@@ -1202,8 +1115,6 @@ function HistoricalTelemetryFallback({
                         height={compact ? 168 : 256}
                         samples={samples}
                         yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                        compact={compact}
-                        redrawKey={`${redrawKey}:historical-gpu`}
                         xDomain={xDomain}
                         series={gpuIndexes.map((gpuIndex, position) => {
                             const trace = buildGapAwareTraceData(
@@ -1214,19 +1125,14 @@ function HistoricalTelemetryFallback({
                             return {
                                 x: trace.x,
                                 y: trace.y,
-                                mode: 'lines',
                                 name: `GPU ${gpuIndex}`,
                                 line: {
                                     color: gpuColors[position % gpuColors.length],
                                     width: 1.45,
-                                    shape: 'linear',
-                                    simplify: false,
                                 },
-                                hovertemplate: `GPU ${gpuIndex} %{y:.1f}%<extra></extra>`,
                             };
                         })}
                         showXAxisLabels={showXAxisLabels}
-                        traceType={traceType}
                     />
                 </PanelFrame>
             ) : null}
@@ -1278,9 +1184,6 @@ export function InfraLiveTelemetry({
 }: InfraLiveTelemetryProps = {}) {
     const compact = variant === 'dashboard';
     const dashboardSizing = DASHBOARD_SIZING[dashboardSize];
-    // Use SVG scatter everywhere here. The dashboard/infra charts are modest in size,
-    // and avoiding Plotly's WebGL path is materially more stable under heavy browser load.
-    const traceType: 'scatter' | 'scattergl' = 'scatter';
     const queryClient = useQueryClient();
     const [restoredState] = useState(() =>
         loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
@@ -1347,17 +1250,11 @@ export function InfraLiveTelemetry({
     const chartRefreshLabel = useTelemetryChartRefresh(
         historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes,
     );
-    const liveStatusQuery = useQuery({
-        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
-        queryFn: fetchSystemStatus,
-        refetchInterval: pollIntervalMs,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-    const historyPoints = historyQuery.data?.points ?? [];
-    const samples = historyPoints
+    const liveStatusQuery = useSystemStatus(pollIntervalMs);
+    const historyPoints = historyQuery.data?.points ?? EMPTY_HISTORY_POINTS;
+    const samples = useMemo(() => historyPoints
         .filter(isRenderableTelemetryChartPoint)
-        .map((point) => buildChartSample(point, 1000));
+        .map((point) => buildChartSample(point, 1000)), [historyPoints]);
     const latestPoint = historyPoints.at(-1);
     const payload = liveStatusQuery.data?.data;
     const latestTimestampMs = historyQuery.data?.next_cursor_ms ?? latestPoint?.timestamp_ms ?? null;
@@ -1387,8 +1284,10 @@ export function InfraLiveTelemetry({
         displayIntervalMs,
         historyQuery.isError || historyIsStale,
     );
-    const visibleSamples = samples.filter((sample) =>
-        sample.timestampMs >= nominalXDomain[0] && sample.timestampMs <= nominalXDomain[1]);
+    const [nominalStartMs, nominalEndMs] = nominalXDomain;
+    const visibleSamples = useMemo(() => samples.filter((sample) =>
+        sample.timestampMs >= nominalStartMs && sample.timestampMs <= nominalEndMs),
+    [samples, nominalStartMs, nominalEndMs]);
     const xDomain = resolveTelemetryPlotDomain(
         nominalXDomain,
         visibleSamples.at(-1)?.timestampMs,
@@ -1456,11 +1355,9 @@ export function InfraLiveTelemetry({
             return { discovery, system };
         },
         onSuccess: ({ discovery, system }) => {
-            queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_POWER_CONTROL_QUERY_KEY, { data: discovery.data.power_control });
             queryClient.setQueryData(SHARED_FAN_CONTROL_QUERY_KEY, { data: discovery.data.fan_control });
-            queryClient.invalidateQueries({ queryKey: INFRA_LIVE_SHARED_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
@@ -1505,7 +1402,6 @@ export function InfraLiveTelemetry({
         return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
-    const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
     const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
@@ -1730,9 +1626,7 @@ export function InfraLiveTelemetry({
                     samples={visibleSamples}
                     showXAxisLabels={showXAxisLabels}
                     compact={compact && dashboardSizing.compactFrame}
-                    traceType={traceType}
                     gapBreakMs={gapBreakMs}
-                    redrawKey={plotRedrawKey}
                     xDomain={xDomain}
                 />
             )}
@@ -1760,9 +1654,7 @@ export function InfraLiveTelemetry({
                             compact={compact && dashboardSizing.compactFrame}
                             panelHeight={compact ? dashboardSizing.cpuPanelHeight : undefined}
                             plotHeight={compact ? dashboardSizing.cpuPlotHeight : undefined}
-                            traceType={traceType}
                             gapBreakMs={gapBreakMs}
-                            redrawKey={`${plotRedrawKey}:cpu`}
                             xDomain={xDomain}
                         />
                         <RamPanel
@@ -1772,9 +1664,7 @@ export function InfraLiveTelemetry({
                             compact={compact && dashboardSizing.compactFrame}
                             panelHeight={compact ? dashboardSizing.ramPanelHeight : undefined}
                             plotHeight={compact ? dashboardSizing.ramPlotHeight : undefined}
-                            traceType={traceType}
                             gapBreakMs={gapBreakMs}
-                            redrawKey={`${plotRedrawKey}:ram`}
                             xDomain={xDomain}
                         />
                     </div>
@@ -1796,9 +1686,7 @@ export function InfraLiveTelemetry({
                                 compact={compact && dashboardSizing.compactFrame}
                                 panelHeight={compact ? dashboardSizing.gpuPanelHeight : undefined}
                                 plotHeight={compact ? dashboardSizing.gpuPlotHeight : undefined}
-                                traceType={traceType}
                                 gapBreakMs={gapBreakMs}
-                                redrawKey={`${plotRedrawKey}:gpu:${gpu.index}`}
                                 xDomain={xDomain}
                                 powerControls={compact ? {
                                     gpu,

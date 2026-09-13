@@ -1437,6 +1437,8 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 cdr_l1_length=structure_cdr_lengths.get("L1"),
                 cdr_l2_length=structure_cdr_lengths.get("L2"),
                 cdr_l3_length=structure_cdr_lengths.get("L3"),
+                producer_model_id=("rfd3" if review_stage_family == "protein_local_redesign"
+                                   else review_stage_family if review_stage_family != "validation" else None),
                 stage_family=review_stage_family,
                 stage_mode=review_stage_mode,
                 source_stage=stage,

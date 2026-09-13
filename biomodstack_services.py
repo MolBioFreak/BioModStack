@@ -1855,6 +1855,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment=BMS_FRONTEND_MODE=dev
+        Environment=NODE_ENV=production
         {frontend_root_directive}
         Environment={systemd_value(f"BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}")}
         Environment={systemd_value(f"BMS_DEV_WEB_HOST_PORT={dev_web_host_port}")}
