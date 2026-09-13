@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -44,7 +45,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   api.defaults.adapter = async config => {
-    if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
+    if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'boltz2', name: 'Boltz-2' }, { id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
     const body = config.data ? JSON.parse(String(config.data)) : undefined;
     posts.push({ url: String(config.url), body });
     if (config.url === '/api/jobs/execution-plan/preview') return response({ schema: 'bms.job.execution-preview.v1', approval_digest: 'd'.repeat(64), admissible: true,
@@ -111,6 +112,26 @@ it('renders exact dependency estimates and blocks mutation on preview blockers',
   expect(container.textContent).toContain('Transfer upper bound: 1,234 bytes');
   expect(container.textContent).toContain('Critical runtime unavailable');
   expect(button('Start provision').disabled).toBe(true);
+});
+
+it.skipIf(!process.env.BMS_PREPARATION_WIRE_DIR)('renders the actual blocked route wire with unknown bytes and no start', async () => {
+  const wire: ProvisionPreview = JSON.parse(readFileSync(`${process.env.BMS_PREPARATION_WIRE_DIR}/blocked-preview.json`, 'utf8'));
+  catalog.push(wire.selection);
+  try {
+    await render(); await select('Provision model', 'boltz2');
+    vi.spyOn(api, 'post').mockResolvedValueOnce(response(wire));
+    await click('Preview artifact downloads');
+    expect(container.textContent).toContain('host_asset_unavailable');
+    expect(container.textContent).toContain('containers/boltz2.sif');
+    expect(container.textContent).toContain('weights/boltz');
+    expect(container.textContent).toContain('Unknown dependency bytes total');
+    expect(container.textContent).toContain('Transfer upper bound: unknown bytes');
+    expect(container.textContent).toContain('Selected storage: unknown bytes');
+    expect(container.textContent).toContain('size and SHA256 unknown');
+    expect(button('Start provision').disabled).toBe(true);
+    await click('Start provision');
+    expect(posts).toEqual([]);
+  } finally { catalog.pop(); }
 });
 
 it('uses operation-bound cancellation and keeps uncertain recovery blocked', async () => {

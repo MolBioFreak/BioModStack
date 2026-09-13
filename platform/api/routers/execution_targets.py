@@ -124,10 +124,11 @@ async def preload_execution_target(
 
 @router.get("/provision/catalog", response_model=list[ProvisionSelection])
 async def provision_catalog():
-    from model_registry import INDEPENDENT_RUNTIME_MODELS, get_registry
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry
     return [ProvisionSelection(kind=kind, model_id=model_id)
-        for model_id in sorted(INDEPENDENT_RUNTIME_MODELS)
-        if get_registry().get_model(model_id) is not None for kind in ("model", "image")]
+        for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
+        for model_id in sorted(models)
+        if get_registry().get_model(model_id) is not None]
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)

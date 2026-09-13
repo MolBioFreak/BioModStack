@@ -156,12 +156,13 @@ function ProvisionActions({ target, onChanged, selection, retryOperationId }: Pr
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}
     {provision.isSuccess && <p role="status">Provision request accepted. Completion is reported by worker progress; installed evidence is shown separately from the last-cache receipt.</p>}
     {data && <div aria-label="Provision preview" className="space-y-2 text-sm">
-      <p>{data.total_bytes.toLocaleString()} dependency bytes total · Managed asset activation — not scientific Ready</p>
+      <p>{data.estimates_complete === false ? "Unknown" : data.total_bytes.toLocaleString()} dependency bytes total · Managed asset activation — not scientific Ready</p>
       <p>Provisioning makes an additional installed copy separate from cache and retains prior release generations. This total is not a missing-byte transfer estimate, free-space check or storage reservation.</p>
       <p>Destination: {data.destination ? `${data.destination.target_id} · ${data.destination.remote_root}` : 'not reported'}</p>
       <p>Installed inventory evidence: {data.inventory_state ?? 'unobserved'}</p>
-      <p>Transfer upper bound: {data.transfer_bytes?.toLocaleString() ?? 'unknown'} bytes · Selected storage: {data.storage_bytes?.toLocaleString() ?? 'unknown'} bytes. Neither is free disk capacity or an ETA.</p>
+      <p>Transfer upper bound: {data.estimates_complete === false ? 'unknown' : data.transfer_bytes?.toLocaleString() ?? 'unknown'} bytes · Selected storage: {data.estimates_complete === false ? 'unknown' : data.storage_bytes?.toLocaleString() ?? 'unknown'} bytes. Neither is free disk capacity or an ETA.</p>
       <ul aria-label="Provision blockers">{data.blockers?.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>
+      {data.estimates_complete === false && <ul aria-label="Selected dependencies (bytes unverified)">{data.dependencies?.map((dependency, index) => <li key={`${dependency.name}-${index}`}>{dependency.name} · {dependency.kind} · size and SHA256 unknown</li>)}</ul>}
       {data.plan_sha256 && <p className="break-all font-mono">Plan SHA256 {data.plan_sha256}</p>}
       {data.asset_states && <ArtifactDetails label="Exact dependency states" count={data.asset_states.length}>{() => <ul aria-label="Exact dependency states">{data.asset_states?.map(asset => <li key={asset.name} className="break-all">{asset.name} · {asset.state} · {asset.size_bytes.toLocaleString()} bytes · SHA256 {asset.sha256}</li>)}</ul>}</ArtifactDetails>}
       {data.effective_params && <details><summary>Effective workflow settings (read only)</summary><SettingValues value={data.effective_params} /></details>}

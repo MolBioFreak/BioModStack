@@ -184,7 +184,17 @@ class ProvisionDestination(StrictModel):
     remote_root: str
 
 
+class ProvisionDependency(StrictModel):
+    """Logical selection, not an attestation of bytes or installed readiness."""
+    name: str
+    kind: str
+    sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    size_bytes: int | None = Field(default=None, ge=0)
+
+
 class ProvisionPreview(StrictModel):
+    dependencies: list[ProvisionDependency] = Field(default_factory=list)
+    estimates_complete: bool = True
     selection: ProvisionSelection | WorkflowProvisionSelection
     preview_sha256: str = Field(pattern=SHA256_PATTERN)
     artifacts: list[CachedArtifactReceipt]

@@ -313,10 +313,12 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
 
 def independent_plan(selection):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
-    from model_registry import model_runtime_dependencies
+    from model_registry import model_runtime_dependencies, model_image_dependencies
     from paths import get_container_dir, get_weights_root
     entries = []
-    for ref in model_runtime_dependencies(selection.model_id):
+    refs = (model_image_dependencies(selection.model_id) if selection.kind == "image"
+            else model_runtime_dependencies(selection.model_id))
+    for ref in refs:
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
@@ -371,6 +373,7 @@ def workflow_plan(selection, *, compiled_plan=None):
     """Bind an authorized shared plan; inspect runtime leaves, never inputs."""
     from services.nextflow import compile_workflow_provision_request
     from schemas import JobCreate
+
     if compiled_plan is None:
         if not isinstance(selection.workflow_request, JobCreate):
             raise ValueError('Native workflow requires fresh authenticated compilation')
@@ -386,6 +389,7 @@ def workflow_plan(selection, *, compiled_plan=None):
     if plan is None or not plan.dependency_closure_complete:
         raise ValueError('Workflow dependency closure is unresolved')
     entries = []
+
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
             json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan):
         for record in _records_for_source(path, prefix, 'runtime'):
@@ -402,11 +406,63 @@ def workflow_plan(selection, *, compiled_plan=None):
 
 def independent_preview(selection, target, *, compiled_plan=None):
     from .contracts import ProvisionPreview, CachedArtifactReceipt
-    plan = None
+    from model_registry import model_runtime_dependencies, model_image_dependencies
+    from .bundle import RemoteBundleError
+    plan = compiled_plan
+    invocation = None
+    dependencies, blockers = [], []
     if selection.kind == 'workflow':
-        entries, plan = workflow_plan(selection, compiled_plan=compiled_plan)
+        if plan is None:
+            from schemas import JobCreate
+            from services.nextflow import compile_workflow_provision_request
+            if not isinstance(selection.workflow_request, JobCreate):
+                raise ValueError('Native workflow requires fresh authenticated compilation')
+            validate_workflow_provision_authority(selection.workflow_request.params)
+            invocation = compile_workflow_provision_request(selection.workflow_request)
+            plan = invocation.execution_plan
+        prefixes = {'image': 'containers', 'weights': 'weights', 'database': 'data',
+                    'reference_database': 'data', 'runtime_data': 'data'}
+        dependencies = [dict(name=(prefixes[d.kind] + '/' + d.relative_path
+                                  if d.kind in prefixes and d.relative_path else d.logical_id), kind=d.kind)
+                        for d in plan.dependencies]
     else:
-        entries = independent_plan(selection)
+        try:
+            refs = (model_image_dependencies(selection.model_id) if selection.kind == 'image'
+                    else model_runtime_dependencies(selection.model_id))
+            dependencies = [dict(name=('containers/' if r.kind == 'image' else 'weights/') + r.relative_path,
+                                 kind=r.kind) for r in refs]
+        except ValueError:
+            blockers = ['binding_unavailable: Use the typed workflow form to prepare its selected dependencies; '
+                        'this independent selection has no reviewed binding.']
+    entries = []
+    if not blockers:
+        try:
+            if selection.kind == 'workflow':
+                entries, plan = workflow_plan(selection, compiled_plan=plan)
+            else:
+                entries = independent_plan(selection)
+        except (RemoteBundleError, ValueError, OSError) as exc:
+            # Project only known preparation failures, never raw exception paths,
+            # biological inputs or arbitrary compiler diagnostics. Other failures
+            # retain the existing error route and cannot grant start authority.
+            message = str(exc)
+            if isinstance(exc, FileNotFoundError) or message.startswith((
+                    'Required package path is unavailable:', 'Required package directory is empty:',
+                    'Required runtime asset is unavailable:', 'Required source dependency is unavailable:')):
+                # Match only server-declared logical names; never reflect the
+                # arbitrary absolute path carried by filesystem exceptions.
+                unavailable = [d['name'] for d in dependencies if message.endswith('/' + d['name'].split('/', 1)[-1])]
+                if plan is not None:
+                    unavailable.extend(d.logical_id for d in plan.dependencies if message.endswith(': ' + d.logical_id))
+                detail = (' Unavailable: ' + ', '.join(sorted(set(unavailable))) + '.') if unavailable else ''
+                blockers = ['host_asset_unavailable:' + detail + ' Install the selected assets on the host using managed setup '
+                            '(including any required license), then preview again. Worker/backend presence is separate.']
+            elif message.startswith(('Workflow dependency closure is unresolved',
+                    'Selected dependency closure is incomplete:', 'Selected runtime dependency has no managed binding:')):
+                blockers = ['dependency_binding_unresolved: The selected workflow lacks complete managed dependency '
+                            'bindings. Resolve its dependency metadata through managed setup, then preview again.']
+            else:
+                raise
     # A shared dependency may occur in many components, but one destination has
     # exactly one immutable identity. Do not hide conflicting selected assets.
     unique = {}
@@ -422,7 +478,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
         raise ValueError('Workflow provision source identity changed')
     identity = dict(scope='managed_asset_activation.v1', selection=selection.model_dump(mode='json'),
         target=[target.id, target.host, target.port, target.username, target.remote_root, target.host_key_sha256],
-        source=source, artifacts=artifacts, modes=[e.mode for e in entries])
+        source=source, artifacts=artifacts, modes=[e.mode for e in entries],
+        dependencies=dependencies, blockers=blockers)
     if plan is not None:
         identity['plan_sha256'] = plan.plan_sha256
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -444,6 +501,7 @@ def independent_preview(selection, target, *, compiled_plan=None):
     missing = {(e.role == 'image', e.sha256, e.size_bytes) for e, row in zip(entries, states, strict=True)
                if row['state'] != 'verified'}
     return ProvisionPreview(selection=selection, preview_sha256=digest,
+        dependencies=dependencies, blockers=blockers, estimates_complete=not blockers,
         artifacts=[CachedArtifactReceipt.model_validate(r) for r in artifacts],
         total_bytes=sum(e.size_bytes for e in entries),
         destination=dict(target_id=target.id, remote_root=target.remote_root),
