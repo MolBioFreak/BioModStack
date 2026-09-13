@@ -4683,6 +4683,8 @@ class OperatorInterruptEvidenceV2(BaseModel):
 
     source_call_completed: StrictBool | None
     source_return_ok: StrictBool | None
+    first_stop_acknowledged: StrictBool | None = None
+    second_stop_acknowledged: StrictBool | None = None
     controller_stop_acknowledged: StrictBool | None
     controller_terminal_state_verified: StrictBool | None
     physical_effect_verified: Literal[False]
@@ -5061,6 +5063,9 @@ class OperatorInterruptReceiptV1(BaseModel):
     controller_stop_attempted: Literal[True]
     source_call_completed: StrictBool
     source_return_ok: StrictBool
+    first_stop_acknowledged: StrictBool | None = None
+    second_stop_acknowledged: StrictBool | None = None
+    controller_terminal_state_verified: StrictBool | None = None
     controller_stop_acknowledged: StrictBool
     controller_stop_delivered: StrictBool | None = None
     controller_response: JsonValue

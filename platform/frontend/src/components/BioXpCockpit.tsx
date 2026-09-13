@@ -1299,7 +1299,8 @@ export function BioXpCockpit() {
                                             step={1}
                                             value={Number.isFinite(manualSteps[axis]) ? manualSteps[axis] : ''}
                                             onChange={(event) => {
-                                                setManualSteps((current) => ({ ...current, [axis]: event.target.valueAsNumber }));
+                                                const parsed = event.target.valueAsNumber;
+                                                setManualSteps((current) => ({ ...current, [axis]: parsed }));
                                             }}
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                         />

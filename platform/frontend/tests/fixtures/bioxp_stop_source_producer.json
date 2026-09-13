@@ -1,0 +1,3970 @@
+[
+  {
+    "armed": true,
+    "first_ack": true,
+    "mutation": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268958349_9e31aedf35cd",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268958349_9e31aedf35cd",
+      "accepted_at": 1789268958.3494444,
+      "queued_at": 1789268958.3494444,
+      "dispatched_at": 1789268958.349455,
+      "finished_at": 1789268958.3839757,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "source_call_completed": true,
+        "source_return_ok": true,
+        "first_stop_acknowledged": true,
+        "second_stop_acknowledged": true,
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "physical_effect_verified": false,
+        "persistence_state": "committed",
+        "details": {
+          "request": {
+            "schema_version": "bioxp.operator_interrupt_request.v1",
+            "idempotency_key": "actual-route-stop",
+            "reason": "offline qualification",
+            "observed_ownership_generation": 1,
+            "observed_board_epoch_by_board": {}
+          },
+          "error": null,
+          "deck_reconciliation": {
+            "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+            "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+            "action_id": "oem.z.stop",
+            "source_call_completed": true,
+            "source_return_ok": true,
+            "first_stop_acknowledged": true,
+            "second_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "physical_effect_verified": false,
+            "controller_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "recovery_hold": false,
+            "error": null
+          }
+        }
+      },
+      "z_move": null
+    },
+    "history": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268958349_9e31aedf35cd",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268958349_9e31aedf35cd",
+      "accepted_at": 1789268958.3494444,
+      "queued_at": 1789268958.3494444,
+      "dispatched_at": 1789268958.349455,
+      "finished_at": 1789268958.3839757,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "details": {
+          "deck_reconciliation": {
+            "action_id": "oem.z.stop",
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "error": null,
+            "first_stop_acknowledged": true,
+            "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+            "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "recovery_hold": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "error": null,
+          "request": {
+            "idempotency_key": "actual-route-stop",
+            "observed_board_epoch_by_board": {},
+            "observed_ownership_generation": 1,
+            "reason": "offline qualification",
+            "schema_version": "bioxp.operator_interrupt_request.v1"
+          }
+        },
+        "first_stop_acknowledged": true,
+        "persistence_state": "committed",
+        "physical_effect_verified": false,
+        "second_stop_acknowledged": true,
+        "source_call_completed": true,
+        "source_return_ok": true
+      },
+      "z_move": null,
+      "history": {
+        "source": "direct",
+        "source_schema": "bioxp.operator_action_receipt.v1",
+        "recorded_status": "completed",
+        "remote_acknowledged": true,
+        "controller_acknowledged": true,
+        "controller_terminal_state_verified": null,
+        "machine_assessment": "pass",
+        "operator_assessment": null,
+        "operator_note": null
+      }
+    },
+    "captures": {
+      "compact": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268958349_9e31aedf35cd",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268958349_9e31aedf35cd",
+          "accepted_at": 1789268958.3494444,
+          "queued_at": 1789268958.3494444,
+          "dispatched_at": 1789268958.349455,
+          "finished_at": 1789268958.3839757,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268958.3494446,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268958349_9e31aedf35cd",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268958349_9e31aedf35cd",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268958.349455,
+          "duration_ms": 34.554243087768555,
+          "error": null,
+          "finished_at": "1789268958.3839757",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268958.3494046,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268958.349455,
+          "provider_returned_at": 1789268958.3839533,
+          "queued_at": 1789268958.3494444,
+          "receipt_persist_started_at": 1789268958.383977,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268958.3493955,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268958349_9e31aedf35cd",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268958.375323,
+                "inputs": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268958.3503673,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": true,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": true,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268958.375323,
+                    "inputs": {
+                      "command_id": "operator_1789268958349_9e31aedf35cd"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": true,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268958.3503673,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268958.375323,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268958.3503673,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268958.3494215",
+          "status": "completed",
+          "sequence": 1
+        }
+      },
+      "detail": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268958349_9e31aedf35cd",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268958349_9e31aedf35cd",
+          "accepted_at": 1789268958.3494444,
+          "queued_at": 1789268958.3494444,
+          "dispatched_at": 1789268958.349455,
+          "finished_at": 1789268958.3839757,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null,
+          "source_receipt": {
+            "action_id": "oem.z.stop",
+            "admission_completed_at": 1789268958.3494446,
+            "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+            "authority_receipt_id": "operator_1789268958349_9e31aedf35cd",
+            "authority_receipt_status": "completed",
+            "command_id": "operator_1789268958349_9e31aedf35cd",
+            "completion_ambiguous": false,
+            "completion_verified": false,
+            "controller_acknowledged": true,
+            "delivery_verified": false,
+            "dispatched_at": 1789268958.349455,
+            "duration_ms": 34.554243087768555,
+            "error": null,
+            "finished_at": "1789268958.3839757",
+            "hardware_postcondition_verified": false,
+            "hardware_precondition_verified": false,
+            "idempotency_key": "actual-route-stop",
+            "idempotency_replay_enabled": false,
+            "inputs": {
+              "axis": "z"
+            },
+            "interrupt_evidence": {
+              "controller_stop_acknowledged": true,
+              "controller_terminal_state_verified": false,
+              "details": {
+                "deck_reconciliation": {
+                  "action_id": "oem.z.stop",
+                  "controller_stop_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "error": null,
+                  "first_stop_acknowledged": true,
+                  "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                  "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                  "persistence_state": "committed",
+                  "physical_effect_verified": false,
+                  "recovery_hold": false,
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true
+                },
+                "error": null,
+                "request": {
+                  "idempotency_key": "actual-route-stop",
+                  "observed_board_epoch_by_board": {},
+                  "observed_ownership_generation": 1,
+                  "reason": "offline qualification",
+                  "schema_version": "bioxp.operator_interrupt_request.v1"
+                }
+              },
+              "first_stop_acknowledged": true,
+              "persistence_state": "committed",
+              "physical_effect_verified": false,
+              "second_stop_acknowledged": true,
+              "source_call_completed": true,
+              "source_return_ok": true
+            },
+            "kind": "primitive",
+            "lock_acquired_at": 1789268958.3494046,
+            "machine_assessment": "pass",
+            "observation_receipt_id": null,
+            "observes_command_id": null,
+            "operator_assessment": null,
+            "operator_note": null,
+            "ownership_generation": 1,
+            "physical_effect_verified": false,
+            "provider_entry_at": 1789268958.349455,
+            "provider_returned_at": 1789268958.3839533,
+            "queued_at": 1789268958.3494444,
+            "receipt_persist_started_at": 1789268958.383977,
+            "reconciliation_required": false,
+            "remote_acknowledged": true,
+            "request_received_at": 1789268958.3493955,
+            "requested_inputs": {},
+            "response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268958.375323,
+                  "inputs": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": true,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": true,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268958.3503673,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268958349_9e31aedf35cd",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268958.375323,
+                      "inputs": {
+                        "command_id": "operator_1789268958349_9e31aedf35cd"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": true,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268958.3503673,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268958.375323,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268958.3503673,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "retry_forbidden": false,
+            "safety_class": "stop",
+            "schema_version": "bioxp.operator_action_receipt.v1",
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "stage_receipts": [],
+            "started_at": "1789268958.3494215",
+            "status": "completed",
+            "sequence": 1
+          },
+          "canonical_inputs": {},
+          "requested_values": {},
+          "effective_values": {},
+          "observed_values": {},
+          "raw_return_layers": {
+            "operator_response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268958.375323,
+                  "inputs": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": true,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": true,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268958.3503673,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268958349_9e31aedf35cd",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268958.375323,
+                      "inputs": {
+                        "command_id": "operator_1789268958349_9e31aedf35cd"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": true,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268958.3503673,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268958.375323,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268958.3503673,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "completion_ambiguous": false,
+            "retry_forbidden": false
+          },
+          "controller_evidence": {},
+          "transport_artifacts": [],
+          "child_receipts": [],
+          "transitions": [],
+          "deck_movement": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268958.3494446,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268958349_9e31aedf35cd",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268958349_9e31aedf35cd",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268958.349455,
+          "duration_ms": 34.554243087768555,
+          "error": null,
+          "finished_at": "1789268958.3839757",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "interrupt_id": "4e3ed3e2-ee36-435c-8ad2-baceb2d53f3c",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268958.3494046,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268958.349455,
+          "provider_returned_at": 1789268958.3839533,
+          "queued_at": 1789268958.3494444,
+          "receipt_persist_started_at": 1789268958.383977,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268958.3493955,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268958349_9e31aedf35cd",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268958.375323,
+                "inputs": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268958.3503673,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": true,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": true,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268958349_9e31aedf35cd",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268958.375323,
+                    "inputs": {
+                      "command_id": "operator_1789268958349_9e31aedf35cd"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": true,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268958.3503673,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268958349_9e31aedf35cd",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268958.375323,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268958.3503673,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268958.3494215",
+          "status": "completed",
+          "sequence": 1
+        }
+      }
+    }
+  },
+  {
+    "armed": false,
+    "first_ack": true,
+    "mutation": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268959115_ae8b5ecd5c34",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268959115_ae8b5ecd5c34",
+      "accepted_at": 1789268959.115154,
+      "queued_at": 1789268959.115154,
+      "dispatched_at": 1789268959.115166,
+      "finished_at": 1789268959.149225,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "source_call_completed": true,
+        "source_return_ok": true,
+        "first_stop_acknowledged": true,
+        "second_stop_acknowledged": true,
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "physical_effect_verified": false,
+        "persistence_state": "committed",
+        "details": {
+          "request": {
+            "schema_version": "bioxp.operator_interrupt_request.v1",
+            "idempotency_key": "actual-route-stop",
+            "reason": "offline qualification",
+            "observed_ownership_generation": 1,
+            "observed_board_epoch_by_board": {}
+          },
+          "error": null,
+          "deck_reconciliation": {
+            "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+            "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+            "action_id": "oem.z.stop",
+            "source_call_completed": true,
+            "source_return_ok": true,
+            "first_stop_acknowledged": true,
+            "second_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "physical_effect_verified": false,
+            "controller_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "recovery_hold": false,
+            "error": null
+          }
+        }
+      },
+      "z_move": null
+    },
+    "history": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268959115_ae8b5ecd5c34",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268959115_ae8b5ecd5c34",
+      "accepted_at": 1789268959.115154,
+      "queued_at": 1789268959.115154,
+      "dispatched_at": 1789268959.115166,
+      "finished_at": 1789268959.149225,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "details": {
+          "deck_reconciliation": {
+            "action_id": "oem.z.stop",
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "error": null,
+            "first_stop_acknowledged": true,
+            "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+            "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "recovery_hold": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "error": null,
+          "request": {
+            "idempotency_key": "actual-route-stop",
+            "observed_board_epoch_by_board": {},
+            "observed_ownership_generation": 1,
+            "reason": "offline qualification",
+            "schema_version": "bioxp.operator_interrupt_request.v1"
+          }
+        },
+        "first_stop_acknowledged": true,
+        "persistence_state": "committed",
+        "physical_effect_verified": false,
+        "second_stop_acknowledged": true,
+        "source_call_completed": true,
+        "source_return_ok": true
+      },
+      "z_move": null,
+      "history": {
+        "source": "direct",
+        "source_schema": "bioxp.operator_action_receipt.v1",
+        "recorded_status": "completed",
+        "remote_acknowledged": true,
+        "controller_acknowledged": true,
+        "controller_terminal_state_verified": null,
+        "machine_assessment": "pass",
+        "operator_assessment": null,
+        "operator_note": null
+      }
+    },
+    "captures": {
+      "compact": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268959115_ae8b5ecd5c34",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268959115_ae8b5ecd5c34",
+          "accepted_at": 1789268959.115154,
+          "queued_at": 1789268959.115154,
+          "dispatched_at": 1789268959.115166,
+          "finished_at": 1789268959.149225,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268959.1151543,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268959115_ae8b5ecd5c34",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268959115_ae8b5ecd5c34",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268959.115166,
+          "duration_ms": 34.09147262573242,
+          "error": null,
+          "finished_at": "1789268959.149225",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268959.1151142,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268959.115166,
+          "provider_returned_at": 1789268959.1492033,
+          "queued_at": 1789268959.115154,
+          "receipt_persist_started_at": 1789268959.1492264,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268959.1151044,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268959.1415784,
+                "inputs": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268959.1161766,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": true,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": true,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.1415784,
+                    "inputs": {
+                      "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": true,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268959.1161766,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.1415784,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268959.1161766,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268959.1151335",
+          "status": "completed",
+          "sequence": 1
+        }
+      },
+      "detail": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268959115_ae8b5ecd5c34",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268959115_ae8b5ecd5c34",
+          "accepted_at": 1789268959.115154,
+          "queued_at": 1789268959.115154,
+          "dispatched_at": 1789268959.115166,
+          "finished_at": 1789268959.149225,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null,
+          "source_receipt": {
+            "action_id": "oem.z.stop",
+            "admission_completed_at": 1789268959.1151543,
+            "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+            "authority_receipt_id": "operator_1789268959115_ae8b5ecd5c34",
+            "authority_receipt_status": "completed",
+            "command_id": "operator_1789268959115_ae8b5ecd5c34",
+            "completion_ambiguous": false,
+            "completion_verified": false,
+            "controller_acknowledged": true,
+            "delivery_verified": false,
+            "dispatched_at": 1789268959.115166,
+            "duration_ms": 34.09147262573242,
+            "error": null,
+            "finished_at": "1789268959.149225",
+            "hardware_postcondition_verified": false,
+            "hardware_precondition_verified": false,
+            "idempotency_key": "actual-route-stop",
+            "idempotency_replay_enabled": false,
+            "inputs": {
+              "axis": "z"
+            },
+            "interrupt_evidence": {
+              "controller_stop_acknowledged": true,
+              "controller_terminal_state_verified": false,
+              "details": {
+                "deck_reconciliation": {
+                  "action_id": "oem.z.stop",
+                  "controller_stop_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "error": null,
+                  "first_stop_acknowledged": true,
+                  "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                  "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                  "persistence_state": "committed",
+                  "physical_effect_verified": false,
+                  "recovery_hold": false,
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true
+                },
+                "error": null,
+                "request": {
+                  "idempotency_key": "actual-route-stop",
+                  "observed_board_epoch_by_board": {},
+                  "observed_ownership_generation": 1,
+                  "reason": "offline qualification",
+                  "schema_version": "bioxp.operator_interrupt_request.v1"
+                }
+              },
+              "first_stop_acknowledged": true,
+              "persistence_state": "committed",
+              "physical_effect_verified": false,
+              "second_stop_acknowledged": true,
+              "source_call_completed": true,
+              "source_return_ok": true
+            },
+            "kind": "primitive",
+            "lock_acquired_at": 1789268959.1151142,
+            "machine_assessment": "pass",
+            "observation_receipt_id": null,
+            "observes_command_id": null,
+            "operator_assessment": null,
+            "operator_note": null,
+            "ownership_generation": 1,
+            "physical_effect_verified": false,
+            "provider_entry_at": 1789268959.115166,
+            "provider_returned_at": 1789268959.1492033,
+            "queued_at": 1789268959.115154,
+            "receipt_persist_started_at": 1789268959.1492264,
+            "reconciliation_required": false,
+            "remote_acknowledged": true,
+            "request_received_at": 1789268959.1151044,
+            "requested_inputs": {},
+            "response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.1415784,
+                  "inputs": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": true,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": true,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268959.1161766,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268959.1415784,
+                      "inputs": {
+                        "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": true,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268959.1161766,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.1415784,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268959.1161766,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "retry_forbidden": false,
+            "safety_class": "stop",
+            "schema_version": "bioxp.operator_action_receipt.v1",
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "stage_receipts": [],
+            "started_at": "1789268959.1151335",
+            "status": "completed",
+            "sequence": 1
+          },
+          "canonical_inputs": {},
+          "requested_values": {},
+          "effective_values": {},
+          "observed_values": {},
+          "raw_return_layers": {
+            "operator_response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.1415784,
+                  "inputs": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": true,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": true,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268959.1161766,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268959.1415784,
+                      "inputs": {
+                        "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": true,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268959.1161766,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.1415784,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268959.1161766,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "completion_ambiguous": false,
+            "retry_forbidden": false
+          },
+          "controller_evidence": {},
+          "transport_artifacts": [],
+          "child_receipts": [],
+          "transitions": [],
+          "deck_movement": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268959.1151543,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268959115_ae8b5ecd5c34",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268959115_ae8b5ecd5c34",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268959.115166,
+          "duration_ms": 34.09147262573242,
+          "error": null,
+          "finished_at": "1789268959.149225",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": true,
+                "interrupt_attempt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "interrupt_id": "83cb5dc6-66b7-4eba-939c-99894d153329",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268959.1151142,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268959.115166,
+          "provider_returned_at": 1789268959.1492033,
+          "queued_at": 1789268959.115154,
+          "receipt_persist_started_at": 1789268959.1492264,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268959.1151044,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268959.1415784,
+                "inputs": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": true,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": true,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268959.1161766,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": true,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": true,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.1415784,
+                    "inputs": {
+                      "command_id": "operator_1789268959115_ae8b5ecd5c34"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": true,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268959.1161766,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268959115_ae8b5ecd5c34",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.1415784,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268959.1161766,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268959.1151335",
+          "status": "completed",
+          "sequence": 1
+        }
+      }
+    }
+  },
+  {
+    "armed": true,
+    "first_ack": false,
+    "mutation": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268959876_9e2931cea272",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268959876_9e2931cea272",
+      "accepted_at": 1789268959.8760357,
+      "queued_at": 1789268959.8760357,
+      "dispatched_at": 1789268959.8760462,
+      "finished_at": 1789268959.9452095,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "source_call_completed": true,
+        "source_return_ok": true,
+        "first_stop_acknowledged": false,
+        "second_stop_acknowledged": true,
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "physical_effect_verified": false,
+        "persistence_state": "committed",
+        "details": {
+          "request": {
+            "schema_version": "bioxp.operator_interrupt_request.v1",
+            "idempotency_key": "actual-route-stop",
+            "reason": "offline qualification",
+            "observed_ownership_generation": 1,
+            "observed_board_epoch_by_board": {}
+          },
+          "error": null,
+          "deck_reconciliation": {
+            "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+            "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+            "action_id": "oem.z.stop",
+            "source_call_completed": true,
+            "source_return_ok": true,
+            "first_stop_acknowledged": false,
+            "second_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "physical_effect_verified": false,
+            "controller_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "recovery_hold": false,
+            "error": null
+          }
+        }
+      },
+      "z_move": null
+    },
+    "history": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268959876_9e2931cea272",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268959876_9e2931cea272",
+      "accepted_at": 1789268959.8760357,
+      "queued_at": 1789268959.8760357,
+      "dispatched_at": 1789268959.8760462,
+      "finished_at": 1789268959.9452095,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "details": {
+          "deck_reconciliation": {
+            "action_id": "oem.z.stop",
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "error": null,
+            "first_stop_acknowledged": false,
+            "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+            "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "recovery_hold": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "error": null,
+          "request": {
+            "idempotency_key": "actual-route-stop",
+            "observed_board_epoch_by_board": {},
+            "observed_ownership_generation": 1,
+            "reason": "offline qualification",
+            "schema_version": "bioxp.operator_interrupt_request.v1"
+          }
+        },
+        "first_stop_acknowledged": false,
+        "persistence_state": "committed",
+        "physical_effect_verified": false,
+        "second_stop_acknowledged": true,
+        "source_call_completed": true,
+        "source_return_ok": true
+      },
+      "z_move": null,
+      "history": {
+        "source": "direct",
+        "source_schema": "bioxp.operator_action_receipt.v1",
+        "recorded_status": "completed",
+        "remote_acknowledged": true,
+        "controller_acknowledged": true,
+        "controller_terminal_state_verified": null,
+        "machine_assessment": "pass",
+        "operator_assessment": null,
+        "operator_note": null
+      }
+    },
+    "captures": {
+      "compact": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268959876_9e2931cea272",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268959876_9e2931cea272",
+          "accepted_at": 1789268959.8760357,
+          "queued_at": 1789268959.8760357,
+          "dispatched_at": 1789268959.8760462,
+          "finished_at": 1789268959.9452095,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268959.8760362,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268959876_9e2931cea272",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268959876_9e2931cea272",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268959.8760462,
+          "duration_ms": 69.19407844543457,
+          "error": null,
+          "finished_at": "1789268959.9452095",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268959.8759966,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268959.8760462,
+          "provider_returned_at": 1789268959.945184,
+          "queued_at": 1789268959.8760357,
+          "receipt_persist_started_at": 1789268959.9452107,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268959.8759863,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268959876_9e2931cea272",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268959.937256,
+                "inputs": {
+                  "command_id": "operator_1789268959876_9e2931cea272"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268959.91233,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": false,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": false,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268959876_9e2931cea272",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.937256,
+                    "inputs": {
+                      "command_id": "operator_1789268959876_9e2931cea272"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": false,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268959.91233,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268959876_9e2931cea272",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.937256,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268959.91233,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268959.8760154",
+          "status": "completed",
+          "sequence": 1
+        }
+      },
+      "detail": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268959876_9e2931cea272",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268959876_9e2931cea272",
+          "accepted_at": 1789268959.8760357,
+          "queued_at": 1789268959.8760357,
+          "dispatched_at": 1789268959.8760462,
+          "finished_at": 1789268959.9452095,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null,
+          "source_receipt": {
+            "action_id": "oem.z.stop",
+            "admission_completed_at": 1789268959.8760362,
+            "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+            "authority_receipt_id": "operator_1789268959876_9e2931cea272",
+            "authority_receipt_status": "completed",
+            "command_id": "operator_1789268959876_9e2931cea272",
+            "completion_ambiguous": false,
+            "completion_verified": false,
+            "controller_acknowledged": true,
+            "delivery_verified": false,
+            "dispatched_at": 1789268959.8760462,
+            "duration_ms": 69.19407844543457,
+            "error": null,
+            "finished_at": "1789268959.9452095",
+            "hardware_postcondition_verified": false,
+            "hardware_precondition_verified": false,
+            "idempotency_key": "actual-route-stop",
+            "idempotency_replay_enabled": false,
+            "inputs": {
+              "axis": "z"
+            },
+            "interrupt_evidence": {
+              "controller_stop_acknowledged": true,
+              "controller_terminal_state_verified": false,
+              "details": {
+                "deck_reconciliation": {
+                  "action_id": "oem.z.stop",
+                  "controller_stop_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "error": null,
+                  "first_stop_acknowledged": false,
+                  "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                  "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                  "persistence_state": "committed",
+                  "physical_effect_verified": false,
+                  "recovery_hold": false,
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true
+                },
+                "error": null,
+                "request": {
+                  "idempotency_key": "actual-route-stop",
+                  "observed_board_epoch_by_board": {},
+                  "observed_ownership_generation": 1,
+                  "reason": "offline qualification",
+                  "schema_version": "bioxp.operator_interrupt_request.v1"
+                }
+              },
+              "first_stop_acknowledged": false,
+              "persistence_state": "committed",
+              "physical_effect_verified": false,
+              "second_stop_acknowledged": true,
+              "source_call_completed": true,
+              "source_return_ok": true
+            },
+            "kind": "primitive",
+            "lock_acquired_at": 1789268959.8759966,
+            "machine_assessment": "pass",
+            "observation_receipt_id": null,
+            "observes_command_id": null,
+            "operator_assessment": null,
+            "operator_note": null,
+            "ownership_generation": 1,
+            "physical_effect_verified": false,
+            "provider_entry_at": 1789268959.8760462,
+            "provider_returned_at": 1789268959.945184,
+            "queued_at": 1789268959.8760357,
+            "receipt_persist_started_at": 1789268959.9452107,
+            "reconciliation_required": false,
+            "remote_acknowledged": true,
+            "request_received_at": 1789268959.8759863,
+            "requested_inputs": {},
+            "response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268959876_9e2931cea272",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.937256,
+                  "inputs": {
+                    "command_id": "operator_1789268959876_9e2931cea272"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": false,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": false,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268959.91233,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268959876_9e2931cea272",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268959.937256,
+                      "inputs": {
+                        "command_id": "operator_1789268959876_9e2931cea272"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": false,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268959.91233,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268959876_9e2931cea272",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.937256,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268959.91233,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "retry_forbidden": false,
+            "safety_class": "stop",
+            "schema_version": "bioxp.operator_action_receipt.v1",
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "stage_receipts": [],
+            "started_at": "1789268959.8760154",
+            "status": "completed",
+            "sequence": 1
+          },
+          "canonical_inputs": {},
+          "requested_values": {},
+          "effective_values": {},
+          "observed_values": {},
+          "raw_return_layers": {
+            "operator_response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268959876_9e2931cea272",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.937256,
+                  "inputs": {
+                    "command_id": "operator_1789268959876_9e2931cea272"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": false,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": false,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268959.91233,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268959876_9e2931cea272",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268959.937256,
+                      "inputs": {
+                        "command_id": "operator_1789268959876_9e2931cea272"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": false,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268959.91233,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268959876_9e2931cea272",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.937256,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268959.91233,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "completion_ambiguous": false,
+            "retry_forbidden": false
+          },
+          "controller_evidence": {},
+          "transport_artifacts": [],
+          "child_receipts": [],
+          "transitions": [],
+          "deck_movement": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268959.8760362,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268959876_9e2931cea272",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268959876_9e2931cea272",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268959.8760462,
+          "duration_ms": 69.19407844543457,
+          "error": null,
+          "finished_at": "1789268959.9452095",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "interrupt_id": "0a4c0de4-bfc0-477e-b714-16c3b7606381",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268959.8759966,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268959.8760462,
+          "provider_returned_at": 1789268959.945184,
+          "queued_at": 1789268959.8760357,
+          "receipt_persist_started_at": 1789268959.9452107,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268959.8759863,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268959876_9e2931cea272",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268959.937256,
+                "inputs": {
+                  "command_id": "operator_1789268959876_9e2931cea272"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268959.91233,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": false,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": false,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268959876_9e2931cea272",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268959.937256,
+                    "inputs": {
+                      "command_id": "operator_1789268959876_9e2931cea272"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": false,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268959.91233,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268959876_9e2931cea272",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268959.937256,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268959.91233,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268959.8760154",
+          "status": "completed",
+          "sequence": 1
+        }
+      }
+    }
+  },
+  {
+    "armed": false,
+    "first_ack": false,
+    "mutation": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268960680_689f742311aa",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268960680_689f742311aa",
+      "accepted_at": 1789268960.6806736,
+      "queued_at": 1789268960.6806736,
+      "dispatched_at": 1789268960.6806834,
+      "finished_at": 1789268960.718924,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "source_call_completed": true,
+        "source_return_ok": true,
+        "first_stop_acknowledged": false,
+        "second_stop_acknowledged": true,
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "physical_effect_verified": false,
+        "persistence_state": "committed",
+        "details": {
+          "request": {
+            "schema_version": "bioxp.operator_interrupt_request.v1",
+            "idempotency_key": "actual-route-stop",
+            "reason": "offline qualification",
+            "observed_ownership_generation": 1,
+            "observed_board_epoch_by_board": {}
+          },
+          "error": null,
+          "deck_reconciliation": {
+            "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+            "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+            "action_id": "oem.z.stop",
+            "source_call_completed": true,
+            "source_return_ok": true,
+            "first_stop_acknowledged": false,
+            "second_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "physical_effect_verified": false,
+            "controller_stop_acknowledged": true,
+            "persistence_state": "committed",
+            "recovery_hold": false,
+            "error": null
+          }
+        }
+      },
+      "z_move": null
+    },
+    "history": {
+      "schema_version": "bioxp.operator_action_receipt.v2",
+      "command_id": "operator_1789268960680_689f742311aa",
+      "action_id": "oem.z.stop",
+      "status": "completed",
+      "terminal": true,
+      "sequence": 1,
+      "method_id": null,
+      "ownership_generation": 1,
+      "expected_board_epoch_by_board": {},
+      "state_version": 1,
+      "status_path": "/operator/v2/actions/receipts/operator_1789268960680_689f742311aa",
+      "accepted_at": 1789268960.6806736,
+      "queued_at": 1789268960.6806736,
+      "dispatched_at": 1789268960.6806834,
+      "finished_at": 1789268960.718924,
+      "terminal_receipt_id": null,
+      "completion_class": null,
+      "physical_effect_verified": false,
+      "error": null,
+      "transport_exchanges": [],
+      "transport_retention_errors": [],
+      "interrupt_evidence": {
+        "controller_stop_acknowledged": true,
+        "controller_terminal_state_verified": false,
+        "details": {
+          "deck_reconciliation": {
+            "action_id": "oem.z.stop",
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "error": null,
+            "first_stop_acknowledged": false,
+            "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+            "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "recovery_hold": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "error": null,
+          "request": {
+            "idempotency_key": "actual-route-stop",
+            "observed_board_epoch_by_board": {},
+            "observed_ownership_generation": 1,
+            "reason": "offline qualification",
+            "schema_version": "bioxp.operator_interrupt_request.v1"
+          }
+        },
+        "first_stop_acknowledged": false,
+        "persistence_state": "committed",
+        "physical_effect_verified": false,
+        "second_stop_acknowledged": true,
+        "source_call_completed": true,
+        "source_return_ok": true
+      },
+      "z_move": null,
+      "history": {
+        "source": "direct",
+        "source_schema": "bioxp.operator_action_receipt.v1",
+        "recorded_status": "completed",
+        "remote_acknowledged": true,
+        "controller_acknowledged": true,
+        "controller_terminal_state_verified": null,
+        "machine_assessment": "pass",
+        "operator_assessment": null,
+        "operator_note": null
+      }
+    },
+    "captures": {
+      "compact": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268960680_689f742311aa",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268960680_689f742311aa",
+          "accepted_at": 1789268960.6806736,
+          "queued_at": 1789268960.6806736,
+          "dispatched_at": 1789268960.6806834,
+          "finished_at": 1789268960.718924,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268960.6806736,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268960680_689f742311aa",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268960680_689f742311aa",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268960.6806834,
+          "duration_ms": 38.27047348022461,
+          "error": null,
+          "finished_at": "1789268960.718924",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268960.6806343,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268960.6806834,
+          "provider_returned_at": 1789268960.718903,
+          "queued_at": 1789268960.6806736,
+          "receipt_persist_started_at": 1789268960.7189248,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268960.6806254,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268960680_689f742311aa",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268960.7110481,
+                "inputs": {
+                  "command_id": "operator_1789268960680_689f742311aa"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268960.6808794,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": false,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": false,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268960680_689f742311aa",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268960.7110481,
+                    "inputs": {
+                      "command_id": "operator_1789268960680_689f742311aa"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": false,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268960.6808794,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268960680_689f742311aa",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268960.7110481,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268960.6808794,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268960.6806536",
+          "status": "completed",
+          "sequence": 1
+        }
+      },
+      "detail": {
+        "projected": {
+          "schema_version": "bioxp.operator_action_receipt.v2",
+          "command_id": "operator_1789268960680_689f742311aa",
+          "action_id": "oem.z.stop",
+          "status": "completed",
+          "terminal": true,
+          "sequence": 1,
+          "method_id": null,
+          "ownership_generation": 1,
+          "expected_board_epoch_by_board": {},
+          "state_version": 1,
+          "status_path": "/operator/v2/actions/receipts/operator_1789268960680_689f742311aa",
+          "accepted_at": 1789268960.6806736,
+          "queued_at": 1789268960.6806736,
+          "dispatched_at": 1789268960.6806834,
+          "finished_at": 1789268960.718924,
+          "terminal_receipt_id": null,
+          "completion_class": null,
+          "physical_effect_verified": false,
+          "error": null,
+          "transport_exchanges": [],
+          "transport_retention_errors": [],
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "z_move": null,
+          "source_receipt": {
+            "action_id": "oem.z.stop",
+            "admission_completed_at": 1789268960.6806736,
+            "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+            "authority_receipt_id": "operator_1789268960680_689f742311aa",
+            "authority_receipt_status": "completed",
+            "command_id": "operator_1789268960680_689f742311aa",
+            "completion_ambiguous": false,
+            "completion_verified": false,
+            "controller_acknowledged": true,
+            "delivery_verified": false,
+            "dispatched_at": 1789268960.6806834,
+            "duration_ms": 38.27047348022461,
+            "error": null,
+            "finished_at": "1789268960.718924",
+            "hardware_postcondition_verified": false,
+            "hardware_precondition_verified": false,
+            "idempotency_key": "actual-route-stop",
+            "idempotency_replay_enabled": false,
+            "inputs": {
+              "axis": "z"
+            },
+            "interrupt_evidence": {
+              "controller_stop_acknowledged": true,
+              "controller_terminal_state_verified": false,
+              "details": {
+                "deck_reconciliation": {
+                  "action_id": "oem.z.stop",
+                  "controller_stop_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "error": null,
+                  "first_stop_acknowledged": false,
+                  "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                  "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                  "persistence_state": "committed",
+                  "physical_effect_verified": false,
+                  "recovery_hold": false,
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true
+                },
+                "error": null,
+                "request": {
+                  "idempotency_key": "actual-route-stop",
+                  "observed_board_epoch_by_board": {},
+                  "observed_ownership_generation": 1,
+                  "reason": "offline qualification",
+                  "schema_version": "bioxp.operator_interrupt_request.v1"
+                }
+              },
+              "first_stop_acknowledged": false,
+              "persistence_state": "committed",
+              "physical_effect_verified": false,
+              "second_stop_acknowledged": true,
+              "source_call_completed": true,
+              "source_return_ok": true
+            },
+            "kind": "primitive",
+            "lock_acquired_at": 1789268960.6806343,
+            "machine_assessment": "pass",
+            "observation_receipt_id": null,
+            "observes_command_id": null,
+            "operator_assessment": null,
+            "operator_note": null,
+            "ownership_generation": 1,
+            "physical_effect_verified": false,
+            "provider_entry_at": 1789268960.6806834,
+            "provider_returned_at": 1789268960.718903,
+            "queued_at": 1789268960.6806736,
+            "receipt_persist_started_at": 1789268960.7189248,
+            "reconciliation_required": false,
+            "remote_acknowledged": true,
+            "request_received_at": 1789268960.6806254,
+            "requested_inputs": {},
+            "response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268960680_689f742311aa",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268960.7110481,
+                  "inputs": {
+                    "command_id": "operator_1789268960680_689f742311aa"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": false,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": false,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268960.6808794,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268960680_689f742311aa",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268960.7110481,
+                      "inputs": {
+                        "command_id": "operator_1789268960680_689f742311aa"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": false,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268960.6808794,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268960680_689f742311aa",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268960.7110481,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268960.6808794,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "retry_forbidden": false,
+            "safety_class": "stop",
+            "schema_version": "bioxp.operator_action_receipt.v1",
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "stage_receipts": [],
+            "started_at": "1789268960.6806536",
+            "status": "completed",
+            "sequence": 1
+          },
+          "canonical_inputs": {},
+          "requested_values": {},
+          "effective_values": {},
+          "observed_values": {},
+          "raw_return_layers": {
+            "operator_response": {
+              "body": {
+                "authority_receipt": {
+                  "command_id": "operator_1789268960680_689f742311aa",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268960.7110481,
+                  "inputs": {
+                    "command_id": "operator_1789268960680_689f742311aa"
+                  },
+                  "physical_effect_verified": false,
+                  "result": {
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "failure": null,
+                    "first_stop_acknowledged": false,
+                    "ok": true,
+                    "physical_effect_verified": false,
+                    "reference_desync": {
+                      "ok": true,
+                      "state": "desynced"
+                    },
+                    "second_stop_acknowledged": true,
+                    "source_call_completed": true,
+                    "source_return_ok": true,
+                    "stop": {
+                      "ack": {
+                        "status": 100
+                      },
+                      "controller_command_acknowledged": true,
+                      "double_stop_acknowledged": false,
+                      "ok": true,
+                      "source_call_completed": true
+                    }
+                  },
+                  "started_at": 1789268960.6808794,
+                  "status": "completed"
+                },
+                "ok": true,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "z_lifecycle": {
+                  "last_failure": {
+                    "reason": "z_safety_stop_unverified",
+                    "receipt": {
+                      "command_id": "operator_1789268960680_689f742311aa",
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "finished_at": 1789268960.7110481,
+                      "inputs": {
+                        "command_id": "operator_1789268960680_689f742311aa"
+                      },
+                      "physical_effect_verified": false,
+                      "result": {
+                        "controller_command_acknowledged": true,
+                        "controller_terminal_state_verified": false,
+                        "failure": null,
+                        "first_stop_acknowledged": false,
+                        "ok": true,
+                        "physical_effect_verified": false,
+                        "second_stop_acknowledged": true,
+                        "source_call_completed": true,
+                        "source_return_ok": true,
+                        "stop": {
+                          "omitted": "summary_depth_limit"
+                        }
+                      },
+                      "started_at": 1789268960.6808794,
+                      "status": "completed"
+                    }
+                  },
+                  "latest_receipt": {
+                    "command_id": "operator_1789268960680_689f742311aa",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268960.7110481,
+                    "physical_effect_verified": false,
+                    "started_at": 1789268960.6808794,
+                    "status": "completed"
+                  },
+                  "reference_state": "desynced",
+                  "state": "failed_latched",
+                  "terminal_state": null
+                }
+              },
+              "http_status": 200
+            },
+            "source_identity": {
+              "evidence_lock_identity_verified": true,
+              "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "release_id": "test-release",
+              "release_verified": true,
+              "robot_identity": "serial206",
+              "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            "completion_ambiguous": false,
+            "retry_forbidden": false
+          },
+          "controller_evidence": {},
+          "transport_artifacts": [],
+          "child_receipts": [],
+          "transitions": [],
+          "deck_movement": null
+        },
+        "fresh": {
+          "action_id": "oem.z.stop",
+          "admission_completed_at": 1789268960.6806736,
+          "authority_fingerprint": "aef505cca24984d8c2518f772b16abc66631bcb29d7f8f62aac8e0a549469701",
+          "authority_receipt_id": "operator_1789268960680_689f742311aa",
+          "authority_receipt_status": "completed",
+          "command_id": "operator_1789268960680_689f742311aa",
+          "completion_ambiguous": false,
+          "completion_verified": false,
+          "controller_acknowledged": true,
+          "delivery_verified": false,
+          "dispatched_at": 1789268960.6806834,
+          "duration_ms": 38.27047348022461,
+          "error": null,
+          "finished_at": "1789268960.718924",
+          "hardware_postcondition_verified": false,
+          "hardware_precondition_verified": false,
+          "idempotency_key": "actual-route-stop",
+          "idempotency_replay_enabled": false,
+          "inputs": {
+            "axis": "z"
+          },
+          "interrupt_evidence": {
+            "controller_stop_acknowledged": true,
+            "controller_terminal_state_verified": false,
+            "details": {
+              "deck_reconciliation": {
+                "action_id": "oem.z.stop",
+                "controller_stop_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "error": null,
+                "first_stop_acknowledged": false,
+                "interrupt_attempt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "interrupt_id": "1439e76d-1c98-406f-98ba-e441bc2cece0",
+                "persistence_state": "committed",
+                "physical_effect_verified": false,
+                "recovery_hold": false,
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true
+              },
+              "error": null,
+              "request": {
+                "idempotency_key": "actual-route-stop",
+                "observed_board_epoch_by_board": {},
+                "observed_ownership_generation": 1,
+                "reason": "offline qualification",
+                "schema_version": "bioxp.operator_interrupt_request.v1"
+              }
+            },
+            "first_stop_acknowledged": false,
+            "persistence_state": "committed",
+            "physical_effect_verified": false,
+            "second_stop_acknowledged": true,
+            "source_call_completed": true,
+            "source_return_ok": true
+          },
+          "kind": "primitive",
+          "lock_acquired_at": 1789268960.6806343,
+          "machine_assessment": "pass",
+          "observation_receipt_id": null,
+          "observes_command_id": null,
+          "operator_assessment": null,
+          "operator_note": null,
+          "ownership_generation": 1,
+          "physical_effect_verified": false,
+          "provider_entry_at": 1789268960.6806834,
+          "provider_returned_at": 1789268960.718903,
+          "queued_at": 1789268960.6806736,
+          "receipt_persist_started_at": 1789268960.7189248,
+          "reconciliation_required": false,
+          "remote_acknowledged": true,
+          "request_received_at": 1789268960.6806254,
+          "requested_inputs": {},
+          "response": {
+            "body": {
+              "authority_receipt": {
+                "command_id": "operator_1789268960680_689f742311aa",
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "finished_at": 1789268960.7110481,
+                "inputs": {
+                  "command_id": "operator_1789268960680_689f742311aa"
+                },
+                "physical_effect_verified": false,
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "failure": null,
+                  "first_stop_acknowledged": false,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "reference_desync": {
+                    "ok": true,
+                    "state": "desynced"
+                  },
+                  "second_stop_acknowledged": true,
+                  "source_call_completed": true,
+                  "source_return_ok": true,
+                  "stop": {
+                    "ack": {
+                      "status": 100
+                    },
+                    "controller_command_acknowledged": true,
+                    "double_stop_acknowledged": false,
+                    "ok": true,
+                    "source_call_completed": true
+                  }
+                },
+                "started_at": 1789268960.6808794,
+                "status": "completed"
+              },
+              "ok": true,
+              "result": {
+                "controller_command_acknowledged": true,
+                "controller_terminal_state_verified": false,
+                "failure": null,
+                "first_stop_acknowledged": false,
+                "ok": true,
+                "physical_effect_verified": false,
+                "reference_desync": {
+                  "ok": true,
+                  "state": "desynced"
+                },
+                "second_stop_acknowledged": true,
+                "source_call_completed": true,
+                "source_return_ok": true,
+                "stop": {
+                  "ack": {
+                    "status": 100
+                  },
+                  "controller_command_acknowledged": true,
+                  "double_stop_acknowledged": false,
+                  "ok": true,
+                  "source_call_completed": true
+                }
+              },
+              "z_lifecycle": {
+                "last_failure": {
+                  "reason": "z_safety_stop_unverified",
+                  "receipt": {
+                    "command_id": "operator_1789268960680_689f742311aa",
+                    "controller_command_acknowledged": true,
+                    "controller_terminal_state_verified": false,
+                    "finished_at": 1789268960.7110481,
+                    "inputs": {
+                      "command_id": "operator_1789268960680_689f742311aa"
+                    },
+                    "physical_effect_verified": false,
+                    "result": {
+                      "controller_command_acknowledged": true,
+                      "controller_terminal_state_verified": false,
+                      "failure": null,
+                      "first_stop_acknowledged": false,
+                      "ok": true,
+                      "physical_effect_verified": false,
+                      "second_stop_acknowledged": true,
+                      "source_call_completed": true,
+                      "source_return_ok": true,
+                      "stop": {
+                        "omitted": "summary_depth_limit"
+                      }
+                    },
+                    "started_at": 1789268960.6808794,
+                    "status": "completed"
+                  }
+                },
+                "latest_receipt": {
+                  "command_id": "operator_1789268960680_689f742311aa",
+                  "controller_command_acknowledged": true,
+                  "controller_terminal_state_verified": false,
+                  "finished_at": 1789268960.7110481,
+                  "physical_effect_verified": false,
+                  "started_at": 1789268960.6808794,
+                  "status": "completed"
+                },
+                "reference_state": "desynced",
+                "state": "failed_latched",
+                "terminal_state": null
+              }
+            },
+            "http_status": 200
+          },
+          "retry_forbidden": false,
+          "safety_class": "stop",
+          "schema_version": "bioxp.operator_action_receipt.v1",
+          "source_identity": {
+            "evidence_lock_identity_verified": true,
+            "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "release_id": "test-release",
+            "release_verified": true,
+            "robot_identity": "serial206",
+            "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "stage_receipts": [],
+          "started_at": "1789268960.6806536",
+          "status": "completed",
+          "sequence": 1
+        }
+      }
+    }
+  }
+]

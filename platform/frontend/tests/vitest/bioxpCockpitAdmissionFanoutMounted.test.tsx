@@ -6,6 +6,7 @@ import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
+import stopSourceProducer from '../fixtures/bioxp_stop_source_producer.json';
 import { historyItem } from '../fixtures/bioxpHistory';
 
 const completeDeckReceiptFixture = {
@@ -768,6 +769,23 @@ describe('primary cockpit query ownership', () => {
         }
         expect(state.invokeCalls).toHaveLength(0);
         expect(state.componentStopCalls).toHaveLength(0);
+    });
+
+    it.each(stopSourceProducer)('renders real acknowledged Z Stop as completed without claiming physical stopping (armed=$armed, first=$first_ack)', async (producer) => {
+        state.yInterruptData = producer.mutation;
+        await act(async () => root.render(<BioXpCockpit />));
+        const outcome = Array.from(container.querySelectorAll('[role="status"]'))
+            .find((node) => node.textContent?.startsWith('Z STOP · completed'));
+        expect(outcome).toBeDefined();
+        expect(outcome?.textContent).toContain('Source call completed: yes · Source return OK: yes');
+        expect(outcome?.textContent).toContain('Controller stop ACK: yes · Controller terminal state verified: no · Physical effect unverified');
+        expect(outcome?.textContent).toContain('Receipt persistence: committed');
+        expect(outcome?.textContent).not.toContain('Outcome or persistence unresolved');
+        const retained = JSON.parse(outcome!.querySelector('pre')!.textContent!);
+        expect(retained.interrupt_evidence.first_stop_acknowledged).toBe(producer.first_ack);
+        expect(retained.interrupt_evidence.second_stop_acknowledged).toBe(true);
+        expect(state.yInterruptCalls).toEqual([]);
+        expect(state.invokeCalls).toEqual([]);
     });
 
     it('keeps addressed gripper Stop independent and retains normal plus stop receipts', async () => {

@@ -343,6 +343,8 @@ export type BioXpJsonValue = null | boolean | number | string | BioXpJsonValue[]
 export interface BioXpOperatorInterruptEvidenceV2 {
     source_call_completed: boolean | null;
     source_return_ok: boolean | null;
+    first_stop_acknowledged?: boolean | null;
+    second_stop_acknowledged?: boolean | null;
     controller_stop_acknowledged: boolean | null;
     controller_terminal_state_verified: boolean | null;
     physical_effect_verified: false;
