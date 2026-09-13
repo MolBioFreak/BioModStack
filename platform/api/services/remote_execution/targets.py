@@ -593,14 +593,6 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
         return await operation(*args, **kwargs)
 
-    async def checked_verification(argv, failure: str, *, timeout: int):
-        try:
-            return await checked_io(run_remote, connection, argv, timeout=timeout)
-        except RemoteTransportError as exc:
-            if isinstance(exc, RemoteConnectionError) or str(exc) in {"Remote transport timed out", "Remote SSH host key changed"}:
-                raise
-            raise RemoteTransportError(failure) from exc
-
     try:
         host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
         if target.host_key_sha256 and target.host_key_sha256 != fingerprint:
@@ -682,19 +674,17 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 raise RemoteTransportError("Critical runtime boot identity changed")
             await cache._cache_artifacts(connection=connection, artifacts=artifacts,
                 operation_id=str(uuid.uuid4()), progress=progress, check_fence=fence)
-        binding = critical_runtime.runtime_binding(connection.remote_root, manifest)
         await set_setup(session, target, "verifying", "Verifying critical runtime and CUDA", expected_started_at=started_at)
-        cuda = await checked_verification([
-            "apptainer", "exec", "--nv",
-            "docker://python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4",
-            "python", "-c", "import ctypes; c=ctypes.CDLL('libcuda.so.1'); assert c.cuInit(0)==0; n=ctypes.c_int(); assert c.cuDeviceGetCount(ctypes.byref(n))==0 and n.value>0; print('BMS_CUDA_OK')",
-        ], "CUDA container verification failed", timeout=3600)
-        if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
-            raise RemoteTransportError("CUDA container verification failed")
-        # Check the real container/driver boundary before replacing the active
-        # release; a failed CUDA probe must preserve the previous generation.
+        # The actor first projects verified driver/library bytes, then executes
+        # the canonical probe on the selected backend before atomic activation.
         critical_release = await managed_inventory.activate_release(
             connection, manifest, fence, progress, boot)
+        backend = critical_release.critical.observed.get('backend')
+        if backend not in {'apptainer', 'udocker'}:
+            raise RemoteTransportError("CUDA container verification failed")
+        binding = critical_runtime.runtime_binding(connection.remote_root, manifest, backend)
+        probe['container_backend'] = backend
+        probe['container_qualification'] = critical_release.critical.observed.get('cuda')
         manifests = [m for m in managed_inventory.saved_manifests(target)
                      if m["selection"] != manifest["selection"]] + [manifest]
         readback = await managed_inventory.observe_releases(connection, manifests, fence)

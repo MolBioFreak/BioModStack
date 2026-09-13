@@ -27,7 +27,7 @@ def test_bootstrap_qualifies_python_before_any_setup(tmp_path, version, mode):
     tools.mkdir()
     actions = tmp_path / 'actions'
     env = {**os.environ, 'PATH': str(tools), 'ACTIONS': str(actions)}
-    for name in ('unshare', 'nvidia-smi', 'rsync', 'tar', 'sha256sum', 'curl', 'apptainer'):
+    for name in ('nvidia-smi', 'rsync', 'tar', 'sha256sum', 'curl', 'apptainer', 'unsquashfs'):
         executable(tools / name, '#!/bin/sh\nexit 0\n')
     executable(tools / 'id', '#!/bin/sh\nprintf "0\\n"\n')
     executable(tools / 'uname', '#!/bin/sh\nprintf "x86_64\\n"\n')
@@ -37,7 +37,7 @@ def test_bootstrap_qualifies_python_before_any_setup(tmp_path, version, mode):
         executable(tools / name, '#!/bin/sh\nprintf "mutation\\n" >> "$ACTIONS"\nexit 99\n')
     if version is not None:
         executable(tools / 'python3', f'#!{sys.executable}\nimport sys\n'
-                   f'sys.version_info = {version!r}\nexec(sys.argv[2])\n')
+                   f'sys.version_info = {version!r}\nif sys.argv[1] == \"-c\": exec(sys.argv[2])\n')
     # Compatible install is a no-op; incompatible setup must not create a root.
     compatible = version is not None and version >= (3, 11)
     worker = tmp_path / 'worker'

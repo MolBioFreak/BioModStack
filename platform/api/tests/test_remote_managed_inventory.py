@@ -422,7 +422,7 @@ def test_native_readiness_uses_shared_dependencies_without_certifying_models():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('damage', [None, 'boot', 'image', 'source', 'failed', 'cancel', 'reported_gpu', 'no_gpu'])
-async def test_explicit_native_probe_uses_native_script_and_bound_readback(monkeypatch, damage):
+async def test_explicit_native_probe_uses_native_script_and_bound_readback(monkeypatch, damage, critical_package):
     from types import SimpleNamespace
     from services import nextflow
     from services.remote_execution import bundle, transport
@@ -441,6 +441,15 @@ async def test_explicit_native_probe_uses_native_script_and_bound_readback(monke
                 sha256='c' * 64, size_bytes=1, state='verified')],
             image_reference=dict(store_root='/worker/cache/runtime-images',
                 owner='managed-release:' + digest, lease_token='d' * 32, identities={'c' * 64: identity}))]))
+    critical, _, requirements, _ = critical_package
+    manifests = [manifest, critical]
+    observed.releases.append(mi.ManagedRelease.model_validate(dict(
+        selection=critical['selection'], release_sha256=mi.release_digest(critical),
+        source_revision=critical['source_revision'], source_tree=critical['source_tree'],
+        state='verified', artifacts=[{k: row[k] for k in ('name', 'sha256', 'size_bytes')} |
+            {'state': 'verified'} for row in critical['artifacts']],
+        critical=dict(requirements=critical['critical']['requirements'],
+                      observed=requirements | dict(backend='udocker', cuda='BMS_CUDA_OK'), compatible=True))))
     calls, reads, identities = [], [], []
     monkeypatch.setattr(nextflow, 'get_code_root', lambda: source)
     def source_identity(root):
@@ -468,13 +477,13 @@ async def test_explicit_native_probe_uses_native_script_and_bound_readback(monke
         return SimpleNamespace(returncode=1 if damage == 'failed' else 0, stdout='[RFA-PREFLIGHT] OK\n')
     monkeypatch.setattr(transport, 'run_remote', command)
     async def fence(): pass
-    connection = SimpleNamespace(provision_operation_id='owned-provision')
+    connection = SimpleNamespace(provision_operation_id='owned-provision', remote_root='/worker')
     if damage in {'boot', 'image', 'source', 'cancel'}:
         with pytest.raises(asyncio.CancelledError if damage == 'cancel' else ValueError):
-            await mi.run_native_readiness_check(connection, manifest, fence, gpu_id=0)
+            await mi.run_native_readiness_check(connection, manifest, fence, gpu_id=0, manifests=manifests)
     else:
         result = await mi.run_native_readiness_check(connection, manifest, fence,
-            gpu_id=None if damage in {'reported_gpu', 'no_gpu'} else 0)
+            gpu_id=None if damage in {'reported_gpu', 'no_gpu'} else 0, manifests=manifests)
         release = result.releases[0]
         assert release.native_readiness is not None
         probe = release.native_readiness.probe
@@ -497,7 +506,11 @@ async def test_explicit_native_probe_uses_native_script_and_bound_readback(monke
     assert len(calls) == (2 if damage == 'reported_gpu' else 1)
     _, argv, kwargs = calls[-1]
     device = 'GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' if damage == 'reported_gpu' else '0'
-    assert argv == ['apptainer', 'exec', '--nv', '--env', 'CUDA_DEVICE_ORDER=PCI_BUS_ID',
+    assert argv[0] == 'env'
+    assert 'BMS_CONTAINER_BACKEND=udocker' in argv
+    executable_index = argv.index('exec') - 1
+    assert argv[executable_index].endswith('/bin/bms-container')
+    assert argv[executable_index + 1:] == ['exec', '--nv', '--env', 'CUDA_DEVICE_ORDER=PCI_BUS_ID',
                     '--env', f'CUDA_VISIBLE_DEVICES={device}', '--writable-tmpfs',
                     '/worker/cache/runtime-images/objects/sha256/' + 'c' * 64 + '/runtime.sif', 'python3', '-']
     assert kwargs == dict(timeout=120, input_bytes=(source / 'scripts/check_rfantibody_runtime.py').read_bytes())

@@ -2,7 +2,8 @@
 """Managed image/weight activation and readback, not scientific readiness.
 
 Uses the independently hash-installed cache helper's descriptor-relative I/O.
-No acquisition URLs, shell commands, model code execution or host callbacks.
+Critical activation alone acquires the fixed digest-pinned compatibility probe
+and qualifies the real selected backend. Inventory reads never execute it.
 """
 from __future__ import annotations
 
@@ -87,7 +88,7 @@ def validate_manifest(value, cache):
         name = row['name']
         path = PurePosixPath(name)
         if (str(path) != name or path.is_absolute() or '..' in path.parts
-                or len(path.parts) < 2 or path.parts[0] not in ({'runner', 'nextflow', 'support-python'} if critical is not None else {'containers', 'weights'})
+                or len(path.parts) < 2 or path.parts[0] not in ({'runner', 'nextflow', 'support-python', 'bin', 'lib'} if critical is not None else {'containers', 'weights'})
                 or name in names or type(row['mode']) is not int or not 0 <= row['mode'] <= 0o777):
             raise ValueError('invalid_artifact_path')
         if (path.parts[0] == 'containers') != (row.get('kind') == 'runtime_image'):
@@ -108,16 +109,22 @@ def validate_manifest(value, cache):
         version = critical['nextflow_version']
         expected = dict(runner='runner/bms_remote_worker.py', nextflow='nextflow/nextflow',
                         jar=f'nextflow/home/framework/{version}/nextflow-{version}-one.jar',
-                        python='support-python/venv/bin/python')
+                        python='support-python/venv/bin/python', container='bin/bms-container')
         if critical['entrypoints'] != expected or not set(expected.values()) <= names:
             raise ValueError('incomplete_critical_manifest')
+        helpers = {'lib/bootstrap_worker.sh', 'lib/scripts/__init__.py', 'lib/scripts/lib/__init__.py',
+                   'lib/scripts/lib/shared_runtime_images.py',
+                   'lib/scripts/lib/runtime_image_lifecycle.py',
+                   'lib/scripts/lib/runtime_image_views.py'}
+        if not helpers <= names:
+            raise ValueError('incomplete_container_runtime')
         # The complete support release is enumerated by the host, not just venv's
         # interpreter shortcut. Require stdlib and site-packages declarations.
         if not any('/encodings/__init__.py' in n for n in names) or not any('/site-packages/' in n for n in names):
             raise ValueError('incomplete_support_python')
         if any(row['size_bytes'] == 0 for row in rows if row['name'] in expected.values()):
             raise ValueError('empty_critical_entrypoint')
-        if any(not row['mode'] & 0o111 for row in rows if row['name'] in {expected['nextflow'], expected['python']}):
+        if any(not row['mode'] & 0o111 for row in rows if row['name'] in {expected['nextflow'], expected['python'], expected['container']}):
             raise ValueError('nonexecutable_critical_entrypoint')
     return hashlib.sha256(canonical(value)).hexdigest()
 
@@ -250,11 +257,20 @@ def observe(root, manifest, cache) -> dict[str, Any]:
     selection = manifest['selection']
     active = root / 'active' / (selection['kind'] + '-' + selection['model_id'] + '.json')
     activated = False
+    qualification = None
     try:
         marker = {'release_sha256': digest}
         if 'critical' in manifest:
             marker['boot_id'] = boot_id()
-        activated = (json.loads(read_bytes(active, cache)) == marker
+        recorded = json.loads(read_bytes(active, cache))
+        if not isinstance(recorded, dict):
+            raise ValueError('invalid_activation_record')
+        qualification = recorded.pop('qualification', None) if 'critical' in manifest else None
+        if 'critical' in manifest and (not isinstance(qualification, dict)
+                or qualification.get('cuda') != 'BMS_CUDA_OK'
+                or qualification.get('backend') not in {'apptainer', 'udocker'}):
+            raise ValueError('critical_execution_not_qualified')
+        activated = (recorded == marker
                      and read_bytes(release / 'manifest.json', cache) == canonical(manifest))
     except (OSError, ValueError):
         pass
@@ -304,6 +320,8 @@ def observe(root, manifest, cache) -> dict[str, Any]:
     if 'critical' in manifest:
         try:
             actual = observed_compatibility()
+            if activated:
+                actual.update(qualification)
             compatible = critical_compatible(manifest['critical']['requirements'], actual)
         except Exception:
             actual, compatible = {}, False
@@ -503,12 +521,72 @@ def install(root, manifest, expected_boot, cache):
         return {'release': result, 'admission': budget}
 
 
+def container_environment(worker_root, release, backend):
+    if backend not in {'apptainer', 'udocker'}:
+        raise ValueError('unsupported_container_backend')
+    tools = worker_root / 'tools/udocker-1.3.17'
+    env = dict(BMS_CONTAINER_BACKEND=backend,
+               BMS_RUNTIME_IMAGE_STORE=str(worker_root / 'cache/runtime-images'),
+               BMS_CONTAINER_WORK_ROOT=str(worker_root / 'container-workspaces'))
+    if backend == 'udocker':
+        env.update(BMS_CONTAINER_EXECUTABLE=str(release / 'bin/bms-container'),
+                   BMS_UDOCKER=str(tools / 'bin/udocker'),
+                   UDOCKER_BIN=str(tools / 'engines/bin'), UDOCKER_LIB=str(tools / 'engines/lib'),
+                   UDOCKER_DIR=str(worker_root / 'container-workspaces/udocker'),
+                   UDOCKER_EXECUTION_MODE='P1')
+    return env
+
+
+PROBE_OCI = 'docker://python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4'
+CUDA_PROBE = "import ctypes; c=ctypes.CDLL('libcuda.so.1'); assert c.cuInit(0)==0; n=ctypes.c_int(); assert c.cuDeviceGetCount(ctypes.byref(n))==0 and n.value>0; print('BMS_CUDA_OK')"
+
+
+def canonical_probe_image(root, release):
+    """Acquire once, publish/retain through the existing image authority."""
+    import subprocess
+    import tempfile
+    sys.path.insert(0, str(release / 'lib'))
+    from scripts.lib.runtime_image_lifecycle import (publish_leased_image, ensure_lease, object_path,
+                                                     transaction, load_state, atomic_write)
+    store = root.parent.parent / 'cache/runtime-images'
+    record = root / 'probe-image.json'
+    owner = 'critical-runtime-probe:' + hashlib.sha256(PROBE_OCI.encode()).hexdigest()
+    # Recover a completed publication if interrupted before the acquisition
+    # receipt was committed; do not pull a second timestamp-distinct SIF.
+    if not record.exists() and store.exists():
+        with transaction(store) as store:
+            leases = [row for row in load_state(store)['leases'].values() if row['owner'] == owner]
+        if leases:
+            if len(leases) != 1 or len(leases[0]['identities']) != 1:
+                raise ValueError('critical_probe_identity_mismatch')
+            digest = next(iter(leases[0]['identities']))
+            ensure_lease(store, [digest], owner=owner)
+            atomic_write(record, json.dumps(dict(oci=PROBE_OCI, sha256=digest)))
+    if record.exists():
+        value = json.loads(record.read_text())
+        if value['oci'] != PROBE_OCI:
+            raise ValueError('critical_probe_identity_mismatch')
+        ensure_lease(store, [value['sha256']], owner=owner)
+        return object_path(store, value['sha256'])
+    with tempfile.TemporaryDirectory(prefix='.probe-', dir=root) as temp:
+        source = Path(temp) / 'probe.sif'
+        subprocess.run(['apptainer', 'pull', '--disable-cache', str(source), PROBE_OCI],
+                       capture_output=True, text=True, check=True, timeout=1800)
+        with source.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        path, token, identities = publish_leased_image(source, store, digest, owner=owner)
+        # Existing installation admission lock serializes acquisition. The
+        # canonical image's durable lease survives retries and generation swaps.
+        atomic_write(record, json.dumps(dict(oci=PROBE_OCI, sha256=digest)))
+        return path
+
+
 def verify_critical_execution(root, manifest):
-    """Offline executable smoke checks are not scientific acceptance."""
+    """Execute the selected real backend before atomically publishing readiness."""
     import subprocess
     release = release_path(root, manifest)
     critical = manifest['critical']
-    env = {k: v for k, v in os.environ.items() if not k.startswith(('NXF_', 'PYTHON'))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('NXF_', 'PYTHON', 'BMS_CONTAINER', 'UDOCKER'))}
     env.update(NXF_OFFLINE='true', NXF_VER=critical['nextflow_version'],
                NXF_HOME=str(release / 'nextflow/home'), PYTHONNOUSERSITE='1')
     version = subprocess.run([str(release / critical['entrypoints']['nextflow']), '-version'],
@@ -518,12 +596,40 @@ def verify_critical_execution(root, manifest):
     subprocess.run([str(release / critical['entrypoints']['python']), '-I', '-c',
                     'import encodings,ssl,json,ctypes; print("BMS_SUPPORT_OK")'],
                    env=env, capture_output=True, text=True, check=True, timeout=120)
+    return qualify_container(root, release, env)
+
+
+def qualify_container(root, release, env):
+    import subprocess
+    image = canonical_probe_image(root, release)
+    for backend in ('apptainer', 'udocker'):
+        if backend == 'udocker':
+            # Reuse the byte-verified current installer owner, not a second
+            # acquisition implementation or an executable masquerading as Apptainer.
+            subprocess.run(['bash', str(release / 'lib/bootstrap_worker.sh'),
+                            'udocker', str(root.parent.parent)], env=env,
+                           capture_output=True, text=True, check=True, timeout=1800)
+        selected_env = dict(env, **container_environment(root.parent.parent, release, backend))
+        executable = selected_env.get('BMS_CONTAINER_EXECUTABLE', 'apptainer')
+        try:
+            result = subprocess.run([executable, 'exec', '--nv', str(image), 'python', '-c', CUDA_PROBE],
+                                    env=selected_env, capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.TimeoutExpired):
+            if backend == 'apptainer':
+                continue
+            raise ValueError('CUDA container verification failed')
+        if result.returncode == 0 and 'BMS_CUDA_OK' in result.stdout.splitlines():
+            if canonical_probe_image(root, release) != image:
+                raise ValueError('critical_probe_identity_mismatch')
+            return dict(backend=backend, cuda='BMS_CUDA_OK', probe_image=str(image))
+    raise ValueError('CUDA container verification failed')
 
 
 def activate(root, manifest, expected_boot, cache, fence=lambda: None):
     if boot_id() != expected_boot:
         raise ValueError('worker_boot_changed')
     digest = validate_manifest(manifest, cache)
+    qualification = None
     result = observe(root, manifest, cache)
     if 'critical' in manifest and not result['critical']['compatible']:
         raise ValueError('critical_runtime_incompatible')
@@ -536,7 +642,8 @@ def activate(root, manifest, expected_boot, cache, fence=lambda: None):
             existing = None
         if existing is not None and existing != canonical(manifest):
             raise ValueError('critical_generation_identity_collision')
-        verify_critical_execution(root, manifest)
+        qualification = verify_critical_execution(root, manifest)
+        result["critical"]["observed"].update(qualification)
     # Weight copies and prepublished shared images are verified before activation.
     # The manifest records image identity, never another full managed SIF.
     # Prior content-addressed generations remain intact for explicit recovery.
@@ -554,6 +661,7 @@ def activate(root, manifest, expected_boot, cache, fence=lambda: None):
     marker = {'release_sha256': digest}
     if 'critical' in manifest:
         marker['boot_id'] = expected_boot
+        marker['qualification'] = qualification
     publish(root / 'active' / (selection['kind'] + '-' + selection['model_id'] + '.json'),
             marker, cache)
     # This process just verified the release and atomically published its marker.

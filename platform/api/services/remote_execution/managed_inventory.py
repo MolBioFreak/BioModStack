@@ -183,6 +183,9 @@ def validate_observation(result, manifests):
             if (compatibility is None or compatibility.requirements != manifest['critical']['requirements']
                     or compatibility.compatible != critical_compatible(compatibility.requirements, compatibility.observed)):
                 raise ValueError('Critical compatibility observation mismatch')
+            if observed.state == 'verified' and (compatibility.observed.get('backend') not in {'apptainer', 'udocker'}
+                    or compatibility.observed.get('cuda') != 'BMS_CUDA_OK'):
+                raise ValueError('Critical execution qualification missing')
             if not compatibility.compatible:
                 if observed.state != 'incompatible':
                     raise ValueError('Critical compatibility readiness mismatch')
@@ -261,7 +264,16 @@ async def run_native_readiness_check(connection, manifest, check_fence, *, gpu_i
             release.native_readiness = readiness
             return before
         gpu_id, gpu_uuid = sorted(devices)[0]
-    result = await run_remote(connection, ['apptainer', 'exec', '--nv',
+    from .critical_runtime import runtime_binding
+    critical_manifest = next((m for m in manifests if 'critical' in m), None)
+    critical_release = next((r for r in before.releases if r.critical and r.state == 'verified'), None)
+    if critical_manifest is None or critical_release is None:
+        raise ValueError('Native check requires verified critical runtime')
+    backend = critical_release.critical.observed.get('backend')
+    binding = runtime_binding(connection.remote_root, critical_manifest, backend)
+    environment = binding['environment']
+    result = await run_remote(connection, ['env', *[f'{k}={v}' for k, v in environment.items()],
+        environment.get('BMS_CONTAINER_EXECUTABLE', 'apptainer'), 'exec', '--nv',
         '--env', 'CUDA_DEVICE_ORDER=PCI_BUS_ID', '--env', f'CUDA_VISIBLE_DEVICES={gpu_uuid or gpu_id}',
         '--writable-tmpfs', str(path), 'python3', '-'], input_bytes=script, timeout=120)
     await check_fence()

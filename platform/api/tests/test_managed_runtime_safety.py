@@ -102,6 +102,7 @@ def install_critical_fixture(package, monkeypatch):
         incoming.write_bytes(entry.source.read_bytes())
         storage.ingest(dict(sha256=entry.sha256, size_bytes=entry.size_bytes), incoming)
     monkeypatch.setattr(managed, 'observed_compatibility', lambda: dict(requirements))
+    monkeypatch.setattr(managed, 'qualify_container', lambda *args: dict(backend='apptainer', cuda='BMS_CUDA_OK'))
     return managed, cache, worker / 'managed-assets/v1'
 
 
@@ -112,7 +113,7 @@ def test_critical_projection_install_and_repeat_readback(critical_package, monke
     assert not (root / 'active/critical_runtime-worker.json').exists()
     installed = m.install(root, manifest, m.boot_id(), cache)
     assert installed['release']['state'] == 'verified'
-    assert installed['release']['critical']['observed'] == requirements
+    assert installed['release']['critical']['observed'] == requirements | dict(backend='apptainer', cuda='BMS_CUDA_OK')
     assert m.install(root, manifest, m.boot_id(), cache)['admission']['additional_copy_bytes'] == 0
     release = m.release_path(root, manifest)
     assert str(release / 'support-python/base') in (release / 'support-python/venv/pyvenv.cfg').read_text()
@@ -132,7 +133,7 @@ def test_critical_native_compatibility_accepts_different_tool_versions(
     monkeypatch.setattr(m, 'observed_compatibility', lambda: actual)
     release = m.install(root, manifest, m.boot_id(), cache)['release']
     assert release['state'] == 'verified'
-    assert release['critical']['observed'] == actual
+    assert release['critical']['observed'] == actual | dict(backend='apptainer', cuda='BMS_CUDA_OK')
     assert release['critical']['requirements'] == m.CRITICAL_REQUIREMENTS
     assert actual != release['critical']['requirements']
     mi.validate_observation(mi.ManagedInventory(observed_at='2026-09-10T00:00:00Z',
@@ -541,3 +542,36 @@ def test_manifest_path_prefix_collision_rejected(tree):
     manifest = make(b'new', ('weights/a', 'weights/a/b'))
     with pytest.raises(ValueError, match='conflicting_artifact_paths'):
         m.install(root, manifest, m.boot_id(), cache)
+
+
+def test_critical_cuda_failure_preserves_active_generation(critical_package, monkeypatch):
+    import copy
+    manifest, _, _, _ = critical_package
+    managed, cache, root = install_critical_fixture(critical_package, monkeypatch)
+    managed.install(root, manifest, managed.boot_id(), cache)
+    marker = root / 'active/critical_runtime-worker.json'
+    prior = marker.read_bytes()
+    successor = copy.deepcopy(manifest)
+    successor['critical']['installation_id'] = 'e' * 64
+    def failed(*args):
+        raise ValueError('CUDA container verification failed')
+    monkeypatch.setattr(managed, 'qualify_container', failed)
+    with pytest.raises(ValueError, match='CUDA container verification failed'):
+        managed.install(root, successor, managed.boot_id(), cache)
+    assert marker.read_bytes() == prior
+    assert managed.observe(root, successor, cache)['state'] == 'unverified'
+    assert managed.observe(root, manifest, cache)['state'] == 'verified'
+
+
+def test_critical_bytes_without_qualification_are_not_ready(critical_package, monkeypatch):
+    import json
+    manifest, _, _, _ = critical_package
+    managed, cache, root = install_critical_fixture(critical_package, monkeypatch)
+    managed.install(root, manifest, managed.boot_id(), cache)
+    marker = root / 'active/critical_runtime-worker.json'
+    record = json.loads(marker.read_text())
+    record.pop('qualification')
+    managed.publish(marker, record, cache)
+    observed = managed.observe(root, manifest, cache)
+    assert observed['state'] == 'unverified'
+    assert all(row['state'] == 'verified' for row in observed['artifacts'])

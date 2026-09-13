@@ -31,6 +31,7 @@ async def test_attachment_never_transfers_over_published_artifacts(
         (published / name).write_bytes(b'old verified bytes')
     m, c = load('bms_managed_runtime'), load('bms_artifact_cache')
     monkeypatch.setattr(m, 'observed_compatibility', lambda: observed)
+    monkeypatch.setattr(m, 'qualify_container', lambda *args: dict(backend='udocker', cuda='BMS_CUDA_OK'))
     async def helper(conn, request, fence):
         await fence()
         managed = root / 'managed-assets/v1'

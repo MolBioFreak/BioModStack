@@ -1160,7 +1160,9 @@ def prepare_remote_bundle(
     resource_destination = f'{remote_attempt}/bundle/inputs/{resource_file.name}'
     resource_lock = f'{remote_attempt}/compute.lock'
     resource_file.write_text(native_resource_config(native_invocation.execution_plan.to_dict(),
-        resources, resource_lock, repo_root))
+        resources, resource_lock, repo_root, container_runtime={
+            'backend': (binding or {}).get('environment', {}).get('BMS_CONTAINER_BACKEND', 'apptainer'),
+            'executable': (binding or {}).get('environment', {}).get('BMS_CONTAINER_EXECUTABLE', 'apptainer')}))
     input_records.append(_record_file(resource_file, f'inputs/{resource_file.name}', 'input'))
     input_transfers.append(TransferPlan(resource_file, resource_destination))
     translated_command = [*translated_command, '-c', resource_destination]

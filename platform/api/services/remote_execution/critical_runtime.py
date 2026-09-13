@@ -67,6 +67,16 @@ def project_runtime(remote_root, staging_root):
                     get_data_root() / 'runtime/cm-api-python') / 'current').resolve(strict=True)
     runner = Path(__file__).resolve().parents[2] / 'tools/bms_remote_worker.py'
     sources = [('runner/bms_remote_worker.py', runner), ('nextflow/nextflow', launcher), (jar_name, jar)]
+    code_root = get_code_root().resolve()
+    sources.append(('bin/bms-container', code_root / 'platform/api/tools/bms_container.py'))
+    sources.append(('lib/bootstrap_worker.sh', Path(__file__).with_name('bootstrap_worker.sh')))
+    for name in ('scripts/__init__.py', 'scripts/lib/__init__.py',
+                 'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
+                 'scripts/lib/runtime_image_views.py'):
+        # scripts is a source namespace package. Project its existing library
+        # package initializer at both levels for standalone installed imports.
+        sources.append(('lib/' + name, code_root / (
+            'scripts/lib/__init__.py' if name == 'scripts/__init__.py' else name)))
     support_leaves = list(_leaves(support))
     source = current_source_identity(get_code_root().resolve())
     identity = dict(source=source, remote_root=remote_root, requirements=requirements, version=version,
@@ -87,7 +97,7 @@ def project_runtime(remote_root, staging_root):
     rows, transfers = [], []
     for name, path in sources:
         row = dict(name=name, sha256=_digest(path), size_bytes=path.stat().st_size,
-                   mode=path.stat().st_mode & 0o777)
+                   mode=0o755 if name == 'bin/bms-container' else path.stat().st_mode & 0o777)
         rows.append(row)
         transfers.append(CacheTransferArtifact(source=path, remote_destination=name,
                          sha256=str(row['sha256']), size_bytes=int(row['size_bytes']), mode=int(row['mode']), role='runtime'))
@@ -96,17 +106,18 @@ def project_runtime(remote_root, staging_root):
                     critical=dict(schema='bms.critical-runtime.v1', installation_id=installation_id,
                         nextflow_version=version, requirements=dict(requirements),
                         entrypoints=dict(runner='runner/bms_remote_worker.py', nextflow='nextflow/nextflow',
-                                         jar=jar_name, python='support-python/venv/bin/python')))
+                                         jar=jar_name, python='support-python/venv/bin/python', container='bin/bms-container')))
     return manifest, tuple(transfers)
 
 
-def runtime_binding(remote_root, manifest):
+def runtime_binding(remote_root, manifest, backend="apptainer"):
     critical = manifest['critical']
     generation = f"{remote_root}/managed-assets/v1/releases/{critical['installation_id']}"
     paths = {key: generation + '/' + value for key, value in critical['entrypoints'].items()}
     rows = {r['name']: r for r in manifest['artifacts']}
     hashes = {key: rows[value]['sha256'] for key, value in critical['entrypoints'].items()}
     from .managed_inventory import release_digest
+    from tools.bms_managed_runtime import container_environment
     return dict(paths=paths, sha256=hashes, release_sha256=release_digest(manifest),
-                environment=dict(NXF_OFFLINE='true', NXF_VER=critical['nextflow_version'],
+                environment=dict(**container_environment(Path(remote_root), Path(generation), backend), NXF_OFFLINE='true', NXF_VER=critical['nextflow_version'],
                 NXF_HOME=generation + '/nextflow/home', PYTHONNOUSERSITE='1'))
