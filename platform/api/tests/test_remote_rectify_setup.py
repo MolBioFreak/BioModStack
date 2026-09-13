@@ -66,8 +66,16 @@ def test_supported_python_runs_managed_helper_and_provisioning(critical_package,
     _, _, root = install_critical_fixture(critical_package, monkeypatch)
     tools = tmp_path / 'version-tools'
     tools.mkdir()
-    for tool in ('java', 'apptainer', 'nvidia-smi'):
+    for tool in ('java', 'nvidia-smi'):
         executable(tools / tool, '#!/bin/sh\nprintf "offline-version-fixture\\n"\n')
+    # Native acquisition/execution boundary only: preserve real helper CLI,
+    # canonical image publication and qualification dispatch under netns guards.
+    executable(tools / 'apptainer', '#!/bin/sh\nset -eu\n'
+               'case "$1" in\n'
+               'pull) printf "opaque offline image fixture" > "$3" ;;\n'
+               'exec) printf "BMS_CUDA_OK\\n" ;;\n'
+               '*) printf "offline-version-fixture\\n" ;;\n'
+               'esac\n')
     env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH']}
     command = [python, str(API / 'tools/bms_managed_runtime.py'), '--root', str(root),
                '--cache-helper', str(API / 'tools/bms_artifact_cache.py')]
@@ -81,6 +89,13 @@ def test_supported_python_runs_managed_helper_and_provisioning(critical_package,
     installed = call('install', manifest=manifest, boot_id=boot)
     assert installed['release']['state'] == 'verified'
     assert call('observe', manifests=[manifest])['releases'][0]['state'] == 'verified'
+    generation = root / 'releases' / manifest['critical']['installation_id']
+    driver = generation / manifest['critical']['entrypoints']['container']
+    assert driver.read_bytes() == (API / 'tools/bms_container.py').read_bytes()
+    version = subprocess.run([python, str(driver), '--version'],
+                             capture_output=True, text=True, env=env, timeout=20)
+    assert version.returncode == 0, version.stdout + version.stderr
+    assert version.stdout.startswith('bms-container ')
     from services.remote_execution.transport import RemoteConnection, _provision_argv
     connection = RemoteConnection(target_id='fixture', host='fixture.invalid', port=22, username='fixture',
                                   remote_root=str(worker))

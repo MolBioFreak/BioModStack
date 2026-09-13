@@ -545,6 +545,7 @@ def canonical_probe_image(root, release):
     """Acquire once, publish/retain through the existing image authority."""
     import subprocess
     import tempfile
+    root, release = Path(root), Path(release)
     sys.path.insert(0, str(release / 'lib'))
     from scripts.lib.runtime_image_lifecycle import (publish_leased_image, ensure_lease, object_path,
                                                      transaction, load_state, atomic_write)
