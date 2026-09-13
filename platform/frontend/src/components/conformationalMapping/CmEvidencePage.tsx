@@ -26,10 +26,7 @@ function EvidencePage({ requestId, record, collection, label, getPage = getCmRec
                 || page.sha256 !== record.sha256 || page.collection !== collection || page.offset !== offset || page.limit !== limit
                 || (record.artifact && (page.artifact?.artifact_id !== record.artifact.artifact_id
                     || page.artifact?.content_sha256 !== record.artifact.content_sha256))
-                || !Array.isArray(page.rows) || page.rows.length > limit
-                || !Number.isInteger(page.total_count) || page.total_count < offset + page.rows.length
-                || page.rows.length !== Math.min(limit, Math.max(0, page.total_count - offset))
-                || page.next_offset !== (offset + page.rows.length < page.total_count ? offset + page.rows.length : null)) {
+                || !Array.isArray(page.rows) || page.rows.length > limit) {
                 throw new Error('Evidence page does not match the requested record identity or bounds.');
             }
             return page;

@@ -44,6 +44,10 @@ it('selects the exact native mmCIF in shared Molstar and retains candidate downl
     expect(Array.from(container.querySelectorAll('a[download]')).map((link) => link.getAttribute('href'))).toEqual(result.candidates.map((candidate) => candidate.structure_url));
     expect(container.textContent).toContain('12.00');
     expect(container.textContent).toContain('—');
+    await act(async () => client.setQueryData(['rfd3-generation', result.job_id], { data: { ...result, candidates: [result.candidates[0]] } }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(container.querySelector('[data-testid="viewer"]')).toBeNull();
+    expect(container.textContent).toContain('Selected candidate is unavailable');
     await act(async () => client.setQueryData(['rfd3-generation', result.job_id], { data: { ...result, job_id: 'wrong-job' } }));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(container.querySelector('[data-testid="viewer"]')).toBeNull();

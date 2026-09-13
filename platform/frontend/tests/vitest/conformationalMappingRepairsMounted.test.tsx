@@ -828,7 +828,9 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
 
 test('mounted RCSB search rejects incomplete server entries without rendering fabricated selectors', async () => {
     const originalAdapter = api.defaults.adapter;
-    api.defaults.adapter = async (config) => ({
+    api.defaults.adapter = async (config) => {
+        if (config.url !== '/api/conformational-mapping/sources/rcsb/search') throw new Error(`TEST ancillary unavailable: ${config.url}`);
+        return {
         data: {
             query: '4HHB', cached: false,
             entries: [{
@@ -837,7 +839,8 @@ test('mounted RCSB search rejects incomplete server entries without rendering fa
             }],
         },
         status: 200, statusText: 'OK', headers: {}, config,
-    });
+        };
+    };
     const mounted = await mountLauncher({ listSources: async () => [] }, { backend: 'external_import', name: 'Reject incomplete RCSB' });
     try {
         await clickButton(mounted.renderer, /^RCSB$/i);
@@ -1175,9 +1178,14 @@ test('PLR context composes the existing Design workbench instead of a second mod
     try {
         await act(async () => { renderer = create(<MemoryRouter initialEntries={[`/designs/${job.id}`]}><QueryClientProvider client={queryClient}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></QueryClientProvider></MemoryRouter>); });
         await flush(30);
-        assert.ok(requested.includes(`/api/jobs/${job.id}/workflow-results`));
+        assert.equal(requested.includes(`/api/jobs/${job.id}/workflow-results`), false);
         assert.ok(requested.includes('/api/designs'));
-        assert.match(text(renderer!.root), /Workflow-native artifact inventory/);
+        const inventory = renderer!.root.findAllByType('summary').find((node) => text(node) === 'Protein Local Redesign files');
+        assert.ok(inventory);
+        await act(async () => inventory.parent!.props.onToggle({ currentTarget: { open: true } }));
+        await flush(30);
+        assert.ok(requested.includes(`/api/jobs/${job.id}/workflow-results`));
+        assert.match(text(renderer!.root), /Source files/);
         assert.match(text(renderer!.root), /TEST FAMPNN candidate/);
         assert.equal(renderer!.root.findAllByProps({ 'aria-label': 'Model-native Protein Local Redesign results' }).length, 0);
         assert.equal(renderer!.root.findAllByProps({ 'aria-label': 'Workflow model results' }).length, 1);

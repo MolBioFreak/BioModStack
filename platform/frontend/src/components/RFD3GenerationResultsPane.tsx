@@ -24,7 +24,8 @@ const SummaryCard = ({ label, value, detail }: { label: string; value: string | 
 
 export function RFD3GenerationResultsContent({ result }: { result: RFD3GenerationReadModel }) {
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
-    const selectedCandidate = result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId) ?? result.candidates[0];
+    const selectedCandidate = selectedCandidateId === null ? result.candidates[0]
+        : result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
     return (
         <div className="space-y-5" data-bms-result-pane="rfd3-generation">
             <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
@@ -76,6 +77,7 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                     <h3 className="mb-3 text-lg font-semibold text-white">{selectedCandidate.candidate_id}</h3>
                     <MolstarViewer structureUrl={selectedCandidate.structure_url} format="cif" label={selectedCandidate.candidate_id} artifactJobId={result.job_id} height={500} />
                 </div>}
+                {selectedCandidateId !== null && !selectedCandidate && <p role="alert" className="p-6 text-sm text-amber-200">Selected candidate is unavailable. Choose another candidate.</p>}
                 {result.candidates.length === 0 && <div className="p-6 text-sm text-slate-400">No generated candidates are available.</div>}
             </section>
         </div>
