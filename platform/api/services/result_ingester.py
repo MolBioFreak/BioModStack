@@ -4925,11 +4925,16 @@ async def ingest_job_results(
     *,
     commit: bool = True,
 ) -> int:
-    """Import native results in one transaction, or join the caller's transaction."""
+    """Import native results atomically, or join a caller-owned transaction.
+
+    With commit=False the caller owns both commit and rollback, including after
+    partial writes. Native prevalidation failures must not discard its pending work.
+    """
     session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
     current_job = None
     try:
-        current_job = await session.get(Job, job_id)
+        with session.no_autoflush:
+            current_job = await session.get(Job, job_id)
         model_id = str(current_job.model_id or "").strip().lower() if current_job else ""
         # Bind native full-root aggregate evidence before any candidate mutation.
         # Interactive stage publications legitimately have no closeout yet.
@@ -4966,15 +4971,10 @@ async def ingest_job_results(
         else:
             await session.flush()
         return count
-    except Exception as exc:
+    except Exception:
         session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
-        if not commit and isinstance(exc, ShapeNoCandidates) and isinstance(exc.shape_publication, dict):
-            from .result_state_integrity import _authoritative_result_count
-            if current_job is not None and await _authoritative_result_count(session, current_job) == 0:
-                # Native finalization owns this validated no-yield disposition and
-                # must retain the caller's generation/publication transaction.
-                raise
-        await session.rollback()
+        if commit:
+            await session.rollback()
         raise
 
 
