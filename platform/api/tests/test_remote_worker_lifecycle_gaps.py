@@ -285,7 +285,10 @@ for i in range(100):
 
 
 def test_reboot_loses_attempt_without_signalling_reused_pid(tmp_path, monkeypatch):
-    envelope = {"job_id": "job", "attempt_id": "attempt", "output_directory": str(tmp_path / "results")}
+    from pathlib import Path
+    envelope = {"job_id": "job", "attempt_id": "attempt", "output_directory": str(tmp_path / "results"),
+        "schema": "bms.remote-execution.v1", "source_revision": "a"*40, "source_tree": "b"*40,
+        "working_directory": str(Path(__file__).resolve().parents[3])}
     worker.atomic_json(tmp_path / worker.ENVELOPE_FILE, envelope)
     worker.atomic_json(tmp_path / worker.STATUS_FILE, dict(
         worker.base_status(envelope, "running"), boot_id="previous-boot", supervisor_pid=123))
@@ -318,6 +321,7 @@ def test_supervisor_joins_detached_grandchild_before_terminal(tmp_path):
     child = tmp_path / "child.json"
     script = "import subprocess,time,json; from pathlib import Path; p=subprocess.Popen(['sleep','60'], start_new_session=True); Path(%r).write_text(json.dumps(p.pid)); time.sleep(60)" % str(child)
     envelope = {"job_id": "job", "attempt_id": "attempt", "command": [sys.executable, "-c", script],
+                "schema": "bms.remote-execution.v1", "source_revision": "a"*40, "source_tree": "b"*40,
                 "working_directory": str(tmp_path), "output_directory": str(tmp_path / "results")}
     worker.atomic_json(tmp_path / worker.ENVELOPE_FILE, envelope)
     worker.atomic_json(tmp_path / worker.STATUS_FILE, worker.base_status(envelope, "prepared"))

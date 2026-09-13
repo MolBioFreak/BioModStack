@@ -81,6 +81,7 @@ async def lane(tmp_path, monkeypatch):
     context_path = attempt / 'context.json'
     context_path.write_text(json.dumps(context))
     worker.atomic_json(worker.envelope_path(attempt), dict(attempt_id='attempt', job_id='job',
+        schema='bms.remote-execution.v1', source_revision='a'*40, source_tree='b'*40,
         output_directory=str(artifacts), working_directory=str(root),
         environment={'BMS_COMPONENT_CONTEXT': str(context_path)}, files=[dict(relative_path='inputs/component-context.json',
             size_bytes=context_path.stat().st_size, sha256=worker.sha256_file(context_path))]))
