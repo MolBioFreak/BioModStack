@@ -104,6 +104,14 @@ def package(tmp_path, monkeypatch):
     seq = roots['inputs']/'seq.fasta'
     seq.write_text('>A\nAAAA\n')
     (roots['repo']/'main.nf').write_text('workflow {}\n')
+    # Critical projection consumes the actual source runtime, not a fake CLI.
+    source_root = Path(__file__).resolve().parents[3]
+    for name in ('platform/api/tools/bms_container.py', 'scripts/lib/__init__.py',
+                 'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
+                 'scripts/lib/runtime_image_views.py'):
+        destination = roots['repo'] / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_root / name, destination)
     # Source archiving is an isolated seam: this test cannot mutate Git.
     monkeypatch.setattr(bundle, 'current_source_identity', lambda *_: ('a'*40, 'b'*40))
     from component_runtime import SourceIdentity
