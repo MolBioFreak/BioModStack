@@ -6756,11 +6756,35 @@ async def _create_job(
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
 
         if execution_preview is not None:
+            if 'input_identities' not in execution_preview:
+                # Typed MD already approved its resolved structure and frozen
+                # profile; its trusted materializer just sealed the derived MD
+                # config. Bind that actual closure, not a second approval or an
+                # invented empty generic preview.
+                if not (job_data.model_id == 'molecular_dynamics'
+                        and isinstance(_approved_execution_plan, ApprovedExecutionPlan)):
+                    raise HTTPException(status_code=409, detail='Native approval lacks input authority')
+                from scripts.lib.portable_inputs import discover_native_input_references
+                import yaml
+                input_request = {'model_id': job_data.model_id, 'mode': job_data.mode,
+                    'params': deepcopy(job_params), 'output_dir': str(output_dir)}
+                approved_inputs = discover_native_input_references(job_data.model_id, job_data.mode,
+                    job_params, (), output_dir=Path(output_dir),
+                    allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
+                    yaml_loader=yaml.safe_load)
+            else:
+                approved_inputs = execution_preview['input_identities']
+                input_request = {'model_id': execution_preview['request']['model_id'],
+                    'mode': execution_preview['request']['mode'],
+                    'params': execution_preview['request']['params'],
+                    'output_dir': execution_preview['plan']['native_parameters_json']['out_dir']}
             provenance_payload['execution_plan_approval'] = {
                 'approval_digest': execution_preview['approval_digest'],
                 'plan_sha256': execution_preview['plan']['plan_sha256'],
                 'plan': execution_preview['plan'],
                 'source_identity': execution_preview['plan']['source_identity'],
+                'input_identities': approved_inputs,
+                'input_request': input_request,
                 'deferred_preparation': execution_preview['deferred_preparation'],
                 'declared_expansions': execution_preview.get('declared_expansions', []),
                 **({'expansion_approval': execution_preview['expansion_approval']}
