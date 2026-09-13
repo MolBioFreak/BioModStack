@@ -142,7 +142,7 @@ it('retries a stopped operation only with a fresh preview of its persisted selec
 
 it('mounts in the real worker panel without Jobs; previews exact bytes then starts once with the digest', async () => {
   await render();
-  expect(container.textContent).toContain('No saved Job required');
+  expect(container.textContent).toContain('Optional advance downloads, not a job launcher');
   expect(container.textContent).toContain('Installed artifacts are unknown');
   expect(button('Start provision').disabled).toBe(true);
   await select('Provision model', 'protenix');
@@ -367,7 +367,9 @@ it('discovers the shared launcher workflows and full model registry without gran
   expect(container.textContent).toContain('Molecular Dynamics');
   await select('Preparation workflow', 'antibody_denovo');
   expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=antibody_denovo');
-  expect(container.textContent).toContain('Workflows without that control do not support unsaved preparation');
+  expect(container.textContent).toContain('Unsaved preparation is available only where that form has “Preview artifact downloads”');
+  expect(container.textContent).toContain('use an existing job as its dependency recipe without rerunning it');
+  expect(container.textContent).not.toContain('No saved Job required');
   expect(posts).toEqual([]);
 });
 

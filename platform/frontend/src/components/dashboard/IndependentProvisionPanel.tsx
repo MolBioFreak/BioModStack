@@ -60,7 +60,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const inventory = target.artifact_inventory;
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
     <h4 className="font-medium">Prepare worker for a model or workflow</h4>
-    <p className="text-xs text-[var(--text-muted)]">No saved Job required. Preparation copies managed runtime assets to this worker; it does not launch inference. Models come from the model registry and workflows from the same catalog as the job launcher. Exact workflow dependencies depend on your typed settings; configure them in the existing launcher before previewing downloads.</p>
+    <p className="text-xs text-[var(--text-muted)]">Optional advance downloads, not a job launcher. Choose a model for its supported runtime assets, or configure a workflow to determine its exact dependencies. Preparation does not run inference.</p>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
         <option value="workflow">Workflow (configure exact dependencies)</option><option value="model">Model and runtime dependencies</option><option value="image">Container image only</option>
@@ -80,7 +80,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {kind !== 'workflow' && modelId && !valid && <p role="status">Independent preparation is unavailable for this model and scope. This is not a statement of scientific readiness. Use a configured workflow's dependency preview where supported; unsupported workflows remain blocked by the shared compiler.</p>}
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
-      <p>Configure scientific settings and select this worker in the launcher, then use “Preview artifact downloads”. Workflows without that control do not support unsaved preparation. Opening the launcher does not prepare assets or launch a Job.</p>
+      <p>Open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
     </div>}
     {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
