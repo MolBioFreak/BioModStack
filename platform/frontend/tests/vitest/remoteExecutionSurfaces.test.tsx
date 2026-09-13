@@ -184,6 +184,16 @@ describe('remote execution operator surfaces', () => {
                 expect(container.textContent).toContain(blocker);
                 expect(button('Retry setup').disabled).toBe(false);
                 expect(button('Detach').disabled).toBe(false);
+                const actions = button('Detach').closest('[role="group"][aria-label="Worker actions"]')!;
+                expect(actions).not.toBeNull();
+                expect(button('Retry setup').parentElement).toBe(actions);
+                expect([...actions.querySelectorAll('button')].map(control => control.textContent)).toEqual(['Detach', 'Retry setup']);
+                const card = actions.parentElement!;
+                expect(card.children).toHaveLength(2);
+                expect(card.firstElementChild?.textContent).toContain(blocker);
+                expect(card.firstElementChild?.classList.contains('min-w-0')).toBe(true);
+                expect(card.firstElementChild?.classList.contains('flex-1')).toBe(true);
+                expect(actions.classList.contains('shrink-0')).toBe(true);
                 const placement = [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Vast · Remote A6000'))!;
                 expect(placement.disabled).toBe(true);
                 await act(async () => placement.click());

@@ -1547,9 +1547,9 @@ export function InfraLiveTelemetry({
                         return (
                             <div
                                 key={target.id}
-                                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3"
+                                className="flex flex-col items-stretch gap-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3 sm:flex-row sm:items-center"
                             >
-                                <div className="min-w-0 text-sm text-[var(--text-secondary)]">
+                                <div className="min-w-0 flex-1 [overflow-wrap:anywhere] text-sm text-[var(--text-secondary)]">
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="font-semibold text-[var(--text-primary)]">
                                             {target.name ?? `Vast ${target.provider_instance_id}`}
@@ -1572,26 +1572,28 @@ export function InfraLiveTelemetry({
                                         <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
                                     )}
                                 </div>
-                                {target.active && (
-                                    <button
-                                        type="button"
-                                        onClick={() => detachVastMutation.mutate(target.id)}
-                                        disabled={detachVastMutation.isPending || isAttaching}
-                                        className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
-                                    >
-                                        {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
-                                    </button>
-                                )}
-                                {!isReady && (
-                                    <button
-                                        type="button"
-                                        onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
-                                        disabled={!canAttach || attachVastMutation.isPending}
-                                        className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
-                                    >
-                                        {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
-                                    </button>
-                                )}
+                                <div role="group" aria-label="Worker actions" className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
+                                    {target.active && (
+                                        <button
+                                            type="button"
+                                            onClick={() => detachVastMutation.mutate(target.id)}
+                                            disabled={detachVastMutation.isPending || isAttaching}
+                                            className="shrink-0 whitespace-nowrap rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
+                                        >
+                                            {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
+                                        </button>
+                                    )}
+                                    {!isReady && (
+                                        <button
+                                            type="button"
+                                            onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
+                                            disabled={!canAttach || attachVastMutation.isPending}
+                                            className="shrink-0 whitespace-nowrap rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
+                                        >
+                                            {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         );
                     })}
