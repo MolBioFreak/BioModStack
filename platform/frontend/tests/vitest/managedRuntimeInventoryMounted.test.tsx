@@ -18,6 +18,12 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 25));
 const render = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><ManagedRuntimeInventoryPanel target={target} /></QueryClientProvider>); await settle(); }); await act(async () => { await settle(); }); };
 const button = (text = 'Refresh installed observation') => [...container.querySelectorAll('button')].find(b => b.textContent === text)!;
 const click = async (text?: string) => { await act(async () => { button(text).click(); await settle(); }); await act(async () => { await settle(); }); };
+const openFiles = async (label = 'model protenix installed artifacts') => {
+  const summary = [...container.querySelectorAll('summary')].find(item => item.textContent?.startsWith(label))!;
+  if (!(summary.parentElement as HTMLDetailsElement).open) {
+    await act(async () => { summary.click(); await settle(); });
+  }
+};
 beforeEach(() => {
   saved = observation(); target = { ...ready }; requests = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -58,6 +64,7 @@ it.each(['passed', 'failed'] as const)('retains scoped native %s evidence across
   expect(container.textContent).toContain(`Last recorded native preflight: ${outcome} · GPU 0`);
   expect(container.textContent).toContain('Scientific ready: false');
   expect(container.textContent).toContain('complete_selected_model_native_probe_coverage');
+  await openFiles();
   for (const state of ['current', 'stale'] as const) {
     saved = { ...saved!, state };
     await act(async () => { await client.invalidateQueries(); await settle(); });
@@ -71,10 +78,41 @@ it.each(['passed', 'failed'] as const)('retains scoped native %s evidence across
 it('GETs saved cumulative image/model evidence without POST, keeping freshness distinct from asset state/readiness', async () => {
   await render();
   expect(requests).toEqual([{ method: 'get', url: '/api/execution-targets/vast%3A123/runtime-inventory', data: undefined }]);
+  await openFiles();
   for (const text of ['Fresh observation (current)', 'model · protenix · Release state: partial', 'image · esmfold2 · Release state: verified', 'Artifact state: missing', '2026-09-07T15:00:00Z', 'Critical runtime ready: false', 'Scientific ready: false', '1,234 bytes', 'd'.repeat(64), 'boot-identity']) expect(container.textContent).toContain(text);
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(requests.every(r => r.method === 'get')).toBe(true);
 });
+it('keeps a full worker inventory collapsed through polling and scrolls only explicitly opened files', async () => {
+  saved!.releases[0].artifacts = Array.from({ length: 18000 }, (_, index) => ({
+    name: `support-python/file-${index}.py`, size_bytes: 123, sha256: 'd'.repeat(64), state: 'verified' as const,
+  }));
+  await render();
+  const summary = [...container.querySelectorAll('summary')].find(item => item.textContent?.startsWith('model protenix installed artifacts'))!;
+  expect(summary.textContent).toContain('18,000');
+  expect((summary.parentElement as HTMLDetailsElement).open).toBe(false);
+  expect(container.textContent).not.toContain('support-python/file-0.py');
+  await act(async () => { await client.invalidateQueries(); await settle(); });
+  expect((summary.parentElement as HTMLDetailsElement).open).toBe(false);
+  expect(container.textContent).not.toContain('support-python/file-0.py');
+  expect(button().disabled).toBe(false);
+  expect(container.textContent).toContain('Release state: partial');
+  await openFiles();
+  const viewport = container.querySelector('[role="region"][aria-label="model protenix installed artifacts"]')!;
+  expect(viewport.classList.contains('max-h-64')).toBe(true);
+  expect(viewport.classList.contains('overflow-auto')).toBe(true);
+  expect(viewport.querySelectorAll('li')).toHaveLength(18000);
+  expect(viewport.textContent).toContain('support-python/file-17999.py');
+  saved = { ...saved!, state: 'stale' };
+  await act(async () => { await client.invalidateQueries(); await settle(); });
+  expect((summary.parentElement as HTMLDetailsElement).open).toBe(true);
+  expect(container.textContent).toContain('Stale observation');
+  await act(async () => { summary.click(); await settle(); });
+  expect(container.querySelector('[role="region"][aria-label="model protenix installed artifacts"]')).toBeNull();
+  expect(container.textContent).not.toContain('support-python/file-17999.py');
+  expect(requests.every(request => request.method === 'get')).toBe(true);
+});
+
 it('explicit refresh sends one bodyless POST despite double click, then reloads saved evidence', async () => {
   saved!.state = 'stale'; await render(); expect(container.textContent).toContain('Stale observation');
   saved = observation();
@@ -85,6 +123,7 @@ it('explicit refresh sends one bodyless POST despite double click, then reloads 
 });
 it('retains prior evidence but not freshness after refresh failure; recovery requires an explicit click', async () => {
   await render(); saved!.state = 'stale';
+  await openFiles();
   const post = vi.spyOn(api, 'post').mockRejectedValueOnce({ isAxiosError: true, response: { data: { detail: 'Worker observation failed' } } });
   await click();
   expect(post).toHaveBeenCalledTimes(1);
@@ -107,6 +146,7 @@ it.each([null, { ...observation(), releases: [] }])('does not promote empty or a
 });
 it('does not display another endpoint observation while its new saved GET is pending', async () => {
   await render();
+  await openFiles();
   let resolve!: (value: ReturnType<typeof response>) => void;
   vi.spyOn(api, 'get').mockImplementationOnce(() => new Promise(r => { resolve = r; }));
   target = { ...target, host: 'replacement' }; await render();
@@ -118,6 +158,7 @@ it('GET errors allow saved-only retry, without SSH refresh', async () => {
   vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('Saved read unavailable'));
   await render(); expect(container.textContent).toContain('Saved read unavailable');
   await click('Reload saved observation');
+  await openFiles();
   expect(container.textContent).toContain('weights/model.pt');
   expect(requests.every(r => r.method === 'get')).toBe(true);
 });
@@ -130,6 +171,7 @@ it('rejects observations that claim scientific readiness or use another scope', 
 });
 it('a late refresh cannot overwrite the replacement endpoint view', async () => {
   await render();
+  await openFiles();
   let resolve!: (value: ReturnType<typeof response>) => void;
   vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(r => { resolve = r; }));
   await click();

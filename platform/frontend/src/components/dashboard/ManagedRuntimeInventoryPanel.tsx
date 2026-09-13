@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { ArtifactDetails } from './ArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchExecutionTargetRuntimeInventory, refreshExecutionTargetRuntimeInventory, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
@@ -84,9 +85,11 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
               {key}: required {release.critical?.requirements[key] ?? 'not specified'} · observed {release.critical?.observed[key] ?? 'missing'}
             </li>)}</ul>}
           </div>}
-          <ul aria-label={`${release.selection.kind} ${provisionSelectionLabel(release.selection)} installed artifacts`} className="max-h-64 space-y-1 overflow-auto text-xs">
-            {release.artifacts.map(artifact => <li key={artifact.name}><p>{artifact.name} · Artifact state: {artifact.state}</p><p>{artifact.size_bytes.toLocaleString()} bytes · SHA256 {artifact.sha256}</p></li>)}
-          </ul>
+          <ArtifactDetails label={`${release.selection.kind} ${provisionSelectionLabel(release.selection)} installed artifacts`} count={release.artifacts.length}>
+            {() => <ul className="space-y-1">
+              {release.artifacts.map(artifact => <li key={artifact.name}><p>{artifact.name} · Artifact state: {artifact.state}</p><p>{artifact.size_bytes.toLocaleString()} bytes · SHA256 {artifact.sha256}</p></li>)}
+            </ul>}
+          </ArtifactDetails>
         </li>)}
       </ul>
     </>}
