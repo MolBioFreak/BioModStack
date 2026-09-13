@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
+import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import { historyItem } from '../fixtures/bioxpHistory';
 
 const completeDeckReceiptFixture = {
@@ -746,6 +747,26 @@ describe('primary cockpit query ownership', () => {
             expect(stop.disabled).toBe(pending === 'interrupt');
         }
         expect(state.yInvokeCalls).toHaveLength(0);
+    });
+
+    it('renders real manual producer admission transitions without submitting motion', async () => {
+        // Produced by robot testdata/tmcl/test_gripper_door_offline.py through
+        // the actual catalog and admission routes. Reference establishment is
+        // a synthetic input here, not a physical Home acceptance claim.
+        const control = (panelName: string, label: string) => {
+            const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === panelName)!;
+            return [...panel.querySelectorAll('button')].find(button => button.textContent === label)!;
+        };
+        for (const phase of ['unarmed', 'armed', 'referenced', 'armed', 'referenced'] as const) {
+            state.catalog.data.actions = structuredClone(manualCatalogProducer[phase]);
+            await act(async () => root.render(<BioXpCockpit />));
+            for (const label of ['Open', 'Close']) {
+                expect(control('Gripper', label).disabled, `${phase} G ${label}`).toBe(phase === 'unarmed');
+                expect(control('Thermal Door', label).disabled, `${phase} D ${label}`).toBe(phase !== 'referenced');
+            }
+        }
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(state.componentStopCalls).toHaveLength(0);
     });
 
     it('keeps addressed gripper Stop independent and retains normal plus stop receipts', async () => {
