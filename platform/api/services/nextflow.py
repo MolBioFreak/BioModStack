@@ -4847,6 +4847,24 @@ def compile_nextflow_invocation(
         relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
         generated_inputs.append(GeneratedInput(relative, payload))
 
+    if (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+            and params.get('rfd3_generation_request') is not None):
+        from services.rfd3_generation import bind_generation_request, canonical_json
+        if not job_id:
+            raise ValueError('Native RFD3 generation requires a job identity')
+        bound, request_path = bind_generation_request(params, output_dir=output_dir, job_id=job_id)
+        if (params.get('rfd3_generation_request_path')
+                or params['rfd3_generation_request'].get('job_id') != 'validation-preview'):
+            # A persisted request is already job-bound. Never silently rebind a
+            # foreign request or redirect its materialized file during dispatch.
+            for key in ('rfd3_generation_request', 'rfd3_generation_request_path',
+                        'rfd3_generation_request_id', 'rfd3_generation_request_sha256',
+                        'rfd3_generation_result_contract_id'):
+                if params.get(key) != bound[key]:
+                    raise ValueError('Native RFD3 generation request binding changed: ' + key)
+        params = bound
+        plan_input(request_path, (canonical_json(bound['rfd3_generation_request']) + '\n').encode('utf-8'))
+
     def bind_fampnn_declaration(command, value) -> None:
         # The same existing producer-owned biological declaration transport is
         # used by public and selected-parent callers; never inline large JSON.

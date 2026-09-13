@@ -1018,7 +1018,14 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     result_payload = result.model_dump()
     admission_authority = 'platform/api/services/nextflow.py; nextflow.config:profiles'
     retrieval_authority = 'platform/api/services/result_contracts.py:resolve_result_contract'
-    if model_id == 'molecular_dynamics' and mode == 'simulate' and reviewed:
+    from services.rfd3_generation import generation_result_contract
+    native_generation = (generation_result_contract(p)
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+        and p.get('generator', 'rfd3') == 'rfd3' else None)
+    if native_generation is not None:
+        result_payload = native_generation
+        retrieval_authority = native_generation['native_contract_authority']
+    elif model_id == 'molecular_dynamics' and mode == 'simulate' and reviewed:
         # MD owns native aggregate/mandatory-analysis completion, not Design
         # analysis rows. Bind that existing authority instead of demanding a
         # generic Design contract that this workflow deliberately never emits.
