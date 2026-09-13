@@ -126,7 +126,62 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
         process.poll()
     return quiet
 
-def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path) -> str:
+def task_container_config(container_runtime: Mapping[str, str] | None = None,
+                          image_paths: Mapping[str, str] | None = None,
+                          shell_options: Sequence[str] = ('-ue',)) -> str:
+    """Use Nextflow's task-shell boundary, not a fictitious udocker backend.
+
+    The closure is also evaluated while hashing: only resolved task directives
+    belong here, never task.workDir. The launcher obtains cwd at execution time.
+    image_paths is the validated offline nested-workflow URI -> SIF inventory.
+    With tracing, Nextflow first passes an absolute .command.run + nxf_trace;
+    task-shell must keep that wrapper on host bash, then execute .command.sh.
+    """
+    runtime = container_runtime if container_runtime is not None else {
+        'backend': os.environ.get('BMS_CONTAINER_BACKEND', 'apptainer'),
+        'executable': os.environ.get('BMS_CONTAINER_EXECUTABLE', ''),
+    }
+    if runtime.get('backend', 'apptainer') != 'udocker':
+        return ''
+    executable = runtime.get('executable', '')
+    if not executable or not Path(executable).is_absolute():
+        raise ValueError('udocker task-shell requires an absolute trusted executable')
+    import shlex
+    # Nextflow joins shell elements into a command; quote the executable for
+    # shell parsing as well as quoting the enclosing Groovy string literal.
+    def groovy(value):
+        return "'" + value.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n') + "'"
+    aliases = groovy(json.dumps(dict(image_paths or {})))
+    shell = ', '.join(groovy(shlex.quote(option)) for option in shell_options)
+    return '\n'.join([
+        'apptainer.enabled = false', 'singularity.enabled = false',
+        'docker.enabled = false',
+        'process.shell = {',
+        '  def image = task.container',
+        f"  if (!image) return ['/bin/bash', {shell}]",
+        f'  def images = new groovy.json.JsonSlurper().parseText({aliases})',
+        "  if (images && !images.containsKey(image.toString())) throw new IllegalArgumentException('Image absent from validated offline inventory: ' + image)",
+        '  image = images.get(image.toString(), image.toString())',
+        "  def payload = groovy.json.JsonOutput.toJson([image: image, options: (task.containerOptions ?: '').toString()])",
+        f"  return [{groovy(shlex.quote(executable))}, 'task-shell', payload.getBytes('UTF-8').encodeBase64().toString(), {shell}]",
+        '}', '',
+    ])
+
+
+def wf_clone_container_config(lock_path: str | Path) -> str:
+    """Resolve the already validated EPI2ME offline image inventory."""
+    inventory = json.loads(Path(lock_path).read_text())['containers']
+    images = {}
+    for image in inventory['images']:
+        path = str(Path(inventory['cache_dir']) / image['cache_file'])
+        images[image['uri']] = path
+        images[image['uri'].removeprefix('docker://')] = path
+    # EPI2ME's pinned base.config uses -euo pipefail, unlike BMS's -ue.
+    return task_container_config(image_paths=images, shell_options=('-euo', 'pipefail'))
+
+
+def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path,
+                           container_runtime: Mapping[str, str] | None = None) -> str:
     """Bind compiled static tasks to one inherited process-lifetime compute slot.
 
     Native setup expressions are retained, including task-input closures. Dynamic
@@ -179,7 +234,7 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
                   f'      def nativeSetup = {expression}',
                   f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']
-    return '\n'.join([*lines, '}', ''])
+    return '\n'.join([*lines, '}', task_container_config(container_runtime), ''])
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:

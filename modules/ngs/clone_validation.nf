@@ -75,7 +75,6 @@ process RunCloneValidation {
     export NXF_OFFLINE=true
     export NXF_DISABLE_CHECK_LATEST=true
     export NXF_DOCKER_ENABLED=false
-    export NXF_SINGULARITY_ENABLED=true
     export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
@@ -85,12 +84,30 @@ process RunCloneValidation {
         --model "${basecallerModel}" \
         --output runtime_provenance.json
 
+    # Keep the nested engine on the same trusted runtime, using the validated
+    # offline URI inventory rather than downloading or substituting images.
+    runtime_args=(-profile singularity)
+    if [[ \${BMS_CONTAINER_BACKEND:-apptainer} == udocker ]]; then
+        export NXF_SINGULARITY_ENABLED=false
+        export NXF_APPTAINER_ENABLED=false
+        python3 - ${shellQuote(codeRoot)} ${lock} <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from scripts.lib.component_adapter import wf_clone_container_config
+Path('wf-clone-container.config').write_text(wf_clone_container_config(sys.argv[2]))
+PY
+        runtime_args=(-c "\$PWD/wf-clone-container.config")
+    else
+        export NXF_SINGULARITY_ENABLED=true
+    fi
+
     mkdir -p wf_clone_out
     set +e
     /usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
         -offline \
         --disable_ping \
-        -profile singularity \
+        "\${runtime_args[@]}" \
         -w wf_clone_work \
         --bam "${bam}" \
         --sample "${sampleName}" \

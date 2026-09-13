@@ -108,7 +108,7 @@ process CanonicalProtenixEnsemble {
     test -f "\$EXECUTION_RECEIPT"
 
     RUNTIME_IMAGE="${runtime_image}"
-    EXECUTING_IMAGE="\${APPTAINER_CONTAINER:-\${SINGULARITY_CONTAINER:-}}"
+    EXECUTING_IMAGE="\${BMS_EXECUTING_IMAGE:-\${APPTAINER_CONTAINER:-\${SINGULARITY_CONTAINER:-}}}"
     test -n "\$EXECUTING_IMAGE"
     python3 ${params.code_root}/scripts/prepare_runtime_image_attestation.py \
       --resolve-reference --store-root "${image_store}" --registry "\$REGISTRY" \
