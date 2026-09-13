@@ -25,23 +25,44 @@ def _digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def _leaves(root):
-    """Enumerate internal links as regular leaves, rejecting cycles/escapes."""
+def _regenerable_bytecode(path):
+    if path.suffix != '.pyc':
+        return False
+    source = (path.parent.parent / (path.name.split('.cpython-', 1)[0] + '.py')
+              if path.parent.name == '__pycache__' else path.with_suffix('.py'))
+    return source.is_file() and not source.is_symlink()
+
+
+def _support_members(root):
+    """Walk physical members once; authenticate internal aliases separately."""
     root = root.resolve()
-    def walk(path, relative, ancestors):
-        real = path.resolve(strict=True)
-        if not real.is_relative_to(root) or real in ancestors:
-            raise CriticalRuntimeBlocked('Support Python link escapes or cycles')
-        if real.is_dir():
-            for child in sorted(real.iterdir()):
-                if relative == 'venv' and child.name == '.venv':
-                    continue  # Same exclusion as the existing relocation authority.
-                yield from walk(child, '/'.join(filter(None, (relative, child.name))), ancestors | {real})
-        elif real.is_file():
-            yield relative, real
-        else:
+    for path in sorted(root.rglob('*')):
+        relative = path.relative_to(root).as_posix()
+        if relative == 'venv/.venv':
+            continue  # Existing host-only source-venv alias, never a worker member.
+        if path.is_symlink():
+            real = path.resolve(strict=True)
+            if not real.is_relative_to(root) or path.is_relative_to(real):
+                raise CriticalRuntimeBlocked('Support Python link escapes or cycles')
+            target = os.path.relpath(real, path.parent)
+            yield relative, path, target
+        elif path.is_file():
+            if not _regenerable_bytecode(path):
+                yield relative, path, None
+        elif not path.is_dir():
             raise CriticalRuntimeBlocked('Support Python contains nonregular members')
-    yield from walk(root, '', set())
+
+
+def _leaves(root):
+    return ((name, path) for name, path, target in _support_members(root) if target is None)
+
+
+def _links(root):
+    for name, path, target in _support_members(root):
+        if target is not None:
+            data = target.encode('utf-8')
+            yield dict(name='support-python/' + name, kind='runtime_link', target=target,
+                       sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data), mode=0o777)
 
 
 def project_runtime(remote_root, staging_root):
@@ -80,20 +101,17 @@ def project_runtime(remote_root, staging_root):
     support_leaves = list(_leaves(support))
     source = current_source_identity(get_code_root().resolve())
     identity = dict(source=source, remote_root=remote_root, requirements=requirements, version=version,
+                    links=list(_links(support)),
                     members=[(n, _digest(p), p.stat().st_size, p.stat().st_mode & 0o777)
                              for n, p in sources + [('support-python/' + n, p) for n, p in support_leaves]])
     installation_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     generation = f'{remote_root}/managed-assets/v1/releases/{installation_id}'
     staging_root = Path(staging_root)
     relocated = _relocate_python_runtime(support, staging_root / 'relocated', generation + '/support-python')
-    # Managed helper's ordinary files use the SAME shared cache. Dereferencing
-    # only validated internal links avoids a second symlink/installer protocol.
+    # Preserve aliases with the existing authenticated-link installer. Each
+    # physical file enters the shared cache once, without another staging copy.
     for name, path in _leaves(relocated):
-        destination = staging_root / 'support-python' / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, destination)
-        destination.chmod(path.stat().st_mode & 0o777)
-        sources.append(('support-python/' + name, destination))
+        sources.append(('support-python/' + name, path))
     rows, transfers = [], []
     for name, path in sources:
         row = dict(name=name, sha256=_digest(path), size_bytes=path.stat().st_size,
@@ -101,6 +119,7 @@ def project_runtime(remote_root, staging_root):
         rows.append(row)
         transfers.append(CacheTransferArtifact(source=path, remote_destination=name,
                          sha256=str(row['sha256']), size_bytes=int(row['size_bytes']), mode=int(row['mode']), role='runtime'))
+    rows.extend(_links(relocated))
     manifest = dict(selection=dict(kind='critical_runtime', model_id='worker'),
                     source_revision=source[0], source_tree=source[1], artifacts=rows,
                     critical=dict(schema='bms.critical-runtime.v1', installation_id=installation_id,
@@ -115,7 +134,9 @@ def runtime_binding(remote_root, manifest, backend="apptainer"):
     generation = f"{remote_root}/managed-assets/v1/releases/{critical['installation_id']}"
     paths = {key: generation + '/' + value for key, value in critical['entrypoints'].items()}
     rows = {r['name']: r for r in manifest['artifacts']}
-    hashes = {key: rows[value]['sha256'] for key, value in critical['entrypoints'].items()}
+    from tools.bms_managed_runtime import link_referent
+    hashes = {key: rows[link_referent(rows[value]) if rows[value].get('kind') == 'runtime_link'
+                        else value]['sha256'] for key, value in critical['entrypoints'].items()}
     from .managed_inventory import release_digest
     from tools.bms_managed_runtime import container_environment
     return dict(paths=paths, sha256=hashes, release_sha256=release_digest(manifest),

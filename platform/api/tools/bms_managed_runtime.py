@@ -16,7 +16,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
+import stat
 import sys
 import uuid
 from typing import Any
@@ -61,6 +63,21 @@ def observed_compatibility():
                 driver=version(['nvidia-smi', '--query-gpu=driver_version', '--format=csv,noheader']))
 
 
+def link_referent(row):
+    target = row['target']
+    if not isinstance(target, str) or not target or PurePosixPath(target).is_absolute():
+        raise ValueError('invalid_runtime_link')
+    path = PurePosixPath(posixpath.normpath(str(PurePosixPath(row['name']).parent / target)))
+    if (not path.is_relative_to('support-python') or path == PurePosixPath('support-python')
+            or PurePosixPath(row['name']).is_relative_to(path)):
+        raise ValueError('invalid_runtime_link')
+    return str(path)
+
+
+def link_artifact(row):
+    return {key: row[key] for key in ('sha256', 'size_bytes')}
+
+
 def validate_manifest(value, cache):
     critical = value.get('critical')
     if set(value) != {'selection', 'source_revision', 'source_tree', 'artifacts'} | ({'critical'} if critical is not None else set()):
@@ -82,9 +99,11 @@ def validate_manifest(value, cache):
         fields = {'name', 'sha256', 'size_bytes', 'mode'}
         if row.get('kind') == 'runtime_image':
             fields.add('kind')
+        elif row.get('kind') == 'runtime_link' and critical is not None:
+            fields.update(('kind', 'target'))
         if set(row) != fields:
             raise ValueError('invalid_artifact')
-        cache.artifact(row)
+        cache.artifact(link_artifact(row) if row.get('kind') == 'runtime_link' else row)
         name = row['name']
         path = PurePosixPath(name)
         if (str(path) != name or path.is_absolute() or '..' in path.parts
@@ -96,6 +115,17 @@ def validate_manifest(value, cache):
         names.add(name)
     if any(str(parent) in names for name in names for parent in PurePosixPath(name).parents):
         raise ValueError('conflicting_artifact_paths')
+    by_name = {row['name']: row for row in rows}
+    directories = {str(p) for name in names for p in PurePosixPath(name).parents}
+    for row in rows:
+        if row.get('kind') == 'runtime_link':
+            referent = link_referent(row)
+            data = row['target'].encode('utf-8')
+            if (not row['name'].startswith('support-python/') or row['mode'] != 0o777
+                    or row['size_bytes'] != len(data) or row['sha256'] != hashlib.sha256(data).hexdigest()
+                    or referent not in names | directories
+                    or by_name.get(referent, {}).get('kind') == 'runtime_link'):
+                raise ValueError('invalid_runtime_link')
     if critical is not None:
         if (selection != {'kind': 'critical_runtime', 'model_id': 'worker'}
                 or set(critical) != {'schema', 'installation_id', 'nextflow_version', 'requirements', 'entrypoints'}
@@ -112,6 +142,11 @@ def validate_manifest(value, cache):
                         python='support-python/venv/bin/python', container='bin/bms-container')
         if critical['entrypoints'] != expected or not set(expected.values()) <= names:
             raise ValueError('incomplete_critical_manifest')
+        python = by_name[expected['python']]
+        if python.get('kind') == 'runtime_link':
+            python = by_name.get(link_referent(python), {})
+            if not python.get('size_bytes') or not python.get('mode', 0) & 0o111:
+                raise ValueError('nonexecutable_critical_entrypoint')
         helpers = {'lib/bootstrap_worker.sh', 'lib/scripts/__init__.py', 'lib/scripts/lib/__init__.py',
                    'lib/scripts/lib/shared_runtime_images.py',
                    'lib/scripts/lib/runtime_image_lifecycle.py',
@@ -300,6 +335,12 @@ def observe(root, manifest, cache) -> dict[str, Any]:
         state = 'missing'
         try:
             with cache.directory(path.parent) as parent:
+                if row.get('kind') == 'runtime_link':
+                    info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+                    state = ('verified' if stat.S_ISLNK(info.st_mode)
+                             and os.readlink(path.name, dir_fd=parent) == row['target'] else 'corrupt')
+                    rows.append({k: row[k] for k in ('name', 'sha256', 'size_bytes')} | {'state': state})
+                    continue
                 fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             try:
                 state = 'verified' if cache.verified(fd, row) else 'corrupt'
@@ -422,7 +463,7 @@ def admit(root, manifest, expected_boot, cache):
         cache_root = root.parent.parent / 'cache/artifacts/v1'
         paths = {cache_root / 'incoming', cache_root / 'locks'}
         paths.update(cache_root / 'objects/sha256' / r['sha256'][:2]
-                     for r in manifest['artifacts'] if r.get('kind') != 'runtime_image')
+                     for r in manifest['artifacts'] if r.get('kind') not in {'runtime_image', 'runtime_link'})
         if any(r.get('kind') == 'runtime_image' for r in manifest['artifacts']):
             paths.add(image_storage(root, cache).image_store)
         for path in paths:
@@ -493,6 +534,12 @@ def install(root, manifest, expected_boot, cache):
                 if info.st_dev != os.fstat(parent).st_dev:
                     raise ValueError('managed_filesystem_changed')
                 directories[destination.parent] = (info.st_dev, info.st_ino)
+                if row.get('kind') == 'runtime_link':
+                    # Reuse authenticated link publication; targets are declared
+                    # physical members and all regular leaves precede aliases.
+                    storage.materialize_link(link_artifact(row), destination,
+                                             release_path(root, manifest), row['target'])
+                    continue
                 # Recheck actual remaining free space before each large copy.
                 check_space(out, manifest, [row], metadata_allowance_bytes=budget["metadata_allowance_bytes"])
                 with storage.locked(row), storage.objects(row) as objects:
