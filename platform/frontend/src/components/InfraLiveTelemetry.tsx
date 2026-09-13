@@ -1374,14 +1374,18 @@ export function InfraLiveTelemetry({
         retry: false,
     });
     const attachVastMutation = useMutation({
-        mutationFn: activateExecutionTarget,
+        mutationFn: (providerInstanceId: string) => {
+            const target = executionTargetsQuery.data?.data.find(item => item.provider_instance_id === providerInstanceId);
+            return activateExecutionTarget(providerInstanceId, target?.active
+                ? { username: target.username ?? undefined, remote_root: target.remote_root } : undefined);
+        },
         onSettled: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
     });
     useEffect(() => {
         if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
             (target) => target.provider === 'vast'
                 && target.provider_instance_id === attachVastMutation.variables
-                && target.active && target.state === 'ready' && target.setup?.phase !== 'failed',
+                && target.active,
         )) {
             attachVastMutation.reset();
         }
@@ -1531,6 +1535,7 @@ export function InfraLiveTelemetry({
                             || (attachVastMutation.isPending && attachVastMutation.variables === target.provider_instance_id);
                         const stateLabel = isReady
                             ? 'Ready'
+                            : target.active ? 'Attached — runtime not ready'
                             : isAttaching
                                 ? 'Checking readiness'
                                 : target.state === 'unavailable'
@@ -1567,23 +1572,24 @@ export function InfraLiveTelemetry({
                                         <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
                                     )}
                                 </div>
-                                {isReady ? (
+                                {target.active && (
                                     <button
                                         type="button"
                                         onClick={() => detachVastMutation.mutate(target.id)}
-                                        disabled={detachVastMutation.isPending}
+                                        disabled={detachVastMutation.isPending || isAttaching}
                                         className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
                                     >
                                         {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
                                     </button>
-                                ) : (
+                                )}
+                                {!isReady && (
                                     <button
                                         type="button"
                                         onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
                                         disabled={!canAttach || attachVastMutation.isPending}
                                         className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
                                     >
-                                        {isAttaching ? 'Attaching…' : 'Attach worker'}
+                                        {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
                                     </button>
                                 )}
                             </div>

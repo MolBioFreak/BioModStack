@@ -146,6 +146,63 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it('keeps verified attachment manageable after runtime failure without selecting science', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', active: false,
+            setup: null as null | { phase: string; message: string }, last_error: null as string | null };
+        const posts: string[] = [];
+        const blocker = 'Mount namespaces unavailable; use a compatible VM';
+        api.defaults.adapter = async config => {
+            if (config.url === '/api/execution-targets') return response([target]);
+            if (config.url === '/api/execution-targets/activate') {
+                if (posts.length) expect(JSON.parse(config.data)).toEqual({ provider: 'vast', provider_instance_id: '456', username: 'worker', remote_root: '/worker-root' });
+                posts.push('attach');
+                target = { ...target, state: 'probing', setup: { phase: 'checking', message: 'Authenticating' } };
+                return { ...response(target), status: 202 };
+            }
+            if (config.url === '/api/execution-targets/vast%3A456/deactivate') {
+                posts.push('detach'); target = { ...target, active: false, state: 'inactive' };
+                return response(target);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div'); document.body.append(container);
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent === label)!;
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /><ExecutionTargetPicker /></QueryClientProvider>));
+            await flush();
+            await act(async () => button('Attach worker').click()); await flush();
+            expect(posts).toEqual(['attach']);
+            for (let attempt = 0; attempt < 2; attempt++) {
+                target = { ...target, state: 'unavailable', active: true, username: 'worker', remote_root: '/worker-root',
+                    setup: { phase: 'failed', message: blocker }, last_error: blocker };
+                await flush(5_020);
+                expect(container.textContent).toContain('Attached — runtime not ready');
+                expect(container.textContent).toContain(blocker);
+                expect(button('Retry setup').disabled).toBe(false);
+                expect(button('Detach').disabled).toBe(false);
+                const placement = [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Vast · Remote A6000'))!;
+                expect(placement.disabled).toBe(true);
+                await act(async () => placement.click());
+                expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+                expect(container.textContent).not.toContain('Remote analytics available');
+                if (attempt === 0) {
+                    await act(async () => button('Retry setup').click()); await flush();
+                    expect(posts).toEqual(['attach', 'attach']);
+                }
+            }
+            await act(async () => button('Detach').click()); await flush();
+            expect(posts).toEqual(['attach', 'attach', 'detach']);
+            expect(container.textContent).not.toContain('Attached — runtime not ready');
+            expect(button('Attach worker').disabled).toBe(false);
+        } finally {
+            await act(async () => root.unmount()); client.clear(); vi.useRealTimers();
+        }
+    });
+
     it('polls accepted Attach setup through installing, transferring and verified ready', async () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

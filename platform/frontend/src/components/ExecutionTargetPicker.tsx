@@ -81,18 +81,20 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                 >
                     Local
                 </button>
-                {readyTargets.map((target) => (
+                {targets.filter(target => target.active).map((target) => (
                     <button
                         key={target.id}
                         type="button"
                         onClick={() => selectTarget(target.id)}
                         aria-pressed={selectedTargetId === target.id}
-                        disabled={disabled}
+                        disabled={disabled || target.state !== 'ready'}
+                        title={target.state !== 'ready' ? target.last_error || target.setup?.message || 'Runtime not ready' : undefined}
                         className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
                             ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
                             : 'border-slate-700 bg-slate-950 text-slate-300'}`}
                     >
                         Vast · {target.name ?? target.provider_instance_id}
+                        {target.state !== 'ready' && <span className="block text-xs">Runtime not ready: {target.last_error || target.setup?.message || 'Setup required'}</span>}
                     </button>
                 ))}
             </div>

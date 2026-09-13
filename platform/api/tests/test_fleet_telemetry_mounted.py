@@ -32,6 +32,8 @@ async def test_migrated_two_worker_selection_and_safe_legacy_endpoint(tmp_path, 
         first.host = 'one.example.test'
         first.port = 22
         first.username = 'root'
+        first.host_key_sha256 = 'a' * 64
+        first.activated_at = datetime.utcnow()
         first.provider_metadata = {'inventory': {'status': 'complete', 'present': True,
             'running': True, 'checked_at': datetime.utcnow().isoformat()}}
         second = target()

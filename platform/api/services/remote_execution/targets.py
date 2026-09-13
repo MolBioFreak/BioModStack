@@ -25,6 +25,7 @@ from .transport import (
     BOOTSTRAP_ERRORS,
     RemoteConnection,
     RemoteTransportError,
+    RemoteConnectionError,
     capture_host_key,
     persist_host_key,
     probe_readiness,
@@ -368,7 +369,46 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
 SETUP_ACTIVE_PHASES = ("checking", "installing", "transferring", "verifying")
 
 
-async def fail_setup(session, identifier, started_at, message: str) -> None:
+def attachment_clause(now):
+    """Current authenticated setup generation, also used for failure recovery."""
+    attachment = ExecutionTarget.provider_metadata["attachment"]
+    inventory = ExecutionTarget.provider_metadata["inventory"]
+    return (
+        ExecutionTarget.active.is_(True)
+        & (attachment["started_at"].as_string() == ExecutionTarget.provider_metadata["setup"]["started_at"].as_string())
+        & (attachment["host"].as_string() == ExecutionTarget.host)
+        & (attachment["port"].as_integer() == ExecutionTarget.port)
+        & (attachment["username"].as_string() == ExecutionTarget.username)
+        & (attachment["remote_root"].as_string() == ExecutionTarget.remote_root)
+        & (attachment["fingerprint"].as_string() == ExecutionTarget.host_key_sha256)
+        & (inventory["status"].as_string() == "complete")
+        & inventory["present"].as_boolean().is_(True)
+        & inventory["running"].as_boolean().is_(True)
+        & (inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat())
+        & (inventory["checked_at"].as_string() <= now.isoformat())
+    )
+
+
+def telemetry_eligible(target):
+    """Monitoring is not scientific admission; no SSH or metadata writes here."""
+    metadata = target.provider_metadata or {}
+    inventory = metadata.get("inventory", {})
+    if not (target.active and target.host_key_sha256 and target.activated_at
+            and inventory_fresh(target) and inventory.get("present") is True
+            and inventory.get("running") is True):
+        return False
+    attachment = metadata.get("attachment")
+    if attachment is None:
+        # Previously qualified ready workers predate the separate attachment commit.
+        return target.state == "ready"
+    return (attachment.get("telemetry") is True
+            and attachment.get("started_at") == metadata.get("setup", {}).get("started_at")
+            and all(attachment.get(key) == getattr(target, key) for key in
+                    ("host", "port", "username", "remote_root"))
+            and attachment.get("fingerprint") == target.host_key_sha256)
+
+
+async def fail_setup(session, identifier, started_at, message: str, *, revoke_attachment=False) -> None:
     """End only this setup attempt; retain inventory-owned state and errors."""
     probing = ExecutionTarget.state == "probing"
     now = datetime.utcnow()
@@ -380,7 +420,10 @@ async def fail_setup(session, identifier, started_at, message: str) -> None:
         provider_metadata=func.json_set(ExecutionTarget.provider_metadata,
             "$.setup.phase", "failed", "$.setup.message", message, "$.setup.updated_at", now.isoformat()),
         state=case((probing, "unavailable"), else_=ExecutionTarget.state),
-        active=case((probing, False), else_=ExecutionTarget.active),
+        active=case((or_(probing,
+            ExecutionTarget.provider_metadata["attachment"]["started_at"].as_string() == started_at),
+            False if revoke_attachment else case((attachment_clause(now), True), else_=False)),
+            else_=ExecutionTarget.active),
         last_error=case((probing, message), else_=ExecutionTarget.last_error),
         updated_at=now,
     ).execution_options(synchronize_session=False))
@@ -464,7 +507,14 @@ class AttachmentController:
 async def activate_target(session, request):
     """Internal synchronous entrypoint retained for fenced service callers."""
     result = await begin_activation(session, request)
-    return await finish_activation(session, result.id)
+    if result.setup is None or result.setup.started_at is None:
+        raise ExecutionTargetError("Setup admission did not publish an attempt identity")
+    try:
+        return await finish_activation(session, result.id)
+    except BaseException as exc:
+        message = str(exc) if isinstance(exc, ExecutionTargetError) else "Remote setup interrupted; retry setup"
+        await fail_setup(session, result.id, result.setup.started_at.isoformat(), message)
+        raise
 
 
 async def begin_activation(
@@ -527,6 +577,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     target = await get_target(session, identifier)
     connection = RemoteConnection.from_target(target)
     started_at = (target.provider_metadata or {}).get("setup", {}).get("started_at")
+    fingerprint = target.host_key_sha256
 
     async def checked_io(operation, *args, **kwargs):
         await session.refresh(target)
@@ -534,6 +585,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 or target.provider_metadata["inventory"].get("present") is not True
                 or target.provider_metadata["inventory"].get("running") is not True
 
+                or (target.host_key_sha256 is not None and target.host_key_sha256 != fingerprint)
                 or target.state != "probing" or target.leased_job_id
                 or (target.provider_metadata or {}).get("setup", {}).get("started_at") != started_at
                 or (target.host, target.port, target.username, target.remote_root) !=
@@ -545,7 +597,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         try:
             return await checked_io(run_remote, connection, argv, timeout=timeout)
         except RemoteTransportError as exc:
-            if str(exc) in {"Remote transport timed out", "Remote SSH host key changed"}:
+            if isinstance(exc, RemoteConnectionError) or str(exc) in {"Remote transport timed out", "Remote SSH host key changed"}:
                 raise
             raise RemoteTransportError(failure) from exc
 
@@ -554,6 +606,42 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         if target.host_key_sha256 and target.host_key_sha256 != fingerprint:
             raise RemoteTransportError("Remote SSH host key changed since the last activation")
         await persist_host_key(host_key_line, fingerprint)
+        # Keyscan only pins a candidate key. This command must authenticate via
+        # strict SSH and prove the requested root is usable before attachment.
+        try:
+            attached = await checked_io(run_remote, connection, ["sh", "-s", "--", connection.remote_root],
+                input_bytes=b'set -eu\nmkdir -p -- "$1"\ntest -r "$1" && test -x "$1"\np=$(mktemp "$1/.bms-attach.XXXXXXXX")\nrm -- "$p"\nprintf "BMS_ATTACHED\\n"\nif command -v python3 >/dev/null; then printf "BMS_TELEMETRY\\n"; fi\n', timeout=60)
+        except RemoteConnectionError:
+            raise
+        except RemoteTransportError as exc:
+            if str(exc) in {"Remote transport timed out", "Remote SSH host key changed"}:
+                raise
+            raise RemoteTransportError("Authenticated attachment root check failed") from exc
+        if "BMS_ATTACHED" not in attached.stdout.splitlines():
+            raise RemoteTransportError("Authenticated attachment root check failed")
+        now = datetime.utcnow()
+        attachment = dict(started_at=started_at, host=connection.host, port=connection.port,
+            username=connection.username, remote_root=connection.remote_root, fingerprint=fingerprint,
+            telemetry="BMS_TELEMETRY" in attached.stdout.splitlines())
+        inventory = ExecutionTarget.provider_metadata["inventory"]
+        committed = await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
+            ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
+            ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
+            ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
+            ExecutionTarget.remote_root == connection.remote_root,
+            or_(ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.host_key_sha256 == fingerprint),
+            inventory["status"].as_string() == "complete",
+            inventory["present"].as_boolean().is_(True), inventory["running"].as_boolean().is_(True),
+            inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+            inventory["checked_at"].as_string() <= now.isoformat(),
+        ).values(active=True, host_key_sha256=fingerprint, activated_at=now, updated_at=now,
+            provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.attachment",
+                func.json(json.dumps(attachment)))).execution_options(synchronize_session=False))
+        if committed.rowcount != 1:
+            await session.rollback()
+            raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
+        await session.commit()
         script = Path(__file__).with_name("bootstrap_worker.sh").read_bytes()
         await checked_io(run_remote, connection, ["bash", "-s", "--", "check", connection.remote_root], input_bytes=script, timeout=60)
         await set_setup(session, target, "installing", "Installing missing worker tools (up to 30 minutes)", expected_started_at=started_at)
@@ -623,20 +711,12 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             "Remote readiness probe is incomplete",
             "Pinned Nextflow framework JAR is unavailable",
             "Critical runtime boot identity changed",
+            "Authenticated attachment root check failed", "Remote SSH connection or authentication failed",
         }
         message = str(exc) if str(exc) in safe else f"Remote setup failed during {phase}; retry Attach"
-        setup = {**(target.provider_metadata or {}).get("setup", {}), "phase": "failed",
-                 "message": message, "updated_at": datetime.utcnow().isoformat()}
-        await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
-            ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
-            ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
-            ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
-            ExecutionTarget.remote_root == connection.remote_root,
-        ).values(state="unavailable", active=False, last_error=message, updated_at=datetime.utcnow(),
-            provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.setup", func.json(json.dumps(setup)))
-        ).execution_options(synchronize_session=False))
-        await session.commit()
+        await fail_setup(session, identifier, started_at, message,
+            revoke_attachment=isinstance(exc, RemoteConnectionError)
+                or "SSH host key changed" in str(exc))
         raise ExecutionTargetError(message) from exc
 
 
@@ -648,6 +728,8 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         update(ExecutionTarget).where(
             ExecutionTarget.id == identifier,
             ExecutionTarget.state == "probing",
+            attachment_clause(now),
+            ExecutionTarget.host_key_sha256 == fingerprint,
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
             ExecutionTarget.leased_job_id.is_(None),
             ExecutionTarget.host == connection.host,
@@ -661,8 +743,9 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
         ).values(
-            state="ready", active=True, activated_at=now, updated_at=now, last_error=None,
+            state="ready", active=True, updated_at=now, last_error=None,
             provider_metadata={**dict(target.provider_metadata or {}),
+                "attachment": {**attachment, "telemetry": True},
                 "managed_boot_id": boot,
                 "critical_runtime_manifest": manifest,
                 "managed_inventory": dict(manifests=manifests, observation=readback.model_dump(mode="json"),
@@ -712,6 +795,8 @@ async def remote_target_telemetry(target: ExecutionTarget) -> dict[str, Any]:
     """Admission reads only fresh, identity-bound cached VRAM; never polls SSH."""
     from .telemetry import remote_telemetry
     sample = remote_telemetry.read(target, include_history=False)
+    if not target_eligible(target):
+        return {**sample, "available": False, "error": "Execution target is not active and ready"}
     if any(gpu.get('memory_total_mb') is None or gpu.get('memory_used_mb') is None
            or gpu.get('memory_total_mb', 0) <= 0
            for gpu in sample['gpus']):
@@ -854,7 +939,7 @@ async def active_remote_telemetry(
     execution_target_id: str | None = None,
 ) -> dict[str, Any]:
     query = select(ExecutionTarget).where(
-        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
+        ExecutionTarget.active.is_(True),
     )
     if execution_target_id is not None:
         query = query.where(ExecutionTarget.id == execution_target_id)

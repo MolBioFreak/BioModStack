@@ -59,7 +59,7 @@ async def test_attachment_never_transfers_over_published_artifacts(
             raise asyncio.CancelledError()
     async def run(conn, argv, **kw):
         async with factory() as other:
-            assert not (await targets.get_target(other, 'vast:49674511')).active
+            assert (await targets.get_target(other, 'vast:49674511')).active == (argv[0] != 'sh')
         if argv[:2] == ['bash', '-s']: return SimpleNamespace(stdout='')
         if argv[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK')
         result = subprocess.run(argv, input=kw.get('input_bytes'), capture_output=True)
@@ -78,7 +78,8 @@ async def test_attachment_never_transfers_over_published_artifacts(
         with pytest.raises(asyncio.CancelledError if failure == 'interrupt' else targets.ExecutionTargetError):
             await targets.activate_target(session, request)
         row = await targets.get_target(session, 'vast:49674511')
-        assert not row.active
+        assert row.active
+        assert not targets.target_eligible(row)
         assert not (root / 'managed-assets/v1/active/critical_runtime-worker.json').exists()
         if failure == 'interrupt':
             await targets.fail_setup(session, row.id, row.provider_metadata['setup']['started_at'], 'interrupted')

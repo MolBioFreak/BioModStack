@@ -7,10 +7,10 @@ import { api } from '../../src/lib/api';
 
 vi.mock('../../src/components/InfraLiveTelemetry', () => ({ InfraLiveTelemetry: () => <div>Local fixture</div> }));
 
-it('requires fleet selection and isolates telemetry, cursors, inventory and late replies by worker', async () => {
+it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemetry, cursors, inventory and late replies by worker (%s)', async state => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const workers = ['1', '2'].map(id => ({ id: `vast:${id}`, provider: 'vast', provider_instance_id: id,
-        name: `Worker ${id}`, active: true, state: 'ready', pricing: {}, capabilities: {} }));
+        name: `Worker ${id}`, active: true, state, pricing: {}, capabilities: {} }));
     client.setQueryData(['execution-targets'], { data: workers });
     const oldAdapter = api.defaults.adapter;
     const unexpected: string[] = [];

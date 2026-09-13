@@ -42,7 +42,7 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
     });
     const [selectedTargetId, setSelectedTargetId] = useState<string>('');
     const activeTargets = targetsQuery.isError ? []
-        : (targetsQuery.data?.data ?? []).filter((target) => target.active && target.state === 'ready');
+        : (targetsQuery.data?.data ?? []).filter((target) => target.active);
     const activeVastTarget = selectedTargetId
         ? activeTargets.find((target) => target.id === selectedTargetId)
         : activeTargets.length === 1 ? activeTargets[0] : undefined;

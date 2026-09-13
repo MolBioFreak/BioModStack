@@ -116,7 +116,11 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
     async def capture(*args): return ('fixture key', 'a'*64)
     async def run(conn, argv, **kw):
         await session.refresh(await targets.get_target(session, 'vast:49674511'))
-        assert not (await targets.get_target(session, 'vast:49674511')).active
+        assert (await targets.get_target(session, 'vast:49674511')).active == (argv[0] != 'sh')
+        if argv[0] == 'sh':
+            result = subprocess.run(argv, input=kw['input_bytes'], capture_output=True)
+            assert result.returncode == 0, result.stderr
+            return SimpleNamespace(stdout=result.stdout.decode())
         if argv[0] == 'apptainer':
             if damage == 'leased':
                 async with factory() as other:
@@ -166,7 +170,8 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
         with pytest.raises(targets.ExecutionTargetError):
             await targets.finish_activation(session, started.id)
         row = await targets.get_target(session, started.id)
-        assert not row.active
+        assert row.active
+        assert not targets.target_eligible(row)
         assert row.leased_job_id == 'racing' if damage == 'leased' else row.state == 'unavailable'
         assert not (root / 'active/critical_runtime-worker.json').exists()
     else:

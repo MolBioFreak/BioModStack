@@ -48,6 +48,15 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
+it('keeps attached runtime-unready workers disabled for independent provisioning', async () => {
+  target = { ...ready, state: 'unavailable', active: true, last_error: 'Mount namespaces unavailable; use a compatible VM' };
+  await render(); await select('Provision model', 'protenix');
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  expect(button('Start provision').disabled).toBe(true);
+  await click('Preview artifact downloads'); await click('Start provision');
+  expect(posts).toEqual([]);
+});
+
 it('binds the unsaved typed workflow settings, invalidates edits, and never submits a Job', async () => {
   let request = { name: 'Unsaved', model_id: 'protenix', mode: 'predict', params: { sequence: 'ACDE', seeds: [7] } };
   const mountWorkflow = async () => { await act(async () => {

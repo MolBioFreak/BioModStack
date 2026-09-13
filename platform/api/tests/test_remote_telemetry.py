@@ -14,6 +14,7 @@ from services.remote_execution import telemetry as mod, targets, telemetry_probe
 def target():
     return ExecutionTarget(id='vast:8', provider='vast', provider_instance_id='8', active=True, state='ready',
         host='example.test', port=22, username='root', remote_root='/opt/biomodstack',
+        host_key_sha256='a'*64, activated_at=datetime.utcnow(),
         provider_metadata={'inventory': {'status': 'complete', 'present': True, 'running': True,
                                          'checked_at': datetime.utcnow().isoformat()}},
         capabilities={}, pricing={}, created_at=datetime.utcnow(), updated_at=datetime.utcnow())

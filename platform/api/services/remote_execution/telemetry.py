@@ -61,11 +61,11 @@ class RemoteTelemetry:
         self.sequence = 0
 
     def read(self, target, since=None, *, include_history=True):
-        from .targets import _target_response, target_eligible
+        from .targets import _target_response, telemetry_eligible
         base = {'source': 'active_vast', 'available': False, 'target': None, 'gpus': [],
                 'history': [], 'cursor': f'{self.epoch}:{self.sequence}', 'reset': since is None,
                 'sample_interval_seconds': INTERVAL, 'retention_seconds': HISTORY_SECONDS}
-        if target is None or not target_eligible(target):
+        if target is None or not telemetry_eligible(target):
             return base
         base['target'] = _target_response(target).model_dump(mode='json')
         entry = self.entries.get(identity(target))
@@ -132,14 +132,14 @@ class RemoteTelemetry:
         entry['due'] = started + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
 
     async def run(self, session_factory, stop):
-        from .targets import target_eligible
+        from .targets import telemetry_eligible
         try:
             while not stop.is_set():
                 try:
                     async with session_factory() as session:
                         targets = list((await session.scalars(select(ExecutionTarget).where(
-                            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready'))).all())
-                        targets = [target for target in targets if target_eligible(target)]
+                            ExecutionTarget.active.is_(True)))).all())
+                        targets = [target for target in targets if telemetry_eligible(target)]
                         # Snapshot ORM fields before the DB session closes; no DB lock during SSH.
                         for target in targets:
                             session.expunge(target)

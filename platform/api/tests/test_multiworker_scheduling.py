@@ -434,6 +434,7 @@ async def test_attachment_is_target_scoped_and_preserves_other_active_worker(wor
         async def noop(*args, **kwargs): pass
         async def probe(*args): return {"ok": True}
         async def run(connection, command, **kwargs):
+            if command[0] == "sh": return SimpleNamespace(stdout="BMS_ATTACHED\nBMS_TELEMETRY\n")
             if command[0] == "env": return SimpleNamespace(stdout="nextflow version 25.10.1\n")
             if command[0] == "apptainer": return SimpleNamespace(stdout="BMS_CUDA_OK\n")
             return SimpleNamespace(stdout="fixturehash worker\nfixturehash nextflow\n")

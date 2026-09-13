@@ -687,10 +687,11 @@ export const refreshVastExecutionTargets = () =>
         '/api/execution-targets/providers/vast/refresh',
     );
 
-export const activateExecutionTarget = (providerInstanceId: string) =>
+export const activateExecutionTarget = (providerInstanceId: string, endpoint?: { username?: string; remote_root: string }) =>
     api.post<ExecutionTarget>('/api/execution-targets/activate', {
         provider: 'vast',
         provider_instance_id: providerInstanceId,
+        ...endpoint,
     });
 
 export const deactivateExecutionTarget = (executionTargetId: string) =>

@@ -26,6 +26,10 @@ class RemoteTransportError(RuntimeError):
     pass
 
 
+class RemoteConnectionError(RemoteTransportError):
+    """SSH could not establish an authenticated command channel."""
+
+
 def _host_key_digest(encoded_key: str) -> str:
     try:
         key_bytes = base64.b64decode(encoded_key.encode("ascii"), validate=True)
@@ -369,6 +373,8 @@ async def run_remote(
         input_bytes=input_bytes,
         timeout=timeout,
     )
+    if result.returncode == 255:
+        raise RemoteConnectionError("Remote SSH connection or authentication failed")
     if result.returncode != 0:
         controlled = _controlled_remote_failure(result.stdout)
         detail = result.stderr.strip().splitlines()[-1:] or ["remote command failed"]
