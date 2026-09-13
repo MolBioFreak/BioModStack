@@ -124,16 +124,14 @@ async def await_controller_service_operation(task, check_fence, *, stop=None):
 async def prepare_generated_msa_on_controller(request, destination, check_fence):
     import asyncio
     import threading
-    from biomodstack_msa_api import PendingMSA, preparation_stop_scope
+    from biomodstack_msa_api import preparation_stop_scope
     await check_fence()
     stop = threading.Event()
     with preparation_stop_scope(stop):
         task = asyncio.create_task(asyncio.to_thread(prepare_generated_msa, request, destination))
-    try:
-        return await await_controller_service_operation(task, check_fence, stop=stop)
-    except PendingMSA:
-        # The next ordinary reconciliation resumes the existing durable ticket.
-        return None
+    # Preserve PendingMSA's sanitized provider/ticket/backoff metadata for the
+    # reconciliation owner to persist. A bare None loses the provider deadline.
+    return await await_controller_service_operation(task, check_fence, stop=stop)
 
 
 def enabled(value, default=False):
