@@ -118,18 +118,25 @@ def _sample_once(sources: list[dict[str, Any]]) -> tuple[float | None, int, list
             current_time = time.monotonic()
             cache_key = str(energy_path)
             previous = _sample_state.get(cache_key)
-            _sample_state[cache_key] = {"energy_uj": current_energy, "time_s": current_time}
             if not previous:
+                _sample_state[cache_key] = {"energy_uj": current_energy, "time_s": current_time}
                 continue
 
             time_delta_s = current_time - previous["time_s"]
             if time_delta_s <= 0.01:
+                # A burst of readers must not discard an already measured
+                # interval or keep moving the baseline before it is usable.
+                if time_delta_s >= 0 and "power_watts" in previous:
+                    total_power_watts += previous["power_watts"]
+                    valid_samples += 1
                 continue
+            _sample_state[cache_key] = {"energy_uj": current_energy, "time_s": current_time}
             energy_delta_uj = current_energy - previous["energy_uj"]
             if energy_delta_uj < 0:
                 energy_delta_uj += max_energy_uj
             power_watts = energy_delta_uj / (time_delta_s * 1_000_000)
             if power_watts >= 0:
+                _sample_state[cache_key]["power_watts"] = power_watts
                 total_power_watts += power_watts
                 valid_samples += 1
 
