@@ -1093,7 +1093,15 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
     response = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
 
     assert response.status_code == 200, response.text
-    assert response.json() == compact
+    # Older source receipts omit these optional observations; serialization must
+    # report unknown, not infer either ACK or a Z move from successful delivery.
+    expected = copy.deepcopy(compact)
+    expected["z_move"] = None
+    expected["interrupt_evidence"].update({
+        "first_stop_acknowledged": None,
+        "second_stop_acknowledged": None,
+    })
+    assert response.json() == expected
     route_name, kwargs = runtime.connection.safety_interrupt_calls[-1]
     assert route_name == "interrupt_operator_action_v1"
     assert kwargs == {
@@ -1467,6 +1475,46 @@ def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
     assert runtime.connection.client.calls == []
 
 
+def _assert_display_section_quarantined(dashboard, section, *, match=None):
+    from services.bioxp.operator_models import (
+        OperatorAdmission,
+        OperatorControlCatalog,
+        OperatorDashboardPipettes,
+        OperatorDashboardXAxis,
+    )
+
+    # The closed section model still rejects invented/inflated evidence. Only
+    # its display embedding is tolerant (OperatorDashboard.isolate_display_section).
+    section_model = {
+        "pipettes": OperatorDashboardPipettes,
+        "x_axis": OperatorDashboardXAxis,
+    }[section]
+    with pytest.raises(ValidationError, match=match):
+        section_model.model_validate(dashboard[section])
+    parsed = OperatorDashboard.model_validate(dashboard)
+    healthy = OperatorDashboard.model_validate(catalog()["dashboard"])
+    assert getattr(parsed, section) is None
+    assert parsed.model_dump(exclude={section}) == healthy.model_dump(exclude={section})
+    assert parsed.model_dump()[section] is None
+
+    # Quarantine is not a replacement source of command/admission authority.
+    payload = catalog()
+    payload["dashboard"] = dashboard
+    parsed_catalog = OperatorControlCatalog.model_validate(payload)
+    healthy_catalog = OperatorControlCatalog.model_validate(catalog())
+    assert parsed_catalog.actions == healthy_catalog.actions
+    with pytest.raises(ValidationError):
+        OperatorDashboard.model_validate({**dashboard, "ownership_generation": "1"})
+    payload["actions"][0]["enabled"] = "true"
+    with pytest.raises(ValidationError):
+        OperatorControlCatalog.model_validate(payload)
+    with pytest.raises(ValidationError):
+        OperatorAdmission.model_validate({
+            "action_id": "motion.home_xy", "ownership_generation": 1,
+            "enabled": "true", "disabled_reason": None, "dependencies": [],
+        })
+
+
 def test_pipette_dashboard_accepts_exact_closed_four_channel_projection():
     parsed = OperatorDashboard.model_validate(catalog()["dashboard"])
 
@@ -1496,15 +1544,14 @@ def test_pipette_dashboard_accepts_exact_closed_four_channel_projection():
         lambda group: group.__setitem__("unexpected", "invented"),
     ],
 )
-def test_pipette_dashboard_rejects_malformed_or_phase_inflated_projection(mutate):
+def test_pipette_dashboard_quarantines_malformed_or_phase_inflated_projection(mutate):
     dashboard = copy.deepcopy(catalog()["dashboard"])
     mutate(dashboard["pipettes"])
 
-    with pytest.raises(ValidationError):
-        OperatorDashboard.model_validate(dashboard)
+    _assert_display_section_quarantined(dashboard, "pipettes")
 
 
-def test_pipette_dashboard_rejects_reordered_distinct_channels():
+def test_pipette_dashboard_quarantines_reordered_distinct_channels():
     dashboard = copy.deepcopy(catalog()["dashboard"])
     dashboard["pipettes"]["channels"] = [
         pipette_channel(3),
@@ -1513,8 +1560,7 @@ def test_pipette_dashboard_rejects_reordered_distinct_channels():
         pipette_channel(0),
     ]
 
-    with pytest.raises(ValidationError, match="ordered"):
-        OperatorDashboard.model_validate(dashboard)
+    _assert_display_section_quarantined(dashboard, "pipettes", match="ordered")
 
 
 def _real_hardware_tip_evidence() -> dict:
@@ -1673,7 +1719,7 @@ def test_pipette_plan_forwards_only_selected_operation_fields(monkeypatch, paylo
     ]
 
 
-def test_strict_x_dashboard_rejects_unknown_nested_authority_keys():
+def test_x_dashboard_quarantines_unknown_nested_authority_keys():
     nested_paths = [
         "provider.lifecycle",
         "provider.live_status",
@@ -1683,8 +1729,6 @@ def test_strict_x_dashboard_rejects_unknown_nested_authority_keys():
         "snapshot_freshness",
         "latest_receipt",
     ]
-    from services.bioxp.operator_models import OperatorDashboard
-    from pydantic import ValidationError
     for label in nested_paths:
         candidate = catalog()["dashboard"]
         current = candidate["x_axis"]
@@ -1695,8 +1739,7 @@ def test_strict_x_dashboard_rejects_unknown_nested_authority_keys():
         else:
             current = current[label]
         current["unexpected"] = True
-        with pytest.raises(ValidationError):
-            OperatorDashboard.model_validate(candidate)
+        _assert_display_section_quarantined(candidate, "x_axis")
 
 
 @pytest.mark.parametrize(
@@ -2547,7 +2590,7 @@ def test_catalog_is_robot_owned_and_strict(monkeypatch):
     assert response.status_code == 200
     assert response.json()["actions"][0]["action_id"] == "motion.home_xy"
     assert response.json()["actions"][0]["inputs"][0]["exclusive_minimum"] == 0.1
-    assert runtime.connection.client.calls == [("operator_control_catalog", {})]
+    assert runtime.connection.client.calls == [("operator_control_catalog", {"params": None})]
 
 
 def test_catalog_accepts_typed_z_provider_last_observation(monkeypatch):
