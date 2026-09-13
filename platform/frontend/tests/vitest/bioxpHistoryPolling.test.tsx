@@ -1,6 +1,8 @@
 import React, { act } from 'react';
 import { BioXpHistoryReceiptCard, useBioXpHistoryPagination } from '../../src/components/BioXpHistoryReceiptCard';
 import { historyItem } from '../fixtures/bioxpHistory';
+import actualY5History from '../fixtures/bioxp_xy_y5_history.json';
+import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -254,6 +256,55 @@ it('fetches full retained evidence only on expansion and hides it on disconnect'
     await act(async () => { render(false); });
     expect(container.textContent).not.toContain('native-proof-value');
     expect(api.post).not.toHaveBeenCalled();
+});
+
+it.each(['detail', 'unavailable'] as const)('actual sparse Y5 history opens its detail via real hooks, %s, without eager fetch or submission', async (outcome) => {
+    const explanation = 'Move timeout reported. Recorded stopped position: X85000, Y5 (requested X85000, Y0). Past receipt only; not current position or readiness. Source result remains failed.';
+    const saved = actualY5History.items.find(row => row.command_id === actualY5Detail.command_id)!;
+    expect(saved.xy_failure).toBeNull();
+    function SavedHistory({ generation }: { generation: number }) {
+        const query = useBioXpOperatorActionHistory(generation, true, actualY5History.limit);
+        const row = query.data?.items.find(row => row.command_id === actualY5Detail.command_id);
+        return row ? <BioXpHistoryReceiptCard key={`${generation}:${row.command_id}`} receipt={row} generation={generation} connected /> : null;
+    }
+    api.get.mockImplementation(async (url) => {
+        if (String(url).startsWith('/api/bioxp/operator-controls/history?')) return { data: structuredClone(actualY5History) };
+        expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`);
+        if (outcome === 'unavailable') throw new Error('retained detail unavailable');
+        return { data: structuredClone(actualY5Detail) };
+    });
+    const renderHistory = async (generation: number) => {
+        await act(async () => root.render(<QueryClientProvider client={client}><SavedHistory generation={generation} /></QueryClientProvider>));
+        await flush();
+    };
+    const plain = () => [...container.querySelectorAll('article > p')].map(node => node.textContent).join(' ');
+    await renderHistory(7);
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(plain()).toContain('route_http_conflict: Robot route reported an HTTP conflict.');
+    expect(plain()).not.toContain('Recorded stopped position');
+    await act(async () => {
+        const disclosure = container.querySelector('details')!;
+        disclosure.open = true; disclosure.dispatchEvent(new Event('toggle'));
+    });
+    await flush();
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.get.mock.calls[1]).toEqual([`/api/bioxp/operator-controls/v2/receipts/${actualY5Detail.command_id}`, { params: { detail: true } }]);
+    if (outcome === 'detail') expect(plain()).toContain(explanation);
+    else { expect(plain()).not.toContain(explanation); expect(container.textContent).toContain('Receipt evidence unavailable'); }
+    await act(async () => {
+        const disclosure = container.querySelector('details')!;
+        disclosure.open = false; disclosure.dispatchEvent(new Event('toggle'));
+    });
+    await flush();
+    if (outcome === 'detail') expect(plain()).toContain(explanation);
+    expect(api.get).toHaveBeenCalledTimes(2);
+    await renderHistory(8);
+    expect(plain()).not.toContain(explanation); // new generation has no inherited detail query
+    expect(container.querySelector('details')!.open).toBe(false);
+    expect(api.get).toHaveBeenCalledTimes(3); // only the new history GET
+    expect(api.post).not.toHaveBeenCalled();
+    expect(saved.xy_failure).toBeNull();
+    expect(actualY5Detail.status).toBe('failed');
 });
 
 it('owns history cursors by connection and page size, using the single route for every page', async () => {

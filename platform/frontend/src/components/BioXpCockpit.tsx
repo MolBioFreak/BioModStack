@@ -436,7 +436,7 @@ export function BioXpCockpit() {
     const latestReceiptQuery = useBioXpOperatorReceiptV2(latestOperatorReceipt?.command_id ?? null, generation, linkConnected);
     const displayedLatestReceipt = latestReceiptQuery.data?.command_id === latestOperatorReceipt?.command_id
         ? latestReceiptQuery.data : latestOperatorReceipt;
-    const latestReceiptFailure = latestReceiptQuery.data ? bioXpReceiptFailureText(latestReceiptQuery.data) : null;
+    const latestReceiptFailure = bioXpReceiptFailureText(displayedLatestReceipt);
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -1253,6 +1253,7 @@ export function BioXpCockpit() {
                         {xyHomeDisabledReason && <p className="mt-1 text-xs text-amber-200">XY home: {xyHomeDisabledReason}</p>}
                         {xyPending && <p role="status" className="mt-2 text-sm text-amber-200">XY command pending · {xyReceipt?.status ?? 'submitting'} · Do not retry.</p>}
                         {xyReceipt && !xyPending && <p role="status" className="mt-2 text-sm">XY command {xyReceipt.status}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
+                        {xyReceipt && bioXpReceiptFailureText(xyReceipt) && <p role="status" className="mt-2 text-sm text-amber-200">{bioXpReceiptFailureText(xyReceipt)}</p>}
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. Do not retry until the outcome is reconciled.</p>}
                         {xyReceipt && <details className="mt-2 text-xs"><summary>Latest XY command receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyReceipt, null, 2)}</pre></details>}
                     </article>

@@ -63,7 +63,7 @@ def test_v1_rejects_explicit_null_transport_evidence(key):
 def test_live_shaped_dashboard_retains_transport_fields(populated):
     payload = dashboard_payload()
     extension = evidence() if populated else {"transport_exchanges": [], "transport_retention_errors": []}
-    payload["latest_receipts"] = [compact_payload(**extension)]
+    payload["latest_receipts"] = [compact_payload(z_move=None, xy_failure=None, **extension)]
     parsed = OperatorDashboardV2.model_validate(payload).model_dump(mode="json")
     assert parsed["latest_receipts"][0] == payload["latest_receipts"][0]
     assert parsed["latest_receipts"][0]["physical_effect_verified"] is False
@@ -116,7 +116,7 @@ def test_real_dashboard_relay_preserves_evidence_without_dispatch(monkeypatch):
     payload = dashboard_payload()
     # The live robot omits this optional projection; exercise the existing adapter too.
     del payload["command_queue"]
-    payload["latest_receipts"] = [compact_payload(**evidence())]
+    payload["latest_receipts"] = [compact_payload(z_move=None, xy_failure=None, **evidence())]
     original = deepcopy(payload)
     runtime.connection.client.responses["operator_dashboard_v2"] = payload
     response = client.get("/api/bioxp/operator-controls/v2/dashboard")
