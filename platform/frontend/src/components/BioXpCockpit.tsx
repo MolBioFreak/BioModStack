@@ -29,7 +29,7 @@ import {
     type BioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
 
-import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
+import { bioXpReceiptFailureText, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
@@ -1252,7 +1252,7 @@ export function BioXpCockpit() {
                         {xyMoveDisabledReason && <p className="mt-1 text-xs text-amber-200">XY move: {xyMoveDisabledReason}</p>}
                         {xyHomeDisabledReason && <p className="mt-1 text-xs text-amber-200">XY home: {xyHomeDisabledReason}</p>}
                         {xyPending && <p role="status" className="mt-2 text-sm text-amber-200">XY command pending · {xyReceipt?.status ?? 'submitting'} · Do not retry.</p>}
-                        {xyReceipt && !xyPending && <p role="status" className="mt-2 text-sm">XY command {xyReceipt.status}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
+                        {xyReceipt && !xyPending && <p role="status" className="mt-2 text-sm">{bioXpReceiptStatusText(xyReceipt, `XY command ${xyReceipt.status}`)}{xyReceipt.status === 'ambiguous' ? '; outcome unknown; do not resubmit' : ''}</p>}
                         {xyReceipt && bioXpReceiptFailureText(xyReceipt) && <p role="status" className="mt-2 text-sm text-amber-200">{bioXpReceiptFailureText(xyReceipt)}</p>}
                         {currentXYSubmission && xyReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY command status unavailable: {bioXpErrorText(xyReceiptQuery.error)}. Do not retry until the outcome is reconciled.</p>}
                         {xyReceipt && <details className="mt-2 text-xs"><summary>Latest XY command receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyReceipt, null, 2)}</pre></details>}
@@ -1509,7 +1509,7 @@ export function BioXpCockpit() {
                 {linkConnected && latestReceiptFailure && <p role="alert" className="mt-2 text-sm text-red-300">{latestReceiptFailure}</p>}
                 {linkConnected && displayedLatestReceipt && (
                     <details className="mt-3 rounded border border-slate-800 bg-slate-900/60 p-3">
-                        <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {displayedLatestReceipt.status}</summary>
+                        <summary className="cursor-pointer text-sm font-semibold">Action receipt details · {bioXpReceiptStatusText(displayedLatestReceipt, displayedLatestReceipt.status)}</summary>
                         <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(displayedLatestReceipt, null, 2)}</pre>
                     </details>
                 )}

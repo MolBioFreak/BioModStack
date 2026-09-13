@@ -5,7 +5,7 @@ import {
     useBioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
-import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
+import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
 
 /** Shared history rendering. Evidence is fetched only when this row is opened. */
 export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
@@ -14,12 +14,14 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
     const [expanded, setExpanded] = useState(false);
     const detail = useBioXpOperatorReceiptV2(receipt.command_id, generation, connected && expanded);
     const evidence = receipt.history;
-    const failureText = bioXpReceiptFailureText(detail.data?.command_id === receipt.command_id ? detail.data : receipt);
+    const displayedReceipt = detail.data?.command_id === receipt.command_id ? detail.data : receipt;
+    const report = bioXpReceiptIsMoveTimeoutReport(displayedReceipt);
+    const failureText = bioXpReceiptFailureText(displayedReceipt);
     return <article className="rounded border border-slate-800 bg-slate-900/60 p-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
             <strong className="font-mono text-slate-100">{receipt.action_id}</strong>
-            <span className={receipt.status === 'ambiguous' ? 'text-amber-300' : receipt.status === 'failed' ? 'text-red-300' : 'text-slate-300'}>
-                {receipt.status.replaceAll('_', ' ')} · {bioXpReceiptTimestampText(receipt.finished_at ?? receipt.accepted_at)}
+            <span className={report || receipt.status === 'ambiguous' ? 'text-amber-300' : receipt.status === 'failed' ? 'text-red-300' : 'text-slate-300'}>
+                {bioXpReceiptStatusText(displayedReceipt, receipt.status.replaceAll('_', ' '))} · {bioXpReceiptTimestampText(receipt.finished_at ?? receipt.accepted_at)}
             </span>
         </div>
         <p className="mt-1 break-all font-mono text-xs text-slate-400">{receipt.command_id}</p>
@@ -30,7 +32,7 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
             {receipt.z_move.target_clamped === true ? ' · Target adjusted by robot' : ''}
         </p>}
         {receipt.status === 'ambiguous' && <p className="mt-1 text-amber-300">Outcome ambiguous; do not resubmit; reconciliation required.</p>}
-        {failureText && <p className="mt-1 whitespace-pre-wrap text-red-300">{receipt.error && failureText === receipt.error.message ? `${receipt.error.code}: ${failureText}` : failureText}</p>}
+        {failureText && <p className={`mt-1 whitespace-pre-wrap ${report ? 'text-amber-300' : 'text-red-300'}`}>{receipt.error && failureText === receipt.error.message ? `${receipt.error.code}: ${failureText}` : failureText}</p>}
         <p className="mt-1 text-xs text-slate-400">
             {evidence.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP unverified'} · {evidence.controller_acknowledged ? 'Controller ACK' : 'Controller ACK unverified'} · {evidence.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {receipt.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
         </p>

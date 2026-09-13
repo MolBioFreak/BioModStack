@@ -6,6 +6,7 @@ import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
 import coherentFailureProducer from '../fixtures/bioxp_xy_coherent_failure.json';
 import bmsMetadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import actualY5 from '../fixtures/bioxp_xy_y5_compact.json';
+import manualReport from '../fixtures/bioxp_xy_manual_report.json';
 import actualY5History from '../fixtures/bioxp_xy_y5_history.json';
 import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -463,7 +464,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         ].find((receipt) => receipt.command_id === commandId
             && ['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(String(receipt.action_id)));
         if (dashboardReceipt) return { data: dashboardReceipt, error: null, isStale: false };
-        if (commandId?.startsWith('xy-') || commandId === coherentFailureProducer.compact.command_id || commandId === bmsMetadata.compact.command_id || commandId === actualY5.command_id) return state.xyReceipt;
+        if (commandId?.startsWith('xy-') || commandId === coherentFailureProducer.compact.command_id || commandId === bmsMetadata.compact.command_id || commandId === actualY5.command_id || commandId === manualReport.command_id) return state.xyReceipt;
         if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
         if (commandId?.startsWith('lifecycle-command-')) return state.lifecycleReceipt;
         if (commandId?.startsWith('z-command-')) return state.zReceipt;
@@ -918,14 +919,14 @@ describe('primary cockpit query ownership', () => {
             await render();
             for (let poll = 0; poll < 3; poll++) {
                 if (poll) await advance(5000);
-                expect(panel().textContent).toContain('XY command failed');
+                expect(panel().textContent).toContain('Move timeout reported');
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
             expect(api.get).toHaveBeenCalledTimes(3);
             await advance(6000);
             expect(button().disabled).toBe(true); // same old producer observation expires
-            expect(panel().textContent).toContain('XY command failed');
+            expect(panel().textContent).toContain('Move timeout reported');
             expect(state.xyCalls).toHaveLength(1);
             expect(state.lifecycleInvokeCalls).toHaveLength(0);
             expect(state.yInterruptCalls).toHaveLength(0);
@@ -952,7 +953,7 @@ describe('primary cockpit query ownership', () => {
             state.xyReceipt = { data: structuredClone(coherentFailureProducer.compact), error: null, isError: false };
             state.statusError = true;
             await render();
-            expect(panel().textContent).toContain('XY command failed');
+            expect(panel().textContent).toContain('Move timeout reported');
             expect(button().disabled).toBe(true);
             state.statusError = false;
             const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(row => row.action_id === 'oem.xy.move_absolute')!;
@@ -963,7 +964,7 @@ describe('primary cockpit query ownership', () => {
                 Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
                 catalogDashboard().generated_at = Date.now() / 1000;
                 await render();
-                expect(panel().textContent).toContain('XY command failed');
+                expect(panel().textContent).toContain('Move timeout reported');
                 expect(button().disabled).toBe(authority !== 'eligible');
                 expect(state.xyCalls).toHaveLength(1);
                 expect(state.lifecycleInvokeCalls).toHaveLength(0);
@@ -1026,7 +1027,7 @@ describe('primary cockpit query ownership', () => {
                 Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });
                 catalogDashboard().generated_at = Date.now() / 1000;
                 await render();
-                expect(visible()).toContain('XY command failed');
+                expect(visible()).toContain('Move timeout reported');
                 expect(visible()).toContain(explanation); // outside closed raw JSON details
                 expect(button().disabled).toBe(authority !== 'eligible');
                 expect(state.xyReceipt.data).toEqual(actualY5);
@@ -1053,6 +1054,36 @@ describe('primary cockpit query ownership', () => {
             expect(state.invokeCalls).toHaveLength(0);
             expect(state.componentStopCalls).toHaveLength(0);
         } finally { vi.useRealTimers(); }
+    });
+
+    it('renders the actual manual API report without a false success or retry across polling', async () => {
+        vi.useFakeTimers();
+        try {
+            const render = () => act(async () => root.render(<BioXpCockpit />));
+            const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+            const button = () => panel().querySelector('button') as HTMLButtonElement;
+            const visible = () => [...panel().querySelectorAll('p')].map(node => node.textContent).join(' ');
+            await render();
+            await act(async () => { button().click(); state.xyCallbacks?.onSuccess?.({command_id:manualReport.command_id,status:'dispatched',terminal:false}); });
+            state.xyReceipt = {data:structuredClone(manualReport),error:null,isError:false};
+            for (let poll=0;poll<3;poll++) {
+                await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+                Object.assign(state.v2Catalog,{dataUpdatedAt:Date.now()});
+                catalogDashboard().generated_at=Date.now()/1000;
+                await render();
+                expect(visible()).toContain('Move timeout reported');
+                expect(visible()).not.toMatch(/XY command (completed|failed)/);
+                expect(visible()).toContain('Source result remains failed');
+                expect(button().disabled).toBe(false);
+                expect(state.xyCalls).toHaveLength(1);
+                expect(state.lifecycleInvokeCalls).toHaveLength(0);
+                expect(state.yInterruptCalls).toHaveLength(0);
+                expect(state.xyReceipt.data).toEqual(manualReport);
+            }
+            state.statusError=true;await render();
+            expect(button().disabled).toBe(true);
+            expect(visible()).toContain('Move timeout reported');
+        } finally {vi.useRealTimers();}
     });
 
     it.each(['completed', 'failed', 'interrupted', 'stopped', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {

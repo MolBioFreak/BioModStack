@@ -14,7 +14,7 @@ import {
     useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
-import { bioXpReceiptFailureText } from '../lib/bioxpEvidencePresentation';
+import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
 import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 
 type Pane = 'primitive' | 'meta' | 'logs';
@@ -129,8 +129,9 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
     const status = 'status' in receipt ? receipt.status : 'schema' in receipt ? 'recorded' : receipt.outcome;
     const machineAssessment = 'machine_assessment' in receipt ? receipt.machine_assessment : 'unverified';
     const operatorAssessment = 'operator_assessment' in receipt ? receipt.operator_assessment : null;
-    const terminalPass = machineAssessment === 'pass' || operatorAssessment === 'pass';
-    const terminalFail = machineAssessment === 'fail' || operatorAssessment === 'fail';
+    const report = bioXpReceiptIsMoveTimeoutReport(receipt);
+    const terminalPass = !report && (machineAssessment === 'pass' || operatorAssessment === 'pass');
+    const terminalFail = !report && (machineAssessment === 'fail' || operatorAssessment === 'fail');
     const commandId = 'command_id' in receipt
         ? receipt.command_id
         : 'receipt_id' in receipt
@@ -151,14 +152,14 @@ function ReceiptCard({ receipt, generation = 0, connected = false }: {
     const stageReceipts = 'stage_receipts' in receipt ? receipt.stage_receipts : [];
     const response = 'response' in receipt ? receipt.response : null;
     return (
-        <article className={`rounded border p-3 text-xs ${terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
+        <article className={`rounded border p-3 text-xs ${report ? 'border-amber-700/60' : terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
             <div className="flex flex-wrap justify-between gap-2">
                 <span className="font-mono text-cyan-200">{actionId}</span>
-                <span>{status} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
+                <span>{bioXpReceiptStatusText(receipt, status)} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
             </div>
             <p className="mt-1 font-mono text-slate-400">{commandId}</p>
             <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
-            {bioXpReceiptFailureText(receipt) && <p className="mt-1 text-red-300">{bioXpReceiptFailureText(receipt)}</p>}
+            {bioXpReceiptFailureText(receipt) && <p className={report ? "mt-1 text-amber-300" : "mt-1 text-red-300"}>{bioXpReceiptFailureText(receipt)}</p>}
             {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
             {stageReceipts.length > 0 && (
                 <details className="mt-2"><summary>Stage receipts ({stageReceipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(stageReceipts, null, 2)}</pre></details>

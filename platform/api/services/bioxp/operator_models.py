@@ -4308,6 +4308,11 @@ class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     physical_outcome: str | None = Field(default=None, max_length=80)
     persistence_fallback: dict[str, Any] | None = None
     machine_assessment: ActionAssessment
+    # Preserve caller disposition separately from primitive/physical truth.
+    # Older v1 receipts omit this; no fabricated classification on readback.
+    completion_class: str | None = Field(
+        default=None, min_length=1, max_length=160, exclude_if=lambda value: value is None,
+    )
     operator_assessment: Literal["pass", "fail"] | None = None
     operator_note: str | None = Field(default=None, max_length=4000)
     operator_assessment_idempotency_key: str | None = Field(

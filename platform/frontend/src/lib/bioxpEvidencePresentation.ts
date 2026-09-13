@@ -26,6 +26,23 @@ export function bioXpProviderFailure(value: unknown): string | null {
     return visit(value, 0);
 }
 
+// Caller completion is not controller arrival. Old receipts are read-only.
+export function bioXpReceiptIsMoveTimeoutReport(receipt: unknown): boolean {
+    const object = (value: unknown): Record<string, unknown> =>
+        value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const row = object(receipt);
+    if (row.completion_class === 'oem_manual_timeout_report') return true;
+    const xy = object(row.xy_failure);
+    const wait = object(object(xy.controller_failure).wait);
+    return row.status === 'failed'
+        && wait.failure === 'oem_moveToAbs_target_event_timeout' && wait.no24v === false
+        && object(xy.terminal_classification).classification === 'failed_with_coherent_stopped_coordinates';
+}
+
+export function bioXpReceiptStatusText(receipt: unknown, fallback: string): string {
+    return bioXpReceiptIsMoveTimeoutReport(receipt) ? 'Move timeout reported' : fallback;
+}
+
 export function bioXpReceiptFailureText(receipt: unknown): string | null {
     if (receipt == null || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
     const object = (value: unknown): Record<string, unknown> =>
@@ -35,7 +52,7 @@ export function bioXpReceiptFailureText(receipt: unknown): string | null {
     const wait = object(object(xy.controller_failure).wait);
     // Use the retained source wait, not a transport error or an endpoint tolerance.
     // Old saved receipts have a generic HTTP conflict but retain this evidence.
-    if (row.status === 'failed' && wait.failure === 'oem_moveToAbs_target_event_timeout' && wait.no24v === false) {
+    if ((row.status === 'failed' || row.completion_class === 'oem_manual_timeout_report') && wait.failure === 'oem_moveToAbs_target_event_timeout' && wait.no24v === false) {
         const terminal = object(xy.terminal_classification);
         const readbacks = object(terminal.readbacks);
         const x = object(object(readbacks.x).position);

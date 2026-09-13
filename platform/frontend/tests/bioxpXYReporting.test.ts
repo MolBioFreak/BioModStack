@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { bioXpReceiptFailureText } from '../src/lib/bioxpEvidencePresentation.js';
+import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../src/lib/bioxpEvidencePresentation.js';
 
 const receipt = (name = 'compact') => JSON.parse(readFileSync(new URL(`./fixtures/bioxp_xy_y5_${name}.json`, import.meta.url), 'utf8'));
 const explanation = 'Move timeout reported. Recorded stopped position: X85000, Y5 (requested X85000, Y0). Past receipt only; not current position or readiness. Source result remains failed.';
@@ -46,4 +46,21 @@ test('does not apply an endpoint tolerance or require a new backend error messag
     raw.xy_failure.terminal_classification.readbacks.y.position.position = 12345;
     raw.error.message = 'new backend source timeout message';
     assert.match(bioXpReceiptFailureText(raw)!, /Y12345 \(requested X85000, Y0\)/);
+});
+
+test('manual caller returns with a report, without changing primitive or arrival truth', () => {
+    const raw = JSON.parse(readFileSync(new URL('./fixtures/bioxp_xy_manual_report.json', import.meta.url),'utf8'));
+    assert.equal(raw.status,'completed');
+    assert.equal(raw.completion_class,'oem_manual_timeout_report');
+    assert.equal(raw.physical_effect_verified,false);
+    assert.equal(bioXpReceiptIsMoveTimeoutReport(raw),true);
+    assert.equal(bioXpReceiptStatusText(raw,raw.status),'Move timeout reported');
+    assert.match(bioXpReceiptFailureText(raw)!, /Recorded stopped position/);
+    assert.match(bioXpReceiptFailureText(raw)!, /Source result remains failed/);
+});
+test('historical source report has no generic failed headline; other failures remain failures',()=>{
+    const raw=receipt();
+    assert.equal(bioXpReceiptStatusText(raw,raw.status),'Move timeout reported');
+    raw.xy_failure.controller_failure.wait.no24v=true;
+    assert.equal(bioXpReceiptStatusText(raw,raw.status),'failed');
 });

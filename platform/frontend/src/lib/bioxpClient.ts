@@ -856,6 +856,7 @@ export interface BioXpOperatorActionReceipt {
     physical_outcome: string | null;
     persistence_fallback: Record<string, unknown> | null;
     machine_assessment: 'pass' | 'fail' | 'unverified';
+    completion_class?: string | null;
     operator_assessment: 'pass' | 'fail' | null;
     operator_note: string | null;
     operator_assessment_idempotency_key: string | null;
