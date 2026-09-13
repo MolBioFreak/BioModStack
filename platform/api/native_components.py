@@ -842,6 +842,8 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 after = a.chain(['PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets',
                     'FinalizeConforNetsOutputs', 'BindCanonicalConforNetsOutputLedger', 'FinalizeCanonicalConforNets'])
                 if not cfg.get('confornets', {}).get('skip_msa', False):
+                    from services.conformational_mapping.request_builder import canonical_msa_params
+                    a.p.update(canonical_msa_params(cfg))
                     a.msa('protenix', ('PrepCanonicalConforNetsRequest',), consumer='modules/conformational_mapping_confornets.nf:RunCanonicalConforNets')
             elif backend == 'external_import':
                 after = a.chain(['CanonicalConformationalImport'])
