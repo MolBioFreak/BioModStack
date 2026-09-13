@@ -15,7 +15,7 @@ const text = (node: ReactTestInstance): string => node.children.map(child => typ
 const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const Location = () => <span data-location={useLocation().pathname + useLocation().search} />;
 const job = { id: 'parent', name: 'TEST mixed models', model_id: 'boltz2', mode: 'structure_prediction', status: 'completed', params: {}, design_count: 504, created_at: '2026-08-09T00:00:00Z' };
-const design = (id: string, model: string) => ({ id, job_id: 'parent', name: id, pdb_path: `${id}.pdb`, provenance: { model_id: model }, created_at: '2026-08-09T00:00:00Z', supported_analyzers: [], viewer_capabilities: ['structure_viewer'], result_contract_source: 'persisted', analysis_contract_id: 'test_structure', artifact_class: 'validated_complex', review_artifact_manifest: { schema: 'bms.review-artifacts.v1', artifacts: { structure: { state: 'ready', path: `${id}.pdb`, sha256: (id === 'z-2' ? 'b' : 'a').repeat(64) } } } });
+const design = (id: string, model: string) => ({ id, job_id: 'parent', name: id, pdb_path: `${id}.pdb`, provenance: { model_id: model, producer_model_id: model }, created_at: '2026-08-09T00:00:00Z', supported_analyzers: [], viewer_capabilities: ['structure_viewer'], result_contract_source: 'persisted', analysis_contract_id: 'test_structure', artifact_class: 'validated_complex', review_artifact_manifest: { schema: 'bms.review-artifacts.v1', artifacts: { structure: { state: 'ready', path: `${id}.pdb`, sha256: (id === 'z-2' ? 'b' : 'a').repeat(64) } } } });
 // Generated TEST rows; transport only is replaced, query serialization and consumers are real.
 const rows = [...Array.from({ length: 501 }, (_, i) => design(`a-${i}`, 'boltz2')), ...Array.from({ length: 3 }, (_, i) => design(`z-${i}`, 'protenix'))];
 const calls: Array<{ url: string; params: Record<string, any> }> = [];
@@ -36,12 +36,12 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
         else if (url === '/api/launch-contexts/context') data = { schema: 'bms.launch-context.v1', launch_context_id: 'context', project_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', workflow_id: null, workflow_revision_id: null, pinned_gpu: null, return_uri: returnUri, source_receipt_id: 'r', state: 'issued', issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z' };
         else if (url === '/api/designs') {
-            const modelOf = (row: typeof suppliedRows[number]) => (row.provenance as Record<string, unknown>).producer_model_id ?? row.provenance.model_id;
+            const modelOf = (row: typeof suppliedRows[number]) => (row.provenance as Record<string, unknown>).producer_model_id;
             let selected = params.model_id ? suppliedRows.filter(row => modelOf(row) === params.model_id) : suppliedRows;
             if (extraJobs.length) selected = selected.filter(row => row.job_id === params.job_id);
             if (params.q) selected = selected.filter(row => row.name.includes(params.q));
             const counts: Record<string, number> = {};
-            for (const row of suppliedRows) { const model = String(modelOf(row)); counts[model] = (counts[model] ?? 0) + 1; }
+            for (const row of suppliedRows) { const model = modelOf(row); if (typeof model === 'string' && model) counts[model] = (counts[model] ?? 0) + 1; }
             data = { designs: selected.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 100)), total: selected.length, model_counts: counts };
         } else if (/^\/api\/designs\/[^/]+$/.test(url)) {
             data = suppliedRows.find(row => row.id === url.split('/').pop());
@@ -89,6 +89,15 @@ test('mounted missing or foreign exact selection stays unavailable rather than s
     expect(calls.filter(call => /^\/api\/designs\/[^/]+$/.test(call.url)).map(call => call.url)).toEqual(['/api/designs/foreign']);
 });
 
+test('exact model scope requires canonical producer identity, not upstream model metadata', async () => {
+    const unattributed = design('unattributed', 'protenix');
+    delete (unattributed.provenance as Record<string, unknown>).producer_model_id;
+    await setup('/designs/parent?result_model=protenix&design_id=unattributed', false,
+        [design('known', 'protenix'), unattributed]);
+    expect(text(renderer!.root)).toContain('Requested Design unattributed is unavailable');
+    expect(renderer!.root.findAllByType(StructureViewerPane)).toHaveLength(0);
+});
+
 test('mounted child redirect preserves server Project context and model URL', async () => {
     await setup('/designs/parent?result_model=protenix&launch_context_id=context', true);
     const location = renderer!.root.findAllByType('span').find(item => item.props['data-location']);
@@ -97,8 +106,8 @@ test('mounted child redirect preserves server Project context and model URL', as
 });
 
 test('mounted validator names never collapse distinct candidates or retries', async () => {
-    const first = { ...design('first', 'protenix'), name: '1_shared', confidence_metrics: { plddt: 81 }, provenance: { model_id: 'protenix', attempt_id: 'original' } };
-    const second = { ...design('second', 'protenix'), name: '2_shared', confidence_metrics: { plddt: 92 }, provenance: { model_id: 'protenix', attempt_id: 'retry' } };
+    const first = { ...design('first', 'protenix'), name: '1_shared', confidence_metrics: { plddt: 81 }, provenance: { model_id: 'protenix', producer_model_id: 'protenix', attempt_id: 'original' } };
+    const second = { ...design('second', 'protenix'), name: '2_shared', confidence_metrics: { plddt: 92 }, provenance: { model_id: 'protenix', producer_model_id: 'protenix', attempt_id: 'retry' } };
     second.review_artifact_manifest.artifacts.structure.sha256 = 'b'.repeat(64);
     await setup('/designs/parent?result_model=protenix', false, [first, first, second]);
     const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'));
