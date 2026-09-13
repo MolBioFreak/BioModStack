@@ -111,8 +111,11 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         for entry in batch:
             for index in indices[key(entry)]:
                 activity[index]['state'] = state
-                await report(state, activity[index]['name'],
-                             'Transferring artifact' if state == 'transferring' else 'Verifying and publishing artifact')
+        # One operation update carries every artifact's state. Thousands of
+        # identical DB/fence updates would reintroduce per-file setup latency.
+        await report(state, activity[indices[key(batch[0])][0]]['name'] if len(batch) == 1 else None,
+                     'Transferring artifact batch' if state == 'transferring'
+                     else 'Verifying and publishing artifact batch')
 
     async def transfer(batch, *, direct=False):
         batch_id = uuid.uuid4().hex
@@ -132,8 +135,8 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         else:
             with tempfile.TemporaryDirectory(prefix='bms-cache-batch-') as temporary:
                 staging = Path(temporary)
+                await check_fence()
                 for entry in batch:
-                    await check_fence()
                     info = entry.source.lstat()
                     if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
                         raise ValueError('Cache source size or type changed')
@@ -176,8 +179,8 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         name = activity[index]['name']
         receipts.append({'name': name, 'sha256': entry.sha256, 'size_bytes': entry.size_bytes})
         activity[index]['state'] = 'verified'
-        if track_artifacts:
-            await report('verifying', name, 'Artifact cache identity verified')
+    if track_artifacts:
+        await report('verifying', None, 'Artifact cache identities verified')
     if materialize:
         for offset in range(0, len(artifacts), 128):
             batch = artifacts[offset:offset + 128]

@@ -51,7 +51,19 @@ async def test_bounded_deduplicated_real_uploads(tmp_path, monkeypatch, local_tr
 @pytest.mark.asyncio
 async def test_production_count_bound(tmp_path, local_transport):
     artifacts = entries(tmp_path, 2050)
-    await stage(tmp_path, artifacts + artifacts[:3])
+    updates, fences = [], []
+    async def progress(event):
+        updates.append(event)
+    async def fence():
+        fences.append(True)
+    receipts = await cache._cache_artifacts(
+        connection=SimpleNamespace(remote_root=str(tmp_path / 'worker')),
+        artifacts=artifacts + artifacts[:3], operation_id=str(uuid.uuid4()),
+        progress=progress, check_fence=fence, track_artifacts=True)
+    assert len(receipts) == 2053
+    assert len(updates) < 12 and len(fences) < 50
+    assert len(updates[-1]['artifact_progress']) == 2053
+    assert all(row['state'] == 'verified' for row in updates[-1]['artifact_progress'])
     calls, uploads = local_transport
     assert len(uploads) == 2
     assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [2048, 2]
