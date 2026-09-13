@@ -22,6 +22,11 @@ export function BioXpHistoryReceiptCard({ receipt, generation, connected }: {
         </div>
         <p className="mt-1 break-all font-mono text-xs text-slate-400">{receipt.command_id}</p>
         {evidence.source === 'retained' && <p className="mt-1 text-xs text-amber-300">Retained legacy record — not current control authority.</p>}
+        {receipt.z_move && <p className="mt-1 text-xs text-cyan-100">
+            Z requested: {receipt.z_move.requested_position_steps ?? 'unknown'} · Applied target: {receipt.z_move.effective_position_steps ?? 'unknown'} steps
+            {' '}· Before: {receipt.z_move.before_position_steps ?? 'unknown'} · After: {receipt.z_move.after_position_steps ?? 'unknown'}
+            {receipt.z_move.target_clamped === true ? ' · Target adjusted by robot' : ''}
+        </p>}
         {receipt.status === 'ambiguous' && <p className="mt-1 text-amber-300">Outcome ambiguous; do not resubmit; reconciliation required.</p>}
         {receipt.error && <p className="mt-1 whitespace-pre-wrap text-red-300">{receipt.error.code}: {receipt.error.message}</p>}
         <p className="mt-1 text-xs text-slate-400">

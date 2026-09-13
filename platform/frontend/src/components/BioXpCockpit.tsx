@@ -240,6 +240,7 @@ export function BioXpCockpit() {
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [pipettesOpen, setPipettesOpen] = useState(false);
+    const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({ x: 60, z: 65000, g: 0 });
     const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, linkConnected);
     // One catalog snapshot owns admission and its embedded dashboard. Cache
     // receipt time never renews the upstream observation's freshness budget.
@@ -341,6 +342,7 @@ export function BioXpCockpit() {
         generation,
         linkConnected,
         null,
+        Number.isInteger(absoluteTargets.z) ? absoluteTargets.z : undefined,
     );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const componentStop = useInvokeBioXpOperatorAction('stop');
@@ -360,14 +362,13 @@ export function BioXpCockpit() {
         z: 10000,
         g: 10000,
     });
-    const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({
-        x: 60,
-        z: 65000,
-        g: 0,
-    });
 
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
     const dashboard = displayTelemetry;
+    const zTargetProvider = catalog?.dashboard.ownership_generation === currentDashboardV2?.ownership_generation
+        && currentCatalogV2 != null ? catalog?.dashboard.z_axis?.provider : undefined;
+    const zTargetPreview = zTargetProvider?.target_preview?.requested_position_steps === absoluteTargets.z
+        ? zTargetProvider.target_preview : undefined;
     const ownershipGeneration = currentDashboardV2?.ownership_generation ?? 0;
 
     const ownership = connection?.ownership;
@@ -569,7 +570,7 @@ export function BioXpCockpit() {
 
     const v2ActionDisabledReason = (actionId: string): string | null => {
         if (!linkConnected) return 'Connect to control the robot.';
-        if (!v2AuthorityCoherent) return 'Updating robot controls…';
+        if (!v2AuthorityCoherent) return 'Current robot control state is unavailable.';
         // Installed CCI handlers: X absolute and XYZ relative/Home wait inline;
         // only manual Y absolute is explicitly nonwaiting (ui-inventory UI-01/02).
         // The manual Y request remains held only while its HTTP submission is pending.
@@ -727,6 +728,7 @@ export function BioXpCockpit() {
         if (operation === 'move-negative' || operation === 'move-positive') {
             if (axis === 'door') return;
             const magnitude = Math.abs(manualSteps[axis]);
+            if (integerInputError(magnitude, operatorActionForPath('/motion/oem/manual/relative')?.inputs.find(input => input.name === 'steps'), 'Requested steps')) return;
             invokeOperatorPath('/motion/oem/manual/relative', {
                 axis,
                 steps: operation === 'move-negative' ? -magnitude : magnitude,
@@ -756,6 +758,7 @@ export function BioXpCockpit() {
             if (envelope) submitV2({ ...envelope, action_id: 'oem.z.move_absolute', inputs: { position_steps: absoluteTargets.z } });
             return;
         }
+        if (integerInputError(absoluteTargets[axis], operatorActionForPath('/motion/oem/manual/absolute')?.inputs.find(input => input.name === 'position_steps'), 'Requested target')) return;
         invokeOperatorPath('/motion/oem/manual/absolute', { axis, position_steps: absoluteTargets[axis] });
     };
 
@@ -1294,13 +1297,9 @@ export function BioXpCockpit() {
                                             min={1}
                                             max={axis === 'x' ? xRelativeMaximum : axis === 'z' ? zRelativeMaximum : 160000}
                                             step={1}
-                                            value={manualSteps[axis]}
+                                            value={Number.isFinite(manualSteps[axis]) ? manualSteps[axis] : ''}
                                             onChange={(event) => {
-                                                const parsed = Number.parseInt(event.target.value || '1', 10);
-                                                const boundedMaximum = axis === 'x' ? xRelativeMaximum : axis === 'z' ? zRelativeMaximum : 160000;
-                                                const magnitude = Number.isFinite(parsed) ? Math.max(1, Math.abs(parsed)) : 1;
-                                                const bounded = boundedMaximum === undefined ? magnitude : Math.min(boundedMaximum, magnitude);
-                                                setManualSteps((current) => ({ ...current, [axis]: bounded }));
+                                                setManualSteps((current) => ({ ...current, [axis]: event.target.valueAsNumber }));
                                             }}
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                         />
@@ -1325,17 +1324,14 @@ export function BioXpCockpit() {
                                                 step={1}
                                                 value={Number.isFinite(absoluteTargets[axis]) ? absoluteTargets[axis] : ''}
                                                 onChange={(event) => {
-                                                    // Z drafts must preserve zero, fractions, emptiness and exponent notation.
-                                                    const parsed = axis === 'z' ? event.target.valueAsNumber
-                                                        : axis === 'x' ? Number(event.target.value || '0')
-                                                            : Number.parseInt(event.target.value || '0', 10);
+                                                    const parsed = event.target.valueAsNumber;
                                                     setAbsoluteTargets((current) => ({ ...current, [axis]: parsed }));
                                                 }}
                                                 className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                             />
                                             <button
                                                 type="button"
-                                                disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true)}
+                                                disabled={!linkConnected || (axis === 'x' ? !xAbsoluteEnabled : axis === 'z' ? !zAbsoluteEnabled : operatorActionForPath('/motion/oem/manual/absolute')?.enabled !== true || integerInputError(absoluteTargets[axis], operatorActionForPath('/motion/oem/manual/absolute')?.inputs.find(input => input.name === 'position_steps'), 'Requested target') !== null)}
                                                 title={axis === 'x' ? xAbsoluteDisabledReason ?? 'Move X to the absolute target' : axis === 'z' ? zAbsoluteDisabledReason ?? 'Move to the absolute target' : undefined}
                                                 onClick={() => runAbsolute(axis)}
                                                 className={actionClass}
@@ -1362,7 +1358,10 @@ export function BioXpCockpit() {
                                         </details>
                                         )}
                                         {axis === 'z' && (
-                                        <p className="text-xs text-cyan-100">Requested OEM target, not an unclamped coordinate: the robot applies its current pseudo-home minimum and axis limits. Requesting 0 is not Home and can move Z away from controller 0. Use Home for the OEM homing sequence.</p>
+                                        <p data-testid="z-target-context" className="text-xs text-cyan-100">
+                                            Selected target: {zTargetPreview?.effective_position_steps ?? 'unavailable'} steps · Current minimum: {zTargetProvider?.current_minimum_steps ?? 'unavailable'} steps.
+                                            {' '}Based on the latest robot context; the command receipt records the applied target. Home reaches the upper limit (0).
+                                        </p>
                                         )}
                                         {axis === 'z' && (
                                         <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-cyan-100">
@@ -1446,7 +1445,7 @@ export function BioXpCockpit() {
                                                         : isZHome
                                                             ? zHomeEnabled
                                                             : action?.enabled === true;
-                                    const enabled = admissionEnabled;
+                                    const enabled = admissionEnabled && !(axis === 'g' && (operation === 'move-negative' || operation === 'move-positive') && integerInputError(manualSteps.g, legacyAction?.inputs.find(input => input.name === 'steps'), 'Requested steps') !== null);
                                     const unavailableReason = isXNegative
                                         ? xNegativeDisabledReason ?? 'Robot verifies this exact X move at dispatch.'
                                         : isXPositive

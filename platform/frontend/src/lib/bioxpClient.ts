@@ -280,6 +280,8 @@ export interface BioXpOperatorDashboard {
         status: BioXpOperatorDashboardAxis | null;
         provider: {
             bound?: boolean;
+            current_minimum_steps?: 500 | 65000 | null;
+            target_preview?: { requested_position_steps: number; effective_position_steps: number | null } | null;
             board?: 4;
             motor?: 1;
             state?: string;
@@ -349,6 +351,7 @@ export interface BioXpOperatorInterruptEvidenceV2 {
 }
 
 export interface BioXpOperatorReceiptV2 {
+    z_move?: { requested_position_steps?: number | null; effective_position_steps?: number | null; before_position_steps?: number | null; after_position_steps?: number | null; target_clamped?: boolean | null; [key: string]: unknown } | null;
     schema_version: 'bioxp.operator_action_receipt.v2';
     interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
     command_id: string;
@@ -1432,13 +1435,15 @@ export const useBioXpOperatorControlCatalog = (
     connectionGeneration: number,
     enabled = true,
     lifecycleState?: string | null,
-) => useQuery({
-    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null],
+    zTargetSteps?: number,
+) => useQuery<BioXpOperatorControlCatalog>({
+    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
     // This catalog also owns live gripper/door availability, not just labels.
     // An expired cached response triggers a refresh on the robot; read again
     // rather than leaving every remaining manual control disabled indefinitely.
     queryFn: async ({ signal }) => (
-        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000 })
+        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000, params: Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : undefined })
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,

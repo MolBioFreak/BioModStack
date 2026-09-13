@@ -4032,6 +4032,12 @@ class OperatorDashboardZTerminalState(BaseModel):
     observed_at: StrictFloat | StrictInt | None = None
 
 
+class OperatorZTargetPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    requested_position_steps: StrictInt
+    effective_position_steps: StrictInt | None
+
+
 class OperatorDashboardZProvider(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: str | None = Field(default=None, max_length=160)
@@ -4059,6 +4065,8 @@ class OperatorDashboardZProvider(BaseModel):
     coordinate_contract: Literal["oem_source_nonnegative_z"] | None = None
     source_min_steps: Literal[0] | None = None
     source_max_steps: Literal[160000] | None = None
+    current_minimum_steps: Literal[500, 65000] | None = None
+    target_preview: OperatorZTargetPreview | None = None
     blockers: list[str] = Field(default_factory=list, max_length=64)
     failure: str | None = Field(default=None, max_length=1000)
     bound: StrictBool
@@ -4229,6 +4237,32 @@ class OperatorAssessmentRequest(BaseModel):
 ReceiptStatusT = TypeVar("ReceiptStatusT", bound=str)
 
 
+class OperatorZMoveEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    failure: str | None = None
+    requested_position_steps: StrictInt | None = None
+    effective_position_steps: StrictInt | None = None
+    pseudo_home_steps: StrictInt | None = None
+    coordinate_mode: Literal["absolute"] | None = None
+    target_clamped: StrictBool | None = None
+    source_return_ok: StrictBool | None = None
+    source_return_code: StrictInt | None = None
+    source_noop: StrictBool | None = None
+    completion_class: str | None = None
+    controller_command_acknowledged: StrictBool | None = None
+    controller_terminal_state_verified: StrictBool | None = None
+    physical_effect_verified: StrictBool | None = None
+    command_issued: StrictBool | None = None
+    terminal_z_state: dict[str, JsonValue] | None = None
+    before_position_steps: StrictInt | None = None
+    target_position_steps: StrictInt | None = None
+    after_position_steps: StrictInt | None = None
+    terminal_speed_steps_s: StrictInt | None = None
+    terminal_stopped: StrictBool | None = None
+    target_events: list[dict[str, JsonValue]] = Field(default_factory=list)
+    controller_error_events: list[dict[str, JsonValue]] = Field(default_factory=list)
+
+
 class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     model_config = ConfigDict(extra="forbid", strict=True)
     sequence: StrictInt | None = Field(default=None, ge=1, exclude_if=lambda value: value is None)
@@ -4285,6 +4319,12 @@ class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     operator_assessed_at: StrictFloat | StrictInt | None = Field(default=None, ge=0)
     inputs: dict[str, Any] = Field(default_factory=dict, max_length=64)
     requested_inputs: dict[str, Any] | None = Field(default=None, max_length=64)
+    z_move: OperatorZMoveEvidence | None = None
+    canonical_inputs: dict[str, JsonValue] = Field(default_factory=dict)
+    requested_values: dict[str, JsonValue] = Field(default_factory=dict)
+    effective_values: dict[str, JsonValue] = Field(default_factory=dict)
+    observed_values: dict[str, JsonValue] = Field(default_factory=dict)
+    controller_evidence: dict[str, JsonValue] = Field(default_factory=dict)
     response: dict[str, JsonValue] | None = None
     authority_receipt_id: str | None = Field(default=None, max_length=128)
     authority_receipt_status: ActionStatus | OperatorDashboardXOmissionMarker | None = None
@@ -5230,6 +5270,7 @@ class OperatorActionReceiptV2(BaseModel):
     completion_class: str | None
     physical_effect_verified: StrictBool
     interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    z_move: OperatorZMoveEvidence | None = None
     error: OperatorReceiptErrorV2 | None
     transport_exchanges: list[OperatorTransportExchangeV2] = Field(default_factory=list)
     transport_retention_errors: list[OperatorTransportRetentionErrorV2] = Field(default_factory=list)

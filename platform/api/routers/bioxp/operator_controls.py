@@ -741,12 +741,14 @@ async def operator_command_status_v2(
 
 @router.get("/operator-controls/catalog", response_model=OperatorControlCatalog)
 async def operator_control_catalog(
+    z_target_steps: int | None = Query(default=None, ge=-2147483648, le=2147483647),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorControlCatalog:
     snapshot = runtime.connection.snapshot()
     try:
         payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
+            params={"z_target_steps": z_target_steps} if z_target_steps is not None else None,
             expected_generation=snapshot.generation,
             require_fresh=False,
         )
