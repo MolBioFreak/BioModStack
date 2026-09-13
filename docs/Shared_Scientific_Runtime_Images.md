@@ -60,6 +60,68 @@ python scripts/retire_runtime_images.py --store-root PATH forget-release --relea
 
 `apply --plan FILE --maintenance-authorization CHANGE_ID` revalidates under the lifecycle fence and **quarantines by rename, not deletion**. The authorization identifies an externally established maintenance window: admissions fenced, all legacy/queued/resumable users accounted for, and no untracked aliases/users. A string alone cannot establish those conditions. Quarantine reclaims zero bytes. Physical purge/grace policy is a separate explicitly reviewed maintenance action. Current references alone and an unprivileged open-FD scan are insufficient grounds for deletion.
 
+## Userspace private image views
+
+`lib.runtime_image_views.private_image_view(store_root, digest, workspace_root,
+extract)` is a context manager yielding a dictionary:
+
+- `rootfs: Path`: this execution's private CoW rootfs;
+- `image: Path`: the original canonical `runtime.sif`, never the extracted tree;
+- `image_fd: int`: retained read-only/no-follow original descriptor (explicitly
+  include it in subprocess `pass_fds` when inheritance is required);
+- `identity: dict`: the existing `verify_image` source receipt.
+
+The synchronous installation-owned callback `extract(image_fd, destination)`
+creates the initially absent destination using the pinned descriptor and must
+finish/reap extraction children before returning or raising. The runtime must
+likewise finish/reap execution children before leaving the context. The caller
+supplies a private workspace **outside both the store and Nextflow task cwd**, on
+a filesystem supporting reflinks from the derivation. There is no task-local SIF,
+full-byte rootfs-copy fallback, automatic engine fallback, or image acquisition
+in this API. `CoWUnavailable` is a fail-closed readiness error, not permission to
+copy. Existing direct SIF consumers and their source descriptors remain intact.
+
+One `.rootfs-<digest>` envelope lives beside the SIF object under
+`objects/sha256`, not inside its immutable 0500 directory. Publication never
+chmods or replaces the canonical source SIF or its parent. Extraction occurs in
+an exact `.derive-<digest>-<uuid>` stage under the existing lifecycle fence; the
+completed, fsynced envelope is atomically renamed into place. Its manifest binds
+source identity, tree content hashes, symlink targets, internal hardlink groups,
+and original/frozen modes. Special device/FIFO/socket entries and external
+hardlinks fail closed. Frozen files/directories have write bits removed and
+owner read/traversal enabled. Every private regular-file allocation uses Linux
+`FICLONE`; internal hardlinks only connect private inodes. Original permissions
+(including executable/sticky bits) are restored on the view. Symlink targets are
+preserved, never followed by tree verification or cleanup. Corrupt published
+source/derivation state is rejected, never silently re-extracted or repaired.
+
+The context retains an ordinary source execution lease in the existing
+`references/state.json` authority, in addition to the caller's durable
+cache/attempt/admission/resume references. It rechecks source descriptor/hash and
+derivation integrity before execution and on exit. Normal exceptions and
+cancellation remove private views and release that execution lease. A SIGKILL
+cannot run a Python finalizer: its lease remains conservatively pinned and its
+private workspace requires the existing owner's explicit cleanup. This API
+never infers resume safety from process death or expires admission references.
+
+`plan_retirement` includes the derivation identity. `apply_retirement` uses the
+same reference/lease/maintenance fences and approval receipt for both allocations:
+source quarantine rename first (immediately preventing admission), then derived
+quarantine rename. `recover_image_derivations(store_root)` is the explicit
+lifecycle restart operation: under the same fence it removes only recognized
+interrupted extraction stages and finishes already-approved quarantine pairs,
+verifying their original source/derived identities. Repeated recovery is
+idempotent; it does not unpin leases or physically purge retired images. It is
+not a second registry, format cache or unattended collector.
+
+These are trusted scientific execution views, **not a hostile-code sandbox**.
+POSIX owner/root access can alter shared bytes; the mechanism does not claim
+kernel-enforced read-only binds, PID/network namespaces or Apptainer-equivalent
+isolation. Host-path symlinks and input-bind policy remain the launcher's trust
+boundary. Source-integrity checks and independent private CoW allocations are
+the preservation contract; live engine/CUDA and actual-host CoW qualification
+remain separate from synthetic local filesystem tests.
+
 ## Acceptance boundary
 
 A deduplication fix is incomplete until every affected supported workflow actually

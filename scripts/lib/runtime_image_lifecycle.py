@@ -322,6 +322,14 @@ def _plan(root, digest):
     with _directory(path.parent) as fd:
         if set(os.listdir(fd)) != {"runtime.sif"}:
             raise Error("unknown references or contents in runtime object")
+    from .runtime_image_views import derived_path, verify_derivation
+    derived = derived_path(root, digest)
+    derivation = None
+    with _directory(derived.parent) as fd:
+        if derived.name in os.listdir(fd):
+            derivation = verify_derivation(derived, identity)[0]
+        if any(name.startswith('.derive-' + digest + '-') for name in os.listdir(fd)):
+            raise Error('interrupted derivation; explicit recovery required')
     reasons = []
     aliases = []
     for key, release in state["releases"].items():
@@ -333,7 +341,7 @@ def _plan(root, digest):
     reasons.extend(f"lease:{key}:{lease['owner']}" for key, lease in state["leases"].items()
                    if digest in lease["identities"])
     return {"schema_version": 1, "store_root": str(root), "generation": state["generation"],
-            "digest": digest, "path": str(path), "identity": identity,
+            "digest": digest, "path": str(path), "identity": identity, "derivation": derivation,
             "allocated_bytes": path.stat().st_blocks * 512, "reasons": sorted(reasons),
             "aliases": sorted(aliases), "job_reference_coverage": "unproven",
             "requires_maintenance_quiescence": True}
@@ -371,6 +379,8 @@ def apply_retirement(root, plan, *, maintenance_authorization):
             "quarantined_ns": time.time_ns(),
         }, sort_keys=True) + "\n")
         with _directory(quarantine.parent) as fd:
+            if name + '.rootfs' in os.listdir(fd):
+                raise Error('quarantine derivation destination already exists')
             try:
                 os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -379,7 +389,56 @@ def apply_retirement(root, plan, *, maintenance_authorization):
                 raise Error("quarantine destination already exists")
             os.rename(current["digest"], name, src_dir_fd=fd, dst_dir_fd=fd)
             os.fsync(fd)
+            if current["derivation"] is not None:
+                # Source disappears first: interrupted retirement cannot admit a
+                # new view. The same approval receipt completes this rename on
+                # explicit recovery; neither allocation is physically deleted.
+                os.rename('.rootfs-' + current['digest'], name + '.rootfs',
+                          src_dir_fd=fd, dst_dir_fd=fd)
+                os.fsync(fd)
         return quarantine
+
+
+def recover_image_derivations(root):
+    """Explicit restart recovery under the existing admission/retirement fence.
+
+    Remove exact interrupted extraction stages and finish already-authorized
+    quarantine pairs. No age heuristic, lease expiry or independent ref registry.
+    """
+    from .runtime_image_views import _recover_stages, verify_derivation
+    with transaction(root) as root:
+        objects = root / 'objects' / 'sha256'
+        with _directory(objects) as fd:
+            names = os.listdir(fd)
+            for name in names:
+                if name.startswith('.derive-'):
+                    digest = _digest(name[len('.derive-'):len('.derive-') + 64])
+                    _recover_stages(root, digest)
+            for name in names:
+                if not name.startswith('.quarantine-') or name.endswith('.rootfs'):
+                    continue
+                receipt = json.loads(_read(root / 'quarantine' / (name + '.json')),
+                                     object_pairs_hook=_unique_keys)
+                plan = receipt['plan']
+                digest = _digest(plan['digest'])
+                if plan.get('derivation') is None:
+                    continue
+                if not name.startswith('.quarantine-' + digest + '-') or plan['store_root'] != str(root):
+                    raise Error('invalid derivation retirement receipt')
+                if digest in os.listdir(fd):
+                    raise Error('quarantined image also has active source')
+                if verify_image(objects / name / 'runtime.sif', digest) != plan['identity']:
+                    raise Error('quarantined source identity changed')
+                active, retired = '.rootfs-' + digest, name + '.rootfs'
+                present = set(os.listdir(fd))
+                if (active in present) == (retired in present):
+                    raise Error('missing or duplicate retirement derivation')
+                selected = active if active in present else retired
+                if verify_derivation(objects / selected, plan['identity'])[0] != plan['derivation']:
+                    raise Error('retirement derivation identity changed')
+                if selected == active:
+                    os.rename(active, retired, src_dir_fd=fd, dst_dir_fd=fd)
+                    os.fsync(fd)
 
 
 # Legacy retirement is deliberately one reviewed allocation at a time. Evidence
