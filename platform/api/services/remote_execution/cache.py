@@ -4,6 +4,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import shutil
+import stat
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,6 +18,10 @@ from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_so
                      _safe_extract, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
 from .images import resolve_image
+
+
+BATCH_COUNT = 2048
+BATCH_BYTES = 256 * 1024 * 1024
 
 
 async def _noop(*args, **kwargs):
@@ -31,6 +38,8 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
         # Lifecycle retention is mandatory, not an optional worker capability.
         lifecycle = Path(__file__).parents[4] / 'scripts/lib/runtime_image_lifecycle.py'
         payloads[lifecycle.name] = lifecycle.read_bytes()
+        views = lifecycle.with_name('runtime_image_views.py')
+        payloads[views.name] = views.read_bytes()
     generation = hashlib.sha256(b''.join(payloads.values())).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{generation}/{helper_name}'
     # Small source modules: stdin transfers, each verified before atomic publication.
@@ -55,6 +64,7 @@ finally:
         path = str(Path(destination).with_name(name))
         await run_remote(connection, ['python3', '-c', script, path,
                                      hashlib.sha256(payload).hexdigest()], input_bytes=payload)
+        await check_fence()
     return destination
 
 
@@ -62,14 +72,20 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
                            materialize=False, links=(), runtime_root=None, track_artifacts=False):
     # Caller owns operation identity and destination authority; never use public paths.
     uuid.UUID(operation_id)
+    artifacts = tuple(artifacts)
+    unique = {}
+    for entry in artifacts:
+        previous = unique.setdefault((entry.role == 'image', entry.sha256), entry)
+        if previous.size_bytes != entry.size_bytes:
+            raise ValueError('Conflicting cache object sizes')
     tool = await _install_helper(connection, check_fence)
     root = f'{connection.remote_root}/cache/artifacts/v1'
     async def call(request):
         await check_fence()
         result = await run_remote(connection, ['python3', tool, '--root', root],
                                   input_bytes=json.dumps(request).encode(), timeout=3600)
+        await check_fence()
         return json.loads(result.stdout)
-    artifacts = tuple(artifacts)
     states = {}
     activity = [dict(name=e.remote_destination.removeprefix(connection.remote_root.rstrip("/") + "/"),
                      sha256=e.sha256, size_bytes=e.size_bytes, state="pending") for e in artifacts]
@@ -81,34 +97,83 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
                 **({'kind': 'runtime_image'} if entry.role == 'image' else {})}
     def key(entry):
         return (entry.role == 'image', entry.sha256)
-    for offset in range(0, len(artifacts), 128):
-        batch = artifacts[offset:offset + 128]
+    objects = tuple(unique.values())
+    for offset in range(0, len(objects), BATCH_COUNT):
+        batch = objects[offset:offset + BATCH_COUNT]
         await report('checking', None, 'Verifying cached artifact batch')
         response = await call({'action': 'probe', 'artifacts': [identity(entry) for entry in batch]})
         states.update({(row.get('kind') == 'runtime_image', row['sha256']): row['state']
                        for row in response['artifacts']})
+    indices = {}
+    for index, entry in enumerate(artifacts):
+        indices.setdefault(key(entry), []).append(index)
+    async def batch_progress(batch, state):
+        for entry in batch:
+            for index in indices[key(entry)]:
+                activity[index]['state'] = state
+                await report(state, activity[index]['name'],
+                             'Transferring artifact' if state == 'transferring' else 'Verifying and publishing artifact')
+
+    async def transfer(batch, *, direct=False):
+        batch_id = uuid.uuid4().hex
+        owner = {'operation_id': operation_id, 'batch_id': batch_id}
+        incoming = f'{root}/incoming/{operation_id}/{batch_id}'
+        await call({'action': 'prepare_incoming', **owner})
+        await batch_progress(batch, 'transferring')
+        if direct:
+            # Images and oversized single objects never acquire task-local copies.
+            entry = batch[0]
+            source = incoming + '/' + entry.sha256
+            await check_fence()
+            await rsync_to_remote(connection, entry.source, source, delete=False)
+            await check_fence()
+            await batch_progress(batch, 'verifying')
+            await call({'action': 'ingest', 'artifact': identity(entry), 'source': source})
+        else:
+            with tempfile.TemporaryDirectory(prefix='bms-cache-batch-') as temporary:
+                staging = Path(temporary)
+                for entry in batch:
+                    await check_fence()
+                    info = entry.source.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
+                        raise ValueError('Cache source size or type changed')
+                    destination = staging / entry.sha256
+                    try:
+                        os.link(entry.source, destination, follow_symlinks=False)
+                    except OSError:
+                        shutil.copyfile(entry.source, destination, follow_symlinks=False)
+                    if destination.is_symlink() or not destination.is_file():
+                        raise ValueError('Cache source is not a regular file')
+                await check_fence()
+                await rsync_to_remote(connection, staging, incoming + '/', delete=False)
+                await check_fence()
+            await batch_progress(batch, 'verifying')
+            await call({'action': 'ingest_many', 'artifacts': [identity(e) for e in batch], **owner})
+        # Never clean uncertain ingest/SSH/cancellation state; retry probes the CAS.
+        await call({'action': 'remove_incoming', **owner})
+        for entry in batch:
+            states[key(entry)] = 'cache_hit'
+            for index in indices[key(entry)]:
+                activity[index]['state'] = 'verified'
+
+    batch, size = [], 0
+    for entry in objects:
+        if states[key(entry)] == 'cache_hit':
+            continue
+        direct = entry.role == 'image' or entry.size_bytes > BATCH_BYTES
+        if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
+            await transfer(batch)
+            batch, size = [], 0
+        if direct:
+            await transfer([entry], direct=True)
+        else:
+            batch.append(entry)
+            size += entry.size_bytes
+    if batch:
+        await transfer(batch)
     receipts = []
     for index, entry in enumerate(artifacts):
-        item = identity(entry)
-        # Names only from authoritative relative destinations, never source paths.
-        name = entry.remote_destination.removeprefix(connection.remote_root.rstrip('/') + '/')
-        if states[key(entry)] != 'cache_hit':
-            incoming = f'{root}/incoming/{operation_id}/{uuid.uuid4().hex}'
-            await check_fence()
-            await run_remote(connection, ['mkdir', '-p', str(Path(incoming).parent)])
-            activity[index]['state'] = 'transferring'
-            await report('transferring', name, 'Transferring artifact')
-            await check_fence()
-            await rsync_to_remote(connection, entry.source, incoming, delete=False)
-            activity[index]['state'] = 'verifying'
-            await report('verifying', name, 'Verifying and publishing artifact')
-            await call({'action': 'ingest', 'artifact': item, 'source': incoming})
-            # Clean only a confirmed completed ingest, never race an uncertain
-            # remote writer after cancellation or SSH loss.
-            await check_fence()
-            await run_remote(connection, ['rm', '-f', '--', incoming])
-            await check_fence()
-            states[key(entry)] = 'cache_hit'
+        name = activity[index]['name']
         receipts.append({'name': name, 'sha256': entry.sha256, 'size_bytes': entry.size_bytes})
         activity[index]['state'] = 'verified'
         if track_artifacts:
@@ -371,18 +436,20 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
     # Read back exact installed cache-object identities after all transfers. This
     # is download evidence, NOT a materialized runtime or scientific acceptance.
     tool = await _install_helper(connection, check_fence)
-    for offset in range(0, len(receipts), 128):
-        batch = receipts[offset:offset + 128]
+    objects = tuple({(e.role == 'image', e.sha256): e for e in entries}.values())
+    for offset in range(0, len(objects), BATCH_COUNT):
+        batch = objects[offset:offset + BATCH_COUNT]
         await check_fence()
         response = await run_remote(connection, ['python3', tool, '--root',
             f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
-                'action': 'probe', 'artifacts': [dict(sha256=r['sha256'], size_bytes=r['size_bytes'],
-                    **({'kind': 'runtime_image'} if entry.role == 'image' else {}))
-                    for r, entry in zip(batch, entries[offset:offset + 128], strict=True)]
+                'action': 'probe', 'artifacts': [dict(sha256=e.sha256, size_bytes=e.size_bytes,
+                    **({'kind': 'runtime_image'} if e.role == 'image' else {})) for e in batch]
             }).encode(), timeout=3600)
+        await check_fence()
         rows = json.loads(response.stdout)['artifacts']
-        expected = {(r['sha256'], r['size_bytes']) for r in batch}
-        observed = {(r['sha256'], r['size_bytes']) for r in rows if r['state'] == 'cache_hit'}
+        expected = {(e.role == 'image', e.sha256, e.size_bytes) for e in batch}
+        observed = {(r.get('kind') == 'runtime_image', r['sha256'], r['size_bytes'])
+                    for r in rows if r['state'] == 'cache_hit'}
         if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
             raise ValueError('Cache source verification failed')
     await check_fence()

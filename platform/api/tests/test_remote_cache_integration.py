@@ -68,7 +68,10 @@ def local_transport(monkeypatch):
         return subprocess.run(argv, input=input_bytes, capture_output=True, check=True)
     async def rsync(connection, source, destination, **kwargs):
         uploads.append(str(source))
-        shutil.copyfile(source, destination)
+        if Path(source).is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(source, destination)
     monkeypatch.setattr(cache, 'run_remote', run)
     monkeypatch.setattr(cache, 'rsync_to_remote', rsync)
     return calls, uploads
@@ -133,10 +136,10 @@ async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypat
                               native_invocation=invocation, source_revision='a'*40,
                               source_tree='b'*40, operation_id=str(uuid.uuid4()),
                               progress=cache._noop, check_fence=cache._noop)
-    assert len(uploads) == 2
+    assert len(uploads) == 1
     assert not Path(bundle.remote_runtime_dir).exists()
     await cache.stage_cached_bundle(connection=connection, bundle=bundle)
-    assert len(uploads) == 2
+    assert len(uploads) == 1
     assert (Path(bundle.remote_source_dir) / 'workflow.nf').read_bytes() == b'workflow'
     model = Path(bundle.remote_runtime_dir) / 'weights/model'
     alias = model.with_name('alias')
@@ -144,11 +147,11 @@ async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypat
     alias.write_bytes(b'job mutation')
     with pytest.raises(subprocess.CalledProcessError):
         await cache.stage_cached_bundle(connection=connection, bundle=bundle)
-    assert model.read_bytes() == b'job mutation' and len(uploads) == 2
+    assert model.read_bytes() == b'job mutation' and len(uploads) == 1
     bundle = next_attempt(connection, bundle)
     await cache.stage_cached_bundle(connection=connection, bundle=bundle)
     model = Path(bundle.remote_runtime_dir) / 'weights/model'
-    assert model.read_bytes() == b'model' and len(uploads) == 2
+    assert model.read_bytes() == b'model' and len(uploads) == 1
     # Corruption forces a verified replacement, not blind reuse.
     item = artifacts[1]
     obj = Path(connection.remote_root) / 'cache/artifacts/v1/objects/sha256' / item.sha256[:2] / item.sha256
@@ -157,7 +160,7 @@ async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypat
     bundle = next_attempt(connection, bundle)
     model = Path(bundle.remote_runtime_dir) / 'weights/model'
     await cache.stage_cached_bundle(connection=connection, bundle=bundle)
-    assert len(uploads) == 3 and model.read_bytes() == b'model'
+    assert len(uploads) == 2 and model.read_bytes() == b'model'
     assert not any('secret' in str(request) for request in calls)
 
 
@@ -181,11 +184,11 @@ async def test_warm_probe_and_materialize_use_bounded_batches(tmp_path, monkeypa
     await cache._cache_artifacts(connection=SimpleNamespace(remote_root='/worker'), artifacts=artifacts,
                                  operation_id=str(uuid.uuid4()), progress=progress,
                                  check_fence=cache._noop, materialize=True)
-    assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [128, 128, 1]
+    assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [257]
     assert [len(r['entries']) for r in calls if r['action'] == 'materialize_many'] == [128, 128, 1]
-    assert len(calls) == 6
+    assert len(calls) == 4
     assert events == ([{'phase': 'checking', 'artifact': None,
-                        'message': 'Verifying cached artifact batch'}] * 3
+                        'message': 'Verifying cached artifact batch'}]
                       + [{'phase': 'verifying', 'artifact': None,
                           'message': 'Materializing verified artifact batch'}] * 3)
 
@@ -248,7 +251,7 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     await cache.stage_cached_bundle(connection=target, bundle=second)
     # Each attempt transports its small authenticated, destination-specific manifest.
     assert len(uploads) == upload_count + 1
-    assert Path(uploads[-1]).name == '.bms-runtime-images.json'
+    assert Path(uploads[-1]).name.startswith('bms-cache-batch-')
     upload_count = len(uploads)
     assert second.remote_source_dir == second.remote_attempt_dir + '/materialized/source'
     assert second.remote_runtime_dir == second.remote_attempt_dir + '/materialized/runtime'

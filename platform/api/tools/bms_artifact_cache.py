@@ -292,6 +292,39 @@ class Cache:
         self.emit(item, 'ready', cache_hit=state == 'cache_hit')
         return {**item, 'state': 'ready', 'cache_hit': state == 'cache_hit'}
 
+    def incoming_batch(self, operation_id, batch_id, *, create=False):
+        if str(uuid.UUID(operation_id)) != operation_id or uuid.UUID(batch_id).hex != batch_id:
+            raise ValueError('invalid_incoming_identity')
+        path = self.root / 'incoming' / operation_id / batch_id
+        with directory(path.parent, create=create) as parent:
+            if create:
+                os.mkdir(path.name, 0o700, dir_fd=parent)
+            with directory(path):
+                pass
+        return path
+
+    def ingest_many(self, values, operation_id, batch_id):
+        items = [artifact(value) for value in values]
+        if (not items or len(items) > 2048
+                or sum(item['size_bytes'] for item in items) > 256 * 1024 * 1024
+                or any(item.get('kind') for item in items)
+                or len({item['sha256'] for item in items}) != len(items)):
+            raise ValueError('invalid_ingest_batch')
+        source = self.incoming_batch(operation_id, batch_id)
+        return {'artifacts': [self.ingest(item, source / item['sha256']) for item in items]}
+
+    def remove_incoming(self, operation_id, batch_id):
+        path = self.incoming_batch(operation_id, batch_id)
+        with directory(path) as parent:
+            for name in os.listdir(parent):
+                # Only task-owned digest files, never recursively delete trees.
+                if not re.fullmatch('[0-9a-f]{64}', name):
+                    raise ValueError('unexpected_incoming_file')
+                os.unlink(name, dir_fd=parent)
+        with directory(path.parent) as parent:
+            os.rmdir(path.name, dir_fd=parent)
+        return {'state': 'ready'}
+
     def extract_source(self, value, destination):
         """Extract only a verified git archive; all members regular files/directories."""
         import tarfile
@@ -446,13 +479,22 @@ def main():
                 os.write(fd, (json.dumps(value, sort_keys=True) + '\n').encode())
             finally:
                 os.close(fd)
-    request = json.loads(sys.stdin.buffer.read(8 * 1024 * 1024 + 1))
+    payload = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
+    if len(payload) > 8 * 1024 * 1024:
+        raise ValueError('request_too_large')
+    request = json.loads(payload)
     cache = Cache(args.root, events)
     action = request['action']
     if action == 'init':
         result = {'state': 'ready', 'schema': 'bms.artifact-cache.v1'}
     elif action == 'probe':
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
+    elif action == 'prepare_incoming':
+        result = {'source': str(cache.incoming_batch(request['operation_id'], request['batch_id'], create=True))}
+    elif action == 'ingest_many':
+        result = cache.ingest_many(request['artifacts'], request['operation_id'], request['batch_id'])
+    elif action == 'remove_incoming':
+        result = cache.remove_incoming(request['operation_id'], request['batch_id'])
     elif action == 'ingest':
         result = cache.ingest(request['artifact'], request['source'])
     elif action == 'extract_source':
