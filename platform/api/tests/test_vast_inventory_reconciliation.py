@@ -289,6 +289,10 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
             inventory(monkeypatch, ['49674511'], state='stopped')
             async with factory() as other:
                 await targets.refresh_vast_targets(other)
+        if command[:3] == ['sh', '-s', '--']:
+            assert command[3] == connection.remote_root
+            assert b'BMS_ATTACHED' in kwargs['input_bytes']
+            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
         if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
         if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
         return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
@@ -308,7 +312,8 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
     await session.rollback()
     async with factory() as check:
         assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
-    assert len(calls) == (5 if outcome == 'stopped_final' else 2)
+    # Authenticated attachment now precedes the two bootstrap calls.
+    assert len(calls) == (5 if outcome == 'stopped_final' else 3)
 
 
 @pytest.mark.asyncio
@@ -350,6 +355,10 @@ async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch
     async def run(connection, command, **kwargs):
         if refresh_at == 'final' and command[0] == 'sha256sum':
             await refresh()
+        if command[:3] == ['sh', '-s', '--']:
+            assert command[3] == connection.remote_root
+            assert b'BMS_ATTACHED' in kwargs['input_bytes']
+            return SimpleNamespace(stdout='BMS_ATTACHED\nBMS_TELEMETRY\n')
         if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
         if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
         return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
