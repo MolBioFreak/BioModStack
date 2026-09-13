@@ -2422,21 +2422,26 @@ def _sample_cpu_package_power() -> tuple[Optional[float], Dict[str, Any]]:
                 }
                 continue
 
+            time_delta_s = current_time - previous["time_s"]
+            if time_delta_s <= 0.01:
+                # Concurrent readers share the last measured interval. Do not
+                # move its baseline on a read too close to compute a new delta.
+                if time_delta_s >= 0 and "power_watts" in previous:
+                    total_power_watts += previous["power_watts"]
+                    valid_samples += 1
+                continue
+
             _rapl_sample_state[cache_key] = {
                 "energy_uj": current_energy,
                 "time_s": current_time,
             }
-
-            time_delta_s = current_time - previous["time_s"]
-            if time_delta_s <= 0.01:
-                continue
-
             energy_delta_uj = current_energy - previous["energy_uj"]
             if energy_delta_uj < 0:
                 energy_delta_uj += max_energy_uj
 
             power_watts = energy_delta_uj / (time_delta_s * 1_000_000)
             if power_watts >= 0:
+                _rapl_sample_state[cache_key]["power_watts"] = power_watts
                 total_power_watts += power_watts
                 valid_samples += 1
 
