@@ -1325,14 +1325,11 @@ export function BioXpCockpit() {
                                                 step={1}
                                                 value={Number.isFinite(absoluteTargets[axis]) ? absoluteTargets[axis] : ''}
                                                 onChange={(event) => {
-                                                    // Preserve fractional values for integer validation; never dispatch a truncated target.
-                                                    const parsed = axis === 'x'
-                                                        ? Number(event.target.value || '0')
-                                                        : Number.parseInt(event.target.value || '0', 10);
-                                                    setAbsoluteTargets((current) => ({
-                                                        ...current,
-                                                        [axis]: Number.isFinite(parsed) ? parsed : 0,
-                                                    }));
+                                                    // Z drafts must preserve zero, fractions, emptiness and exponent notation.
+                                                    const parsed = axis === 'z' ? event.target.valueAsNumber
+                                                        : axis === 'x' ? Number(event.target.value || '0')
+                                                            : Number.parseInt(event.target.value || '0', 10);
+                                                    setAbsoluteTargets((current) => ({ ...current, [axis]: parsed }));
                                                 }}
                                                 className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                             />
@@ -1363,6 +1360,9 @@ export function BioXpCockpit() {
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
                                             {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
                                         </details>
+                                        )}
+                                        {axis === 'z' && (
+                                        <p className="text-xs text-cyan-100">Requested OEM target, not an unclamped coordinate: the robot applies its current pseudo-home minimum and axis limits. Requesting 0 is not Home and can move Z away from controller 0. Use Home for the OEM homing sequence.</p>
                                         )}
                                         {axis === 'z' && (
                                         <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-cyan-100">
