@@ -3652,7 +3652,15 @@ def _materialize_seed_selection_from_completed_designs(
                 if dest_path.is_symlink() or not dest_path.is_file() or dest_path.read_bytes() != source_path.read_bytes():
                     raise ValueError('Retained seed bytes differ from native source')
             else:
-                shutil.copyfile(source_path, dest_path)
+                # A killed copy must never publish a partial deterministic seed.
+                # Keep the temporary inode outside the selected roster and
+                # publish it without replacing any retained or foreign input.
+                import tempfile
+                with tempfile.NamedTemporaryFile(dir=selection_dir.parent,
+                        prefix='.' + selection_dir.name + '-seed-input-') as temporary:
+                    shutil.copyfile(source_path, temporary.name)
+                    os.fsync(temporary.fileno())
+                    os.link(temporary.name, dest_path)
             link_mode = 'copy'
         else:
             link_mode = _link_selection_input(source_path, dest_path)
