@@ -567,9 +567,17 @@ def test_conformational_command_without_plan_retains_selected_science(tmp_path, 
         'run_frustrampnn': True,
     }, str(tmp_path / 'out'), job_id='native-job')
     assert invocation.entrypoint == 'workflows/conformational_mapping.nf'
+    assert invocation.execution_plan is not None and invocation.execution_plan.complete
+    _, projected = compile_remote_dependencies('conformational_mapping', 'map',
+        list(invocation.command), native_invocation=invocation)
+    assert projected['run_frustrampnn'] is True
+    # The CM root contract now completes this plan; exercise the missing-plan
+    # negative explicitly rather than relying on that former implementation gap.
+    from dataclasses import replace
+    without_plan = replace(invocation, execution_plan=None)
     with pytest.raises(RemoteBundleError, match='complete selected native execution plan; no local fallback'):
         compile_remote_dependencies('conformational_mapping', 'map', list(invocation.command),
-                                    native_invocation=invocation)
+                                    native_invocation=without_plan)
     assert invocation.native_parameters['run_frustrampnn'] is True
     assert not (tmp_path / 'out').exists()
 
