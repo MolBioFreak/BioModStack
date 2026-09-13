@@ -238,7 +238,6 @@ test('raw telemetry is averaged into aligned buckets with an in-place partial en
         timestamp: new Date(timestampMs).toISOString(),
         timestampMs,
         pollIntervalMs: 1000,
-        clock: '',
         cpuUtil: value,
         cpuFreqMhz: value * 100,
         cpuPower: value,

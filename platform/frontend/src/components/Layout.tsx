@@ -128,7 +128,7 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
         ?? import.meta.env.BASE_URL
         ?? '/';
     const surfaceLabel = resolveUiSurfaceLabel({
-        viteDev: Boolean(import.meta.env.DEV),
+        viteDev: import.meta.env.MODE === 'development',
         electronShell: Boolean(window.biomodstack?.getShellContext),
         cordovaShell: Boolean(window.cordova),
     });
@@ -153,11 +153,11 @@ const SHOW_DEV_FEATURES_KEY = 'show_dev_features';
 function readShowDevFeatures(): boolean {
     try {
         return resolveShowDevFeaturesDefault(
-            Boolean(import.meta.env.DEV),
+            import.meta.env.MODE === 'development',
             localStorage.getItem(SHOW_DEV_FEATURES_KEY),
         );
     } catch {
-        return Boolean(import.meta.env.DEV);
+        return import.meta.env.MODE === 'development';
     }
 }
 

@@ -35,6 +35,15 @@ BioModStack is operated as a managed service. Keep the repository limited to cod
 
 ## Development versus production
 
+The Development frontend uses React's non-profiling production runtime while
+keeping Vite's `development` mode, Development API/state and UI features. Both
+`pnpm dev` and the managed frontend launcher set `NODE_ENV=production`; do not
+remove it to identify the environment. React's development performance tracks
+retain render diagnostics in long-open polling pages even without DevTools.
+Vite still serves source modules and reloads edits, but React Fast Refresh and
+development-only instrumentation are intentionally disabled. Use Vite's mode,
+not `import.meta.env.DEV`, for Development-specific UI defaults.
+
 - **Development:** use `test`, development configuration, isolated development state, and local/managed development services. Validate behavior here first.
 - **Production:** use `main`, production configuration, managed persistent state, and the approved deployment path. Do not make direct source edits or ad-hoc service substitutions in production.
 - **Development sync interval is intentionally 60 seconds.** `biomodstack-dev-sync.timer` checks `origin/test` once every 60 seconds; that expected delay is not a fault.

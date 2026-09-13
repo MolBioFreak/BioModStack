@@ -623,6 +623,13 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     project_root = tmp_path / "biomodstack"
     telemetry_db = tmp_path / "telemetry.sqlite3"
     monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(telemetry_db))
+    # Model an installed reference, not whatever image store the host has today.
+    image_store = tmp_path / ".image-store"
+    reference = image_store / "references" / "development.env"
+    reference.parent.mkdir(parents=True)
+    reference.write_text("# fixture runtime reference\n")
+    monkeypatch.setenv("BMS_RUNTIME_IMAGE_STORE", str(image_store))
+    monkeypatch.delenv("BMS_DEVELOPMENT_RUNTIME_IMAGE_REFERENCE_FILE", raising=False)
     monkeypatch.setattr(
         services,
         "git_build_identity",
@@ -684,6 +691,8 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     frontend_unit = units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_RUNTIME_MODE=dev" in frontend_unit
     assert "Environment=BMS_FRONTEND_MODE=dev" in frontend_unit
+    assert "Environment=NODE_ENV=production" in frontend_unit
+    assert "Environment=NODE_ENV=production" not in api_unit
     assert f"Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{expected_dev_api_port}" in frontend_unit
     assert "Environment=VITE_BMS_BUILD_SHA=0123456789abcdef0123456789abcdef01234567" in frontend_unit
     assert "Environment=VITE_BMS_BUILD_ID=test-0123456789ab" in frontend_unit

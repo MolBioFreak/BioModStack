@@ -128,6 +128,15 @@ class FrontendPrerequisitesTests(unittest.TestCase):
                 frontend.resolve_frontend_environment(self.source)
             self.assertEqual(exc.exception.code, "environment_changed")
 
+    def test_launch_uses_nonprofiling_react_without_changing_development_target(self):
+        env = {"NODE_ENV": "development", "BMS_RUNTIME_MODE": "dev", "BMS_DEV_API_PROXY_TARGET": "http://127.0.0.1:18002"}
+        resolved = {"node": "/node", "vite": "/vite", "cwd": str(self.source), "env": env.copy()}
+        args = ["--host", "127.0.0.1", "--port", "18082"]
+        with patch.object(frontend, "resolve_frontend_environment", return_value=resolved), patch.object(frontend.os, "chdir") as chdir, patch.object(frontend.os, "execve") as execute:
+            frontend.launch(self.source, args)
+        chdir.assert_called_once_with(str(self.source))
+        execute.assert_called_once_with("/node", ["/node", "/vite", *args], {**env, "NODE_ENV": "production"})
+
     def test_explicit_bootstrap_flags_and_idempotence(self):
         commands = []
         def run(command, **kwargs):
