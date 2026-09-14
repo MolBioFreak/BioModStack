@@ -415,7 +415,7 @@ def test_native_workflow_union_rejects_acquisition_and_closed_request_extras(ext
     from pydantic import ValidationError
     from services.remote_execution.contracts import WorkflowProvisionSelection
     body = {'name': 'Native', 'backend': 'external_import', 'ordered_seeds': [0],
-        'samples_per_seed': 1, 'feature_policy': {}, 'runtime_policy': {}, 'analysis_policy': {}}
+        'samples_per_seed': 1, 'feature_policy': {'mode': 'features_disabled_control_v1'}, 'runtime_policy': {}, 'analysis_policy': {}}
     wire = {'kind': 'workflow', 'workflow_request': {'workflow_type': 'conformational_mapping', 'request': body}}
     selection = WorkflowProvisionSelection.model_validate(wire)
     assert WorkflowProvisionSelection.model_validate_json(selection.model_dump_json()) == selection
@@ -429,7 +429,7 @@ def test_native_workflow_union_rejects_acquisition_and_closed_request_extras(ext
             **wire['workflow_request'], 'request': {**body, extra: 'untrusted'}}})
 
 
-def test_workflow_preview_forwards_shared_invocation_and_scrubs_worker_manifest(tmp_path, monkeypatch):
+def test_workflow_preview_forwards_shared_plan_and_scrubs_worker_manifest(tmp_path, monkeypatch):
     import json
     from services import nextflow
     from services.remote_execution import cache, managed_inventory as mi
@@ -449,8 +449,8 @@ def test_workflow_preview_forwards_shared_invocation_and_scrubs_worker_manifest(
         return invocation
     asset = tmp_path / 'model.pt'
     asset.write_bytes(b'controlled dependency fixture')
-    def runtime_assets(model, mode, params, *, include_support, native_invocation):
-        assert native_invocation is invocation
+    def runtime_assets(model, mode, params, *, include_support, selected_plan):
+        assert selected_plan is plan
         assert (model, mode, params, include_support) == ('protenix', 'predict', {'science': 17}, False)
         return [(asset, 'weights/model.pt'), (asset, 'weights/model.pt')]
     monkeypatch.setattr(nextflow, 'compile_workflow_provision_request', compile_request)
@@ -483,7 +483,7 @@ async def test_native_controller_authorizes_before_preview_and_reuses_plan_on_ru
     selection = WorkflowProvisionSelection(kind='workflow', workflow_request={
         'workflow_type': 'conformational_mapping', 'request': {
             'name': 'Unsaved native', 'backend': 'external_import', 'ordered_seeds': [0],
-            'samples_per_seed': 1, 'feature_policy': {}, 'runtime_policy': {}, 'analysis_policy': {}}})
+            'samples_per_seed': 1, 'feature_policy': {'mode': 'features_disabled_control_v1'}, 'runtime_policy': {}, 'analysis_policy': {}}})
     request = Request({'type': 'http', 'headers': []})
     plans, previews = [], []
     async def compile_native(native, actual_request, session):

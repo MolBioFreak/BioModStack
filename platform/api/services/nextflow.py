@@ -19,11 +19,14 @@ import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Callable, Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
+from typing import Callable, Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set, Literal, TYPE_CHECKING, overload
 import logging
 
 from services import ont_submission_trust, stage_reporting
 from services.frustrampnn.contracts import canonical_json_bytes
+
+if TYPE_CHECKING:
+    from component_runtime import NativeInvocation, NativeInvocationPreview
 
 
 
@@ -3934,10 +3937,20 @@ def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=N
     return list(invocation.command)
 
 
-def compile_job_nextflow_invocation(job, params, output_dir):
+@overload
+def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
+
+
+@overload
+def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[False] = False) -> 'NativeInvocation': ...
+
+
+def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: bool = False):
     """Bind persisted request origin and trusted MSA transport without writes."""
     from dataclasses import replace
     from component_runtime import SourceIdentity, canonical_bytes
+    if type(_preview_only) is not bool:
+        raise ValueError('native preview phase must be a boolean')
     from paths import get_code_root
     from services.core_protein_scientific_contract import workflow_params
 
@@ -3952,13 +3965,20 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     # input. Supplying a new requested_params fallback to the native compiler
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
-    invocation = compile_nextflow_invocation(job.model_id, job.mode, workflow_params(job, params),
-        output_dir, job_id=job.id, requested_params=requested,
-        source_identity=source, requested_identity_json=requested_json)
+    prepared = workflow_params(job, params)
+    fields: dict[str, Any] = dict(job_id=job.id, requested_params=requested,
+                                 source_identity=source, requested_identity_json=requested_json)
+    if _preview_only:
+        invocation = compile_nextflow_invocation(job.model_id, job.mode, prepared,
+            output_dir, _preview_only=True, **fields)
+    else:
+        invocation = compile_nextflow_invocation(job.model_id, job.mode, prepared, output_dir, **fields)
     if SourceIdentity.from_checkout(get_code_root()) != source:
         raise ValueError('Source identity changed during native compilation')
     invocation = replace(invocation, source_identity=source, requested_json=requested_json)
-    return _bind_protenix_msa_transport(invocation, params)
+    # Prepared package transport is an executable launch binding, not preview
+    # authority. Its paired identity is validated by the real launch below.
+    return invocation if _preview_only else _bind_protenix_msa_transport(invocation, params)
 
 
 def _native_plan_metadata_settings(model_id, params):
@@ -4139,7 +4159,7 @@ def compile_workflow_provision_request(request):
         execution_source_revision=None, execution_source_tree=None,
         output_dir=str(output), child_output_dir=None,
     )
-    invocation = compile_job_nextflow_invocation(snapshot, params, str(output))
+    invocation = compile_job_nextflow_invocation(snapshot, params, str(output), _preview_only=True)
     if (typed.model_id, typed.mode) == ('conformational_mapping', 'map'):
         # The same managed checkpoint selected by native CM submission must own
         # the request snapshot. Inspect only that registered file, never recurse
@@ -4750,6 +4770,24 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
     return replace(invocation, generated_inputs=tuple(inputs) + generated)
 
 
+@overload
+def compile_nextflow_invocation(
+    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
+    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
+    source_identity=None, requested_identity_json: bytes | None = None,
+    execution_context: None = None, _preview_only: Literal[True],
+) -> 'NativeInvocationPreview': ...
+
+
+@overload
+def compile_nextflow_invocation(
+    model_id: str, mode: str, params: Dict[str, Any], output_dir: str,
+    job_id: Optional[str] = None, *, requested_params: dict[str, Any] | None = None,
+    source_identity=None, requested_identity_json: bytes | None = None,
+    execution_context: NativeCompilerExecutionContext | None = None, _preview_only: Literal[False] = False,
+) -> 'NativeInvocation': ...
+
+
 def compile_nextflow_invocation(
     model_id: str,
     mode: str,
@@ -4761,14 +4799,20 @@ def compile_nextflow_invocation(
     source_identity=None,
     requested_identity_json: bytes | None = None,
     execution_context: NativeCompilerExecutionContext | None = None,
+    _preview_only: bool = False,
 ):
     """The existing native compiler, returning immutable values and argv together.
 
     This is shared by preview, local/remote launch and saved-job prewarming;
     transport adapters must not reconstruct its settings from rendered argv.
     """
-    from component_runtime import NativeInvocation, GeneratedInput
+    from component_runtime import NativeInvocation, NativeInvocationPreview, GeneratedInput
     from copy import deepcopy
+    if type(_preview_only) is not bool or (_preview_only and execution_context is not None):
+        raise ValueError('native preview cannot carry an execution reservation')
+    if _preview_only and any(params.get(key) not in (None, [], ())
+            for key in ('gpu_id', 'gpu_ids', 'frustrampnn_physical_gpu_id')):
+        raise ValueError('native preview cannot carry physical GPU bindings')
     requested_snapshot = deepcopy(params if requested_params is None else requested_params)
     params = deepcopy(params)
     if execution_context is not None:
@@ -4807,11 +4851,15 @@ def compile_nextflow_invocation(
         from model_registry import selected_execution_metadata
         from paths import get_code_root
 
-        invocation = NativeInvocation.capture(model_id=model_id, mode=mode,
-            command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
-            requested=requested_snapshot, effective=params,
-            native_parameters=native_parameters, entrypoint=workflow_entrypoint,
-            generated_inputs=generated_inputs)
+        fields: dict[str, Any] = dict(model_id=model_id, mode=mode, requested=requested_snapshot,
+                      effective=params, native_parameters=native_parameters,
+                      entrypoint=workflow_entrypoint, generated_inputs=generated_inputs)
+        if _preview_only:
+            # Do not expose partially bound argv as an executable invocation.
+            invocation = NativeInvocationPreview.capture(**fields)
+        else:
+            invocation = NativeInvocation.capture(**fields,
+                command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command])
         # The Job owner already captures and subsequently rechecks its source.
         # Reuse that immutable origin; never add a third Git probe or feed the
         # metadata-only request identity into scientific legacy flags.
@@ -6318,7 +6366,7 @@ def compile_nextflow_invocation(
                 cmd.extend([f"--{nf_key}", str(value)])
                 native_parameters[nf_key] = value
 
-    if params.get("run_frustrampnn") is True:
+    if params.get("run_frustrampnn") is True and not _preview_only:
         component_gpu = params.get("gpu_id")
         if isinstance(component_gpu, bool) or not str(component_gpu).isdigit():
             raise ValueError(

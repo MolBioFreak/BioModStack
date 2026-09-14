@@ -80,8 +80,7 @@ def test_supported_generator_normalization_and_native_custody(mode, workflow, st
     from services.remote_execution.bundle import compile_remote_dependencies
     command, remote_params = compile_remote_dependencies('antibody_denovo', mode,
         list(invocation.command), native_invocation=invocation)
-    assert command == list(invocation.command)
-    assert remote_params == invocation.native_parameters
+    _assert_selected_native_transport(invocation, command, remote_params)
     assert not (tmp_path / 'not-materialized').exists()
 
 
@@ -101,6 +100,23 @@ def test_standalone_engines_still_rejected(model, mode):
 def test_parent_mode_keeps_native_input_and_generator_admission(mode, params):
     assert get_registry().validate_job_params('antibody_denovo', mode, params)
 
+
+
+def _assert_selected_native_transport(invocation, command, remote):
+    # Placement drops only the existing unselected shared runtime defaults.
+    # Native scientific arguments and selected resource bindings stay exact.
+    removed = set(invocation.native_parameters) - set(remote)
+    assert removed <= {'rfd_models', 'af2_models', 'alphafold_params', 'boltz_models', 'msa_local_db'}
+    assert not any(row.selector in removed for row in invocation.execution_plan.dependencies)
+    assert remote == {key: value for key, value in invocation.native_parameters.items() if key not in removed}
+    expected = []
+    native = iter(invocation.command)
+    for argument in native:
+        if argument.startswith('--') and argument[2:] in removed:
+            assert next(native) == str(invocation.native_parameters[argument[2:]])
+        else:
+            expected.append(argument)
+    assert command == expected
 
 
 def test_actual_frontend_requests_reach_remote_compiler(tmp_path):
@@ -123,9 +139,16 @@ def test_actual_frontend_requests_reach_remote_compiler(tmp_path):
         assert invocation.requested_json == invocation.execution_plan.requested_json
         assert json.loads(invocation.requested_json) == payload['params']
         assert invocation.execution_plan.complete, invocation.execution_plan.blockers
+        assert not hasattr(invocation, 'command')
+        preview = invocation
+        invocation = compile_nextflow_invocation(typed.model_id, typed.mode,
+            json.loads(preview.effective_json), str(tmp_path / 'execution'),
+            requested_params=payload['params'], source_identity=preview.source_identity)
+        assert invocation.requested_json == preview.requested_json
+        assert invocation.execution_plan.metadata == preview.execution_plan.metadata
         command, remote = compile_remote_dependencies(typed.model_id, typed.mode,
             list(invocation.command), native_invocation=invocation)
-        assert command == list(invocation.command)
+        _assert_selected_native_transport(invocation, command, remote)
         for key, value in payload['params'].items():
             if key == 'cdr_positions_by_loop' and value == {}:
                 # The UI selects native annotation, not explicit CDR positions.

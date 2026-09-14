@@ -371,7 +371,6 @@ def workflow_plan(selection, *, compiled_plan=None):
     """Bind an authorized shared plan; inspect runtime leaves, never inputs."""
     from services.nextflow import compile_workflow_provision_request
     from schemas import JobCreate
-    invocation = None
     if compiled_plan is None:
         if not isinstance(selection.workflow_request, JobCreate):
             raise ValueError('Native workflow requires fresh authenticated compilation')
@@ -387,11 +386,8 @@ def workflow_plan(selection, *, compiled_plan=None):
     if plan is None or not plan.dependency_closure_complete:
         raise ValueError('Workflow dependency closure is unresolved')
     entries = []
-    asset_kwargs = dict(include_support=False, native_invocation=invocation)
-    if compiled_plan is not None:
-        asset_kwargs['selected_plan'] = plan
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
-            json.loads(plan.native_parameters_json), **asset_kwargs):
+            json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan):
         for record in _records_for_source(path, prefix, 'runtime'):
             if record.link_target is not None:
                 raise ValueError('Managed provisioning does not support runtime symlinks')
