@@ -159,10 +159,20 @@ def test_deck_harmonization_explicit_refresh_can_repair_stale_status_not_motion(
     asyncio.run(scenario())
 
 
-def test_deck_harmonization_scoped_catalog_through_actual_boundary(tmp_path):
-    payload = _serial206_catalog_payload()
-    payload["dashboard"]["deck"].update(current_location=None, current_well=None, semantic_state_revision=1)
-    payload["actions"][0]["destination_options"][-1].update(enabled=False, disabled_reason="canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision")
+@pytest.mark.parametrize("source", ["contract", "native"])
+def test_deck_harmonization_scoped_catalog_through_actual_boundary(tmp_path, source):
+    if source == "native":
+        path = os.environ.get("BMS_NATIVE_DECK_EXPORT")
+        if not path:
+            pytest.skip("requires isolated native scoped catalog export")
+        payload = json.loads(Path(path).read_text())["catalog"]
+    else:
+        payload = _serial206_catalog_payload()
+        payload["dashboard"]["deck"].update(current_location=None, current_well=None, semantic_state_revision=1)
+        payload["actions"][0]["destination_options"][-1].update(enabled=False, disabled_reason="canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision")
+    expected = next(row for row in payload["actions"] if row["action_id"] == "oem.deck.move_to_location")
+    assert next(row for row in expected["destination_options"] if row["target"] == "LOC_OC")["enabled"] is True
+    assert next(row for row in expected["destination_options"] if row["target"] == "LOC_PARK")["enabled"] is False
 
     async def scenario():
         b = Boundary(tmp_path)
@@ -182,9 +192,12 @@ def test_deck_harmonization_scoped_catalog_through_actual_boundary(tmp_path):
                 result = await client.get("/operator-controls/v2/catalog")
                 assert result.status_code == 200, result.text
                 actual = result.json()
-                assert actual["actions"][0]["destination_options"] == payload["actions"][0]["destination_options"]
+                action = next(row for row in actual["actions"] if row["action_id"] == "oem.deck.move_to_location")
+                assert action["destination_options"] == expected["destination_options"]
                 assert actual["dashboard"]["deck"]["current_location"] is None
                 assert actual["dashboard"]["deck"]["current_well"] is None
+                if source == "native" and (output := os.environ.get("BMS_NATIVE_CATALOG_EXPORT")):
+                    Path(output).write_text(json.dumps(actual))
         await b.connection.disconnect()
         assert calls == ["GET"] * 3
 
