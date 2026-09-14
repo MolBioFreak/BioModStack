@@ -106,9 +106,10 @@ def package(tmp_path, monkeypatch):
     (roots['repo']/'main.nf').write_text('workflow {}\n')
     # Critical projection consumes the actual source runtime, not a fake CLI.
     source_root = Path(__file__).resolve().parents[3]
-    for name in ('platform/api/tools/bms_container.py', 'scripts/lib/__init__.py',
+    for name in ('platform/api/tools/bms_container.py', 'platform/api/tools/bms_nextflow.sh',
+                 'platform/api/tools/bms_nextflow_singularity.py', 'scripts/lib/__init__.py',
                  'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
-                 'scripts/lib/runtime_image_views.py'):
+                 'scripts/lib/runtime_image_views.py', 'scripts/lib/container_runtime.py'):
         destination = roots['repo'] / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_root / name, destination)
@@ -204,6 +205,16 @@ def compile_native(job, params):
     job.native_invocation.materialize_inputs(Path(job.output_dir))
     assert tuple(argv) == job.native_invocation.command
     return argv
+
+
+def test_old_userspace_binding_cannot_bypass_updated_launcher(package):
+    roots, release, job, target, command = package
+    target.capabilities = {'critical_runtime_binding': {
+        'paths': {'nextflow': '/old/nextflow/nextflow'},
+        'environment': {'BMS_CONTAINER_BACKEND': 'udocker'}}}
+    with pytest.raises(bundle.RemoteBundleError, match='reattach the target'):
+        bundle.prepare_remote_bundle(job=job, target=target, command=command,
+                                     native_invocation=job.native_invocation)
 
 
 @pytest.mark.parametrize('shared_critical', [False, True])

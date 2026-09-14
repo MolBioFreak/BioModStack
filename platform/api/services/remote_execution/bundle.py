@@ -955,6 +955,11 @@ def prepare_remote_bundle(
         if search and not effective_params.get('protenix_prepared_msa_dir'):
             raise RemoteBundleError('Controller-prepared Protenix MSA inputs are required before remote bundling')
     binding = (getattr(target, "capabilities", None) or {}).get("critical_runtime_binding")
+    if binding and binding.get('environment', {}).get('BMS_CONTAINER_BACKEND') == 'udocker':
+        bound_paths, bound_environment = binding.get('paths', {}), binding.get('environment', {})
+        if (not bound_paths.get('nextflow_container') or not bound_environment.get('BMS_NEXTFLOW_EXECUTABLE')
+                or bound_paths.get('nextflow') != bound_environment['BMS_NEXTFLOW_EXECUTABLE']):
+            raise RemoteBundleError('Managed Nextflow container runtime needs updating; reattach the target')
     runtime_assets = _runtime_assets(str(job.model_id), str(job.mode), effective_params,
                                     include_support=not bool(binding), native_invocation=native_invocation)
     runtime_paths = {path.resolve() for path, _ in runtime_assets}

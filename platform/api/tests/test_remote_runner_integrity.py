@@ -31,7 +31,8 @@ async def test_attachment_never_transfers_over_published_artifacts(
         (published / name).write_bytes(b'old verified bytes')
     m, c = load('bms_managed_runtime'), load('bms_artifact_cache')
     monkeypatch.setattr(m, 'observed_compatibility', lambda: observed)
-    monkeypatch.setattr(m, 'qualify_container', lambda *args: dict(backend='udocker', cuda='BMS_CUDA_OK'))
+    monkeypatch.setattr(m, 'qualify_container', lambda *args: dict(
+        backend='udocker', cuda='BMS_CUDA_OK', nextflow='BMS_NEXTFLOW_INTERPRETERS_OK'))
     async def helper(conn, request, fence):
         await fence()
         managed = root / 'managed-assets/v1'
@@ -53,8 +54,13 @@ async def test_attachment_never_transfers_over_published_artifacts(
     async def probe(*_): return {'gpus': ['fixture']}
     transfers = []
     async def transfer(conn, source, destination, **kw):
-        transfers.append(destination)
-        Path(destination).write_bytes(Path(source).read_bytes()[:5] if failure else Path(source).read_bytes())
+        # Cache batches use rsync directory contents, singletons a file.
+        source = Path(source)
+        members = sorted(source.iterdir()) if source.is_dir() else [source]
+        for member in members:
+            target = Path(destination) / member.name if source.is_dir() else Path(destination)
+            transfers.append(str(target))
+            target.write_bytes(member.read_bytes()[:5] if failure else member.read_bytes())
         assert all((published / name).read_bytes() == b'old verified bytes' for name in names)
         if failure == 'interrupt':
             raise asyncio.CancelledError()

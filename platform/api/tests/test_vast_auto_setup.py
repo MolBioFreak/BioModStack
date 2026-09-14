@@ -34,7 +34,7 @@ apt-get() { test "$FAIL_STAGE" != apt; }
 curl() { test "$FAIL_STAGE" != download; }
 sha256sum() { /bin/cat >/dev/null; test "$FAIL_STAGE" != checksum; }
 '''
-    result = subprocess.run(['bash', '-c', prefix + script], env={**os.environ, 'FAIL_STAGE': stage}, capture_output=True, text=True)
+    result = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env={**os.environ, 'FAIL_STAGE': stage}, capture_output=True, text=True)
     assert result.returncode != 0
     assert 'BMS_SETUP_ERROR:' in result.stdout
     assert {'apt': 'Package installation failed', 'download': 'Apptainer download failed', 'checksum': 'Apptainer checksum mismatch'}[stage] in result.stdout
@@ -66,23 +66,28 @@ sha256sum() { /bin/cat >/dev/null; }
 export -f id uname unshare mount umount nvidia-smi java apptainer apt-get curl sha256sum
 '''
     env = {**os.environ, 'STATE': str(tmp_path)}
-    first = subprocess.run(['bash', '-c', prefix + script], env=env, capture_output=True, text=True)
+    missing_root = subprocess.run(['bash', '-c', prefix + script], env=env, capture_output=True, text=True)
+    assert missing_root.returncode != 0
+    assert 'Explicit absolute worker root is required' in missing_root.stdout
+    assert not (tmp_path / 'apt-log').exists()
+    first = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env=env, capture_output=True, text=True)
     assert first.returncode == 0, first.stderr
     calls = (tmp_path / 'apt-log').read_text()
     assert 'openjdk-17-jre-headless' in calls and 'apptainer.deb' in calls
     assert 'upgrade' not in calls
-    second = subprocess.run(['bash', '-c', prefix + script], env=env, capture_output=True, text=True)
+    second = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env=env, capture_output=True, text=True)
     assert second.returncode == 0, second.stderr
     assert (tmp_path / 'apt-log').read_text() == calls
     (tmp_path / 'java').unlink()
-    root = tmp_path / 'worker-root'
+    root = tmp_path / 'nonroot-worker-root'
     nonroot_prefix = prefix + '''\nid() { echo 1000; }\nsudo() { shift; "$@"; }\nchown() { printf '%s\\n' "$*" >> "$STATE/chown-log"; }\n'''
     nonroot = subprocess.run(['bash', '-c', nonroot_prefix + script, 'bootstrap', 'install', str(root)], env=env, capture_output=True, text=True)
     assert nonroot.returncode == 0, nonroot.stderr
     assert root.is_dir() and str(root) in (tmp_path / 'chown-log').read_text()
     calls = (tmp_path / 'apt-log').read_text()
-    blocked = subprocess.run(['bash', '-c', prefix + script], env={**env, 'BLOCKED': '1'}, capture_output=True, text=True)
-    assert blocked.returncode != 0
+    blocked = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env={**env, 'BLOCKED': '1'}, capture_output=True, text=True)
+    # Namespace policy is qualified by the managed backend, not bootstrap.
+    assert blocked.returncode == 0, blocked.stderr
     assert (tmp_path / 'apt-log').read_text() == calls
 
 from database import ExecutionTarget
@@ -112,6 +117,14 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
     m, c = load('bms_managed_runtime'), load('bms_artifact_cache')
     monkeypatch.setattr(m, 'observed_compatibility', lambda: dict(requirements))
     root = worker / 'managed-assets/v1'
+    def qualify(*args):
+        # The managed installer, not a controller-side SSH command, owns CUDA
+        # and native Nextflow qualification. Keep real byte/install checks.
+        if damage == 'cuda':
+            raise ValueError('CUDA container verification failed')
+        return dict(backend='apptainer', cuda='BMS_CUDA_OK',
+                    nextflow='BMS_NEXTFLOW_INTERPRETERS_OK')
+    monkeypatch.setattr(m, 'qualify_container', qualify)
     async def noop(*args, **kwargs): pass
     async def capture(*args): return ('fixture key', 'a'*64)
     async def run(conn, argv, **kw):
@@ -121,22 +134,20 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(
             result = subprocess.run(argv, input=kw['input_bytes'], capture_output=True)
             assert result.returncode == 0, result.stderr
             return SimpleNamespace(stdout=result.stdout.decode())
-        if argv[0] == 'apptainer':
-            if damage == 'leased':
-                async with factory() as other:
-                    row = await targets.get_target(other, 'vast:49674511')
-                    row.leased_job_id = 'racing'
-                    await other.commit()
-            if damage == 'cuda':
-                raise targets.RemoteTransportError('fixture failure')
-            return SimpleNamespace(stdout='BMS_CUDA_OK\n')
         return SimpleNamespace(stdout='')
     async def helper(conn, request, fence):
         await fence()
         action = request['action']
         if action == 'boot': result = {}
         elif action == 'admit': result = m.admit(root, request['manifest'], request['boot_id'], c)
-        elif action == 'install': result = m.install(root, request['manifest'], request['boot_id'], c)
+        elif action == 'install':
+            if damage == 'leased':
+                async with factory() as other:
+                    row = await targets.get_target(other, 'vast:49674511')
+                    row.leased_job_id = 'racing'
+                    await other.commit()
+                await fence()
+            result = m.install(root, request['manifest'], request['boot_id'], c)
         elif action == 'observe': result = {'releases': [m.observe(root, v, c) for v in request['manifests']]}
         elif action == 'bounded_check':
             releases = [m.observe(root, v, c) for v in request['manifests']]
