@@ -699,6 +699,9 @@ def qualify_nextflow(root, release, image, env):
     import subprocess
     import tempfile
     import shutil
+    # The standalone CLI carries validated PurePosixPath identities; filesystem
+    # reads need concrete Paths, without resolving or changing those identities.
+    root, release = Path(root), Path(release)
     if __package__:
         from . import bms_remote_worker as owner
     else:

@@ -156,7 +156,8 @@ def test_standalone_probe_loads_published_writer_without_bytecode(nextflow_probe
     standalone = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(standalone)
     with pytest.raises(ValueError, match='critical_nextflow_execution_error'):
-        standalone.qualify_nextflow(root, release, image, env)
+        from pathlib import PurePosixPath
+        standalone.qualify_nextflow(PurePosixPath(root), PurePosixPath(release), image, env)
     assert not list(root.glob('.nextflow-probe-*'))
     assert not list(release.rglob('__pycache__'))
 
