@@ -88,9 +88,12 @@ def _base_identity(row: Any) -> dict[str, Any]:
         "invocation_id": row.invocation_id,
         "source_artifact_sha256": row.source_artifact_sha256,
         "checkpoint_sha256": (row.runtime_identity_json or {}).get("checkpoint_sha256"),
-        "configuration_id": (row.summary_json or {}).get("configuration_id"),
-        "configuration_sha256": (row.summary_json or {}).get("configuration_sha256"),
-        "threshold_policy_id": ((row.summary_json or {}).get("threshold_policy") or {}).get("id")
+        "configuration_id": (row.summary_json or {}).get("execution_configuration_id")
+            or (row.summary_json or {}).get("configuration_id"),
+        "configuration_sha256": (row.summary_json or {}).get("execution_configuration_sha256")
+            or (row.summary_json or {}).get("configuration_sha256"),
+        "threshold_policy_id": (row.summary_json or {}).get("threshold_policy_id")
+            or ((row.summary_json or {}).get("threshold_policy") or {}).get("id")
             or ((row.summary_json or {}).get("threshold_policy") or {}).get("policy_id"),
     }
 

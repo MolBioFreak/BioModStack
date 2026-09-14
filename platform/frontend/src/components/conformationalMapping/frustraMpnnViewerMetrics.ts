@@ -48,7 +48,7 @@ export interface FrustraMpnnStructureMapRow {
 
 export interface FrustraMpnnStructureMap {
     readonly schema_name: 'frustrampnn_structure_map';
-    readonly schema_version: 1;
+    readonly schema_version: number;
     readonly target_id: string;
     readonly parent_job_id: string;
     readonly candidate_id: string;
@@ -61,7 +61,7 @@ export interface FrustraMpnnStructureMap {
     readonly normalized_pdb_sha256: string;
     readonly selected_source_model: number;
     readonly altloc_policy: string;
-    readonly normalizer_version: 'frustrampnn_structure_normalizer_v1';
+    readonly normalizer_version: string;
     readonly model_ready_sequence: string;
     readonly model_ready_sequence_sha256: string;
     readonly excluded_records: readonly {

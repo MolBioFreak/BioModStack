@@ -31,8 +31,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import delete, func, select
+from sqlalchemy import String, cast, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 from PIL import Image, UnidentifiedImageError
 
 from database import (
@@ -591,7 +592,6 @@ class FrustraMPNNStatisticsResponse(BaseModel):
     parent_job_id: str
     candidate_id: str
     invocation_id: str
-    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     missing_fields: list[Phase4Field]
     settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -603,7 +603,6 @@ class FrustraMPNNStatisticsResponse(BaseModel):
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     statistics_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    statistics_json: FrustraMPNNStatisticsDocument | None = None
     comparison_compatibility_id: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
@@ -1083,19 +1082,16 @@ class FrustraMPNNResultItemResponse(BaseModel):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     summary_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
-    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     statistics_available: bool
     missing_fields: list[Phase4Field]
     settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     effective_settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    effective_settings_json: FrustraMPNNEffectiveSettings | None = None
     capability_inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     statistics_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    statistics_json: FrustraMPNNStatisticsDocument | None = None
     comparison_compatibility_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: Literal["succeeded", "failed", "not_run"]
-    component_contract_version: Literal["1.0", "2.0", "3.0"]
+    component_contract_version: str
     runtime_identity: FrustraMPNNRuntimeIdentityResponse
     runtime_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
@@ -1104,6 +1100,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
 
 
 class FrustraMPNNResultDetailResponse(FrustraMPNNResultItemResponse):
+    effective_settings_json: FrustraMPNNEffectiveSettings | None = None
     summary: (
         FrustraMPNNSummaryV3Document
         | FrustraMPNNSummaryV2Document
@@ -3268,41 +3265,50 @@ _LANDSCAPE_FIELDS = (
 )
 
 
-def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
-    terminal = dict(result.terminal_result_json or {})
-    component_contract_version = terminal.get("component_contract_version")
-    authority_version = (
-        "v3" if component_contract_version == "3.0"
-        else "v2" if component_contract_version == "2.0"
-        else "historical_v1"
-    )
-    values = {field: getattr(result, field) for field in _PHASE4_FIELDS}
-    values["statistics_json"] = resolve_json_value(values["statistics_json"])
-    if authority_version == "historical_v1":
-        values = {field: None for field in _PHASE4_FIELDS}
-        missing_fields = list(_PHASE4_FIELDS)
-    else:
-        missing_fields = [field for field, value in values.items() if value is None]
-    core_fields = _PHASE4_FIELDS[:4]
-    statistics_fields = _PHASE4_FIELDS[4:]
-    core_available = authority_version in {"v2", "v3"} and not any(
-        field in missing_fields for field in core_fields
-    )
+def _result_authority(
+    result: FrustraMPNNResult,
+    *,
+    document_presence: Mapping[str, bool] | None = None,
+    include_documents: bool = True,
+) -> dict[str, Any]:
+    documents = ("effective_settings_json", "statistics_json")
+    values = {
+        field: getattr(result, field)
+        for field in _PHASE4_FIELDS if field not in documents
+    }
+    presence = dict(document_presence) if document_presence is not None else {
+        field: getattr(result, field) is not None for field in documents
+    }
+    missing_fields = [
+        field for field in _PHASE4_FIELDS
+        if (not presence[field] if field in documents else values[field] is None)
+    ]
+    core_available = not any(field in missing_fields for field in _PHASE4_FIELDS[:4])
     statistics_available = core_available and not any(
-        field in missing_fields for field in statistics_fields
+        field in missing_fields for field in _PHASE4_FIELDS[4:]
     )
-    available = (
-        core_available
-        if authority_version == "v3"
-        else core_available and statistics_available
-    )
+    if include_documents:
+        values["effective_settings_json"] = result.effective_settings_json
+        values["statistics_json"] = resolve_json_value(result.statistics_json)
     return {
-        "authority_version": authority_version,
-        "availability": available,
+        "availability": core_available,
         "statistics_available": statistics_available,
         "missing_fields": missing_fields,
         **values,
     }
+
+
+def _result_read_statement(*, detail: bool = False):
+    # SQL presence flags avoid hydrating governed statistics (or expanded list
+    # settings). JSON null and SQL NULL both represent absence in retained rows.
+    documents = ("effective_settings_json", "statistics_json")
+    statement = select(FrustraMPNNResult, *(
+        func.coalesce(cast(getattr(FrustraMPNNResult, field), String) != "null", False)
+        .label(field + "_present") for field in documents
+    )).options(defer(FrustraMPNNResult.statistics_json, raiseload=True))
+    if not detail:
+        statement = statement.options(defer(FrustraMPNNResult.effective_settings_json, raiseload=True))
+    return statement
 
 
 def _comparison_authority(result: FrustraMPNNResult) -> dict[str, Any]:
@@ -3525,7 +3531,10 @@ def _safe_execution_receipt(
     return projected
 
 
-def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[str, Any]:
+def _result_payload(
+    result: FrustraMPNNResult, *, detail: bool = False,
+    document_presence: Mapping[str, bool] | None = None,
+) -> dict[str, Any]:
     payload = {name: getattr(result, name) for name in _RESULT_FIELDS}
     parent_metadata = result.parent_metadata_json if isinstance(result.parent_metadata_json, Mapping) else {}
     raw_operator_label = result.candidate_id
@@ -3541,7 +3550,9 @@ def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[
         "artifact_sha256": result.source_artifact_sha256,
         "candidate_id": result.candidate_id,
     }
-    payload.update(_result_authority(result))
+    payload.update(_result_authority(
+        result, document_presence=document_presence, include_documents=False,
+    ))
     payload["reopen_destination"] = {
         "surface": "frustrampnn-workbench",
         "params": {"job_id": result.parent_job_id, "invocation_id": result.invocation_id},
@@ -3558,10 +3569,9 @@ def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[
         if isinstance(result.runtime_identity_json, Mapping)
         else {}
     )
-    if terminal.get("component_contract_version") == "2.0":
-        runtime_identity = _safe_runtime_identity(execution_receipt)
-    else:
-        runtime_identity = _safe_runtime_identity(terminal.get("runtime_identity"))
+    runtime_identity = _safe_runtime_identity(
+        execution_receipt or terminal.get("runtime_identity")
+    )
     runtime_identity_sha256 = runtime_identity.get("runtime_identity_sha256")
     payload["runtime_identity"] = runtime_identity
     payload["runtime_identity_sha256"] = runtime_identity_sha256
@@ -3569,6 +3579,7 @@ def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[
     payload["gpu_provenance"] = gpu_provenance
     payload["failure_class"] = terminal.get("failure_class")
     if detail:
+        payload["effective_settings_json"] = result.effective_settings_json
         payload["summary"] = dict(result.summary_json)
         payload["terminal_result"] = _safe_terminal_result(
             result,
@@ -3578,7 +3589,7 @@ def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[
         )
         payload["execution_receipt"] = (
             _safe_execution_receipt(result, execution_receipt, terminal)
-            if terminal.get("component_contract_version") == "2.0"
+            if execution_receipt
             else None
         )
     return payload
@@ -3639,15 +3650,18 @@ async def list_results(
     )
     rows = (
         await session.execute(
-            select(FrustraMPNNResult)
+            _result_read_statement()
             .where(*filters)
             .order_by(FrustraMPNNResult.created_at.asc(), FrustraMPNNResult.invocation_id.asc())
             .offset(offset)
             .limit(limit)
         )
-    ).scalars().all()
+    ).all()
     return {
-        "items": [_result_payload(row) for row in rows],
+        "items": [_result_payload(row, document_presence={
+            "effective_settings_json": settings_present,
+            "statistics_json": statistics_present,
+        }) for row, settings_present, statistics_present in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -4067,14 +4081,7 @@ async def statistics_query(
         if result is None:
             raise HTTPException(status_code=404, detail="FrustraMPNN result not found")
         authority = _result_authority(result)
-        if authority["authority_version"] == "historical_v1":
-            expanded.append(_statistics_query_unavailable(
-                dataset,
-                body.level,
-                "historical_v1_statistics_unavailable",
-            ))
-            continue
-        if not authority["availability"] or not isinstance(
+        if not authority["statistics_available"] or not isinstance(
             authority["statistics_json"], dict
         ):
             expanded.append(_statistics_query_unavailable(
@@ -4198,14 +4205,13 @@ async def result_statistics(
 ) -> FrustraMPNNStatisticsResponse:
     result = await _scoped_result(invocation_id, job_id, session)
     authority = _result_authority(result)
-    available = bool(authority["availability"])
+    available = bool(authority["statistics_available"])
     return FrustraMPNNStatisticsResponse.model_validate(
         {
             "result_id": result.invocation_id,
             "parent_job_id": result.parent_job_id,
             "candidate_id": result.candidate_id,
             "invocation_id": result.invocation_id,
-            "authority_version": authority["authority_version"],
             "availability": available,
             "missing_fields": authority["missing_fields"],
             "settings_sha256": authority["settings_sha256"],
@@ -4215,7 +4221,6 @@ async def result_statistics(
                 "capability_inventory_sha256"
             ],
             "statistics_sha256": authority["statistics_sha256"],
-            "statistics_json": authority["statistics_json"],
             "comparison_compatibility_id": authority[
                 "comparison_compatibility_id"
             ],
@@ -4234,7 +4239,19 @@ async def result_detail(
     job_id: str = Query(...),
     session: AsyncSession = Depends(get_session),
 ):
-    return _result_payload(await _scoped_result(invocation_id, job_id, session), detail=True)
+    row = (await session.execute(
+        _result_read_statement(detail=True).where(
+            FrustraMPNNResult.parent_job_id == job_id,
+            FrustraMPNNResult.invocation_id == invocation_id,
+        )
+    )).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="FrustraMPNN result not found")
+    result, settings_present, statistics_present = row
+    return _result_payload(result, detail=True, document_presence={
+        "effective_settings_json": settings_present,
+        "statistics_json": statistics_present,
+    })
 
 
 @router.get(

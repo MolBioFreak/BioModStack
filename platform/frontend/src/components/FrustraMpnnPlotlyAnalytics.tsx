@@ -20,14 +20,10 @@ export default function FrustraMpnnPlotlyAnalytics({
     residues,
     highMax,
     minimalMin,
-    thresholdPolicyId,
-    sourceSha256,
 }: {
     residues: CmLandscapeResidue[];
     highMax: number;
     minimalMin: number;
-    thresholdPolicyId: string;
-    sourceSha256: string;
 }) {
     const model = useMemo(() => buildFrustraMpnnPlotlyModel(residues), [residues]);
     const colors = useThemeColors();
@@ -127,7 +123,7 @@ export default function FrustraMpnnPlotlyAnalytics({
             <div className="border-b border-slate-800 p-4">
                 <h2 className="font-semibold">FrustraMPNN visual analytics</h2>
                 <p className="mt-1 text-xs text-slate-400">Purpose: reveal sequence-local frustration patterns, mutation-specific score structure, and substitution distributions across the complete persisted landscape. Plotly zoom, pan, hover, and PNG export operate on all {model.residueLabels.length.toLocaleString()} residues and {model.residueLabels.length * 20} exact slots.</p>
-                <p className="mt-2 font-mono text-[10px] text-slate-600">Authority: {thresholdPolicyId} · high ≤ {highMax} · minimal ≥ {minimalMin} · source {sourceSha256.slice(0, 12)}…{sourceSha256.slice(-8)}</p>
+                <p className="mt-2 text-xs text-slate-400">Highly frustrated ≤ {highMax} · minimally frustrated ≥ {minimalMin}</p>
             </div>
             <div className="grid gap-3 p-3 xl:grid-cols-2">
                 <article className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 xl:col-span-2">

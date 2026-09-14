@@ -84,7 +84,7 @@ const baseDetail = {
             missing_slot_count: 3,
         },
     }),
-} as unknown as FrustraMpnnResultDetail;
+} as unknown as FrustraMpnnResultDetail & { statistics_json: ReturnType<typeof parseFrustraMpnnStatistics> };
 
 const analysis = (state: FrustraMpnnStatisticsAnalysis['state'], diagnostic: string | null = null): FrustraMpnnStatisticsAnalysis => ({
     analysis_id: '11111111-1111-4111-8111-111111111111',
@@ -116,9 +116,10 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         await act(async () => root.unmount());
     });
 
-    it('renders v2 authority, effective settings, canonical statistics, and statistical missingness', async () => {
-        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} />);
-        expect(container.textContent).toContain('Result authority: v2');
+    it('renders settings and explicitly supplied statistics without version labels', async () => {
+        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} statisticsOverride={baseDetail.statistics_json} />);
+        expect(container.textContent).not.toContain('Result authority:');
+        expect(container.querySelector('details')?.open).toBe(false);
         expect(container.textContent).toContain('Requested: all_protein_entities');
         expect(container.textContent).toContain('Resolved chains: 1');
         expect(container.textContent).toContain('Requested model');
@@ -129,9 +130,17 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         expect(container.textContent).toContain('Minimally frustrated ≥');
         expect(container.textContent).toContain('Field-level value origins');
         expect(container.textContent).toContain('selected model number');
-        expect(container.textContent).toContain('Canonical statistics');
-        expect(container.textContent).toContain('Historical/statistical missingness: 1 residues and 3 slots');
+        expect(container.textContent).toContain('Statistics');
+        expect(container.textContent).toContain('Missing scores: 1 residues and 3 slots');
         expect(container.textContent).not.toContain('/private/');
+        await act(async () => root.unmount());
+    });
+
+    it('does not use inline statistics when the dedicated response is absent', async () => {
+        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} />);
+        expect(container.textContent).toContain('Statistics unavailable');
+        expect(container.textContent).not.toContain('Scoreable slots');
+        expect(container.textContent).toContain('Settings used');
         await act(async () => root.unmount());
     });
 
@@ -262,7 +271,7 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         await act(async () => failed.root.unmount());
     });
 
-    it('renders historical authority and missingness without reconstructing absent settings or statistics', async () => {
+    it('renders absent settings and independent statistics availability without version labels', async () => {
         const historical = {
             ...baseDetail,
             authority_version: 'historical_v1',
@@ -273,11 +282,11 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
             execution_receipt: null,
         } as unknown as FrustraMpnnResultDetail;
         const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={historical} />);
-        expect(container.textContent).toContain('Result authority: historical_v1');
-        expect(container.textContent).toContain('Missing authority: effective_settings_json, statistics_json');
+        expect(container.textContent).not.toContain('historical_v1');
+        expect(container.textContent).not.toContain('Missing authority:');
         expect(container.textContent).toContain('Effective settings were not recorded');
-        expect(container.textContent).toContain('predates persisted statistics authority');
-        expect(container.textContent).toContain('not reconstructed');
+        expect(container.textContent).toContain('Statistics unavailable');
+        expect(container.textContent).toContain('saved structure and residue scores remain available');
         await act(async () => root.unmount());
     });
 });

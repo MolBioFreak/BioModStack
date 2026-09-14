@@ -465,7 +465,7 @@ test('artifact parser accepts the exact backend path-free contract and uses its 
     );
 });
 
-test('artifact selection requires one exact role, schema, version, and media identity', () => {
+test('artifact selection requires a unique role, schema and media with optional version constraint', () => {
     const selectArtifact = (frustraMpnnApi as unknown as {
         selectFrustraMpnnArtifactByIdentity: (
             items: Array<Record<string, unknown>>,
@@ -486,6 +486,10 @@ test('artifact selection requires one exact role, schema, version, and media ide
         schema_name: 'frustrampnn_structure_map', schema_version: 1,
     };
     assert.equal(selectArtifact([wrongSchema, exact, wrongMedia], identity)?.artifact_id, 'map-exact');
+    const { schema_version, ...shapeIdentity } = identity;
+    assert.equal(selectArtifact([wrongSchema, exact, wrongMedia], shapeIdentity)?.artifact_id, 'map-exact');
+    assert.throws(() => selectArtifact([exact, { ...exact, artifact_id: 'duplicate' }], shapeIdentity), /ambiguous/);
+    assert.equal(selectArtifact([exact], { ...shapeIdentity, schema_version: null }), undefined);
     assert.equal(selectArtifact([wrongSchema, wrongMedia], identity), undefined);
     assert.throws(
         () => selectArtifact([exact, { ...exact, artifact_id: 'map-duplicate' }], identity),
@@ -518,14 +522,14 @@ test('structure-map download recursively validates the complete canonical docume
     }
 });
 
-test('closed v2 result detail preserves authority, settings, statistics, and safe receipt identities', () => {
+test('result detail preserves settings and safe receipts without parsing inline statistics', () => {
     const parsed = parseFrustraMpnnResultDetail(resultDetail);
-    assert.equal(parsed.authority_version, 'v2');
+    assert.equal('authority_version' in parsed, false);
     assert.equal(parsed.availability, true);
     assert.equal(parsed.effective_settings_json?.settings_value_origin, 'operator_request');
     assert.equal(parsed.effective_settings_json?.requested_settings.source_structure.selected_model_number, 1);
     assert.deepEqual(parsed.effective_settings_json?.resolved_chains[0].residues[0], effectiveSettings.resolved_chains[0].residues[0]);
-    assert.equal(parsed.statistics_json?.distributions.overall.sample_sd, 0.1);
+    assert.equal('statistics_json' in parsed, false);
     assert.equal(parsed.execution_receipt?.runtime_identity_sha256, hashes.g);
     assert.equal('command_plan' in parsed.execution_receipt!, false);
     assert.equal('path' in parsed.effective_settings_json!, false);
@@ -540,7 +544,22 @@ test('closed v2 result detail preserves authority, settings, statistics, and saf
     }
 });
 
-test('closed v3 result detail opens before derived statistics complete', () => {
+test('compact discovery and core detail do not depend on inline derived statistics', () => {
+    const { summary, terminal_result, execution_receipt, effective_settings_json, statistics_json, authority_version, ...compact } = resultDetail;
+    const list = frustraMpnnApi.parseFrustraMpnnResultList({ items: [compact], total: 1, limit: 50, offset: 0 });
+    assert.equal(list.items[0].invocation_id, resultDetail.invocation_id);
+    assert.equal('effective_settings_json' in list.items[0], false);
+    assert.equal('statistics_json' in list.items[0], false);
+    for (const derived of [null, { malformed: true }, statistics_json]) {
+        const core = parseFrustraMpnnResultDetail({ ...resultDetail, statistics_json: derived });
+        assert.equal('statistics_json' in core, false);
+        assert.deepEqual(core.effective_settings_json, parseFrustraMpnnResultDetail(resultDetail).effective_settings_json);
+        assert.deepEqual(core.source_identity, resultDetail.source_identity);
+    }
+    assert.throws(() => frustraMpnnApi.parseFrustraMpnnStatistics({ malformed: true }), /unknown|missing/);
+});
+
+test('result detail opens before derived statistics complete', () => {
     const current = structuredClone(resultDetail);
     current.authority_version = 'v3';
     current.statistics_available = false;
@@ -561,9 +580,9 @@ test('closed v3 result detail opens before derived statistics complete', () => {
     current.execution_receipt.schema_version = 3;
 
     const parsed = parseFrustraMpnnResultDetail(current);
-    assert.equal(parsed.authority_version, 'v3');
+    assert.equal('authority_version' in parsed, false);
     assert.equal(parsed.summary.schema_version, 3);
-    assert.equal(parsed.statistics_json, null);
+    assert.equal('statistics_json' in parsed, false);
 });
 
 test('v2 result summary enforces canonical minima, nonempty chain support, and closed finite fields', () => {
@@ -611,7 +630,7 @@ test('historical result parsing remains explicit and does not infer unavailable 
         comparison_compatibility_id: null, component_contract_version: '1.0', execution_receipt: null,
     };
     const parsed = parseFrustraMpnnResultDetail(historical);
-    assert.equal(parsed.authority_version, 'historical_v1');
+    assert.equal('authority_version' in parsed, false);
     assert.equal(parsed.availability, false);
     assert.deepEqual(parsed.missing_fields, historical.missing_fields);
 
@@ -1035,9 +1054,9 @@ test('all standard launch surfaces own one typed settings panel and the typed st
     assert.equal((handoffSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.equal((structureSource.match(/<FrustraMpnnSettingsPanel/g) || []).length, 1);
     assert.match(resultSource, /selectFrustraMpnnArtifactByIdentity/);
-    assert.match(resultSource, /role:\s*'structure_map'[\s\S]*schema_name:\s*'frustrampnn_structure_map'[\s\S]*schema_version:\s*1[\s\S]*media_type:\s*'application\/json'/);
-    assert.match(resultSource, /role:\s*'normalized_input'[\s\S]*schema_name:\s*null[\s\S]*schema_version:\s*null[\s\S]*media_type:\s*'chemical\/x-pdb'/);
-    assert.match(resultSource, /role:\s*'identity_authority'[\s\S]*schema_name:\s*'producer_manifest'[\s\S]*schema_version:\s*1[\s\S]*media_type:\s*'application\/json'/);
+    assert.match(resultSource, /role:\s*'structure_map'[\s\S]*schema_name:\s*'frustrampnn_structure_map'[\s\S]*media_type:\s*'application\/json'/);
+    assert.match(resultSource, /role:\s*'normalized_input'[\s\S]*schema_name:\s*null[\s\S]*media_type:\s*'chemical\/x-pdb'/);
+    assert.match(resultSource, /role:\s*'identity_authority'[\s\S]*schema_name:\s*'producer_manifest'[\s\S]*media_type:\s*'application\/json'/);
     assert.ok(analysisSource.indexOf('validateFrustraMpnnUploadedSettings') < analysisSource.indexOf('analyzeFrustraMpnnDesigns(parentJobId'));
     assert.ok(resultSource.indexOf('validateFrustraMpnnOwnedSettings') < resultSource.indexOf('reanalyzeFrustraMpnn(job.id'));
     assert.ok(handoffSource.indexOf('validateFrustraMpnnUploadedSettings') < handoffSource.indexOf('handoffFrustraMpnnCandidate(candidateFile'));

@@ -22,7 +22,7 @@ import {
     type FrustraMpnnLandscapeFilters,
     type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
-import { assertTerminalSourceAuthority } from '../lib/frustraMpnnViewerAuthority.js';
+import { assertFrustraMpnnSourceBinding, assertTerminalSourceAuthority } from '../lib/frustraMpnnViewerAuthority.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench.js';
 import {
     collectCompleteFrustraMpnnLandscape,
@@ -226,20 +226,18 @@ export default function FrustraMpnnResultsViewer({
         const persisted = detail.data?.effective_settings_json?.requested_settings;
         if (persisted) setFrustrampnnSettings(persisted);
     }, [detail.data?.invocation_id]);
-    const hasExactV3AnalysisOwner = Boolean(
+    const hasAnalysisOwner = Boolean(
         detail.data
         && selectedInvocation
         && detail.data.parent_job_id === job.id
         && detail.data.invocation_id === selectedInvocation
-        && detail.data.component_contract_version === '3.0'
-        && detail.data.terminal_result.component_contract_version === '3.0'
         && detail.data.terminal_result.parent_job_id === job.id
         && detail.data.terminal_result.invocation_id === selectedInvocation
     );
     const statisticsAnalysis = useQuery({
         queryKey: ['frustrampnn-statistics-analysis', job.id, selectedInvocation],
         queryFn: ({ signal }) => fetchFrustraMpnnStatisticsAnalysis(job.id, selectedInvocation!, signal),
-        enabled: hasExactV3AnalysisOwner,
+        enabled: hasAnalysisOwner && !detail.data?.statistics_available,
         refetchInterval: (query) => {
             const analysis = query.state.data;
             if (!analysis) return false;
@@ -250,7 +248,7 @@ export default function FrustraMpnnResultsViewer({
     const statistics = useQuery({
         queryKey: ['frustrampnn-statistics', job.id, selectedInvocation],
         queryFn: ({ signal }) => fetchFrustraMpnnStatistics(job.id, selectedInvocation!, signal),
-        enabled: hasExactV3AnalysisOwner && statisticsAnalysis.data?.state === 'completed',
+        enabled: hasAnalysisOwner && (detail.data?.statistics_available || statisticsAnalysis.data?.state === 'completed'),
     });
     const retryStatistics = useMutation({
         mutationFn: () => retryFrustraMpnnStatisticsAnalysis(job.id, selectedInvocation!),
@@ -261,9 +259,7 @@ export default function FrustraMpnnResultsViewer({
             ]);
         },
     });
-    const fetchedStatistics = hasExactV3AnalysisOwner
-        ? statistics.data?.statistics ?? statistics.data?.statistics_json ?? null
-        : undefined;
+    const fetchedStatistics = statistics.data?.statistics ?? null;
     const artifacts = useQuery({
         queryKey: ['frustrampnn-artifacts', job.id, selectedInvocation],
         queryFn: ({ signal }) => listFrustraMpnnArtifacts(job.id, selectedInvocation!, signal),
@@ -272,7 +268,6 @@ export default function FrustraMpnnResultsViewer({
     const structureMapArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
         role: 'structure_map',
         schema_name: 'frustrampnn_structure_map',
-        schema_version: 1,
         media_type: 'application/json',
     });
     const structureArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
@@ -284,7 +279,6 @@ export default function FrustraMpnnResultsViewer({
     const identityAuthorityArtifact = selectFrustraMpnnArtifactByIdentity(artifacts.data?.items ?? [], {
         role: 'identity_authority',
         schema_name: 'producer_manifest',
-        schema_version: 1,
         media_type: 'application/json',
     });
     const canonicalSucceeded = Boolean(
@@ -298,7 +292,7 @@ export default function FrustraMpnnResultsViewer({
         && detail.data.summary.parent_job_id === job.id
         && detail.data.summary.candidate_id === detail.data.candidate_id
     );
-    // Historical contracts remain supported; the API verifies persisted landscape bytes.
+    // The API verifies landscape bytes independently of derived statistics.
     const handoffSource = canonicalSucceeded && !detail.isError
         && detail.data?.invocation_id === selectedInvocation
         && detail.data.terminal_result.candidate_id === detail.data.candidate_id
@@ -344,17 +338,18 @@ export default function FrustraMpnnResultsViewer({
         const terminalResult = detail.data.terminal_result;
         if (!terminalResult) return { bundle: null, error: 'terminal_result_missing: canonical terminal result authority is absent.' };
         try {
-            if (structureArtifact.content_sha256 !== structureMap.data.normalized_pdb_sha256) {
-                throw new Error('normalized_structure_hash_conflict: normalized structure artifact SHA-256 does not match structure-map authority.');
-            }
-            if (detail.data.source_artifact_sha256 !== structureMap.data.source_sha256) {
-                throw new Error('source_hash_conflict: result source SHA-256 does not match structure-map source authority.');
-            }
+            const originalSourceSha256 = assertFrustraMpnnSourceBinding(
+                detail.data.source_artifact_sha256,
+                structureArtifact.content_sha256,
+                structureMap.data,
+                structureMapArtifact.content_sha256,
+                detail.data.effective_settings_json?.resolution_identity,
+            );
             assertTerminalSourceAuthority(terminalResult.source_artifact, detail.data.source_artifact_sha256);
             const sourceIsIdentityAuthority = structureMap.data.identity_authority === 'pdb_self_identity_v1'
                 || structureMap.data.identity_authority === 'mmcif_atom_site_v1';
             if (sourceIsIdentityAuthority) {
-                if (structureMap.data.authority_artifact_sha256 !== detail.data.source_artifact_sha256) {
+                if (structureMap.data.authority_artifact_sha256 !== originalSourceSha256) {
                     throw new Error('identity_authority_hash_conflict: self-authoritative source SHA-256 does not match the structure map.');
                 }
             } else if (!identityAuthorityArtifact) {
@@ -378,7 +373,7 @@ export default function FrustraMpnnResultsViewer({
                 error: null,
             };
         } catch (error) {
-            return { bundle: null, error: errorMessage(error, 'Exact FrustraMPNN residue mapping failed closed.') };
+            return { bundle: null, error: errorMessage(error, 'FrustraMPNN residue mapping is unavailable.') };
         }
     }, [allResidues, canonicalSucceeded, completeLandscape.data, detail.data, identityAuthorityArtifact, job.id, structureArtifact, structureMap.data, structureMapArtifact]);
 
@@ -514,7 +509,7 @@ export default function FrustraMpnnResultsViewer({
                     {[
                         ['Requested', receipt.data?.created_at ?? job.created_at],
                         ['Status', explicitState],
-                        ['Runtime identity', detail.data ? shortHash(String(detail.data.runtime_identity.sif_sha256 ?? detail.data.request_sha256)) : 'pending'],
+                        ['Runtime identity', detail.data?.runtime_identity_sha256 ? shortHash(detail.data.runtime_identity_sha256) : 'unavailable'],
                         ['Assigned GPU', assignedGpuLabel],
                         ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
@@ -532,8 +527,8 @@ export default function FrustraMpnnResultsViewer({
                 />}
                 {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} statisticsOverride={fetchedStatistics} />}
 
-                {detail.data && <section aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                    <h2 className="font-semibold">Reanalysis settings</h2>
+                {detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                    <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
                     <p className="mt-1 text-xs text-slate-500">Edit a complete requested-settings document for the next governed child.</p>
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
@@ -543,7 +538,7 @@ export default function FrustraMpnnResultsViewer({
                             reference: { job_id: job.id, invocation_id: selectedInvocation },
                         } : undefined}
                     />
-                </section>}
+                </details>}
 
                 {results.data && results.data.total > 1 && (
                     <section className="flex flex-wrap items-center justify-end gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300" aria-label="Persisted invocation history pagination">
@@ -577,15 +572,11 @@ export default function FrustraMpnnResultsViewer({
                             residues={allResidues}
                             highMax={detail.data.summary.threshold_policy.high_max}
                             minimalMin={detail.data.summary.threshold_policy.minimal_min}
-                            thresholdPolicyId={detail.data.summary.schema_version === 1
-                                ? detail.data.summary.threshold_policy.id
-                                : detail.data.summary.threshold_policy_id}
-                            sourceSha256={detail.data.source_artifact_sha256}
                         />}
 
-                        <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
-                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Exact-authority structure coloring</h2><p className="mt-1 text-xs text-slate-500">Mol* colors only exact (auth_asym_id, auth_seq_id, insertion_code) identities validated against the persisted source and structure-map hashes.</p></div><div className="flex items-center gap-3"><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span><a href="#frustrampnn-landscape" className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/20">Open residue data ↓</a></div></div>
-                            {metricResult.error && <div role="alert" className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Typed mapping missingness: {metricResult.error}</div>}
+                        <section aria-label="FrustraMPNN structure map" className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 p-3"><div><h2 className="font-semibold">Frustration map</h2><p className="mt-1 text-xs text-slate-500">Residue colors show the saved frustration scores.</p></div><div className="flex items-center gap-3"><span className="text-xs text-slate-400">{metricResult.bundle ? `${metricResult.bundle.residueProfiles.length} mapped residues` : 'coloring unavailable'}</span><a href="#frustrampnn-landscape" className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/20">Open residue data ↓</a></div></div>
+                            {metricResult.error && <div role="alert" className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{metricResult.error}</div>}
                             {completeLandscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(completeLandscape.error, 'Complete bounded landscape could not be validated.')}</div>}
                             {structureArtifact && selectedInvocation ? <StructureWorkbench
                                 structureUrl={structureArtifact.download_url}
