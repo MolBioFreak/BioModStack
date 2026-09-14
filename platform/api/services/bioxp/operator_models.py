@@ -5350,6 +5350,14 @@ class OperatorDeckStageV1(BaseModel):
     terminal_evidence: JsonValue | None
 
 
+class OperatorDeckRecoveryResolutionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    command_id: str = Field(min_length=1, max_length=160)
+    decision_id: str = Field(min_length=1, max_length=160)
+    semantic_state_revision: StrictInt = Field(ge=1)
+    transition_sequence: StrictInt = Field(ge=1)
+
+
 class OperatorDeckMovementReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
@@ -5370,6 +5378,7 @@ class OperatorDeckMovementReceiptV1(BaseModel):
     physical_observation_verified: StrictBool | None = None
     transition_revision: StrictInt | None = None
     ambiguity_state: Literal["none", "failed", "ambiguous", "recovery_required"] | None = None
+    recovery_resolution: OperatorDeckRecoveryResolutionV1 | None = None
     stages: list[OperatorDeckStageV1] = Field(default_factory=list)
 
 
@@ -5409,6 +5418,12 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
             ):
                 raise ValueError("deck receipt target must match canonical inputs")
             deck = self.deck_movement
+            if deck.recovery_resolution is not None and (
+                not self.terminal
+                or self.status not in {"failed", "ambiguous", "interrupted", "stopped", "aborted", "cancelled"}
+                or deck.recovery_resolution.command_id != self.command_id
+            ):
+                raise ValueError("deck recovery resolution requires matched terminal historical command")
             if deck.physical_observation_verified is True and not self.physical_effect_verified:
                 raise ValueError("deck physical observation cannot exceed receipt physical-effect truth")
             if self.physical_effect_verified and deck.physical_observation_verified is not True:

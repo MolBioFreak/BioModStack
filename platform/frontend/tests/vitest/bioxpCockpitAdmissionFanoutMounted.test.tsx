@@ -420,6 +420,7 @@ const xHomeAction = () => ({
 vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
+    bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
     BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
     BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
     BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,
@@ -2151,6 +2152,120 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(panel.textContent).not.toContain(actionId);
         expect(state.receiptHookCalls[3]).toEqual({ commandId: null, generation: 1, enabled: true });
         expect(state.receiptHookCalls.some(call => call.commandId === 'canonical-internal-deck-command')).toBe(false);
+    });
+
+    it.each(process.env.BMS_RECOVERY_DETAIL_EXPORT ? ['contract', 'native'] : ['contract'])('warm recovery polls the actual decoder without replay: %s', async (source) => {
+        const resolved = source === 'native'
+            ? JSON.parse(readFileSync(process.env.BMS_RECOVERY_DETAIL_EXPORT!, 'utf8')) as BioXpOperatorReceiptDetailV2
+            : { ...completeDeckReceiptFixture, status: 'ambiguous', completion_class: 'recovery_required',
+                deck_movement: { ...completeDeckReceiptFixture.deck_movement, ambiguity_state: 'recovery_required', recovery_resolution: {
+                    command_id: completeDeckReceiptFixture.command_id, decision_id: 'warm-home-decision', semantic_state_revision: 18, transition_sequence: 2,
+                } } } as BioXpOperatorReceiptDetailV2;
+        catalogDashboard().deck!.semantic_state_revision = resolved.deck_movement!.recovery_resolution!.semantic_state_revision - 1;
+        const unresolved = structuredClone(resolved);
+        delete unresolved.deck_movement!.recovery_resolution;
+        catalogDashboard().latest_receipts = [unresolved];
+        nativeMetadataMode.receipts = true;
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let payload = unresolved;
+        let fail = false;
+        let calls = 0;
+        vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
+        vi.mocked(api.get).mockImplementation(async url => {
+            expect(url).toContain(encodeURIComponent(resolved.command_id)); calls++;
+            if (fail) throw new Error('receipt unavailable');
+            return { data: structuredClone(payload) };
+        });
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const advance = () => act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+        const refreshAuthority = () => { catalogDashboard().generated_at = Date.now() / 1000; };
+        try {
+            await render(); await advance();
+            const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+            expect(move.disabled).toBe(true);
+            payload = resolved;
+            await advance(); refreshAuthority(); await render();
+            expect(move.disabled).toBe(true);
+            catalogDashboard().deck!.semantic_state_revision = resolved.deck_movement!.recovery_resolution!.semantic_state_revision;
+            refreshAuthority(); await render();
+            expect(move.disabled).toBe(false);
+            expect(panel.textContent).toContain('Historical outcome remains ambiguous');
+            expect(panel.textContent).toContain(resolved.command_id);
+            expect(calls).toBeGreaterThanOrEqual(2);
+            fail = true; await advance(); refreshAuthority(); await render();
+            expect(move.disabled).toBe(true);
+            fail = false; state.statusError = true; state.connectionReachable = false;
+            await render(); await advance();
+            expect(move.disabled).toBe(true);
+            state.statusError = false; state.connectionReachable = true;
+            refreshAuthority(); await render();
+            expect(move.disabled, panel.textContent ?? '').toBe(false);
+            expect(state.deckInvokeCalls).toHaveLength(0); expect(api.post).not.toHaveBeenCalled();
+            state.connected = false; await render(); const before = calls; await advance(); expect(calls).toBe(before);
+            state.connectionGeneration = 2; state.connected = true; catalogDashboard().latest_receipts = [];
+            await render(); await advance();
+            expect(calls).toBe(before);
+            expect(panel.textContent).not.toContain(resolved.command_id);
+            expect(state.deckInvokeCalls).toHaveLength(0);
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false; vi.useRealTimers();
+        }
+    });
+
+    it('decodes recovery resolution without rewriting ambiguous history', async () => {
+        const real = await vi.importActual<typeof import('../../src/lib/bioxpClient')>('../../src/lib/bioxpClient');
+        const receipt = { ...completeDeckReceiptFixture, status: 'ambiguous', completion_class: 'recovery_required',
+            deck_movement: { ...completeDeckReceiptFixture.deck_movement, recovery_resolution: {
+                command_id: completeDeckReceiptFixture.command_id, decision_id: 'home-decision', semantic_state_revision: 18, transition_sequence: 2,
+            } } } as BioXpOperatorReceiptDetailV2;
+        expect(real.decodeBioXpReceiptDetailV2(receipt, receipt.command_id)).toBe(receipt);
+        expect(receipt.status).toBe('ambiguous');
+        for (const mutation of [{ decision_id: '' }, { semantic_state_revision: true }, { transition_sequence: 0 }, { command_id: 'other' }, { extra: 1 }]) {
+            const bad = structuredClone(receipt);
+            Object.assign(bad.deck_movement!.recovery_resolution!, mutation);
+            expect(() => real.decodeBioXpReceiptDetailV2(bad, receipt.command_id)).toThrow();
+        }
+        for (const mutation of [{ terminal: false }, { action_id: 'oem.y.move_steps' }, { status: 'completed' }]) {
+            expect(() => real.decodeBioXpReceiptDetailV2({ ...receipt, ...mutation } as BioXpOperatorReceiptDetailV2, receipt.command_id)).toThrow();
+        }
+    });
+
+    it('recovery decision releases only matched history under fresh authority without replay', async () => {
+        const receipt = { ...completeDeckReceiptFixture, status: 'ambiguous', completion_class: 'recovery_required',
+            deck_movement: { ...completeDeckReceiptFixture.deck_movement, ambiguity_state: 'recovery_required', recovery_resolution: null as unknown } };
+        catalogDashboard().latest_receipts = [receipt];
+        const render = async () => { await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); }); };
+        await render();
+        const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('Deck Movement'))!;
+        const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move to destination')!;
+        expect(move.disabled).toBe(true);
+        const resolution = { command_id: receipt.command_id, decision_id: 'home-decision', semantic_state_revision: 18, transition_sequence: 2 };
+        receipt.deck_movement.recovery_resolution = resolution;
+        await render();
+        expect(move.disabled).toBe(true); // current revision 17 predates reconciliation
+        catalogDashboard().deck!.semantic_state_revision = 18;
+        await render();
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).toContain('Reconciled by decision home-decision');
+        expect(panel.textContent).toContain('Ambiguous outcomeambiguous');
+        expect(state.deckInvokeCalls).toHaveLength(0);
+        for (const bad of [{ ...resolution, command_id: 'other' }, { ...resolution, transition_sequence: 0 }, null]) {
+            receipt.deck_movement.recovery_resolution = bad;
+            await render();
+            expect(move.disabled).toBe(true);
+            expect(state.deckInvokeCalls).toHaveLength(0);
+        }
+        receipt.deck_movement.recovery_resolution = resolution;
+        catalogDashboard().deck!.semantic_state_revision = 19;
+        await render();
+        expect(move.disabled).toBe(false);
+        await act(async () => move.click());
+        expect(state.deckInvokeCalls).toHaveLength(1); // explicit new user command only
+        expect(move.disabled).toBe(true); // new addressed receipt, not the old recovered one, must reconcile
+        await act(async () => move.click());
+        expect(state.deckInvokeCalls).toHaveLength(1);
     });
 
     it.each(['stopped', 'aborted', 'cancelled'])('renders truthful terminal deck lifecycle %s', async (status) => {

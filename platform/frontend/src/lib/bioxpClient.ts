@@ -418,6 +418,12 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
         hardware_postcondition_verified: boolean | null;
         semantic_state_committed: boolean | null;
         physical_observation_verified: boolean | null;
+        recovery_resolution?: {
+            command_id: string;
+            decision_id: string;
+            semantic_state_revision: number;
+            transition_sequence: number;
+        } | null;
         transition_revision: number | null;
         ambiguity_state: 'none' | 'failed' | 'ambiguous' | 'recovery_required' | null;
         stages: Array<{
@@ -1711,18 +1717,42 @@ export const BIOXP_V2_PENDING_COMPLETION_CLASS = 'issued_pending' as const;
 export const bioXpReceiptV2IsNonTerminal = (receipt: BioXpOperatorReceiptV2 | null | undefined): boolean =>
     receipt !== null && receipt !== undefined && receipt.terminal !== true;
 
+/** Validate the additive native decision; it never changes historical outcome. */
+export const bioXpDeckRecoveryResolution = (receipt: BioXpOperatorReceiptDetailV2 | undefined) => {
+    const value = receipt?.deck_movement?.recovery_resolution;
+    if (value == null) return null;
+    if (typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join(',') !== 'command_id,decision_id,semantic_state_revision,transition_sequence'
+        || typeof value.command_id !== 'string' || value.command_id.length < 1 || value.command_id.length > 160
+        || typeof value.decision_id !== 'string' || value.decision_id.length < 1 || value.decision_id.length > 160
+        || !Number.isSafeInteger(value.semantic_state_revision) || value.semantic_state_revision < 1
+        || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
+        || value.command_id !== receipt?.command_id || receipt.terminal !== true
+        || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
+        || !['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
+        throw new Error('Invalid deck recovery resolution');
+    }
+    return value;
+};
+
+export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2, commandId: string) => {
+    if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
+    bioXpDeckRecoveryResolution(receipt);
+    return receipt;
+};
+
 export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
 ) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-    queryFn: async () => (
+    queryFn: async () => decodeBioXpReceiptDetailV2((
         await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
             { params: { detail: true } },
         )
-    ).data,
+    ).data, commandId ?? ''),
     enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
@@ -1731,6 +1761,7 @@ export const useBioXpOperatorReceiptV2 = (
         // this identity at a slower cadence; never resubmit the action.
         if (query.state.error) return 2_000;
         if (!query.state.data) return 500;
+        if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
         return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
     },
     refetchIntervalInBackground: false,

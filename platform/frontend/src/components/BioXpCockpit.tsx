@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+    bioXpDeckRecoveryResolution,
     bioXpErrorPresentation,
     bioXpErrorText,
     bioXpPostDispatchCommandIdentity,
@@ -297,18 +298,31 @@ export function BioXpCockpit() {
     const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, robotControlReady);
     const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, robotControlReady);
     const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
+    const [reconciledDeckPredecessor, setReconciledDeckPredecessor] = useState<{ commandId: string; generation: number } | null>(null);
     const dashboardDeckReceipt = [
         ...(currentDashboardV2?.active_commands ?? []),
         ...(currentDashboardV2?.latest_receipts ?? []),
     ]
-        .filter((receipt) => CANONICAL_DECK_ACTION_IDS.has(receipt.action_id)
+        .filter((receipt) => !(reconciledDeckPredecessor?.generation === generation
+                && reconciledDeckPredecessor.commandId === receipt.command_id && receipt.terminal)
+            && CANONICAL_DECK_ACTION_IDS.has(receipt.action_id)
             && (receipt.terminal === false
                 || receipt.status === 'ambiguous'
                 || receipt.completion_class === 'recovery_required'
                 || receipt.error?.code === 'reconciliation_required'))
         .sort((left, right) => right.sequence - left.sequence)[0];
+    const [retainedDeckReceiptIdentity, setRetainedDeckReceiptIdentity] = useState<{ commandId: string; generation: number } | null>(null);
+    useEffect(() => {
+        if (!active || (currentDashboardV2 !== undefined && dashboardDeckReceipt == null)) {
+            setRetainedDeckReceiptIdentity(null);
+        } else if (dashboardDeckReceipt != null) {
+            setRetainedDeckReceiptIdentity(previous => previous?.commandId === dashboardDeckReceipt.command_id && previous.generation === generation
+                ? previous : { commandId: dashboardDeckReceipt.command_id, generation });
+        }
+    }, [active, generation, currentDashboardV2, dashboardDeckReceipt]);
     const effectiveDeckCommandId = active
         ? dashboardDeckReceipt?.command_id ?? (deckMutationGeneration === generation ? deckCommandId : null)
+            ?? (currentDashboardV2 === undefined && retainedDeckReceiptIdentity?.generation === generation ? retainedDeckReceiptIdentity.commandId : null)
         : null;
     useEffect(() => {
         if (dashboardDeckReceipt != null && deckCommandId != null
@@ -886,14 +900,21 @@ export function BioXpCockpit() {
     };
     const deckReceiptActionMismatch = deckReceiptQuery.data != null
         && !CANONICAL_DECK_ACTION_IDS.has(deckReceiptQuery.data.action_id);
-    const deckReceipt = deckReceiptActionMismatch ? undefined : deckReceiptQuery.data;
+    const deckReceipt = deckReceiptActionMismatch || deckReceiptQuery.data?.command_id !== effectiveDeckCommandId
+        ? undefined : deckReceiptQuery.data;
     const deckReceiptUnavailable = effectiveDeckCommandId !== null && deckReceipt == null;
     const deckPending = deckReceipt?.terminal === false;
     const deckAmbiguous = deckReceiptActionMismatch || deckReceipt?.status === 'ambiguous';
-    const deckRecoveryRequired = deckReceiptActionMismatch
-        || deckAmbiguous
+    let deckResolution = null;
+    let deckResolutionInvalid = false;
+    try { deckResolution = bioXpDeckRecoveryResolution(deckReceipt); } catch { deckResolutionInvalid = true; }
+    const deckRecoveryResolved = deckResolution !== null && !deckReceiptQuery.error
+        && dashboardDeck != null && dashboardDeck.semantic_state_revision >= deckResolution.semantic_state_revision;
+    const deckRecoveryRequired = deckResolutionInvalid || deckReceiptActionMismatch || (!deckRecoveryResolved && (
+        deckAmbiguous
         || deckReceipt?.error?.code === 'reconciliation_required'
-        || deckReceipt?.completion_class === 'recovery_required';
+        || deckReceipt?.completion_class === 'recovery_required'));
+
     const deckDisabledReason = !v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
@@ -910,13 +931,18 @@ export function BioXpCockpit() {
                             ? currentDeckDestination?.disabled_reason ?? 'Fresh selected destination authority is unavailable.'
                             : invokeDeckAction.isPending
                                 ? 'Deck enqueue is pending.'
-                                : effectiveDeckCommandId !== null && (deckReceiptUnavailable || deckPending || deckAmbiguous || deckRecoveryRequired)
+                                : effectiveDeckCommandId !== null && (deckReceiptUnavailable || deckReceiptQuery.error || deckPending || deckRecoveryRequired)
                                     ? 'Existing deck command requires reconciliation; do not resubmit.'
                                     : null;
     const invokeDeckMove = () => {
         if (deckDisabledReason !== null || selectedDeckDestination == null || deckAction?.expected_board_epoch_by_board == null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
+        // Only an explicit new user action may supersede this reconciled
+        // predecessor. Its ambiguous receipt remains unchanged in history.
+        if (deckRecoveryResolved && effectiveDeckCommandId !== null) {
+            setReconciledDeckPredecessor({ commandId: effectiveDeckCommandId, generation });
+        }
         submitDeckV2({
             ...envelope,
             action_id: 'oem.deck.move_to_location',
@@ -1174,6 +1200,7 @@ export function BioXpCockpit() {
                 </dl>
                 </details>
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
+                {deckResolution && <p className="text-sm text-slate-300">Reconciled by decision {deckResolution.decision_id}. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
             </section>
 
