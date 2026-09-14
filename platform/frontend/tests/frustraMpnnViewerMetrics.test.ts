@@ -113,7 +113,12 @@ test('native FrustraMPNN workbench legend renders classes without duplicating th
     const bundle = createFrustraMpnnViewerMetrics({
         requestId: 'request-1', candidateId: 'candidate-1', residues: [residue()], structureMap: structureMap(),
     });
-    const html = renderToStaticMarkup(React.createElement(MetricLegendPanel, { layer: bundle.layers[0] }));
+    for (const layer of bundle.layers) assert.equal(layer.descriptor.provenance.sourceVersion, undefined);
+    const layer = bundle.layers[0];
+    const html = renderToStaticMarkup(React.createElement(MetricLegendPanel, { layer: {
+        ...layer, descriptor: { ...layer.descriptor, provenance: { ...layer.descriptor.provenance, sourceVersion: 'obsolete-format-v99' } },
+    } }));
+    assert.doesNotMatch(html, /Version|obsolete-format-v99|cm_frustration_landscape_v1/);
     assert.match(html, /Highly frustrated/);
     assert.match(html, /Neutral/);
     assert.match(html, /Minimally frustrated/);

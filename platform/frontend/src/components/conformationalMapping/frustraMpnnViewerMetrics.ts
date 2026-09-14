@@ -142,7 +142,6 @@ const sharedProvenance = (
     }
     return {
         source: 'Canonical persisted FrustraMPNN exact-20 landscape',
-        sourceVersion: 'cm_frustration_landscape_v1',
         workflowId: requestId,
         artifactId: candidateId,
         artifactSha256: rawCsvSha256,
