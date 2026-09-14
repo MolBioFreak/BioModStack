@@ -63,7 +63,7 @@ def test_deck_harmonization_receipt_boundary_survives_failed_readiness(tmp_path,
                         for field in ("delivery_attempted", "controller_command_acknowledged", "controller_completion_verified", "hardware_postcondition_verified", "physical_observation_verified"):
                             assert row["deck_movement"][field] is False
                         assert row["deck_movement"]["semantic_state_committed"] is True
-                        if output := os.environ.get("BMS_DECK_DETAIL_EXPORT"):
+                        if (source == "native" or not os.environ.get("BMS_NATIVE_DECK_EXPORT")) and (output := os.environ.get("BMS_DECK_DETAIL_EXPORT")):
                             Path(output).write_text(json.dumps(row))
             before = len(calls)
             with pytest.raises(ConnectionStateError, match="fresh reachable"):

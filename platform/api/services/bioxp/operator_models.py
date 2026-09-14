@@ -5324,7 +5324,7 @@ class OperatorTransitionV2(BaseModel):
 
     transition_id: str = Field(min_length=1, max_length=160)
     from_status: CommandStatusV2 | None
-    to_status: CommandStatusV2
+    to_status: CommandStatusV2 | Literal["reconciled"]
     at: StrictFloat
     reason: str | None
 
@@ -5405,6 +5405,15 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
             "oem.deck._mov_execution",
             "oem.deck._finite_operation",
         }
+        recovery_transitions = [row for row in self.transitions if row.to_status == "reconciled"]
+        if recovery_transitions:
+            resolution = self.deck_movement.recovery_resolution if self.deck_movement else None
+            if (
+                self.action_id not in deck_plan_actions or resolution is None
+                or len(recovery_transitions) != 1
+                or recovery_transitions[0].transition_id != str(resolution.transition_sequence)
+            ):
+                raise ValueError("reconciled transition requires the matching deck recovery decision")
         if self.action_id in deck_plan_actions:
             if self.deck_movement is None:
                 # The producer creates deck evidence only when it persists a plan.

@@ -8,7 +8,10 @@ import httpx
 import pytest
 from pydantic import ValidationError
 from routers.bioxp.operator_controls import router
-from services.bioxp.operator_models import OperatorActionReceiptDetailV2
+from services.bioxp.operator_models import (
+    OperatorActionReceiptDetailV2, OperatorActionReceiptV2,
+    OperatorControlCatalogV2, OperatorDashboardV2,
+)
 from test_bioxp_camera_boundary import Boundary
 from test_serial206_bioxp_v2_models import _park_noop_payload
 
@@ -59,6 +62,59 @@ def test_recovery_rejects_incomplete_decision(field):
         OperatorActionReceiptDetailV2.model_validate(p)
 
 
+@pytest.mark.parametrize("fault", [None, "unbound", "wrong_sequence", "duplicate", "other_action", "command_status"])
+def test_reconciliation_transition_is_separate_from_command_outcome(fault):
+    payload = resolved_payload()
+    payload["transitions"] = [{"transition_id": "2", "from_status": "ambiguous",
+        "to_status": "reconciled", "at": 1.0, "reason": None}]
+    if fault == "unbound":
+        payload["deck_movement"]["recovery_resolution"] = None
+    elif fault == "wrong_sequence":
+        payload["transitions"][0]["transition_id"] = "3"
+    elif fault == "duplicate":
+        payload["transitions"].append(copy.deepcopy(payload["transitions"][0]))
+    elif fault == "other_action":
+        payload.update(action_id="oem.y.move_steps", deck_movement=None)
+    elif fault == "command_status":
+        payload["status"] = "reconciled"
+    if fault is not None:
+        with pytest.raises(ValidationError):
+            OperatorActionReceiptDetailV2.model_validate(payload)
+    else:
+        result = OperatorActionReceiptDetailV2.model_validate(payload)
+        assert result.status == "ambiguous"
+        assert result.transitions[0].to_status == "reconciled"
+
+
+def test_native_warm_home_recovery_projections():
+    path = os.environ.get("BMS_NATIVE_RECOVERY_EXPORT")
+    if not path:
+        pytest.skip("native owner warm export required")
+    assert isinstance(path, str)
+    native = json.loads(Path(path).read_text())
+    assert len(native["catalog_cycles"]) >= 2
+    assert len(native["dashboard_cycles"]) >= 2
+    assert {row["action_id"] for row in native["home_receipts"]} == {
+        "oem.z.manual_home", "oem.x.manual_panel_home", "oem.y.manual_panel_home",
+    }
+    for payload in [native["catalog"], *native["catalog_cycles"]]:
+        OperatorControlCatalogV2.model_validate(payload)
+    for payload in [native["dashboard"], *native["dashboard_cycles"]]:
+        OperatorDashboardV2.model_validate(payload)
+    for payload in native["home_receipts"]:
+        row = OperatorActionReceiptDetailV2.model_validate(payload)
+        assert row.status == "completed" and row.terminal
+    for payload in [native["compact"], native["fresh_process"]["compact"]]:
+        OperatorActionReceiptV2.model_validate(payload)
+    for payload in [native["detail"], native["fresh_process"]["detail"]]:
+        row = OperatorActionReceiptDetailV2.model_validate(payload)
+        assert row.status == "ambiguous" and row.terminal
+        assert row.deck_movement is not None
+        assert row.deck_movement.recovery_resolution is not None
+        assert row.deck_movement.recovery_resolution.command_id == row.command_id
+        assert row.deck_movement.semantic_state_committed is False
+
+
 @pytest.mark.parametrize("source", ["contract", "native"])
 def test_recovery_through_transport_and_asgi(tmp_path, source):
     if source == "native":
@@ -88,7 +144,7 @@ def test_recovery_through_transport_and_asgi(tmp_path, source):
                 row = response.json()
                 assert row["status"] == p["status"] == "ambiguous"
                 assert row["deck_movement"]["recovery_resolution"] == p["deck_movement"]["recovery_resolution"]
-                if output := os.environ.get("BMS_RECOVERY_DETAIL_EXPORT"):
+                if source == "native" and (output := os.environ.get("BMS_RECOVERY_DETAIL_EXPORT")):
                     Path(output).write_text(json.dumps(row))
             p["deck_movement"]["recovery_resolution"]["command_id"] = "wrong"
             response = await client.get(f'/operator-controls/v2/receipts/{p["command_id"]}', params={"detail": "true"})

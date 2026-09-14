@@ -397,7 +397,7 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
     transitions: Array<{
         transition_id: string;
         from_status: BioXpOperatorReceiptV2Status | null;
-        to_status: BioXpOperatorReceiptV2Status;
+        to_status: BioXpOperatorReceiptV2Status | 'reconciled';
         at: number;
         reason: string | null;
     }>;
