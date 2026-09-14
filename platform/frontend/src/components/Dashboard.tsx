@@ -388,11 +388,16 @@ export function Dashboard() {
                 return;
             }
             const targetChanged = canChooseResumeTarget && resumeExecutionTargetId !== (resumeSettingsJob.execution_target_id ?? null);
-            parsedOverrides = buildStructureReorchestrateOverrides(
-                resumeSettingsJob,
-                structureReorchestrateSettings,
-                canChooseResumeTarget && (targetChanged || resumeExecutionTargetId !== null) ? resumeGpuOptions.map((gpu) => gpu.index).join(',') : undefined,
-            );
+            try {
+                parsedOverrides = buildStructureReorchestrateOverrides(
+                    resumeSettingsJob,
+                    structureReorchestrateSettings,
+                    canChooseResumeTarget && (targetChanged || resumeExecutionTargetId !== null) ? resumeGpuOptions.map((gpu) => gpu.index).join(',') : undefined,
+                );
+            } catch (error) {
+                setResumeSettingsError(error instanceof Error ? error.message : 'Invalid structure retry settings.');
+                return;
+            }
             if (targetChanged) {
                 parsedOverrides.pinned_gpus = structureReorchestrateSettings.boltzCp.pinnedGpus.length > 0
                     ? structureReorchestrateSettings.boltzCp.pinnedGpus : null;

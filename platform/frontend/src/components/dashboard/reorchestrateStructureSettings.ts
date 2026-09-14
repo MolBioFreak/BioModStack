@@ -1,3 +1,4 @@
+import { hydrateEsmfold2Settings, buildEsmfold2Params, esmfold2SettingsError, type Esmfold2Settings } from '../esmfold2Settings';
 import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, hydrateMsaProvider, hydrateNeurosnapMsaSettings, type NeurosnapMsaSettings, type SavedMsaProvider } from '../../lib/msaPolicy';
 import type { Job } from '../../lib/api.js';
 import {
@@ -33,6 +34,7 @@ export const canChangeStructureExecutionTarget = (job: Job): boolean => (
 
 export interface StructureReorchestrateSettings {
     predictors: StructurePredictor[];
+    esmfold2: Esmfold2Settings;
     msaProvider: StructureMsaProvider;
     neurosnapMsa: NeurosnapMsaSettings;
     colabfoldMsa: ColabfoldMsaSettings;
@@ -72,6 +74,7 @@ export interface StructureReorchestrateSettings {
 
 const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
+    esmfold2: hydrateEsmfold2Settings(),
     msaProvider: 'colabfold_api',
     neurosnapMsa: hydrateNeurosnapMsaSettings({}),
     colabfoldMsa: hydrateColabfoldMsaSettings({}),
@@ -270,6 +273,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
         msaTargetShards: normalizeMsaTargetShards(params.msa_target_shards),
         msaTargetShardMinSizeGb: normalizeMsaTargetShardMinSizeGb(params.msa_target_shard_min_size_gb),
         skipMsa: false,
+        esmfold2: hydrateEsmfold2Settings(params),
         msaAllowEmptyFallback: toBoolean(params.msa_allow_empty_fallback, DEFAULTS.msaAllowEmptyFallback),
         boltz: {
             useMsa: toBoolean(params.boltz_use_msa, DEFAULTS.boltz.useMsa),
@@ -302,6 +306,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
     const activeUseMsa = settings.predictors.map((predictor) => {
         if (predictor === 'boltz' || predictor === 'fold_cp') return settings.boltz.useMsa;
         if (predictor === 'protenix') return settings.protenix.useMsa;
+        if (predictor === 'esmfold2') return settings.esmfold2.use_msa;
         return false;
     });
     settings.skipMsa = activeUseMsa.length > 0 && activeUseMsa.every((value) => value === false);
@@ -404,6 +409,14 @@ export const buildStructureReorchestrateOverrides = (
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);
     }
 
+
+    if (next.predictors.includes('esmfold2')) {
+        const settings = { ...next.esmfold2, use_msa: next.skipMsa ? false : previous.skipMsa ? true : next.esmfold2.use_msa };
+        const error = esmfold2SettingsError(settings);
+        if (error) throw new Error(error);
+        const prior = buildEsmfold2Params(previous.esmfold2);
+        for (const [key, value] of Object.entries(buildEsmfold2Params(settings))) maybeSet(key, value, prior[key]);
+    }
 
     if (next.predictors.includes('protenix')) {
         maybeSet('protenix_use_msa', next.skipMsa ? false : previous.skipMsa ? true : next.protenix.useMsa, previous.protenix.useMsa);

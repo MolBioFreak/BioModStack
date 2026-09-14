@@ -1,3 +1,5 @@
+import { Esmfold2SettingsControls } from './Esmfold2SettingsControls';
+import { hydrateEsmfold2Settings, buildEsmfold2Params, esmfold2SettingsError } from './esmfold2Settings';
 import { MsaProviderReadiness } from './MsaProviderReadiness';
 import { hydrateColabfoldMsaSettings, hydrateMsaProvider, hydrateNeurosnapMsaSettings, type SavedMsaProvider } from '../lib/msaPolicy';
 import { ColabfoldMsaControls } from './ColabfoldMsaControls';
@@ -290,10 +292,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [bcpWriteFullPae, setBcpWriteFullPae] = useState(Boolean(initialValues?.write_full_pae ?? initialValues?.bcp_write_full_pae ?? false));
     const [bcpSeed, setBcpSeed] = useState(initialBoltzCpSeed != null ? String(initialBoltzCpSeed) : '');
 
-    // ESMFold2-specific settings intentionally stay compact; inputs reuse the standard structure surface.
-    const [esmfold2Variant, setEsmfold2Variant] = useState<'fast' | 'full'>(
-        initialValues?.model_variant === 'full' || initialValues?.esmf_model_variant === 'full' ? 'full' : 'fast'
-    );
+    const [esmfold2Settings, setEsmfold2Settings] = useState(() => hydrateEsmfold2Settings(initialValues));
 
     // Error handling
     const [allowRetries, setAllowRetries] = useState(initialValues?.allow_retries ?? false);
@@ -660,7 +659,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const msaNeeded =
         (usesBoltz && !isBoltzApi && boltzUseMsa) ||
         (usesFoldCp && boltzUseMsa) ||
-        (usesProtenix && protenixUseMsa);
+        (usesProtenix && protenixUseMsa) ||
+        (usesEsmFold2 && esmfold2Settings.use_msa);
 
     useEffect(() => {
         if (!isBoltzApi) return;
@@ -724,8 +724,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         }
 
         if (usesEsmFold2) {
-            params.model_variant = esmfold2Variant;
-            params.local_files_only = true;
+            Object.assign(params, buildEsmfold2Params(esmfold2Settings));
         }
 
         if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
@@ -761,7 +760,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
-        if (msaNeeded) {
+        if (msaNeeded || usesEsmFold2) {
             // Preserve historical local draft intent; submission rejects it below.
             if (msaProvider === 'local') {
                 Object.assign(params, { msa_provider: msaProvider, msa_preset: msaPreset,
@@ -833,7 +832,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     // Project drafts reuse the saved-template scientific projection, not a second serializer.
     const projectDraftJson = JSON.stringify(currentTemplateParams);
     useEffect(() => {
@@ -1001,8 +1000,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         }
 
         if (usesEsmFold2) {
-            params.model_variant = esmfold2Variant;
-            params.local_files_only = true;
+            const error = esmfold2SettingsError(esmfold2Settings);
+            if (error) throw new Error(error);
+            // Draft/template and preview/submit consume the same native settings projection.
+            for (const key of Object.keys(buildEsmfold2Params(esmfold2Settings))) params[key] = currentTemplateParams[key];
             if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
                 params.workflow_adapter = initialValues.workflow_adapter.trim();
             }
@@ -1079,6 +1080,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             if (msaUseExpand !== undefined) params.msa_use_expand = msaUseExpand;
             if (msaUseEnv !== undefined) params.msa_use_env = msaUseEnv;
             if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
+        }
+
+        if (usesEsmFold2) {
+            for (const [key, value] of Object.entries(currentTemplateParams)) {
+                if (key.startsWith('msa_') || key.startsWith('colabfold_')) params[key] = value;
+            }
         }
 
         const targetConditioningRequested = (!isBoltzApi && usesBoltz && boltzTargetGeometryMode !== 'flexible') || (usesProtenix && protenixTargetGeometryMode !== 'flexible');
@@ -2127,17 +2134,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                             compact
                         />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Model Variant</label>
-                                <select
-                                    value={esmfold2Variant}
-                                    onChange={(e) => setEsmfold2Variant(e.target.value === 'full' ? 'full' : 'fast')}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                >
-                                    <option value="fast">Fast</option>
-                                    <option value="full">Full</option>
-                                </select>
-                            </div>
+                            <div className="md:col-span-2"><Esmfold2SettingsControls value={esmfold2Settings} onChange={setEsmfold2Settings} /></div>
                             <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
                                 PDB import supplies sequence; DNA/RNA/ligands use Complex Components below. PDB coordinates are not structural templates.
                             </div>
@@ -2243,7 +2240,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 )}
 
                 {/* MSA Quality Options (Advanced) */}
-                {((showBoltzParams && boltzUseMsa) || (showProtenixParams && protenixUseMsa)) && (
+                {((showBoltzParams && boltzUseMsa) || (showProtenixParams && protenixUseMsa) || (showEsmFold2Params && esmfold2Settings.use_msa)) && (
                     <div className="border border-[var(--border-primary)] rounded-lg overflow-hidden">
                         <button
                             onClick={() => setShowMsaOptions(!showMsaOptions)}

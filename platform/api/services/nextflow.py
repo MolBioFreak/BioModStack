@@ -2828,6 +2828,17 @@ async def launch_nextflow_job(
             prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(
                 session, job, model_id, msa_params, Path(output_dir) / 'prepared-msa', remote_launch_authority,
                 native_invocation=prepared_invocation)
+            if model_id in {'esmfold2', 'esmfold2_experimental'} and 'esmf_msa_preparation' in prepared_params:
+                # Persist controller-generated source authority, never rewrite requested science.
+                prepared_authority = prepared_params.pop('esmf_msa_preparation')
+                provenance = {**dict(job.provenance or {}), 'esmf_msa_preparation': prepared_authority}
+                if remote_launch_authority is not None:
+                    from services.remote_execution.executor import _publish_remote_transition
+                    if not await _publish_remote_transition(session, job, {'provenance': provenance}):
+                        raise asyncio.CancelledError()
+                else:
+                    job.provenance = provenance
+                    await session.commit()
             if prepared_invocation is None:
                 launch_params = prepared_params
             else:
@@ -3966,6 +3977,9 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
     prepared = workflow_params(job, params)
+    msa_authority = (job.provenance or {}).get('esmf_msa_preparation')
+    if job.model_id in {'esmfold2', 'esmfold2_experimental'} and msa_authority is not None:
+        prepared['esmf_msa_preparation_json'] = json.dumps(msa_authority, allow_nan=False, sort_keys=True)
     fields: dict[str, Any] = dict(job_id=job.id, requested_params=requested,
                                  source_identity=source, requested_identity_json=requested_json)
     if _preview_only:

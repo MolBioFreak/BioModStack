@@ -50,8 +50,8 @@ if receipt_path:
     args._msa_expected_hashes = {source['used_path']: source['sha256'] for source in receipt['sources']}
 built, manifest = runner.build_structure_prediction_input(args, ProteinInput=Input,
     DNAInput=Input, RNAInput=Input, LigandInput=Input, StructurePredictionInput=Input, MSA=InstrumentedMSA)
-associations = [{'id': item.id, 'sequence': item.sequence,
-                 'msa': item.msa.capture if item.msa else None} for item in built.sequences]
+associations = [{'id': item.id, 'sequence': getattr(item, 'sequence', None),
+                 'msa': item.msa.capture if getattr(item, 'msa', None) else None} for item in built.sequences]
 (out / 'capture.json').write_text(json.dumps({'argv': sys.argv[1:], 'parsed': parsed,
     'msa_sha256': hashlib.sha256(Path(msa_path).read_bytes()).hexdigest() if msa_path else None,
     'associations': associations, 'manifest_components': manifest, 'parser_calls': parser_calls}))

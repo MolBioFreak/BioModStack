@@ -45,8 +45,8 @@ def reject_reserved_marker(payload: Any) -> None:
     while pending:
         value = pending.pop()
         if isinstance(value, Mapping):
-            reserved = {REVISION_KEY, 'core_protein_requested_params',
-                        'esmf_requested_settings_json', 'openmm_requested_settings_json',
+            reserved = {REVISION_KEY, 'core_protein_requested_params', 'esmf_msa_preparation',
+                        'esmf_requested_settings_json', 'esmf_msa_preparation_json', 'openmm_requested_settings_json',
                         'fampnn_analysis_policy', 'fampnn_analysis_declaration',
                         'fampnn_analysis_declaration_path', 'fampnn_analysis_declaration_sha256'}
             forged = reserved.intersection(value)

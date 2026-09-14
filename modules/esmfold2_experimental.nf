@@ -40,7 +40,17 @@ def esmfold2ContractInputs(inputs, settings) {
     }
     components.each { component -> if (component.msa_path) sources << component.msa_path.toString() }
     sources = sources.unique()
-    def files = sources.collect { source -> file(source, checkIfExists: true) }
+    def files = sources.collect { source ->
+        def resolved = source
+        if (System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) {
+            def process = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
+                'resolve', source).start()
+            resolved = process.inputStream.text.trim()
+            def error = process.errorStream.text
+            if (process.waitFor() != 0) throw new IllegalArgumentException("ESMFold2 portable input binding failed: ${error}")
+        }
+        file(resolved, checkIfExists: true)
+    }
     return inputs.map { meta, sequence, name ->
         def payload = new LinkedHashMap(request)
         if (!components) payload.esmf_sequence = sequence.toString()

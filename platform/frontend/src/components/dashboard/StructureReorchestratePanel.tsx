@@ -1,3 +1,4 @@
+import { Esmfold2SettingsControls } from '../Esmfold2SettingsControls';
 import { MsaProviderReadiness } from '../MsaProviderReadiness';
 import { ColabfoldMsaControls } from '../ColabfoldMsaControls';
 import { NeurosnapMsaControls } from '../NeurosnapMsaControls';
@@ -63,6 +64,13 @@ export function StructureReorchestratePanel({
 
     return (
         <div className="space-y-4">
+            {settings.predictors.includes('esmfold2') && <fieldset disabled={disabled} className={sectionClass}>
+                <legend>ESMFold2 Settings</legend>
+                <Esmfold2SettingsControls value={{ ...settings.esmfold2, use_msa: settings.skipMsa ? false : settings.esmfold2.use_msa }}
+                    onChange={esmfold2 => update({ esmfold2,
+                        ...(esmfold2.use_msa !== (settings.skipMsa ? false : settings.esmfold2.use_msa) ? { skipMsa: !esmfold2.use_msa } : {}),
+                    })} />
+            </fieldset>}
             <div className={sectionClass}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -75,7 +83,9 @@ export function StructureReorchestratePanel({
                         <input
                             type="checkbox"
                             checked={settings.skipMsa}
-                            onChange={(event) => update({ skipMsa: event.target.checked })}
+                            onChange={(event) => update({ skipMsa: event.target.checked,
+                                ...(settings.predictors.includes('esmfold2') ? { esmfold2: { ...settings.esmfold2, use_msa: !event.target.checked } } : {}),
+                            })}
                             className="rounded border-slate-600 bg-slate-950"
                             disabled={disabled}
                         />

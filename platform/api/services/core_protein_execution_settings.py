@@ -57,8 +57,12 @@ def _requested(original, model, key, scope):
         selected = [c for c in components if c.get('id') == scope.removeprefix('component:')]
         if len(selected) != 1:
             raise ValueError('ambiguous component request identity')
-        original = selected[0]
-        return key in original, original.get(key)
+        component = selected[0]
+        if (original.get('esmf_use_msa') is True and not component.get('msa_path')
+                and component.get('type', 'protein') in ('protein', 'peptide')
+                and key in ('msa_max_sequences', 'msa_remove_insertions') and key not in component):
+            return key in original, original.get(key)
+        return key in component, component.get(key)
     prefix = 'esmf_' if model == 'esmfold2' else 'openmm_'
     alias = prefix + key
     if alias in original and key in original and canonical(original[alias]) != canonical(original[key]):
@@ -67,15 +71,43 @@ def _requested(original, model, key, scope):
     return name in original, original.get(name)
 
 
-def _esm_sources(original, effective, components, raw_sources):
+def _esm_sources(original, effective, components, raw_sources, preparation=None):
     """Reconcile trusted inputs, executed paths and the complete staged inventory.
 
     Staged paths need not survive workflow cleanup; hashes remain producer byte
     evidence. Paths bind first-publication scope, never substitute for hashes.
     """
     required = {}
+    generated = {}
+    if preparation is not None:
+        from services.msa_provider_setup import selected_provider, provider_settings
+        from biomodstack_msa_api import validate_settings
+        import hashlib
+        if original.get('esmf_use_msa') is not True:
+            raise ValueError('unrequested generated ESMFold2 MSA')
+        provider = selected_provider(original)
+        if (preparation.get('provider') != provider or preparation.get('settings') !=
+                validate_settings(provider, provider_settings(original))):
+            raise ValueError('generated MSA provider/settings differ from request')
+        roster = {'primary': _requested(original, 'esmfold2', 'sequence', 'model')[1]}
+        roster.update({'component:' + c['id']: c.get('sequence') for c in
+            original.get('complex_components', original.get('esmf_complex_components', []))})
+        for source in preparation.get('sources', []):
+            scope = source.get('scope')
+            sequence = roster.get(scope)
+            if (scope in generated or not isinstance(sequence, str) or
+                    source.get('sequence_sha256') != hashlib.sha256(sequence.encode()).hexdigest()):
+                raise ValueError('generated MSA sequence/scope mismatch')
+            generated[scope] = source
+        if not generated:
+            raise ValueError('empty generated MSA authority')
 
     def require(scope, used, requested):
+        if scope in generated:
+            if requested or not isinstance(used, str) or not used:
+                raise ValueError('generated MSA replaced a supplied source or is missing')
+            required[scope] = (None, used)
+            return
         if bool(used) != bool(requested):
             raise ValueError('requested and executed source inventories differ')
         if used:
@@ -116,7 +148,13 @@ def _esm_sources(original, effective, components, raw_sources):
         if not isinstance(scope, str) or scope in seen or scope not in required:
             raise ValueError('duplicate or foreign source scope')
         seen.add(scope)
-        if (source.get('requested_path'), source.get('used_path')) != required[scope]:
+        if scope in generated:
+            expected = generated[scope]
+            if (source.get('used_path') != required[scope][1] or
+                    (source.get('sha256'), source.get('size_bytes')) !=
+                    (expected.get('sha256'), expected.get('size_bytes'))):
+                raise ValueError('generated MSA bytes differ from controller authority')
+        elif (source.get('requested_path'), source.get('used_path')) != required[scope]:
             raise ValueError('source paths differ from request or executed argv')
         if type(source.get('size_bytes')) is not int or source['size_bytes'] < 0:
             raise ValueError('missing or invalid source byte size')
@@ -125,7 +163,7 @@ def _esm_sources(original, effective, components, raw_sources):
         if used in byte_identities and byte_identities[used] != identity:
             raise ValueError('contradictory staged byte identity')
         byte_identities[used] = identity
-    if seen != required.keys():
+    if seen != required.keys() or not generated.keys() <= seen:
         raise ValueError('missing required source identity')
 
 
@@ -163,7 +201,8 @@ def prepare_receipt(job, root: Path, path: Path):
         component_effective = json.loads(effective['complex_components_json'] or '[]')
         if effective.get('complex_components_file'):
             raise ValueError('unreceipted component file input')
-        _esm_sources(original, effective, component_effective, payload['sources'])
+        _esm_sources(original, effective, component_effective, payload['sources'],
+                     (job.provenance or {}).get('esmf_msa_preparation'))
     else:
         effective = {}
         for key in OPENMM_KEYS:

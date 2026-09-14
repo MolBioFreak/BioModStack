@@ -104,6 +104,14 @@ it('explicitly carries automatic Fold-CP allocation between workers with equal G
         pinned_gpus: null, lock_gpus: false, bcp_gpu_ids: '0,1,2,3', bcp_size_cp: 4,
     });
 });
+it('ESMFold2 retry reports Fast plus MSA validation instead of dispatching or silently changing intent', async () => {
+    jobPatch = { model_id: 'esmfold2', mode: 'predict' };
+    paramsPatch = { structure_launch_variant: undefined, pred_method: 'esmfold2', model_variant: 'fast', esmf_use_msa: true };
+    await open(); await click('Re-orchestrate Job');
+    expect(requests).toHaveLength(0);
+    expect(container.textContent).toContain('Choose Full to use MSA');
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="ESMFold2 Model Variant"]')!.value).toBe('fast');
+});
 it('resume API preserves omission for legacy callers and serializes explicit Local/remote', async () => {
     await resumeJob('source'); await resumeJob('source', undefined, undefined, undefined, null); await resumeJob('source', undefined, undefined, undefined, target.id);
     expect(requests).toEqual([{}, { execution_target_id: null }, { execution_target_id: target.id }]);

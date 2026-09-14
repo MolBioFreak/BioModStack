@@ -732,6 +732,14 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
             raise ValueError('invalid requested settings transport')
         original = {key.removeprefix('esmf_'): value for key, value in original.items()}
     settings, sources, argv = {}, [], []
+    prepared_sources = {}
+    if request.get('esmf_msa_preparation_json'):
+        preparation = json.loads(request['esmf_msa_preparation_json'])
+        for source in preparation['sources']:
+            scope = source['scope']
+            if scope in prepared_sources:
+                raise ValueError('duplicate prepared MSA scope')
+            prepared_sources[scope] = source
     integer_bounds = {'seed': (0, 2147483647), 'msa_max_sequences': (1, 10000),
                       'num_loops': (1, 12), 'num_sampling_steps': (1, 1000),
                       'num_diffusion_samples': (1, 8)}
@@ -754,6 +762,14 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
         if not path.is_file():
             raise ValueError(f'missing staged file: {value}')
         data = path.read_bytes()
+        if scope in prepared_sources:
+            expected = prepared_sources[scope]
+            sequences = ([normalized.get('sequence')] if scope == 'primary' else
+                         [c.get('sequence') for c in components if 'component:' + str(c.get('id', '')) == scope])
+            if len(sequences) != 1 or not isinstance(sequences[0], str) or hashlib.sha256(sequences[0].encode()).hexdigest() != expected['sequence_sha256']:
+                raise ValueError('prepared MSA sequence/scope differs from controller authority')
+            if (hashlib.sha256(data).hexdigest(), len(data)) != (expected['sha256'], expected['size_bytes']):
+                raise ValueError('prepared MSA bytes differ from controller authority')
         sources.append({'scope': scope, 'requested_path': value, 'used_path': str(path),
                         'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data)})
         return str(path)
@@ -793,6 +809,8 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
             if type(value) not in (str, bool, int, float):
                 raise ValueError(f'invalid scalar type: {key}')
             argv.extend(['--' + key.replace('_', '-'), str(value).lower() if type(value) is bool else str(value)])
+    if not prepared_sources.keys() <= {source['scope'] for source in sources}:
+        raise ValueError('missing prepared MSA source')
     # Verify exactly the command we will run, not an independent copy of the request.
     effective = vars(parser.parse_args(argv))
     for key in defaults:

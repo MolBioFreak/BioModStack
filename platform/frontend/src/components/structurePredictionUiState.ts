@@ -386,7 +386,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel complex prediction', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
-    { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
+    { id: 'esmfold2', name: 'ESMFold2', desc: 'All-atom co-folding with optional MSA', color: 'blue' },
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
 ];
 
