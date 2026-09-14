@@ -1534,6 +1534,9 @@ export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV
             || typeof request.inputs.camera_offset !== 'boolean') {
             throw new Error('Deck movement inputs must contain target and camera_offset only');
         }
+        if (request.inputs.camera_offset && ['LOC_PARK', 'LOC_TC_BARCODE', 'LOC_RC_BARCODE'].includes(request.inputs.target)) {
+            throw new Error('Optional camera offset is only valid for ordinary deck destinations');
+        }
     }
     if ((request.action_id === 'oem.x.move_steps' || request.action_id === 'oem.y.move_steps' || request.action_id === 'oem.z.move_steps')
         && (!Number.isSafeInteger(request.inputs.steps)

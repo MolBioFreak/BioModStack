@@ -346,6 +346,110 @@ def test_deck_detail_receipt_keeps_controller_semantic_and_physical_truth_separa
         operator_models.OperatorActionReceiptDetailV2.model_validate(malformed)
 
 
+def _park_noop_payload():
+    return {
+        **compact_payload(action_id="oem.deck.move_to_location", status="completed",
+                          terminal=True, finished_at=2.0, completion_class="source_noop"),
+        "canonical_inputs": {"target": "LOC_PARK", "camera_offset": False},
+        "requested_values": {}, "effective_values": {}, "observed_values": {},
+        "raw_return_layers": {}, "controller_evidence": {}, "transport_artifacts": [],
+        "child_receipts": [], "transitions": [],
+        "deck_movement": {
+            "target": "LOC_PARK", "target_label": "Park", "source_branch": "park",
+            "resolved_location_id": 28, "transition_revision": 3, "ambiguity_state": "none",
+            "delivery_attempted": False, "controller_command_acknowledged": False,
+            "controller_completion_verified": False, "hardware_postcondition_verified": False,
+            "semantic_state_committed": True, "physical_observation_verified": False,
+        },
+    }
+
+
+def test_deck_harmonization_accepts_truthful_park_source_noop():
+    receipt = operator_models.OperatorActionReceiptDetailV2.model_validate(_park_noop_payload())
+    assert receipt.completion_class == "source_noop"
+    assert receipt.deck_movement.controller_completion_verified is False
+    assert receipt.deck_movement.semantic_state_committed is True
+    assert receipt.physical_effect_verified is False
+
+
+@pytest.mark.parametrize("field,value", [
+    ("target", "LOC_OC"), ("target", "LOC_TC_BARCODE"),
+    ("source_branch", "ordinary"), ("source_branch", "barcode"),
+    ("resolved_location_id", 1), ("semantic_state_committed", False),
+    ("delivery_attempted", True), ("delivery_attempted", None),
+    ("controller_command_acknowledged", True), ("controller_completion_verified", True),
+    ("hardware_postcondition_verified", True), ("physical_observation_verified", True),
+    ("transition_revision", 0), ("ambiguity_state", "recovery_required"),
+])
+def test_deck_harmonization_rejects_incoherent_noop(field, value):
+    payload = _park_noop_payload()
+    payload["deck_movement"][field] = value
+    if field == "target":
+        payload["canonical_inputs"]["target"] = value
+    with pytest.raises(ValidationError):
+        operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+
+
+@pytest.mark.parametrize("status", ["failed", "ambiguous", "aborted"])
+def test_deck_harmonization_rejects_failed_park_noop(status):
+    payload = _park_noop_payload()
+    payload["status"] = status
+    with pytest.raises(ValidationError):
+        operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+
+
+@pytest.mark.parametrize("partial_revision", [0, 1])
+def test_deck_harmonization_scoped_ordinary_eligibility_preserves_unknowns(partial_revision):
+    payload = _serial206_catalog_payload()
+    payload["dashboard"]["deck"].update(current_location=None, current_well=None, semantic_state_revision=partial_revision)
+    park = payload["actions"][0]["destination_options"][-1]
+    park.update(enabled=False, disabled_reason="canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision")
+    catalog = OperatorControlCatalogV2.model_validate(payload)
+    assert catalog.actions[0].enabled is True
+    assert catalog.actions[0].destination_options[0].enabled is True
+    assert catalog.actions[0].destination_options[-1].enabled is False
+    assert catalog.dashboard.deck.current_location is None
+    assert catalog.dashboard.deck.current_well is None
+    assert catalog.dashboard.deck.semantic_state_revision == partial_revision
+
+
+def test_deck_harmonization_disabled_targets_keep_their_own_finite_reasons():
+    payload = _serial206_catalog_payload()
+    action = payload["actions"][0]
+    action.update(enabled=False, disabled_reason="canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:tip_loaded")
+    for option in action["destination_options"]:
+        option.update(enabled=False, disabled_reason=action["disabled_reason"])
+    action["destination_options"][-1]["disabled_reason"] = "canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision"
+    assert OperatorControlCatalogV2.model_validate(payload).actions[0].enabled is False
+
+
+@pytest.mark.parametrize("fault", ["enabled_without_target", "disabled_with_target", "enabled_with_reason", "disabled_without_reason"])
+def test_deck_harmonization_rejects_incoherent_target_eligibility(fault):
+    payload = _serial206_catalog_payload()
+    action = payload["actions"][0]
+    if fault == "enabled_without_target":
+        for option in action["destination_options"]:
+            option.update(enabled=False, disabled_reason="blocked")
+    elif fault == "disabled_with_target":
+        action.update(enabled=False, disabled_reason="blocked")
+    elif fault == "enabled_with_reason":
+        action["destination_options"][0]["disabled_reason"] = "blocked"
+    else:
+        action["destination_options"][0]["enabled"] = False
+    with pytest.raises(ValidationError):
+        OperatorControlCatalogV2.model_validate(payload)
+
+
+def test_deck_harmonization_exports_strict_catalog_for_mounted_polling():
+    import os
+    import json
+    from pathlib import Path
+    catalog = OperatorControlCatalogV2.model_validate(_serial206_catalog_payload())
+    if path := os.environ.get("BMS_DECK_TEST_CATALOG"):
+        Path(path).write_text(json.dumps(catalog.model_dump(mode="json")))
+    assert len(catalog.actions[0].destination_options) == 26
+
+
 def test_queued_deck_detail_keeps_unestablished_planning_and_effect_evidence_unknown():
     payload = {
         **compact_payload(action_id="oem.deck.move_to_location", command_id="deck-queued-1"),

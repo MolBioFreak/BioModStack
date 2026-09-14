@@ -4961,6 +4961,12 @@ class OperatorDeckMoveInputsV1(BaseModel):
     target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
     camera_offset: StrictBool
 
+    @model_validator(mode="after")
+    def bind_optional_camera_offset(self):
+        if self.camera_offset and self.target in {"LOC_PARK", "LOC_TC_BARCODE", "LOC_RC_BARCODE"}:
+            raise ValueError("optional camera offset is only valid for ordinary deck destinations")
+        return self
+
 
 OperatorNormalInputsV2 = (
     OperatorYMoveStepsInputsV2
@@ -5409,8 +5415,27 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 raise ValueError("verified physical effect requires matching deck observation")
             if self.action_id != "oem.deck.move_to_location":
                 return self
+            source_noop = self.completion_class == "source_noop"
+            if source_noop and not (
+                self.status == "completed"
+                and deck.target == "LOC_PARK"
+                and deck.source_branch == "park"
+                and deck.resolved_location_id == 28
+                and self.canonical_inputs.get("camera_offset") is False
+                and deck.semantic_state_committed is True
+                and deck.transition_revision is not None and deck.transition_revision > 0
+                and deck.ambiguity_state == "none"
+                and deck.delivery_attempted is False
+                and deck.controller_command_acknowledged is False
+                and deck.controller_completion_verified is False
+                and deck.hardware_postcondition_verified is False
+                and deck.physical_observation_verified is False
+                and self.physical_effect_verified is False
+                and self.error is None
+            ):
+                raise ValueError("source_noop requires coherent completed already-at-Park evidence")
             if self.status == "completed":
-                if deck.controller_completion_verified is not True or deck.semantic_state_committed is not True:
+                if not source_noop and (deck.controller_completion_verified is not True or deck.semantic_state_committed is not True):
                     raise ValueError("completed deck movement requires controller completion and semantic commit")
                 if deck.target_label is None or deck.source_branch is None:
                     raise ValueError("completed deck movement requires established target and source branch")
@@ -5696,20 +5721,22 @@ class OperatorActionSpecV2(BaseModel):
                     for option in options
                 ):
                     raise ValueError("deck camera option must match its source branch")
+            if any(option.enabled != (option.disabled_reason is None) for option in options):
+                raise ValueError("deck destination eligibility must match its own prerequisite reason")
             if self.enabled:
                 if self.disabled_reason is not None or self.destination_catalog_revision is None or self.position_table_revision is None:
                     raise ValueError("enabled deck movement requires complete revisions")
                 if set(self.expected_board_epoch_by_board or {}) != {"4", "5"} or not options:
                     raise ValueError("enabled deck movement requires exact epochs and 26 destinations")
-                if any(not option.enabled or option.disabled_reason is not None for option in options):
-                    raise ValueError("enabled deck movement cannot contain disabled destinations")
+                if not any(option.enabled for option in options):
+                    raise ValueError("enabled deck movement requires an eligible destination")
             elif self.disabled_reason is None:
                 raise ValueError("disabled deck movement requires robot reason")
             elif options:
                 if self.destination_catalog_revision is None or self.position_table_revision is None:
                     raise ValueError("disabled populated deck catalog requires complete revisions")
-                if any(option.enabled or option.disabled_reason != self.disabled_reason for option in options):
-                    raise ValueError("disabled deck destinations must preserve the action reason")
+                if any(option.enabled for option in options):
+                    raise ValueError("disabled deck movement cannot contain eligible destinations")
             elif self.destination_catalog_revision is not None or self.position_table_revision is not None:
                 raise ValueError("empty disabled deck catalog cannot claim revisions")
         elif any(value is not None for value in deck_fields):

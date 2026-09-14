@@ -21,6 +21,7 @@ import {
     useInvokeBioXpDeckActionV2,
     useInvokeBioXpOperatorAction,
     type BioXpOperatorActionV2Request,
+    type BioXpDeckDestinationV1,
 
     type BioXpOperatorDashboardXAxis,
 
@@ -29,7 +30,7 @@ import {
     type BioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
 
-import { bioXpReceiptFailureText, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
+import { bioXpDeckReadinessText, bioXpReceiptFailureText, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
@@ -253,7 +254,7 @@ export function BioXpCockpit() {
     const upstreamAgeMs = typeof upstreamGeneratedAt === 'number'
         ? Math.max(0, authorityNow - upstreamGeneratedAt * 1000) : Infinity;
     const localAgeMs = Math.max(0, authorityNow - catalogV2Query.dataUpdatedAt);
-    const currentCatalogV2 = linkConnected
+    const currentCatalogV2 = linkConnected && !catalogV2Query.isError
         && localAgeMs < 15_000 && upstreamAgeMs < 15_000
         ? catalogV2Query.data : undefined;
     const currentDashboardV2 = currentCatalogV2?.dashboard;
@@ -281,6 +282,10 @@ export function BioXpCockpit() {
     const currentLifecycleCommandId = lifecycleGenerationCurrent ? lifecycleCommandId : null;
     const currentLifecycleActionId = lifecycleGenerationCurrent ? lifecycleActionId : null;
     const [deckTarget, setDeckTarget] = useState('');
+    const [deckCameraOffset, setDeckCameraOffset] = useState(false);
+    const [deckSelectionCatalog, setDeckSelectionCatalog] = useState<{
+        generation: number; options: BioXpDeckDestinationV1[];
+    } | null>(null);
     const [yStepInput, setYStepInput] = useState(1000);
     const [yTargetInput, setYTargetInput] = useState(0);
     const v2AuthorityCoherent = currentCatalogV2 !== undefined;
@@ -302,14 +307,16 @@ export function BioXpCockpit() {
                 || receipt.completion_class === 'recovery_required'
                 || receipt.error?.code === 'reconciliation_required'))
         .sort((left, right) => right.sequence - left.sequence)[0];
-    const effectiveDeckCommandId = dashboardDeckReceipt?.command_id ?? deckCommandId ?? null;
+    const effectiveDeckCommandId = active
+        ? dashboardDeckReceipt?.command_id ?? (deckMutationGeneration === generation ? deckCommandId : null)
+        : null;
     useEffect(() => {
         if (dashboardDeckReceipt != null && deckCommandId != null
             && dashboardDeckReceipt.command_id !== deckCommandId) {
             setDeckCommandId(null);
         }
     }, [dashboardDeckReceipt, deckCommandId]);
-    const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, robotControlReady);
+    const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, active);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const invokeDeckAction = useInvokeBioXpDeckActionV2();
@@ -472,18 +479,33 @@ export function BioXpCockpit() {
         && catalogDeck.destination_catalog_revision === dashboardDeck.destination_catalog_revision
         && deckAction.position_table_revision === catalogDeck.position_table_revision
         && catalogDeck.position_table_revision === dashboardDeck.position_table_revision;
-    const deckDestinations = useMemo(() => deckAction?.destination_options ?? [], [deckAction]);
-    const selectedDeckDestination = deckDestinations.find((destination) => destination.target === deckTarget)
-        ?? deckDestinations[0];
+    // Retained options are intent only, never retained motion authority. Empty
+    // prerequisite projections do not mean the finite robot catalog was deleted.
+    const selectionAction = catalogV2Query.data?.actions.find((action) => action.action_id === 'oem.deck.move_to_location');
+    const deckDestinations = active && deckSelectionCatalog?.generation === generation
+        ? deckSelectionCatalog.options : [];
+    const selectedDeckDestination = deckDestinations.find((destination) => destination.target === deckTarget);
+    const currentDeckDestination = deckAction?.destination_options?.find((destination) => destination.target === deckTarget);
     useEffect(() => {
-        if (deckDestinations.length === 0) {
+        if (!active) {
+            setDeckSelectionCatalog(null);
             setDeckTarget('');
+            setDeckCameraOffset(false);
             return;
         }
-        setDeckTarget((current) => deckDestinations.some((destination) => destination.target === current)
-            ? current
-            : deckDestinations[0].target);
-    }, [deckDestinations]);
+        if (deckSelectionCatalog?.generation !== generation) {
+            setDeckSelectionCatalog(null);
+            setDeckTarget('');
+            setDeckCameraOffset(false);
+        }
+        const options = selectionAction?.destination_options;
+        if (catalogV2Query.isError || !options?.length) return;
+        const firstCatalog = deckSelectionCatalog?.generation !== generation;
+        setDeckSelectionCatalog({ generation, options });
+        setDeckTarget((current) => firstCatalog ? options[0].target
+            : options.some((destination) => destination.target === current) ? current : '');
+        // A replacement which removes the draft requires explicit reselection.
+    }, [active, generation, selectionAction, catalogV2Query.isError]);
     const v2InterruptActionById = (actionId: string) => v2CatalogActionById(actionId)
         && (currentCatalogV2?.actions ?? []).find(
         (action) => action.action_id === actionId
@@ -569,8 +591,9 @@ export function BioXpCockpit() {
         || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
 
     const v2ActionDisabledReason = (actionId: string): string | null => {
-        if (!linkConnected) return 'Connect to control the robot.';
-        if (!v2AuthorityCoherent) return 'Current robot control state is unavailable.';
+        const queryOnlyRefresh = actionId === 'oem.deck.collect_authority';
+        if (!active || (!queryOnlyRefresh && !linkConnected)) return 'Connect to control the robot.';
+        if (!queryOnlyRefresh && !v2AuthorityCoherent) return 'Current robot control state is unavailable.';
         // Installed CCI handlers: X absolute and XYZ relative/Home wait inline;
         // only manual Y absolute is explicitly nonwaiting (ui-inventory UI-01/02).
         // The manual Y request remains held only while its HTTP submission is pending.
@@ -581,7 +604,12 @@ export function BioXpCockpit() {
             || invokeDeckAction.isPending || invokeYAction.isPending
             || (invokeOperatorAction.isPending && !pendingReadOnly);
         if (conflictingSubmission) return 'A command is pending; wait for its receipt before another normal action.';
-        const action = v2NormalActionById(actionId);
+        // An explicitly requested query can refresh expired observations. Its
+        // same-generation published identity is not permission for motion.
+        const action = queryOnlyRefresh ? catalogV2Query.data?.actions.find(row =>
+            row.action_id === actionId && row.interrupt === false
+            && row.request_schema_version === 'bioxp.operator_action_request.v2'
+            && row.response_schema_version === 'bioxp.operator_action_receipt.v2') : v2NormalActionById(actionId);
         if (!action) return 'Robot action unavailable.';
         return action.enabled === true ? null : action.disabled_reason ?? 'Robot action unavailable.';
     };
@@ -843,13 +871,15 @@ export function BioXpCockpit() {
             },
         });
     };
-    const v2NormalEnvelope = () => {
-        if (!v2AuthorityCoherent || currentDashboardV2 == null) return null;
+    const v2NormalEnvelope = (actionId?: 'oem.deck.collect_authority') => {
+        const authority = actionId === 'oem.deck.collect_authority' && active
+            ? catalogV2Query.data?.dashboard : currentDashboardV2;
+        if (authority == null || (actionId == null && !v2AuthorityCoherent)) return null;
         const idempotencyKey = nextIdempotencyKey('bioxp-oem');
         return {
             expected_connection_generation: generation,
             schema_version: 'bioxp.operator_action_request.v2' as const,
-            expected_ownership_generation: currentDashboardV2.ownership_generation,
+            expected_ownership_generation: authority.ownership_generation,
             idempotency_key: idempotencyKey,
             expected_board_epoch_by_board: {},
         };
@@ -876,8 +906,8 @@ export function BioXpCockpit() {
                     ? `Robot deck ambiguity: ${dashboardDeck?.ambiguity_state ?? 'unknown'}.`
                     : selectedDeckDestination == null
                         ? 'Robot destination catalog is empty.'
-                        : selectedDeckDestination.enabled !== true
-                            ? selectedDeckDestination.disabled_reason ?? 'Robot destination is disabled.'
+                        : currentDeckDestination?.enabled !== true
+                            ? currentDeckDestination?.disabled_reason ?? 'Fresh selected destination authority is unavailable.'
                             : invokeDeckAction.isPending
                                 ? 'Deck enqueue is pending.'
                                 : effectiveDeckCommandId !== null && (deckReceiptUnavailable || deckPending || deckAmbiguous || deckRecoveryRequired)
@@ -891,7 +921,7 @@ export function BioXpCockpit() {
             ...envelope,
             action_id: 'oem.deck.move_to_location',
             expected_board_epoch_by_board: deckAction.expected_board_epoch_by_board,
-            inputs: { target: selectedDeckDestination.target, camera_offset: false },
+            inputs: { target: selectedDeckDestination.target, camera_offset: currentDeckDestination?.camera_offset_option === true && deckCameraOffset },
         });
     };
     const invokeYMoveSteps = (steps: number) => {
@@ -1080,27 +1110,34 @@ export function BioXpCockpit() {
                         Robot destination
                         <select
                             value={selectedDeckDestination?.target ?? ''}
-                            disabled={deckDisabledReason !== null}
+                            disabled={!active || deckDestinations.length === 0}
                             onChange={(event) => setDeckTarget(event.target.value)}
                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
                         >
+                            {selectedDeckDestination == null && <option value="">Choose a destination</option>}
                             {deckDestinations.map((destination) => (
                                 <option key={destination.target} value={destination.target}>{destination.label}</option>
                             ))}
                         </select>
                     </label>
                 </div>
+                <label className="mt-3 block text-sm text-slate-300">
+                    <input type="checkbox" checked={selectedDeckDestination?.camera_offset_option === true && deckCameraOffset}
+                        disabled={selectedDeckDestination?.camera_offset_option !== true}
+                        onChange={(event) => setDeckCameraOffset(event.target.checked)} />
+                    {' '}Add camera offset
+                </label>
                 <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current location</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_location ?? '—'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Current well</dt><dd className="font-mono">{currentDashboardV2?.deck?.current_well ?? '—'}</dd></div>
                 </dl>
                 <p className={`mt-3 text-sm ${deckDisabledReason ? 'text-amber-200' : 'text-emerald-300'}`}>
-                    {deckDisabledReason ?? 'Ready to move to the selected destination.'}
+                    {deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Ready to move to the selected destination.'}
                 </p>
                 <button
                     type="button"
                     disabled={deckDisabledReason !== null || invokeDeckAction.isPending}
-                    title={deckDisabledReason ?? 'Move to the selected destination'}
+                    title={deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Move to the selected destination'}
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
                 >Move to destination</button>
@@ -1109,7 +1146,7 @@ export function BioXpCockpit() {
                     disabled={v2ActionDisabledReason('oem.deck.collect_authority') !== null}
                     title={v2ActionDisabledReason('oem.deck.collect_authority') ?? 'Read current axes and latch; no activation, homing or movement.'}
                     onClick={() => {
-                        const envelope = v2NormalEnvelope();
+                        const envelope = v2NormalEnvelope('oem.deck.collect_authority');
                         if (envelope) submitV2({ ...envelope, action_id: 'oem.deck.collect_authority', inputs: {} });
                     }}
                     className="ml-3 mt-3 rounded bg-slate-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"

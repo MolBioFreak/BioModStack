@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +13,7 @@ import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-const nativeMetadataMode = vi.hoisted(() => ({ enabled: false }));
+const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
@@ -458,6 +459,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
+        if (nativeMetadataMode.receipts) return real.useBioXpOperatorReceiptV2(commandId, generation, enabled);
         const dashboardReceipt = [
             ...(catalogDashboard().active_commands as Array<Record<string, unknown>>),
             ...(catalogDashboard().latest_receipts as Array<Record<string, unknown>>),
@@ -1836,6 +1838,220 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(panel.textContent).not.toContain('lifecycle-command-1');
             expect(panel.textContent).not.toContain('meta.recover_motion_non_homing');
         });
+    });
+
+    it.skipIf(!process.env.BMS_DECK_TEST_CATALOG)('deck harmonization selects all 26 through real polling, retains nonfirst intent on empty/error/expiry and fences replacement', async () => {
+        const published = JSON.parse(readFileSync(process.env.BMS_DECK_TEST_CATALOG!, 'utf8'));
+        const deck = published.actions.find((a: { action_id: string }) => a.action_id === 'oem.deck.move_to_location');
+        expect(deck.destination_options).toHaveLength(26);
+        // The strict-model export supplies the finite roster. The transport
+        // controls freshness/failure only; selection must not use admission.
+        const populated = structuredClone(state.v2Catalog.data!);
+        const actions = populated.actions as Array<Record<string, unknown>>;
+        actions.splice(actions.findIndex(a => a.action_id === 'oem.deck.move_to_location'), 1, {
+            ...deck, enabled: false, disabled_reason: 'deck_reference_unavailable',
+        });
+        let response = populated;
+        let fail = false;
+        nativeMetadataMode.enabled = true;
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
+        vi.mocked(api.get).mockImplementation(async (url) => {
+            expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
+            if (fail) throw new Error('temporary catalog failure');
+            return { data: structuredClone(response) };
+        });
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const advance = async (ms = 5001) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')!;
+        const select = () => panel().querySelector('select') as HTMLSelectElement;
+        const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+        const choose = async (target: string) => act(async () => { select().value = target; select().dispatchEvent(new Event('change', { bubbles: true })); });
+        try {
+            await render(); await advance(1);
+            expect(select().disabled).toBe(false);
+            for (const target of deck.destination_options) {
+                await choose(target.target);
+                expect(select().value).toBe(target.target);
+                expect(move().disabled).toBe(true);
+            }
+            await choose('LOC_OC');
+            const camera = () => panel().querySelector('input[type="checkbox"]') as HTMLInputElement;
+            await act(async () => camera().click());
+            expect(camera().checked).toBe(true);
+            response = structuredClone(populated);
+            (response.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!.destination_options = [];
+            await advance(); // actual successful transient-empty poll
+            expect(select().value).toBe('LOC_OC'); expect(camera().checked).toBe(true);
+            fail = true;
+            await advance(); await advance(); await advance(); // retries + expired original authority
+            expect(select().value).toBe('LOC_OC'); expect(select().disabled).toBe(false);
+            expect(move().disabled).toBe(true);
+            fail = false; response = structuredClone(populated);
+            (response.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000;
+            await advance();
+            expect(select().value).toBe('LOC_OC'); expect(camera().checked).toBe(true);
+            expect(api.get.mock.calls.length).toBeGreaterThanOrEqual(5);
+            // Model currently requires the complete roster. This UI-only
+            // replacement control also proves future removal cannot substitute.
+            response = structuredClone(response);
+            const replacement = (response.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+            replacement.destination_options = (replacement.destination_options as Array<{target: string}>).filter(o => o.target !== 'LOC_OC');
+            await advance(); expect(select().value).toBe(''); expect(move().disabled).toBe(true);
+            state.connected = false; await render(); expect(select().disabled).toBe(true);
+            expect(select().options).toHaveLength(1);
+            state.connected = true; state.connectionGeneration = 2; fail = true;
+            await render(); await advance(1); expect(select().disabled).toBe(true);
+            expect(state.deckInvokeCalls).toHaveLength(0); expect(state.yInvokeCalls).toHaveLength(0);
+            expect(api.post).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.enabled = false; vi.useRealTimers();
+        }
+    });
+
+    it.each(['LOC_OC', 'LOC_PARK', 'LOC_TC_BARCODE'])('deck harmonization camera draft submits only compatible boolean for %s', async (target) => {
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: true }, { target: 'LOC_TC_BARCODE', label: 'TC barcode', camera_offset_option: false, enabled: true });
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        const select = panel.querySelector('select')!;
+        const camera = panel.querySelector('input[type="checkbox"]') as HTMLInputElement;
+        await act(async () => camera.click());
+        expect(camera.checked).toBe(true);
+        for (let poll = 0; poll < 3; poll++) await act(async () => root.render(<BioXpCockpit />));
+        await act(async () => { select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(camera.checked).toBe(target === 'LOC_OC');
+        expect(camera.disabled).toBe(target !== 'LOC_OC');
+        expect(state.deckInvokeCalls).toHaveLength(0);
+        await act(async () => [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!.click());
+        expect(state.deckInvokeCalls).toHaveLength(1);
+        expect(state.deckInvokeCalls[0]).toMatchObject({ request: { inputs: { target, camera_offset: target === 'LOC_OC' } } });
+    });
+
+    it('deck harmonization real receipt GETs survive status failure without another POST and stop at generation change', async () => {
+        nativeMetadataMode.receipts = true;
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let calls = 0;
+        let terminal = false;
+        vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset();
+        vi.mocked(api.get).mockImplementation(async (url) => {
+            expect(url).toContain('/api/bioxp/operator-controls/v2/receipts/deck-command-mounted-1');
+            calls++;
+            if (calls === 2) throw new Error('temporary receipt failure');
+            return { data: { ...completeDeckReceiptFixture, command_id: 'deck-command-mounted-1', status: terminal ? 'completed' : 'dispatched', terminal } };
+        });
+        const render = () => act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+        const advance = async () => act(async () => { await vi.advanceTimersByTimeAsync(5001); });
+        try {
+            await render();
+            const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+            await act(async () => move.click()); await advance();
+            state.statusError = true; state.connectionReachable = false; await render();
+            await advance(); terminal = true; await advance(); await advance();
+            expect(calls).toBeGreaterThanOrEqual(3);
+            expect(panel.textContent).toContain('Lifecyclecompleted');
+            expect(move.disabled).toBe(true);
+            expect(state.deckInvokeCalls).toHaveLength(1); expect(api.post).not.toHaveBeenCalled();
+            state.connected = false; await render(); const prior = calls; await advance(); expect(calls).toBe(prior);
+            state.connectionGeneration = 2; state.connected = true; await render(); await advance();
+            expect(calls).toBe(prior); expect(panel.textContent).not.toContain('deck-command-mounted-1');
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false; vi.useRealTimers();
+        }
+    });
+
+    it('deck harmonization cold expired catalog permits explicit query refresh but no motion or automatic collection', async () => {
+        const actions = state.v2Catalog.data!.actions as Array<Record<string, unknown>>;
+        actions.push({ action_id: 'oem.deck.collect_authority', enabled: true, disabled_reason: null, interrupt: false,
+            request_schema_version: 'bioxp.operator_action_request.v2', response_schema_version: 'bioxp.operator_action_receipt.v2' });
+        (state.v2Catalog.data!.dashboard as Record<string, unknown>).generated_at = Date.now() / 1000 - 60;
+        state.statusError = true; state.connectionReachable = false;
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        const select = panel.querySelector('select')!;
+        const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+        const refresh = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Refresh deck readiness (no motion)')!;
+        expect(select.options).toHaveLength(2); expect(select.disabled).toBe(false);
+        expect(move.disabled).toBe(true); expect(refresh.disabled).toBe(false);
+        expect(state.yInvokeCalls).toHaveLength(0); expect(state.deckInvokeCalls).toHaveLength(0);
+        await act(async () => refresh.click());
+        expect(state.yInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: 'oem.deck.collect_authority', inputs: {}, expected_connection_generation: 1, expected_ownership_generation: 1 } });
+        expect(move.disabled).toBe(true); expect(state.deckInvokeCalls).toHaveLength(0);
+        const action = actions.find(a => a.action_id === 'oem.deck.collect_authority')!;
+        action.enabled = false; action.disabled_reason = 'query owner unavailable';
+        await act(async () => root.render(<BioXpCockpit />)); expect(refresh.disabled).toBe(true);
+        state.connected = false; await act(async () => root.render(<BioXpCockpit />)); expect(refresh.disabled).toBe(true);
+    });
+
+    it('deck harmonization target-specific ordinary readiness does not authorize Park', async () => {
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: false, disabled_reason: 'canonical_deck_authority_unavailable:deck_semantic_state_not_authoritative:location_revision' });
+        Object.assign(catalogDashboard().deck as object, { current_location: null, current_well: null, semantic_state_revision: 1 });
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        const select = panel.querySelector('select')!;
+        const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+        expect(move.disabled).toBe(false);
+        await act(async () => { select.value = 'LOC_PARK'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(select.disabled).toBe(false); expect(move.disabled).toBe(true);
+        await act(async () => { select.value = 'LOC_OC'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(move.disabled).toBe(false); expect(state.deckInvokeCalls).toHaveLength(0);
+    });
+
+    it.each([
+        ['deck_bootstrap_semantic_location_unavailable', 'established previous location and well'],
+        ['deck_bootstrap_board_epochs_unavailable', 'Controller board ownership is not established'],
+        ['deck_bootstrap_branch_state_unavailable', 'Required source branch state is unknown'],
+        ['deck_bootstrap_latch_or_tip_state_unavailable', 'Required latch or tip state is unknown'],
+        ['deck_gripper_observation_not_authoritative', 'Current gripper confirmation is unavailable'],
+        ['deck_reference_not_authoritative:x', 'Required X reference is unavailable'],
+        ['private exception password=do-not-show', 'Source-owned deck readiness is unavailable'],
+        ['__proto__', 'Source-owned deck readiness is unavailable'],
+    ])('deck harmonization renders finite prerequisite %s without exception prose', async (suffix, expected) => {
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        action.enabled = false; action.disabled_reason = `canonical_deck_authority_unavailable:${suffix}`;
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        expect(panel.textContent).toContain(expected);
+        expect(panel.textContent).not.toContain('password=');
+        expect((panel.querySelector('select') as HTMLSelectElement).disabled).toBe(false);
+        expect(state.deckInvokeCalls).toHaveLength(0);
+    });
+
+    it.skipIf(!process.env.BMS_DECK_DETAIL_EXPORT)('deck harmonization renders strict API Park no-op without fabricated controller or physical completion', async () => {
+        const detail = JSON.parse(readFileSync(process.env.BMS_DECK_DETAIL_EXPORT!, 'utf8'));
+        expect(detail.completion_class).toBe('source_noop');
+        nativeMetadataMode.receipts = true;
+        state.deckDeferred = true;
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        vi.mocked(api.get).mockReset();
+        vi.mocked(api.get).mockImplementation(async (url) => {
+            expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${detail.command_id}`);
+            return { data: structuredClone(detail) };
+        });
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        (action.destination_options as unknown[]).push({ target: 'LOC_PARK', label: 'Park', camera_offset_option: false, enabled: true });
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+            const select = panel.querySelector('select')!;
+            await act(async () => { select.value = 'LOC_PARK'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+            await act(async () => [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!.click());
+            await act(async () => { state.deckCallbacks?.onSuccess?.(detail); });
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(panel.textContent).toContain('Lifecyclecompleted');
+            expect(panel.textContent).toContain('Controller completionnot verified');
+            expect(panel.textContent).toContain('Semantic state commitcommitted');
+            expect(panel.textContent).toContain('Physical observationnot observed');
+            expect(panel.textContent).not.toContain('receipt unavailable / outcome uncertain');
+            expect(state.deckInvokeCalls).toHaveLength(1);
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false;
+        }
     });
 
     it('renders finite deck movement and submits exactly one semantic enqueue', async () => {

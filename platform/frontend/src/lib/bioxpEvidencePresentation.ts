@@ -26,6 +26,48 @@ export function bioXpProviderFailure(value: unknown): string | null {
     return visit(value, 0);
 }
 
+/** Finite native prerequisite grammar; never display arbitrary exception prose. */
+export function bioXpDeckReadinessText(reason: string): string {
+    const prefix = 'canonical_deck_authority_unavailable';
+    if (!reason.startsWith(prefix)) return reason;
+    const code = reason.slice(prefix.length + 1);
+    const messages: Record<string, string> = {
+        deck_bootstrap_semantic_location_unavailable: 'This source branch requires an established previous location and well. Refresh does not initialize them.',
+        deck_bootstrap_board_epochs_unavailable: 'Controller board ownership is not established. Refresh deck readiness to query it.',
+        deck_bootstrap_branch_state_unavailable: 'Required source branch state is unknown. Refresh does not reconstruct it.',
+        deck_bootstrap_latch_or_tip_state_unavailable: 'Required latch or tip state is unknown. Refresh deck readiness to query available observations.',
+        deck_gripper_observation_not_authoritative: 'Current gripper confirmation is unavailable. Refresh deck readiness to query it.',
+        deck_authority_cache_unavailable: 'Deck readiness has not been observed. Use Refresh deck readiness; it does not move or initialize the robot.',
+        deck_authority_cache_stale: 'Deck readiness observation expired. Use Refresh deck readiness; no motion is performed.',
+        'source_authority_missing:deck_authority_cached_snapshot': 'A current deck readiness observation is unavailable.',
+        deck_controller_positions_not_authoritative: 'Current controller positions are unavailable. Refresh deck readiness to query them.',
+        deck_reference_snapshot_not_authoritative: 'Required axis references are unavailable. Refresh does not home the robot.',
+        deck_board_epochs_not_authoritative: 'Controller board ownership is not established.',
+        deck_board4_not_active: 'Controller board 4 is not active.',
+        ownership_generation_changed: 'Robot ownership changed. Obtain current readiness before moving.',
+        deck_semantic_generation_epochs_stale: 'Source state belongs to an earlier controller generation.',
+        deck_authority_changed_during_collection: 'Robot authority changed during collection. Obtain current readiness before moving.',
+        deck_authority_changed_during_observation: 'Robot authority changed during observation. Obtain current readiness before moving.',
+        oem_host_latch_status_reader_not_bound: 'The source latch observation owner is unavailable.',
+        oem_host_latch_status_observation_failed: 'The source latch observation failed. Refresh deck readiness to query it.',
+        deck_latch_observation_failed: 'Latch observation failed. Refresh deck readiness to query it.',
+        deck_latch_observation_malformed: 'Latch observation is not valid.',
+    };
+    const semantic: Record<string, string> = {
+        tip_loaded: 'Whether a tip is loaded is unknown.', tip_dirty: 'Source tip cleanliness state is unknown.',
+        tip_location: 'Source tip location is unknown.', clean_path: 'This source branch requires known tray clean-path state.',
+        location: 'This source branch requires an established previous location.',
+        location_revision: 'This source branch requires an established previous location and well.',
+        plate_on_gantry: 'Held-plate state required by this source branch is unknown.',
+        latch_status: 'Source latch state is unknown.', machine_latch_closed: 'Machine latch-closed state is unknown.',
+        ambiguity: 'A previous deck outcome requires reconciliation; do not resubmit.',
+        pseudo_z_home: 'Source pseudo-home state is unavailable.',
+    };
+    for (const [key, message] of Object.entries(semantic)) messages[`deck_semantic_state_not_authoritative:${key}`] = message;
+    for (const axis of ['x', 'y', 'z', 'g']) messages[`deck_reference_not_authoritative:${axis}`] = `Required ${axis.toUpperCase()} reference is unavailable. Refresh does not home the robot.`;
+    return Object.hasOwn(messages, code) ? messages[code] : 'Source-owned deck readiness is unavailable. Refresh queries readiness; it does not initialize or move the robot.';
+}
+
 // Caller completion is not controller arrival. Old receipts are read-only.
 export function bioXpReceiptIsMoveTimeoutReport(receipt: unknown): boolean {
     const object = (value: unknown): Record<string, unknown> =>

@@ -43,6 +43,17 @@ describe('BioXP OEM XY method input bounds', () => {
 });
 
 describe('BioXP OEM deck movement request', () => {
+    it.each(['LOC_OC', 'LOC_PARK', 'LOC_TC_BARCODE', 'LOC_RC_BARCODE'])('deck harmonization camera choice is branch coherent for %s', (target) => {
+        const request = { expected_connection_generation: 7, schema_version: 'bioxp.operator_action_request.v2' as const,
+            idempotency_key: 'camera-choice', expected_ownership_generation: 3,
+            expected_board_epoch_by_board: { '4': 11, '5': 12 }, action_id: 'oem.deck.move_to_location' as const,
+            inputs: { target, camera_offset: false } };
+        expect(() => assertBioXpOperatorActionV2Request(request)).not.toThrow();
+        request.inputs.camera_offset = true;
+        if (target === 'LOC_OC') expect(() => assertBioXpOperatorActionV2Request(request)).not.toThrow();
+        else expect(() => assertBioXpOperatorActionV2Request(request)).toThrow('ordinary deck destinations');
+    });
+
     it('accepts only semantic inputs and exact board 4/5 fences', () => {
         const request = {
             expected_connection_generation: 7,
