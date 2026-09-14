@@ -19,9 +19,100 @@ def resolveBooleanParam(value, defaultValue) {
     return value.toString().equalsIgnoreCase('true')
 }
 
+// The task-produced manifest owns native keys; paths only prove exact membership.
+// Keep this on the existing canonical channel, before any staging/flattening.
+def protenixManifestProducerOutputs(outputs, sequenceInput) {
+    return outputs.flatMap { rawOutput ->
+        def values = rawOutput instanceof Collection ? rawOutput as List : [rawOutput]
+        if (values.size() != 3) {
+            throw new IllegalArgumentException('Protenix producer requires task-coupled manifest identity')
+        }
+        def authority = values[0]
+        def metadataFields = [
+            'producer_artifact_id', 'producer_artifact_key', 'producer_sample',
+            'producer_sequence', 'producer_fold', 'producer_rank',
+            'producer_submission_id', 'producer_submission_name', 'original_submission_identity',
+        ] as Set
+        if (sequenceInput && (!(authority instanceof Map) ||
+            (authority.keySet() as Set) != metadataFields ||
+            authority.producer_artifact_id != authority.producer_artifact_key ||
+            authority.producer_sample != authority.producer_artifact_id ||
+            !(authority.producer_artifact_key instanceof String) ||
+            !(authority.producer_artifact_key ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/))) {
+            throw new IllegalArgumentException('typed sequence producer output metadata is invalid')
+        }
+        def manifestPath = values[1].toAbsolutePath().normalize()
+        if (manifestPath.fileName.toString() != 'producer_candidates.json' ||
+            !java.nio.file.Files.isRegularFile(manifestPath, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            manifestPath.toRealPath() != manifestPath) {
+            throw new IllegalArgumentException('Protenix producer manifest is not a task-owned regular file')
+        }
+        def manifest = new JsonSlurper().parse(manifestPath)
+        def schemaName = sequenceInput ? 'sequence_structure_producer_candidates' : 'structure_producer_candidates'
+        if (!(manifest instanceof Map) || manifest.schema_name != schemaName ||
+            manifest.schema_version != 1 || !(manifest.candidates instanceof Collection)) {
+            throw new IllegalArgumentException('Protenix producer candidate manifest is invalid')
+        }
+        def predictedFiles = values[2] instanceof Collection ? values[2] as List : [values[2]]
+        if (!predictedFiles || manifest.candidates.size() != predictedFiles.size()) {
+            throw new IllegalArgumentException('Protenix producer manifest/file set is incomplete')
+        }
+        def byKey = [:]
+        manifest.candidates.each { record ->
+            def key = record instanceof Map ? record.producer_output_key : null
+            if (!(key instanceof String) || !key || key.startsWith('/') || key.contains('\\') ||
+                key.split('/', -1).any { it in ['', '.', '..'] } || byKey.containsKey(key) ||
+                record.producer_method != 'protenix' ||
+                !(record.producer_artifact_sha256 instanceof String) ||
+                !(record.producer_artifact_sha256 ==~ /[0-9a-f]{64}/)) {
+                throw new IllegalArgumentException('Protenix producer manifest contains invalid or duplicate identity')
+            }
+            if (sequenceInput) {
+                if (metadataFields.any { !record.containsKey(it) || record[it] != authority[it] }) {
+                    throw new IllegalArgumentException('Protenix producer metadata disagrees with sequence input')
+                }
+            } else if (record.producer_sample != (authority == null ? null : authority.toString())) {
+                throw new IllegalArgumentException('Protenix producer sample disagrees with scheduler input')
+            }
+            byKey[key] = record
+        }
+        def predictionsRoot = manifestPath.parent.resolve('predictions')
+        def boundKeys = [] as Set
+        predictedFiles.collect { predicted ->
+            def source = predicted.toAbsolutePath().normalize()
+            if (!source.startsWith(predictionsRoot) ||
+                !java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                source.toRealPath() != source) {
+                throw new IllegalArgumentException('Protenix producer output escaped its task predictions root')
+            }
+            def relative = predictionsRoot.relativize(source).toString().replace('\\', '/')
+            def key = sequenceInput ? "${authority.producer_artifact_key}/${relative}".toString() : relative
+            def record = byKey[key]
+            def name = relative.toLowerCase()
+            def sourceFormat = name.endsWith('.pdb') || name.endsWith('.ent') ? 'pdb' :
+                (name.endsWith('.cif') || name.endsWith('.mmcif') ? 'mmcif' : null)
+            if (record == null || !boundKeys.add(key) || sourceFormat == null || record.source_format != sourceFormat) {
+                throw new IllegalArgumentException('Protenix producer metadata does not bind one emitted file and format')
+            }
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            source.toFile().withInputStream { stream ->
+                byte[] buffer = new byte[1024 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            if (record.producer_artifact_sha256 != digest.digest().encodeHex().toString()) {
+                throw new IllegalArgumentException('Protenix producer source SHA256 disagrees with manifest')
+            }
+            tuple(new LinkedHashMap(record as Map), predicted)
+        }
+    }
+}
+
 def canonicalProducerOutputs(outputs, producerMethod) {
+    if (producerMethod == 'protenix') {
+        return protenixManifestProducerOutputs(outputs, true)
+    }
     def outputRoots = [
-        protenix: '/predictions/',
         esmfold2: '/esmfold2_results/',
     ]
     if (!outputRoots.containsKey(producerMethod)) {
@@ -402,7 +493,10 @@ def sequenceCanonicalProducerOutputs(outputs, producerMethod) {
     }
 }
 
-def complexCanonicalProducerOutputs(outputs) {
+def complexCanonicalProducerOutputs(outputs, producerMethod = 'boltz') {
+    if (producerMethod == 'protenix') {
+        return protenixManifestProducerOutputs(outputs, false)
+    }
     outputs.flatMap { producerSample, producerManifest, produced ->
         def manifest = new groovy.json.JsonSlurper().parse(producerManifest)
         if (manifest.schema_name != 'structure_producer_candidates' ||
@@ -1798,7 +1892,7 @@ workflow complex_prediction_wf {
         })
         ProtenixFromComplex(PrepProtenixComplex.out.protenix_json)
         canonical_candidates = complexCanonicalProducerOutputs(
-            ProtenixFromComplex.out.canonical_structures
+            ProtenixFromComplex.out.canonical_structures, 'protenix'
         )
         structures = canonical_candidates.map { producer_meta, predicted -> predicted }
     }
@@ -1816,7 +1910,7 @@ workflow complex_prediction_wf {
             BoltzFromComplex.out.canonical_pdbs
         )
         protenix_candidates = complexCanonicalProducerOutputs(
-            ProtenixFromComplex.out.canonical_structures
+            ProtenixFromComplex.out.canonical_structures, 'protenix'
         )
         canonical_candidates = boltz_candidates.mix(protenix_candidates)
         structures = canonical_candidates.map { producer_meta, predicted -> predicted }

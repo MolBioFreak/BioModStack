@@ -702,6 +702,115 @@ async def _verify_publication_counts(
         )
 
 
+def _verified_legacy_protenix_sequence_link(
+    job: Job, design: Design, root: Path, native: Mapping[str, Any], declared: Mapping[str, Any]
+) -> bool:
+    """Resolve old sequence transport keys through immutable native publication.
+
+    Older sequence channels stripped through the LAST ``predictions`` directory,
+    unlike the native manifest's outer-root-relative key. Never rewrite either
+    identity, guess a basename, or join on a digest alone. Re-prove the original
+    candidate, its exact publication binding, and the current primary Design.
+    New channels carry the native manifest key and use the ordinary exact join.
+    """
+    from .contracts import validate_relative_path
+    from .manifests import _read_regular
+
+    if job.model_id != "protenix" or native.get("producer_method") != "protenix":
+        return False
+    if any(native.get(k) != declared.get(k) for k in (
+        "producer_method", "producer_sample", "producer_rank",
+    )):
+        return False
+    prefix = native.get("producer_artifact_key")
+    original_key = native.get("producer_output_key")
+    if not isinstance(prefix, str) or not isinstance(original_key, str):
+        return False
+    validate_relative_path(prefix)
+    validate_relative_path(original_key)
+    if not original_key.startswith(prefix + "/"):
+        return False
+    parts = original_key[len(prefix) + 1:].split("/")
+    if "predictions" not in parts:
+        return False
+    last = max(i for i, part in enumerate(parts) if part == "predictions")
+    legacy_key = prefix + "/" + "/".join(parts[last + 1:])
+    if legacy_key == original_key or declared.get("producer_output_key") != legacy_key:
+        return False
+    inventory = (job.provenance or {}).get("protenix_primary_publication")
+    if not isinstance(inventory, list) or not inventory or not design.pdb_path:
+        return False
+    original_sha = declared.get("original_source_sha256")
+    if (native.get("producer_artifact_sha256") != original_sha
+            or native.get("source_format") != declared.get("original_source_format")):
+        return False
+
+    def read_bound(reference):
+        if not isinstance(reference, dict) or not isinstance(reference.get("path"), str):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication reference is invalid")
+        path = Path(reference["path"])
+        path = path if path.is_absolute() else root / path
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication escapes its owner") from exc
+        raw = _read_regular(root, relative)
+        if hashlib.sha256(raw).hexdigest() != reference.get("sha256"):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication bytes changed")
+        document = json.loads(raw)
+        if not isinstance(document, dict):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication is malformed")
+        return document, path
+
+    proofs = 0
+    for item in inventory:
+        if not isinstance(item, dict):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication inventory is invalid")
+        publication, _ = read_bound(item.get("publication"))
+        manifest, manifest_path = read_bound(item.get("producer_manifest"))
+        descriptor = publication.get("producer_manifest")
+        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("relative_path"), str):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native manifest descriptor is invalid")
+        manifest_relative = descriptor["relative_path"]
+        validate_relative_path(manifest_relative)
+        if (publication.get("schema_name") != "structure_producer_publication"
+                or publication.get("schema_version") != 1
+                or manifest.get("schema_name") != "sequence_structure_producer_candidates"
+                or manifest.get("schema_version") != 1
+                or descriptor.get("sha256") != item["producer_manifest"]["sha256"]
+                or root / manifest_relative != manifest_path):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication custody is invalid")
+        candidates = manifest.get("candidates")
+        bindings = publication.get("bindings")
+        if (not isinstance(candidates, list) or not isinstance(bindings, list)
+                or not all(isinstance(row, dict) for row in candidates + bindings)):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication members are invalid")
+        keys = [row.get("producer_output_key") for row in candidates]
+        binding_keys = [row.get("producer_output_key") for row in bindings]
+        if (not all(isinstance(key, str) for key in keys + binding_keys)
+                or len(set(keys)) != len(keys) or len(set(binding_keys)) != len(binding_keys)
+                or set(keys) != set(binding_keys)):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native publication membership is ambiguous")
+        selected = [row for row in candidates if row == native]
+        bound = [row for row in bindings if row.get("producer_output_key") == original_key]
+        if len(selected) != 1 or len(bound) != 1:
+            continue
+        binding = bound[0]
+        relative = binding.get("published_relative_path")
+        validate_relative_path(relative)
+        native_path = Path(design.pdb_path)
+        native_path = native_path if native_path.is_absolute() else root / native_path
+        if (native_path != root / relative or binding.get("sha256") != original_sha
+                or binding.get("source_format") != native.get("source_format")):
+            continue
+        raw = _read_regular(root, relative)
+        if (len(raw) != binding.get("size_bytes")
+                or hashlib.sha256(raw).hexdigest() != original_sha):
+            raise FrustraMPNNPersistenceError("FrustraMPNN native published structure bytes changed")
+        proofs += 1
+    return proofs == 1
+
+
 async def _exact_design_link(
     session: AsyncSession,
     *,
@@ -833,9 +942,15 @@ async def _exact_design_link(
                         "producer_rank": None,
                         "producer_output_key": f"{esmfold2['sequence_name']}/{native_path.as_posix()}",
                     }
-                if all(native.get(key) == producer_provenance.get(key) for key in (
+                identity_matches = all(native.get(key) == producer_provenance.get(key) for key in (
                     "producer_method", "producer_sample", "producer_rank", "producer_output_key",
-                )) and native.get("producer_output_key"):
+                ))
+                if (not identity_matches and parent_workflow_id == "structure_prediction"
+                        and producer_stage == "structure_prediction:protenix"):
+                    identity_matches = _verified_legacy_protenix_sequence_link(
+                        job, row, root, native, producer_provenance,
+                    )
+                if identity_matches and native.get("producer_output_key"):
                     matches.append(row)
         else:
             matches = [row for row in rows if row.pdb_path and (

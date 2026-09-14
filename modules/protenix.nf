@@ -45,7 +45,7 @@ process ProtenixPredict {
     tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)
 
     output:
-    tuple val(producer_meta), path("predictions/**/*.cif"), emit: typed_cifs, optional: true
+    tuple val(producer_meta), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: typed_cifs
     path "producer_publication/**/*.json", emit: producer_publication
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
@@ -344,7 +344,7 @@ process ProtenixFromComplex {
     tuple val(input_sample), path(complex_json), path(prepared_msa)
 
     output:
-    tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}"), emit: canonical_structures, optional: true
+    tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}"), emit: canonical_structures
     path "producer_publication/**/*.json", emit: producer_publication
     path "predictions/**/*.cif", emit: raw_structures
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
