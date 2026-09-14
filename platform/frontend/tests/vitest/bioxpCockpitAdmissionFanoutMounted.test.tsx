@@ -2248,7 +2248,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         catalogDashboard().deck!.semantic_state_revision = 18;
         await render();
         expect(move.disabled).toBe(false);
-        expect(panel.textContent).toContain('Reconciled by decision home-decision');
+        expect(panel.textContent).toContain('Earlier move reconciled.');
+        expect(panel.textContent).not.toContain('home-decision');
         expect(panel.textContent).toContain('Ambiguous outcomeambiguous');
         expect(state.deckInvokeCalls).toHaveLength(0);
         for (const bad of [{ ...resolution, command_id: 'other' }, { ...resolution, transition_sequence: 0 }, null]) {

@@ -1200,7 +1200,7 @@ export function BioXpCockpit() {
                 </dl>
                 </details>
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
-                {deckResolution && <p className="text-sm text-slate-300">Reconciled by decision {deckResolution.decision_id}. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
+                {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
             </section>
 
