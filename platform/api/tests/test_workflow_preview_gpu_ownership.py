@@ -9,6 +9,7 @@ from component_runtime import NativeInvocation, NativeInvocationPreview, SourceI
 from schemas import JobCreate
 from services import nextflow
 from tests.test_remote_rectify_admission import admission
+from tests.test_remote_lifecycle_gaps import store as lifecycle_store, preparing
 
 
 @pytest.fixture(autouse=True)
@@ -169,3 +170,46 @@ async def test_full_workflow_preview_post_persists_approval_without_gpu_assignme
         # requires the scheduler to supply one for the enabled analysis stage.
         with pytest.raises(ValueError, match='scheduler-assigned physical GPU ID'):
             nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_normalizer', [False, True])
+async def test_real_launcher_retains_admitted_neurosnap_backend(lifecycle_store, monkeypatch, tmp_path, legacy_normalizer):
+    import database
+    from database import Job
+    from services.msa_policy import apply_msa_policy
+    await preparing(lifecycle_store)
+    params = apply_msa_policy('protenix', scientific_request())
+    async with lifecycle_store() as session:
+        job = await session.get(Job, 'job')
+        job.model_id = 'protenix'
+        job.params = params
+        await session.commit()
+    monkeypatch.setattr(database, 'async_session', lifecycle_store)
+    monkeypatch.setattr(nextflow, 'assert_workflow_launch_allowed', lambda *_: None)
+    monkeypatch.setattr(nextflow, 'transient_workflow_runner_mode', lambda: False)
+    monkeypatch.setattr(nextflow, 'configured_lane', lambda **_: None)
+    if legacy_normalizer:
+        original = nextflow._normalize_protenix_msa_backend
+        monkeypatch.setattr(nextflow, '_normalize_protenix_msa_backend',
+            lambda value: '' if value == 'neurosnap_api' else original(value))
+    observed = []
+    def compiler_boundary(job, actual, output):
+        # The real compiler begins with this same policy. Stop before any MSA
+        # submission, input materialization, worker contact or model execution.
+        observed.append(apply_msa_policy('protenix', actual))
+        raise ValueError('offline stop before scientific execution')
+    monkeypatch.setattr(nextflow, 'compile_job_nextflow_invocation', compiler_boundary)
+    await nextflow.launch_nextflow_job('job', 'protenix', 'predict', params, str(tmp_path))
+    async with lifecycle_store() as session:
+        job = await session.get(Job, 'job')
+        assert job.status == 'failed' and job.remote_attempt_id is None
+        if legacy_normalizer:
+            assert observed == []
+            assert 'Conflicting msa_provider' in job.error_message
+        else:
+            assert len(observed) == 1
+            assert observed[0]['msa_provider'] == observed[0]['protenix_msa_backend'] == 'neurosnap_api'
+            for key, value in scientific_request().items():
+                assert observed[0][key] == value
+            assert job.error_message == 'offline stop before scientific execution'

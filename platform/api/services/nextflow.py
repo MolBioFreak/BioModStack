@@ -1235,7 +1235,7 @@ def _normalize_msa_preset(value: object) -> str:
 
 def _normalize_protenix_msa_backend(value: object) -> str:
     backend = str(value).strip().lower() if value is not None else ""
-    if backend in {"auto", "local", "colabfold_api", "none", "esm"}:
+    if backend in {"auto", "local", "colabfold_api", "neurosnap_api", "none", "esm"}:
         return backend
     return ""
 
