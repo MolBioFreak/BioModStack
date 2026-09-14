@@ -45,7 +45,7 @@ async function mount(initialValues: any = fixture) {
     vi.spyOn(window, 'alert').mockImplementation(() => {});
     api.defaults.adapter = async config => {
         if (config.method === 'post') { requests.push(JSON.parse(config.data)); throw new Error('offline captured POST; no job created'); }
-        if (config.url === '/msa/providers') return { data: { providers: { neurosnap_api: { configured: true, credential_configured: true, authentication: 'not_checked', live_acceptance: 'not_checked_by_setup', blockers: [] } } }, status: 200, statusText: 'OK', headers: {}, config };
+        if (config.url === '/api/msa/providers') return { data: { providers: { neurosnap_api: { configured: true, credential_configured: true, authentication: 'not_checked', live_acceptance: 'not_checked_by_setup', blockers: [] } } }, status: 200, statusText: 'OK', headers: {}, config };
         if (config.url?.includes('msa')) return { data: { cache_entries: 0, available: true, configured: true }, status: 200, statusText: 'OK', headers: {}, config };
         throw new Error(`Unexpected offline GET ${config.url}`);
     };

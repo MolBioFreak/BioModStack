@@ -19,21 +19,27 @@ export function MsaProviderReadiness({ provider }: { provider: SavedMsaProvider 
     const [error, setError] = useState(false);
     useEffect(() => {
         const controller = new AbortController();
-        api.get<MsaProviderSetup>('/msa/providers', { signal: controller.signal })
-            .then(response => setSetup(response.data))
+        api.get<MsaProviderSetup>('/api/msa/providers', { signal: controller.signal })
+            .then(response => {
+                const data = response.data;
+                if (!data || typeof data !== 'object' || !data.providers || typeof data.providers !== 'object') {
+                    throw new Error('Invalid provider setup response');
+                }
+                if (!controller.signal.aborted) setSetup(data);
+            })
             .catch(() => { if (!controller.signal.aborted) setError(true); });
         return () => controller.abort();
     }, []);
     if (provider === 'local') return <p role="status">Local MSA search is disabled.</p>;
-    if (error) return <p role="status">Provider setup could not be read. Saved settings are unchanged; admission will check configuration.</p>;
     const selected = provider === 'auto' ? 'colabfold_api' : provider;
-    const state = setup?.providers[selected];
+    const state = setup?.providers?.[selected];
+    if (error || (setup && (!state || typeof state.configured !== 'boolean'))) return <p role="status">Provider setup could not be read. Saved settings are unchanged; admission will check configuration.</p>;
     return <div role="status" className="text-xs">
         {!state ? 'Reading provider setup…' : <>
             <p>{selected}: {state.configured ? 'configured (not proof of live acceptance)' : 'not configured'}.
-                Authentication: {state.authentication}; live acceptance: {state.live_acceptance}.</p>
-            {state.credential_configured !== null && <p>Server credential: {state.credential_configured ? 'configured' : 'missing'}. Credentials are deployment-owned.</p>}
-            {state.blockers.map(blocker => <p key={blocker}>{blocker}</p>)}
+                Authentication: {state.authentication ?? 'not reported'}; live acceptance: {state.live_acceptance ?? 'not reported'}.</p>
+            {typeof state.credential_configured === 'boolean' && <p>Server credential: {state.credential_configured ? 'configured' : 'missing'}. Credentials are deployment-owned.</p>}
+            {Array.isArray(state.blockers) && state.blockers.filter(blocker => typeof blocker === 'string').map(blocker => <p key={blocker}>{blocker}</p>)}
         </>}
     </div>;
 }
