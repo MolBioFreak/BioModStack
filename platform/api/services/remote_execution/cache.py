@@ -18,10 +18,12 @@ from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_so
                      _safe_extract, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
 from .images import resolve_image
+from . import hf_assets
 
 
 BATCH_COUNT = 2048
 BATCH_BYTES = 256 * 1024 * 1024
+HF_MIN_BYTES = 8 * 1024 * 1024
 
 
 async def _noop(*args, **kwargs):
@@ -40,6 +42,7 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
         payloads[lifecycle.name] = lifecycle.read_bytes()
         views = lifecycle.with_name('runtime_image_views.py')
         payloads[views.name] = views.read_bytes()
+        payloads['bms_hf_transfer.py'] = (Path(__file__).parents[2] / 'tools/bms_hf_transfer.py').read_bytes()
     generation = hashlib.sha256(b''.join(payloads.values())).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{generation}/{helper_name}'
     # Small source modules: stdin transfers, each verified before atomic publication.
@@ -104,6 +107,12 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         response = await call({'action': 'probe', 'artifacts': [identity(entry) for entry in batch]})
         states.update({(row.get('kind') == 'runtime_image', row['sha256']): row['state']
                        for row in response['artifacts']})
+    # HF is a byte source, not a second registry. Verified worker hits remain
+    # offline; selected bulk misses alone consult controller-owned cloud config.
+    # Keep small support files batched rather than doing thousands of HTTP calls.
+    bulk = {key(e) for e in objects if states[key(e)] != 'cache_hit'
+            and e.role in {'image', 'runtime', 'source'} and e.size_bytes >= HF_MIN_BYTES}
+    hf_enabled = bool(bulk) and hf_assets.configuration() is not None
     indices = {}
     for index, entry in enumerate(artifacts):
         indices.setdefault(key(entry), []).append(index)
@@ -117,7 +126,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
                      'Transferring artifact batch' if state == 'transferring'
                      else 'Verifying and publishing artifact batch')
 
-    async def transfer(batch, *, direct=False):
+    async def transfer(batch, *, direct=False, use_hf=False):
         batch_id = uuid.uuid4().hex
         owner = {'operation_id': operation_id, 'batch_id': batch_id}
         incoming = f'{root}/incoming/{operation_id}/{batch_id}'
@@ -128,7 +137,25 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             entry = batch[0]
             source = incoming + '/' + entry.sha256
             await check_fence()
-            await rsync_to_remote(connection, entry.source, source, delete=False)
+            if use_hf:
+                name = activity[indices[key(entry)][0]]['name']
+                acquired = {}
+                for renewal in range(2):
+                    await report('transferring', name, 'Preparing private Hugging Face asset delivery')
+                    sources = await hf_assets.prepare_sources([entry], check_fence=check_fence)
+                    await report('transferring', name, 'Downloading artifact from Hugging Face')
+                    acquired = await call({'action': 'acquire_hf', 'artifact': identity(entry),
+                                           **owner, 'source': sources[key(entry)]})
+                    # A finite fresh-link retry is not a route fallback. Neither
+                    # expiry nor cancellation publishes an unverified partial.
+                    if acquired.get('state') != 'source_expired':
+                        break
+                if (acquired.get('state') != 'downloaded'
+                        or acquired.get('sha256') != entry.sha256
+                        or acquired.get('size_bytes') != entry.size_bytes):
+                    raise ValueError('Hugging Face artifact acquisition did not verify')
+            else:
+                await rsync_to_remote(connection, entry.source, source, delete=False)
             await check_fence()
             await batch_progress(batch, 'verifying')
             await call({'action': 'ingest', 'artifact': identity(entry), 'source': source})
@@ -163,12 +190,13 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     for entry in objects:
         if states[key(entry)] == 'cache_hit':
             continue
-        direct = entry.role == 'image' or entry.size_bytes > BATCH_BYTES
+        use_hf = hf_enabled and key(entry) in bulk
+        direct = use_hf or entry.role == 'image' or entry.size_bytes > BATCH_BYTES
         if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
             await transfer(batch)
             batch, size = [], 0
         if direct:
-            await transfer([entry], direct=True)
+            await transfer([entry], direct=True, use_hf=use_hf)
         else:
             batch.append(entry)
             size += entry.size_bytes

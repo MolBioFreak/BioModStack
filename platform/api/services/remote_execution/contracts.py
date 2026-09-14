@@ -28,6 +28,22 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class HFAssetLinkStatus(StrictModel):
+    """Safe connection projection; never a credential or download capability."""
+    configured: bool
+    available: bool
+    bucket: str | None = Field(default=None, max_length=193)
+    mode: Literal["hf_preferred", "ssh"]
+    credential_configured: bool
+    allow_publish: bool
+    message: str = Field(min_length=1, max_length=500)
+
+
+class HFAssetLinkCheckRequest(StrictModel):
+    """Connection checks accept no credential, path, URL or runtime overrides."""
+    pass
+
+
 class DiscoveredExecutionTarget(StrictModel):
     provider: Literal["vast"]
     provider_instance_id: str = Field(min_length=1, max_length=128)

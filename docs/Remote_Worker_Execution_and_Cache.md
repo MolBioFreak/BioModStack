@@ -21,6 +21,11 @@ The earlier deferred status of issue 44 is historical. The current revision requ
 
 ## Cache authority and provisioning
 
+Bulk runtime assets use the [private HF delivery integration](HF_Runtime_Asset_Delivery.md)
+when configured. That connection is controller-owned; the worker receives only
+short-lived object read access. Existing cache identity, publication and licensing
+remain authoritative, with SSH retained for control and small batched files.
+
 A cache is an optimization, not a new source of scientific truth. Reuse requires the same declared content hashes, byte sizes, roles and runtime identity that normal remote bundle verification consumes. A filename, modification time, directory existence, or cache-success marker alone is insufficient.
 
 Required invariants:

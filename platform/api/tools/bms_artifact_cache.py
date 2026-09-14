@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verified instance-local artifact storage. JSON stdin protocol; no credentials/URLs.
+"""Verified instance-local artifact storage. JSON stdin; no persistent capabilities.
 
 Roots and destinations are trusted controller configuration, never operator input.
 Every directory is pinned with O_NOFOLLOW; published bytes are never written in
@@ -303,6 +303,46 @@ class Cache:
                 pass
         return path
 
+    def acquire_hf(self, value, operation_id, batch_id, source):
+        # The installed helper imports its authenticated peer; source imports
+        # use the same file through the API tools package.
+        if __package__:
+            from . import bms_hf_transfer as hf
+        else:
+            import bms_hf_transfer as hf
+        item = None
+        try:
+            item = artifact(value)
+            hf.validate_source(source)
+            path = self.incoming_batch(operation_id, batch_id)
+            with directory(path) as parent:
+                fd = os.open(item['sha256'], os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+                             | os.O_NONBLOCK, 0o600, dir_fd=parent)
+                try:
+                    regular(fd)
+                    info = os.fstat(fd)
+                    if (info.st_nlink != 1 or info.st_uid != os.geteuid()
+                            or stat.S_IMODE(info.st_mode) != 0o600):
+                        raise hf.TransferError('hf_unsafe_incoming_file')
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        raise hf.TransferError('hf_acquisition_busy') from None
+                    result = hf.download(fd, item, source)
+                    current = os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino, current.st_nlink) != (info.st_dev, info.st_ino, 1):
+                        raise hf.TransferError('hf_incoming_identity_changed')
+                    os.fsync(parent)
+                    return result
+                finally:
+                    os.close(fd)
+        except hf.SourceExpired:
+            return {**(item or {}), 'state': 'source_expired'}
+        except hf.TransferError:
+            raise
+        except Exception:
+            raise hf.TransferError('hf_acquisition_failed') from None
+
     def ingest_many(self, values, operation_id, batch_id):
         items = [artifact(value) for value in values]
         if (not items or len(items) > 2048
@@ -491,6 +531,8 @@ def main():
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
     elif action == 'prepare_incoming':
         result = {'source': str(cache.incoming_batch(request['operation_id'], request['batch_id'], create=True))}
+    elif action == 'acquire_hf':
+        result = cache.acquire_hf(request['artifact'], request['operation_id'], request['batch_id'], request['source'])
     elif action == 'ingest_many':
         result = cache.ingest_many(request['artifacts'], request['operation_id'], request['batch_id'])
     elif action == 'remove_incoming':

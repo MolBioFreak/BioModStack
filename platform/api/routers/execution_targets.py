@@ -11,6 +11,8 @@ from services.remote_execution.contracts import (
     WorkflowProvisionSelection, WorkflowProvisionRequest,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
+    HFAssetLinkStatus,
+    HFAssetLinkCheckRequest,
 )
 from services.remote_execution.targets import (
     ExecutionTargetError,
@@ -23,6 +25,20 @@ from services.remote_execution.targets import (
 from services.remote_execution.managed_inventory import ManagedInventory, project_inventory
 
 router = APIRouter()
+
+
+@router.get('/providers/huggingface', response_model=HFAssetLinkStatus)
+async def hf_asset_link_status():
+    """Deployment-owned config only. No cloud calls, keys or capability URLs."""
+    from services.remote_execution.hf_assets import readiness
+    return readiness()
+
+
+@router.post('/providers/huggingface/check', response_model=HFAssetLinkStatus)
+async def check_hf_asset_link(request: HFAssetLinkCheckRequest | None = None):
+    """Explicit read-only private-bucket authentication; never upload or rent."""
+    from services.remote_execution.hf_assets import check_connection
+    return await check_connection()
 
 
 @router.get('/{execution_target_id}/runtime-inventory', response_model=ManagedInventory | None)
