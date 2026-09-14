@@ -66,6 +66,13 @@ def test_real_projection_and_actor_preserve_aliases_without_object_copies(linked
     assert python.is_symlink() and python.resolve() == release / 'support-python/base/bin/python'
     binding = cr.runtime_binding(str(worker), manifest)
     assert binding['sha256']['python'] == hashlib.sha256(python.read_bytes()).hexdigest()
+    udocker_binding = cr.runtime_binding(str(worker), manifest, backend='udocker')
+    for key in ('nextflow', 'nextflow_container'):
+        path = Path(udocker_binding['paths'][key])
+        assert udocker_binding['sha256'][key] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert udocker_binding['environment']['BMS_NEXTFLOW_EXECUTABLE'] == str(release / 'bin/bms-nextflow')
+    assert 'PATH' not in udocker_binding['environment']
+    assert 'BMS_NEXTFLOW_EXECUTABLE' not in binding['environment']
     assert m.install(root, manifest, m.boot_id(), storage)['admission']['additional_copy_bytes'] == 0
     python.unlink()
     python.symlink_to('/bin/sh')

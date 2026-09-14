@@ -8,10 +8,8 @@ The existing worker owns process quiescence, resources and result publication.
 """
 from __future__ import annotations
 
-import base64
 import ctypes
 import fcntl
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -327,27 +325,10 @@ def main(argv=None):
     if args == ['--version']:
         print('bms-container 1 (udocker P1; private-copy-on-write inputs)')
         return 0
-    if args and args[0] == 'task-shell':
-        if len(args) < 4:
-            raise ValueError('incomplete Nextflow task shell')
-        payload = json.loads(base64.b64decode(args[1], validate=True))
-        if not isinstance(payload, dict) or set(payload) != {'image', 'options'}:
-            raise ValueError('invalid Nextflow task shell payload')
-        shell = args[2:]
-        # Nextflow's tracing wrapper is HOST infrastructure. It invokes this
-        # task shell again for the actual .command.sh, with the same FD198.
-        if (len(shell) >= 2 and shell[-1] == 'nxf_trace'
-                and Path(shell[-2]).name == '.command.run'):
-            os.execv('/bin/bash', ['/bin/bash', *shell])
-        if not payload['image']:
-            os.execv('/bin/bash', ['/bin/bash', *shell])
-        if not isinstance(payload['image'], str) or not isinstance(payload['options'], str):
-            raise ValueError('invalid Nextflow image/options')
-        invocation = parse_exec([*shlex.split(payload['options']), payload['image'], '/bin/bash', *shell])
-    elif args and args[0] == 'exec':
+    if args and args[0] == 'exec':
         invocation = parse_exec(args[1:])
     else:
-        raise ValueError('expected exec or task-shell')
+        raise ValueError('expected exec')
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise RuntimeError('cannot establish container child ownership')
     identity = dict(boot_id=owner.boot_id(), supervisor_pid=os.getpid(),

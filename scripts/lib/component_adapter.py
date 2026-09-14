@@ -126,46 +126,8 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
         process.poll()
     return quiet
 
-def task_container_config(container_runtime: Mapping[str, str] | None = None,
-                          image_paths: Mapping[str, str] | None = None,
-                          shell_options: Sequence[str] = ('-ue',)) -> str:
-    """Use Nextflow's task-shell boundary, not a fictitious udocker backend.
-
-    The closure is also evaluated while hashing: only resolved task directives
-    belong here, never task.workDir. The launcher obtains cwd at execution time.
-    image_paths is the validated offline nested-workflow URI -> SIF inventory.
-    With tracing, Nextflow first passes an absolute .command.run + nxf_trace;
-    task-shell must keep that wrapper on host bash, then execute .command.sh.
-    """
-    runtime = container_runtime if container_runtime is not None else {
-        'backend': os.environ.get('BMS_CONTAINER_BACKEND', 'apptainer'),
-        'executable': os.environ.get('BMS_CONTAINER_EXECUTABLE', ''),
-    }
-    if runtime.get('backend', 'apptainer') != 'udocker':
-        return ''
-    executable = runtime.get('executable', '')
-    if not executable or not Path(executable).is_absolute():
-        raise ValueError('udocker task-shell requires an absolute trusted executable')
-    import shlex
-    # Nextflow joins shell elements into a command; quote the executable for
-    # shell parsing as well as quoting the enclosing Groovy string literal.
-    def groovy(value):
-        return "'" + value.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n') + "'"
-    aliases = groovy(json.dumps(dict(image_paths or {})))
-    shell = ', '.join(groovy(shlex.quote(option)) for option in shell_options)
-    return '\n'.join([
-        'apptainer.enabled = false', 'singularity.enabled = false',
-        'docker.enabled = false',
-        'process.shell = {',
-        '  def image = task.container',
-        f"  if (!image) return ['/bin/bash', {shell}]",
-        f'  def images = new groovy.json.JsonSlurper().parseText({aliases})',
-        "  if (images && !images.containsKey(image.toString())) throw new IllegalArgumentException('Image absent from validated offline inventory: ' + image)",
-        '  image = images.get(image.toString(), image.toString())',
-        "  def payload = groovy.json.JsonOutput.toJson([image: image, options: (task.containerOptions ?: '').toString()])",
-        f"  return [{groovy(shlex.quote(executable))}, 'task-shell', payload.getBytes('UTF-8').encodeBase64().toString(), {shell}]",
-        '}', '',
-    ])
+# Kept as the shared public interface for root, child and nested consumers.
+from scripts.lib.container_runtime import nextflow_container_config as task_container_config
 
 
 def wf_clone_container_config(lock_path: str | Path) -> str:

@@ -102,7 +102,7 @@ def install_critical_fixture(package, monkeypatch):
         incoming.write_bytes(entry.source.read_bytes())
         storage.ingest(dict(sha256=entry.sha256, size_bytes=entry.size_bytes), incoming)
     monkeypatch.setattr(managed, 'observed_compatibility', lambda: dict(requirements))
-    monkeypatch.setattr(managed, 'qualify_container', lambda *args: dict(backend='apptainer', cuda='BMS_CUDA_OK'))
+    monkeypatch.setattr(managed, 'qualify_container', lambda *args: dict(backend='apptainer', cuda='BMS_CUDA_OK', nextflow='BMS_NEXTFLOW_INTERPRETERS_OK'))
     return managed, cache, worker / 'managed-assets/v1'
 
 
@@ -113,11 +113,61 @@ def test_critical_projection_install_and_repeat_readback(critical_package, monke
     assert not (root / 'active/critical_runtime-worker.json').exists()
     installed = m.install(root, manifest, m.boot_id(), cache)
     assert installed['release']['state'] == 'verified'
-    assert installed['release']['critical']['observed'] == requirements | dict(backend='apptainer', cuda='BMS_CUDA_OK')
+    assert installed['release']['critical']['observed'] == requirements | dict(backend='apptainer', cuda='BMS_CUDA_OK', nextflow='BMS_NEXTFLOW_INTERPRETERS_OK')
     assert m.install(root, manifest, m.boot_id(), cache)['admission']['additional_copy_bytes'] == 0
     release = m.release_path(root, manifest)
     assert str(release / 'support-python/base') in (release / 'support-python/venv/pyvenv.cfg').read_text()
     assert len(artifacts) == len(manifest['artifacts'])
+    assert manifest['critical']['schema'] == 'bms.critical-runtime.v2'
+    assert manifest['critical']['entrypoints']['nextflow'] == 'bin/bms-nextflow'
+    assert manifest['critical']['entrypoints']['nextflow_container'] == 'nextflow/container-bin/singularity'
+    for name in ('bin/bms-nextflow', 'nextflow/container-bin/singularity', 'nextflow/nextflow'):
+        assert (release / name).stat().st_mode & 0o111
+    assert (release / 'lib/scripts/lib/container_runtime.py').is_file()
+
+
+@pytest.mark.parametrize('member', ['nextflow', 'nextflow_container', 'container'])
+def test_v2_rejects_nonexecutable_wrappers(critical_package, member):
+    manifest = critical_package[0]
+    m, cache = load('bms_managed_runtime'), load('bms_artifact_cache')
+    name = manifest['critical']['entrypoints'][member]
+    next(row for row in manifest['artifacts'] if row['name'] == name)['mode'] = 0o644
+    with pytest.raises(ValueError, match='nonexecutable_critical_entrypoint'):
+        m.validate_manifest(manifest, cache)
+
+
+def test_v1_is_readable_historical_not_newly_qualified(critical_package, monkeypatch):
+    import copy
+    manifest, _, _, _ = critical_package
+    m, cache, root = install_critical_fixture(critical_package, monkeypatch)
+    m.install(root, manifest, m.boot_id(), cache)
+    prior = (root / 'active/critical_runtime-worker.json').read_bytes()
+    legacy = copy.deepcopy(manifest)
+    legacy['critical']['schema'] = 'bms.critical-runtime.v1'
+    legacy['critical']['entrypoints']['nextflow'] = 'nextflow/nextflow'
+    del legacy['critical']['entrypoints']['nextflow_container']
+    legacy['artifacts'] = [row for row in legacy['artifacts'] if row['name'] not in {
+        'bin/bms-nextflow', 'nextflow/container-bin/singularity', 'lib/scripts/lib/container_runtime.py'}]
+    assert m.validate_manifest(legacy, cache)
+    assert m.observe(root, legacy, cache)['state'] == 'unverified'
+    with pytest.raises(ValueError, match='historical_critical_runtime_requires_v2_publication'):
+        m.verify_critical_execution(root, legacy)
+    assert (root / 'active/critical_runtime-worker.json').read_bytes() == prior
+    legacy['critical']['entrypoints']['nextflow'] = 'bin/bms-nextflow'
+    with pytest.raises(ValueError, match='incomplete_critical_manifest'):
+        m.validate_manifest(legacy, cache)
+
+
+def test_v2_readback_requires_nextflow_qualification(critical_package, monkeypatch):
+    import json
+    manifest = critical_package[0]
+    m, cache, root = install_critical_fixture(critical_package, monkeypatch)
+    m.install(root, manifest, m.boot_id(), cache)
+    marker = root / 'active/critical_runtime-worker.json'
+    value = json.loads(marker.read_text())
+    del value['qualification']['nextflow']
+    m.publish(marker, value, cache)
+    assert m.observe(root, manifest, cache)['state'] == 'unverified'
 
 
 @pytest.mark.parametrize('java,apptainer,driver', [
@@ -133,7 +183,7 @@ def test_critical_native_compatibility_accepts_different_tool_versions(
     monkeypatch.setattr(m, 'observed_compatibility', lambda: actual)
     release = m.install(root, manifest, m.boot_id(), cache)['release']
     assert release['state'] == 'verified'
-    assert release['critical']['observed'] == actual | dict(backend='apptainer', cuda='BMS_CUDA_OK')
+    assert release['critical']['observed'] == actual | dict(backend='apptainer', cuda='BMS_CUDA_OK', nextflow='BMS_NEXTFLOW_INTERPRETERS_OK')
     assert release['critical']['requirements'] == m.CRITICAL_REQUIREMENTS
     assert actual != release['critical']['requirements']
     mi.validate_observation(mi.ManagedInventory(observed_at='2026-09-10T00:00:00Z',

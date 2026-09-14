@@ -88,7 +88,7 @@ process RunCloneValidation {
     # offline URI inventory rather than downloading or substituting images.
     runtime_args=(-profile singularity)
     if [[ \${BMS_CONTAINER_BACKEND:-apptainer} == udocker ]]; then
-        export NXF_SINGULARITY_ENABLED=false
+        export NXF_SINGULARITY_ENABLED=true
         export NXF_APPTAINER_ENABLED=false
         python3 - ${shellQuote(codeRoot)} ${lock} <<'PY'
 import sys
@@ -104,7 +104,7 @@ PY
 
     mkdir -p wf_clone_out
     set +e
-    /usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
+    "\${BMS_NEXTFLOW_EXECUTABLE:-/usr/local/bin/nextflow}" -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
         -offline \
         --disable_ping \
         "\${runtime_args[@]}" \

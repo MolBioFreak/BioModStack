@@ -90,10 +90,12 @@ def project_runtime(remote_root, staging_root):
     sources = [('runner/bms_remote_worker.py', runner), ('nextflow/nextflow', launcher), (jar_name, jar)]
     code_root = get_code_root().resolve()
     sources.append(('bin/bms-container', code_root / 'platform/api/tools/bms_container.py'))
+    sources.append(('bin/bms-nextflow', code_root / 'platform/api/tools/bms_nextflow.sh'))
+    sources.append(('nextflow/container-bin/singularity', code_root / 'platform/api/tools/bms_nextflow_singularity.py'))
     sources.append(('lib/bootstrap_worker.sh', Path(__file__).with_name('bootstrap_worker.sh')))
     for name in ('scripts/__init__.py', 'scripts/lib/__init__.py',
                  'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
-                 'scripts/lib/runtime_image_views.py'):
+                 'scripts/lib/runtime_image_views.py', 'scripts/lib/container_runtime.py'):
         # scripts is a source namespace package. Project its existing library
         # package initializer at both levels for standalone installed imports.
         sources.append(('lib/' + name, code_root / (
@@ -115,16 +117,18 @@ def project_runtime(remote_root, staging_root):
     rows, transfers = [], []
     for name, path in sources:
         row = dict(name=name, sha256=_digest(path), size_bytes=path.stat().st_size,
-                   mode=0o755 if name == 'bin/bms-container' else path.stat().st_mode & 0o777)
+                   mode=0o755 if name in {'bin/bms-container', 'bin/bms-nextflow',
+                                         'nextflow/container-bin/singularity'} else path.stat().st_mode & 0o777)
         rows.append(row)
         transfers.append(CacheTransferArtifact(source=path, remote_destination=name,
                          sha256=str(row['sha256']), size_bytes=int(row['size_bytes']), mode=int(row['mode']), role='runtime'))
     rows.extend(_links(relocated))
     manifest = dict(selection=dict(kind='critical_runtime', model_id='worker'),
                     source_revision=source[0], source_tree=source[1], artifacts=rows,
-                    critical=dict(schema='bms.critical-runtime.v1', installation_id=installation_id,
+                    critical=dict(schema='bms.critical-runtime.v2', installation_id=installation_id,
                         nextflow_version=version, requirements=dict(requirements),
-                        entrypoints=dict(runner='runner/bms_remote_worker.py', nextflow='nextflow/nextflow',
+                        entrypoints=dict(runner='runner/bms_remote_worker.py', nextflow='bin/bms-nextflow',
+                                         nextflow_container='nextflow/container-bin/singularity',
                                          jar=jar_name, python='support-python/venv/bin/python', container='bin/bms-container')))
     return manifest, tuple(transfers)
 

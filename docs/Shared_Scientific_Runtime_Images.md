@@ -122,6 +122,29 @@ boundary. Source-integrity checks and independent private CoW allocations are
 the preservation contract; live engine/CUDA and actual-host CoW qualification
 remain separate from synthetic local filesystem tests.
 
+## Nextflow interpreter boundary
+
+The managed v2 critical runtime publishes `bin/bms-nextflow`, the unchanged pinned
+Nextflow distribution launcher, and a private `nextflow/container-bin/singularity`
+CLI bridge. For the udocker backend only, the managed launcher scopes that directory
+to its process PATH. Nextflow's built-in container builder wraps the actual Bash or
+Python interpreter, including explicit shebangs and its tracing wrapper. `process.shell`
+is an ordinary shell selection, never the container boundary. Real Apptainer remains
+available for SIF inspection/acquisition; the private bridge reports BMS/udocker
+identity, rejects acquisition and unsupported options, and removes its PATH entry
+before invoking `bms-container exec`. Inherited host environment forwarding remains
+distinct from explicit container overrides, so it does not replace the SIF's PATH
+or library setup. Nested workflow launchers use the same managed entrypoint and
+their validated existing offline image library; a missing image is not downloaded.
+
+V1 manifests remain readable historical records, not repaired-runtime qualification.
+V2 activation requires actual containerized Nextflow Bash, Python and headerless CUDA
+tasks against the existing canonical probe image, in addition to direct CUDA and
+support-runtime checks. Probe/task writers remain owned by the existing fenced
+process owner; cancellation does not delete live work or release a live compute slot.
+Recorder tests of generated Nextflow commands are distinct from real image/GPU and
+scientific workflow acceptance. No model settings, weights or image bytes change.
+
 ## Acceptance boundary
 
 A deduplication fix is incomplete until every affected supported workflow actually

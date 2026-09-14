@@ -129,7 +129,7 @@ def validate_manifest(value, cache):
     if critical is not None:
         if (selection != {'kind': 'critical_runtime', 'model_id': 'worker'}
                 or set(critical) != {'schema', 'installation_id', 'nextflow_version', 'requirements', 'entrypoints'}
-                or critical['schema'] != 'bms.critical-runtime.v1'
+                or critical['schema'] not in {'bms.critical-runtime.v1', 'bms.critical-runtime.v2'}
                 or not re.fullmatch('[0-9a-f]{64}', critical['installation_id'])
                 or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', critical['nextflow_version'])):
             raise ValueError('invalid_critical_identity')
@@ -140,6 +140,8 @@ def validate_manifest(value, cache):
         expected = dict(runner='runner/bms_remote_worker.py', nextflow='nextflow/nextflow',
                         jar=f'nextflow/home/framework/{version}/nextflow-{version}-one.jar',
                         python='support-python/venv/bin/python', container='bin/bms-container')
+        if critical['schema'] == 'bms.critical-runtime.v2':
+            expected.update(nextflow='bin/bms-nextflow', nextflow_container='nextflow/container-bin/singularity')
         if critical['entrypoints'] != expected or not set(expected.values()) <= names:
             raise ValueError('incomplete_critical_manifest')
         python = by_name[expected['python']]
@@ -151,6 +153,8 @@ def validate_manifest(value, cache):
                    'lib/scripts/lib/shared_runtime_images.py',
                    'lib/scripts/lib/runtime_image_lifecycle.py',
                    'lib/scripts/lib/runtime_image_views.py'}
+        if critical['schema'] == 'bms.critical-runtime.v2':
+            helpers.update({'nextflow/nextflow', 'lib/scripts/lib/container_runtime.py'})
         if not helpers <= names:
             raise ValueError('incomplete_container_runtime')
         # The complete support release is enumerated by the host, not just venv's
@@ -159,7 +163,12 @@ def validate_manifest(value, cache):
             raise ValueError('incomplete_support_python')
         if any(row['size_bytes'] == 0 for row in rows if row['name'] in expected.values()):
             raise ValueError('empty_critical_entrypoint')
-        if any(not row['mode'] & 0o111 for row in rows if row['name'] in {expected['nextflow'], expected['python'], expected['container']}):
+        executable_names = {expected['nextflow'], expected['python'], expected['container']}
+        if critical['schema'] == 'bms.critical-runtime.v2':
+            executable_names.update({'nextflow/nextflow', expected['nextflow_container']})
+            if any(not by_name[name]['size_bytes'] for name in helpers):
+                raise ValueError('empty_critical_helper')
+        if any(not row['mode'] & 0o111 for row in rows if row['name'] in executable_names):
             raise ValueError('nonexecutable_critical_entrypoint')
     return hashlib.sha256(canonical(value)).hexdigest()
 
@@ -303,7 +312,9 @@ def observe(root, manifest, cache) -> dict[str, Any]:
         qualification = recorded.pop('qualification', None) if 'critical' in manifest else None
         if 'critical' in manifest and (not isinstance(qualification, dict)
                 or qualification.get('cuda') != 'BMS_CUDA_OK'
-                or qualification.get('backend') not in {'apptainer', 'udocker'}):
+                or qualification.get('backend') not in {'apptainer', 'udocker'}
+                or (manifest['critical']['schema'] == 'bms.critical-runtime.v2'
+                    and qualification.get('nextflow') != 'BMS_NEXTFLOW_INTERPRETERS_OK')):
             raise ValueError('critical_execution_not_qualified')
         activated = (recorded == marker
                      and read_bytes(release / 'manifest.json', cache) == canonical(manifest))
@@ -577,6 +588,7 @@ def container_environment(worker_root, release, backend):
                BMS_CONTAINER_WORK_ROOT=str(worker_root / 'container-workspaces'))
     if backend == 'udocker':
         env.update(BMS_CONTAINER_EXECUTABLE=str(release / 'bin/bms-container'),
+                   BMS_NEXTFLOW_EXECUTABLE=str(release / 'bin/bms-nextflow'),
                    BMS_UDOCKER=str(tools / 'bin/udocker'),
                    UDOCKER_BIN=str(tools / 'engines/bin'), UDOCKER_LIB=str(tools / 'engines/lib'),
                    UDOCKER_DIR=str(worker_root / 'container-workspaces/udocker'),
@@ -634,6 +646,8 @@ def verify_critical_execution(root, manifest):
     import subprocess
     release = release_path(root, manifest)
     critical = manifest['critical']
+    if critical['schema'] != 'bms.critical-runtime.v2':
+        raise ValueError('historical_critical_runtime_requires_v2_publication')
     env = {k: v for k, v in os.environ.items() if not k.startswith(('NXF_', 'PYTHON', 'BMS_CONTAINER', 'UDOCKER'))}
     env.update(NXF_OFFLINE='true', NXF_VER=critical['nextflow_version'],
                NXF_HOME=str(release / 'nextflow/home'), PYTHONNOUSERSITE='1')
@@ -667,10 +681,149 @@ def qualify_container(root, release, env):
                 continue
             raise ValueError('CUDA container verification failed')
         if result.returncode == 0 and 'BMS_CUDA_OK' in result.stdout.splitlines():
+            nextflow = qualify_nextflow(root, release, image, selected_env)
             if canonical_probe_image(root, release) != image:
                 raise ValueError('critical_probe_identity_mismatch')
-            return dict(backend=backend, cuda='BMS_CUDA_OK', probe_image=str(image))
+            return dict(backend=backend, cuda='BMS_CUDA_OK', probe_image=str(image), nextflow=nextflow)
     raise ValueError('CUDA container verification failed')
+
+
+def qualify_nextflow(root, release, image, env):
+    """Qualify native interpreter wrapping, not just a direct container exec.
+
+    Disposable DSL, logs and work stay outside the immutable generation. This
+    intentionally uses the published normal launcher (including its JVM flags),
+    the authenticated shared config helper and the already leased probe image.
+    """
+    import shlex
+    import subprocess
+    import tempfile
+    import shutil
+    if __package__:
+        from . import bms_remote_worker as owner
+    else:
+        # The standalone activation helper is outside the release. Load its
+        # authenticated writer owner without caching inside immutable storage.
+        owner_path = release / 'runner/bms_remote_worker.py'
+        owner_spec = importlib.util.spec_from_file_location('_bms_probe_writer_owner', owner_path)
+        if owner_spec is None or owner_spec.loader is None:
+            raise ValueError('critical_nextflow_writer_owner_missing')
+        owner = importlib.util.module_from_spec(owner_spec)
+        exec(compile(owner_path.read_bytes(), str(owner_path), 'exec'), owner.__dict__)
+    spec = importlib.util.spec_from_file_location(
+        '_bms_probe_container_runtime', release / 'lib/scripts/lib/container_runtime.py')
+    if spec is None or spec.loader is None:
+        raise ValueError('critical_nextflow_config_helper_missing')
+    helper = importlib.util.module_from_spec(spec)
+    # SourceFileLoader.exec_module would cache bytecode inside the immutable
+    # release. Execute the authenticated source without creating cache members.
+    helper_path = release / 'lib/scripts/lib/container_runtime.py'
+    exec(compile(helper_path.read_bytes(), str(helper_path), 'exec'), helper.__dict__)
+    backend = env['BMS_CONTAINER_BACKEND']
+    config = helper.nextflow_container_config(container_runtime={
+        'backend': backend, 'executable': env.get('BMS_CONTAINER_EXECUTABLE', '')})
+
+    def groovy(value):
+        return "'" + value.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n') + "'"
+
+    # Never manufacture the container identity on the host: native Apptainer or
+    # bms-container must supply it inside each interpreted task.
+    marker = ("os.environ.get('BMS_EXECUTING_IMAGE')" if backend == 'udocker' else
+              "(os.environ.get('APPTAINER_CONTAINER') or os.environ.get('SINGULARITY_CONTAINER'))")
+    processes = []
+    for name, header in [('bash', '#!/bin/bash\n'), ('python', '#!/usr/bin/env python\n'),
+                         ('headerless', '')]:
+        body = ("import os, contextlib\n"
+                "with open('result.txt', 'w') as out, contextlib.redirect_stdout(out):\n"
+                f"    marker = {marker}\n"
+                f"    assert marker == {str(image)!r}, ('not the selected container', marker)\n"
+                f"    {CUDA_PROBE}\n"
+                f"    print('BMS_NEXTFLOW_{name.upper()}_OK')\n"
+                "    print(marker)\n")
+        script = header + (body if name == 'python' else 'python -c ' + shlex.quote(body) + '\n')
+        processes.append(f"process PROBE_{name.upper()} {{\n"
+                         "  output: path 'result.txt'\n  script:\n"
+                         f"  {groovy(script)}\n}}\n")
+    pipeline = '\n'.join(processes) + '\nworkflow {\n' + ''.join(
+        f'  PROBE_{name.upper()}()\n' for name in ('bash', 'python', 'headerless')) + '}\n'
+    config += (f"\nprocess.container = {groovy(str(image))}\n"
+               "process.containerOptions = '--nv'\nprocess.executor = 'local'\n"
+               "process.cpus = 1\nprocess.maxForks = 1\nprocess.time = '1 min'\n"
+               "executor.queueSize = 1\n")
+    if backend == 'apptainer':
+        config += 'apptainer.enabled = true\nsingularity.enabled = false\ndocker.enabled = false\n'
+    # No TemporaryDirectory finalizer: unknown writer ownership must retain work.
+    temp = Path(tempfile.mkdtemp(prefix='.nextflow-probe-', dir=root))
+    process = None
+    safe_to_remove = True
+    scope = {
+        'BMS_COMPONENT_CONTEXT': 'critical-nextflow-probe',
+        'BMS_COMPONENT_JOB_ID': str(uuid.uuid4()),
+        'BMS_COMPONENT_OUTPUT_DIR': str(temp),
+    }
+    identity = dict(boot_id=owner.boot_id(), component_scope=scope)
+
+    def diagnostic(value):
+        if isinstance(value, bytes):
+            value = value.decode('utf-8', errors='replace')
+        return str(value or '')[-4096:]
+
+    try:
+        (temp / 'main.nf').write_text(pipeline)
+        (temp / 'nextflow.config').write_text(config)
+        command = [str(release / 'bin/bms-nextflow'), '-log', str(temp / 'nextflow.log'),
+                   '-C', str(temp / 'nextflow.config'), 'run', str(temp / 'main.nf'),
+                   '-work-dir', str(temp / 'work'), '-with-trace', str(temp / 'trace.tsv')]
+        try:
+            process = subprocess.Popen(command, cwd=temp, env=dict(env, **scope),
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                       start_new_session=True)
+            safe_to_remove = False
+            identity.update(supervisor_pid=process.pid,
+                            supervisor_start_ticks=owner.process_start_ticks(process.pid))
+            owner.attempt_writers(identity)
+            output, _ = process.communicate(timeout=300)
+            if process.returncode:
+                raise ValueError(f'critical_nextflow_failed: exit {process.returncode}; {diagnostic(output)}')
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f'critical_nextflow_timeout: 300s; {diagnostic(exc.output)}') from exc
+        except OSError as exc:
+            raise ValueError(f'critical_nextflow_execution_error: {diagnostic(exc)}') from exc
+        finally:
+            if process is not None:
+                try:
+                    # Reuse the shared PID/start/boot-fenced owner, including
+                    # scoped orphans, on success as well as exceptional exits.
+                    if not owner.quiesce_writers(identity, timeout_seconds=5):
+                        raise RuntimeError('writers remain active')
+                    process.wait(timeout=5)
+                    safe_to_remove = True
+                except BaseException as exc:
+                    raise ValueError(f'critical_nextflow_quiescence_unknown: retained {temp}; '
+                                     f'{diagnostic(exc)}') from exc
+                finally:
+                    if process.stdout is not None:
+                        process.stdout.close()
+        wrappers = sorted((temp / 'work').glob('*/*/.command.run'))
+        expected = {f'BMS_NEXTFLOW_{name}_OK' for name in ('BASH', 'PYTHON', 'HEADERLESS')}
+        witnessed = set()
+        engine = 'singularity' if backend == 'udocker' else 'apptainer'
+        if len(wrappers) != 3 or not (temp / 'trace.tsv').is_file():
+            raise ValueError('critical_nextflow_missing_tasks')
+        for wrapper in wrappers:
+            command = wrapper.read_text()
+            if not re.search(r'\b' + engine + r'\s+exec\b', command) or '.command.sh' not in command:
+                raise ValueError('critical_nextflow_host_interpreter')
+            output = (wrapper.parent / 'result.txt').read_text().splitlines()
+            if 'BMS_CUDA_OK' not in output or str(image) not in output:
+                raise ValueError('critical_nextflow_container_witness_missing')
+            witnessed.update(expected.intersection(output))
+        if witnessed != expected:
+            raise ValueError('critical_nextflow_interpreter_witness_missing')
+    finally:
+        if safe_to_remove:
+            shutil.rmtree(temp)
+    return 'BMS_NEXTFLOW_INTERPRETERS_OK'
 
 
 def activate(root, manifest, expected_boot, cache, fence=lambda: None):
