@@ -140,7 +140,10 @@ their validated existing offline image library; a missing image is not downloade
 V1 manifests remain readable historical records, not repaired-runtime qualification.
 V2 activation requires actual containerized Nextflow Bash, Python and headerless CUDA
 tasks against the existing canonical probe image, in addition to direct CUDA and
-support-runtime checks. Probe/task writers remain owned by the existing fenced
+support-runtime checks. The fixed minimal Python/CUDA probe has no procps, so its
+qualification does not request resource-metric tracing. This does not disable or
+change tracing for scientific workflows; their selected images supply that tool
+contract. Probe/task writers remain owned by the existing fenced
 process owner; cancellation does not delete live work or release a live compute slot.
 Recorder tests of generated Nextflow commands are distinct from real image/GPU and
 scientific workflow acceptance. No model settings, weights or image bytes change.

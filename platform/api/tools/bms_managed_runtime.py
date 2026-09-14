@@ -771,9 +771,12 @@ def qualify_nextflow(root, release, image, env):
     try:
         (temp / 'main.nf').write_text(pipeline)
         (temp / 'nextflow.config').write_text(config)
+        # This fixed Python/CUDA probe image has no procps. Qualify execution,
+        # not optional resource metrics; scientific workflow tracing is unchanged
+        # and covered separately against its own selected image/tool contract.
         command = [str(release / 'bin/bms-nextflow'), '-log', str(temp / 'nextflow.log'),
                    '-C', str(temp / 'nextflow.config'), 'run', str(temp / 'main.nf'),
-                   '-work-dir', str(temp / 'work'), '-with-trace', str(temp / 'trace.tsv')]
+                   '-work-dir', str(temp / 'work')]
         try:
             process = subprocess.Popen(command, cwd=temp, env=dict(env, **scope),
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -808,7 +811,7 @@ def qualify_nextflow(root, release, image, env):
         expected = {f'BMS_NEXTFLOW_{name}_OK' for name in ('BASH', 'PYTHON', 'HEADERLESS')}
         witnessed = set()
         engine = 'singularity' if backend == 'udocker' else 'apptainer'
-        if len(wrappers) != 3 or not (temp / 'trace.tsv').is_file():
+        if len(wrappers) != 3:
             raise ValueError('critical_nextflow_missing_tasks')
         for wrapper in wrappers:
             command = wrapper.read_text()

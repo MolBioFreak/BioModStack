@@ -93,7 +93,7 @@ def test_nextflow_qualification_requires_interpreted_container_outputs(tmp_path,
         assert f'{"singularity" if backend == "udocker" else "apptainer"}.enabled = true' in config
         assert "process.containerOptions = '--nv'" in config
         assert 'task-shell' not in config and 'docker://' not in pipeline + config
-        (temp / 'trace.tsv').write_text('test boundary trace fixture\n')
+        assert '-with-trace' not in argv  # fixed probe image has no procps
         for name in ('BASH', 'PYTHON', 'HEADERLESS'):
             if fault == 'missing_task' and name == 'PYTHON':
                 continue
