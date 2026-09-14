@@ -283,3 +283,64 @@ def test_nested_missing_image_never_acquires_or_executes(tmp_path, monkeypatch):
     assert result.returncode != 0
     assert 'no image acquisition' in result.stdout + result.stderr
     assert not (tmp_path/'record.jsonl').exists()
+
+
+@pytest.mark.parametrize('remote,backend,prepared,use_msa,needs_db', [
+    (True, 'neurosnap_api', True, True, False),
+    (True, 'neurosnap_api', False, True, False),
+    (True, 'neurosnap', False, True, False),
+    (True, 'colabfold_api', False, True, False),
+    (True, 'local', True, True, False),
+    (True, 'local', False, True, True),
+    (True, 'local', False, False, False),
+    (False, 'neurosnap_api', True, True, True),
+])
+def test_real_protenix_profile_requests_only_selected_msa_bind(
+        tmp_path, monkeypatch, remote, backend, prepared, use_msa, needs_db):
+    """Evaluate actual production label/profile, not a copied option expression."""
+    import shlex
+    cmd, env = prepare(tmp_path, monkeypatch)
+    env.update(BMS_REMOTE_EXECUTION='1' if remote else '0',
+               BMS_DATA=str(tmp_path/'data'), XDG_CACHE_HOME=str(tmp_path/'cache'))
+    cmd[cmd.index('-profile')+1] = 'workstation_ryzen7960x'
+    # Use the production file as a top-level config, as the actual launcher
+    # does; includeConfig changes Groovy helper-method/profile resolution.
+    shutil.copyfile(ROOT/'nextflow.config', tmp_path/'nextflow.config')
+    (tmp_path/'observe.config').write_text(
+        "process { withName: ObservedOptions { container = null; cpus = 1; memory = '256MB' } }\n")
+    cmd += ['-c', str(tmp_path/'observe.config')]
+    (tmp_path/'main.nf').write_text('''
+    nextflow.enable.dsl=2
+    process ObservedOptions {
+      label 'Protenix'
+      label 'gpu'
+      output: path 'options.json'
+      script:
+      """
+      printf '%s' '${groovy.json.JsonOutput.toJson([options: task.containerOptions.toString()])}' > options.json
+      """
+    }
+    workflow { ObservedOptions() }
+    ''')
+    db = tmp_path/'unused-local-database'
+    prepared_path = tmp_path/'prepared-msa'; prepared_path.mkdir()
+    weights = tmp_path/'weights'; weights.mkdir()
+    params = dict(gpu_id=0, protenix_msa_backend=backend, protenix_use_msa=use_msa,
+                  protenix_prepared_msa_dir=str(prepared_path) if prepared else None,
+                  msa_local_db=str(db), protenix_weights=str(weights),
+                  msa_cache_dir=str(tmp_path/'msa-cache'),
+                  cm_api_runtime_dir=str(tmp_path/'support'), code_root=str(ROOT))
+    (tmp_path/'params.json').write_text(json.dumps(params))
+    cmd += ['-params-file', str(tmp_path/'params.json')]
+    result = subprocess.run(cmd, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=120)
+    (tmp_path/'profile.log').write_text(result.stdout + result.stderr)
+    assert result.returncode == 0, result.stdout + result.stderr
+    outputs = list((tmp_path/'work').glob('*/*/options.json'))
+    assert len(outputs) == 1
+    options = shlex.split(json.loads(outputs[0].read_text())['options'])
+    assert (f'{db}:{db}' in options) is needs_db
+    assert f'{weights}:/protenix_weights' in options
+    assert f"{tmp_path/'msa-cache'}:{tmp_path/'msa-cache'}" in options
+    assert f'{ROOT}/scripts:/scripts' in options
+    assert '--nv' in options and 'CUDA_VISIBLE_DEVICES=0' in options
+    assert not db.exists(), 'Selection must not create an empty pretend database'
