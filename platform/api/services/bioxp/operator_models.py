@@ -5440,12 +5440,37 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
             if self.action_id != "oem.deck.move_to_location":
                 return self
             source_noop = self.completion_class == "source_noop"
-            if source_noop and not (
-                self.status == "completed"
-                and deck.target == "LOC_PARK"
+            park_noop = (
+                deck.target == "LOC_PARK"
                 and deck.source_branch == "park"
                 and deck.resolved_location_id == 28
                 and self.canonical_inputs.get("camera_offset") is False
+            )
+            # Ordinary moveTo can also return without issuing a motor command.
+            # Bind that completion to the retained canonical source outcome, not
+            # coordinates or diagnostic child controller-completion flags.
+            source = self.source_receipt or {}
+            ordinary_noop = (
+                deck.source_branch == "ordinary"
+                and deck.target not in {"LOC_PARK", "LOC_TC_BARCODE", "LOC_RC_BARCODE"}
+                and deck.resolved_location_id is not None and deck.resolved_location_id > 0
+                and source.get("command_id") == self.command_id
+                and source.get("action_id") == self.action_id
+                and source.get("effective_inputs") == self.canonical_inputs
+                and source.get("status") == "completed"
+                and source.get("completion_class") == "source_noop"
+                and source.get("source_noop") is True
+                and source.get("source_noop_reason") == "already_at_target"
+                and source.get("remote_acknowledged") is False
+                and source.get("controller_acknowledged") is False
+                and source.get("physical_effect_verified") is False
+                and source.get("recovery_required") is False
+                and bool(deck.stages)
+                and all(stage.terminal_state == "completed" for stage in deck.stages)
+            )
+            if source_noop and not (
+                self.status == "completed"
+                and (park_noop or ordinary_noop)
                 and deck.semantic_state_committed is True
                 and deck.transition_revision is not None and deck.transition_revision > 0
                 and deck.ambiguity_state == "none"
@@ -5457,7 +5482,7 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
                 and self.physical_effect_verified is False
                 and self.error is None
             ):
-                raise ValueError("source_noop requires coherent completed already-at-Park evidence")
+                raise ValueError("source_noop requires coherent completed already-at-target evidence")
             if self.status == "completed":
                 if not source_noop and (deck.controller_completion_verified is not True or deck.semantic_state_committed is not True):
                     raise ValueError("completed deck movement requires controller completion and semantic commit")
