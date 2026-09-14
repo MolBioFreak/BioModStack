@@ -25,11 +25,13 @@ def capture(name):
         return json.loads(fixture.read_text())
     if not root:
         pytest.skip('requires supplemental native Pool/failed capture bundle')
-    return json.loads((Path(root) / (name + '.json')).read_text())
+    payload = json.loads((Path(root) / (name + '.json')).read_text())
+    return payload['detail'] if name == 'clamped_noop' else payload
 
 
-def test_exact_native_noop_model():
-    raw = capture('noop')
+@pytest.mark.parametrize('name', ['noop', 'clamped_noop'])
+def test_exact_native_noop_model(name):
+    raw = capture(name)
     try:
         model = OperatorActionReceiptDetailV2.model_validate(raw)
     except ValidationError as exc:
@@ -42,10 +44,25 @@ def test_exact_native_noop_model():
     assert model.physical_effect_verified is False
 
 
-@pytest.mark.parametrize('name,expected', [('noop', 200), ('pool', 200), ('old_failed', 502)])
+@pytest.mark.parametrize('name,expected', [('noop', 200), ('clamped_noop', 200), ('pool', 200), ('old_failed', 502)])
 def test_exact_native_receipt_router(tmp_path, name, expected):
     raw = capture(name)
     compact = {k: v for k, v in raw.items() if k in OperatorActionReceiptV2.model_fields}
+    if name == 'clamped_noop':
+        # Qualified offline canonical N+E producer export, not a live move.
+        bundle = json.loads((Path(os.environ['BMS_NOOP_CAPTURE_ROOT']) / 'clamped_noop.json').read_text())
+        compact = bundle['compact']
+        provider = raw['deck_movement']['stages'][-1]['terminal_evidence']['provider_evidence']
+        assert provider['oem_requested_y_steps'] == -1687
+        assert provider['oem_effective_y_steps'] == 0
+        operation = provider['primitive_result']['operations'][0]
+        assert operation['branch'] == 'near_axis_sequential'
+        assert operation['before']['y'] == operation['after']['y'] == 0
+    if name == 'old_failed':
+        # Historical pre-fix producer contradiction, not a valid current failed
+        # receipt: failed outer status still claims a completed semantic commit.
+        with pytest.raises(ValidationError, match='non-completed semantic commit requires ambiguous deck recovery'):
+            OperatorActionReceiptDetailV2.model_validate(raw)
 
     async def scenario():
         b = Boundary(tmp_path)
