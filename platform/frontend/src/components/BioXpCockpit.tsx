@@ -23,6 +23,7 @@ import {
     useInvokeBioXpOperatorAction,
     type BioXpOperatorActionV2Request,
     type BioXpDeckDestinationV1,
+    type BioXpDeckSubmission,
 
     type BioXpOperatorDashboardXAxis,
 
@@ -39,6 +40,36 @@ import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
+
+function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
+    item: BioXpDeckSubmission; generation: number; active: boolean; onSelect: (id: string) => void;
+    onTerminal: (key: string, receipt: BioXpOperatorReceiptV2) => void;
+}) {
+    const current = active && item.request.expected_connection_generation === generation;
+    const commandId = item.receipt?.command_id ?? item.commandId;
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current);
+    const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
+    useEffect(() => {
+        if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)
+            onTerminal(item.request.idempotency_key, query.data);
+    }, [current, query.data, query.error, item, onTerminal]);
+    const label = query.data != null && query.data.action_id !== item.request.action_id ? 'receipt unavailable / outcome uncertain'
+        : item.state === 'submitting' ? 'submitting / not yet accepted'
+        : item.state === 'uncertain' ? 'admission uncertain / checking request; do not resubmit'
+        : item.state === 'not_sent' ? 'not sent / connection changed'
+        : item.state === 'rejected' ? 'not accepted' : `robot ${receipt?.status ?? 'accepted'}`;
+    return <p data-request-key={item.request.idempotency_key}>
+        {String(item.request.inputs.target)}{item.request.inputs.camera_offset === true ? ' + camera offset' : ''} · {label}
+        {' · '}{item.request.idempotency_key}
+        {commandId && <button type="button" disabled={!current} onClick={() => onSelect(commandId)}>
+            {' · '}{commandId}
+        </button>}
+        {!current && ' · earlier connection'}
+        {query.error != null && ' · receipt unavailable; checking again'}
+        {item.error != null && ` · ${bioXpErrorText(item.error)}`}
+        {bioXpReceiptFailureText(receipt)}
+    </p>;
+}
 
 type Axis = 'x' | 'z' | 'g' | 'door';
 type Operation =
@@ -323,26 +354,10 @@ export function BioXpCockpit() {
                 || receipt.status === 'ambiguous'
                 || receipt.completion_class === 'recovery_required'
                 || receipt.error?.code === 'reconciliation_required'))
-        .sort((left, right) => right.sequence - left.sequence)[0];
-    const [retainedDeckReceiptIdentity, setRetainedDeckReceiptIdentity] = useState<{ commandId: string; generation: number } | null>(null);
-    useEffect(() => {
-        if (!active || (currentDashboardV2 !== undefined && dashboardDeckReceipt == null)) {
-            setRetainedDeckReceiptIdentity(null);
-        } else if (dashboardDeckReceipt != null) {
-            setRetainedDeckReceiptIdentity(previous => previous?.commandId === dashboardDeckReceipt.command_id && previous.generation === generation
-                ? previous : { commandId: dashboardDeckReceipt.command_id, generation });
-        }
-    }, [active, generation, currentDashboardV2, dashboardDeckReceipt]);
+        .sort((left, right) => Number(right.status === 'ambiguous') - Number(left.status === 'ambiguous'))[0];
     const effectiveDeckCommandId = active
-        ? dashboardDeckReceipt?.command_id ?? (deckMutationGeneration === generation ? deckCommandId : null)
-            ?? (currentDashboardV2 === undefined && retainedDeckReceiptIdentity?.generation === generation ? retainedDeckReceiptIdentity.commandId : null)
+        ? (deckMutationGeneration === generation ? deckCommandId : null) ?? dashboardDeckReceipt?.command_id ?? null
         : null;
-    useEffect(() => {
-        if (dashboardDeckReceipt != null && deckCommandId != null
-            && dashboardDeckReceipt.command_id !== deckCommandId) {
-            setDeckCommandId(null);
-        }
-    }, [dashboardDeckReceipt, deckCommandId]);
     const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, active);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
@@ -356,7 +371,7 @@ export function BioXpCockpit() {
         && (axisReceipt == null || !axisReceipt.terminal || axisReceipt.status === 'ambiguous');
     const axisAmbiguousError = isDispatchedOutcomeAmbiguous(invokeYAction.error)
         && !(axisReceipt?.terminal && axisReceipt.status !== 'ambiguous');
-    const invokeDeckAction = useInvokeBioXpDeckActionV2();
+    const invokeDeckAction = useInvokeBioXpDeckActionV2(generation, active);
     const interruptXStop = useInterruptBioXpOperatorActionV1();
     const interruptYStop = useInterruptBioXpOperatorActionV1();
     const interruptZStop = useInterruptBioXpOperatorActionV1();
@@ -471,6 +486,12 @@ export function BioXpCockpit() {
         resetInvokeXYAction();
         setXYSubmission(null);
     }, [generation, active, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZStop, resetInvokeDeckAction, resetInvokeLifecycleAction, resetInvokeXYAction, resetInvokeYAction]);
+    useEffect(() => {
+        if (!active || deckCommandId != null) return;
+        const first = invokeDeckAction.submissions.find(item => item.request.expected_connection_generation === generation && (item.receipt != null || item.commandId != null));
+        const identity = first?.receipt?.command_id ?? first?.commandId ?? dashboardDeckReceipt?.command_id;
+        if (identity) { setDeckMutationGeneration(generation); setDeckCommandId(identity); }
+    }, [active, invokeDeckAction.submissions, generation, deckCommandId, dashboardDeckReceipt]);
     const interruptMutation = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all') => {
         if (actionId === 'oem.x.stop') return interruptXStop;
         if (actionId === 'oem.y.stop') return interruptYStop;
@@ -509,17 +530,12 @@ export function BioXpCockpit() {
             )
         : undefined;
     const deckAction = v2NormalActionById('oem.deck.move_to_location');
-    const catalogDeck = currentCatalogV2?.dashboard.deck;
     const dashboardDeck = currentDashboardV2?.deck;
     const deckAuthorityCoherent = v2AuthorityCoherent
         && deckAction !== undefined
-        && catalogDeck != null
         && dashboardDeck != null
-        && currentCatalogV2?.dashboard.ownership_generation === currentDashboardV2?.ownership_generation
-        && deckAction.destination_catalog_revision === catalogDeck.destination_catalog_revision
-        && catalogDeck.destination_catalog_revision === dashboardDeck.destination_catalog_revision
-        && deckAction.position_table_revision === catalogDeck.position_table_revision
-        && catalogDeck.position_table_revision === dashboardDeck.position_table_revision;
+        && deckAction.destination_catalog_revision === dashboardDeck.destination_catalog_revision
+        && deckAction.position_table_revision === dashboardDeck.position_table_revision;
     // Retained options are intent only, never retained motion authority. Empty
     // prerequisite projections do not mean the finite robot catalog was deleted.
     const selectionAction = catalogV2Query.data?.actions.find((action) => action.action_id === 'oem.deck.move_to_location');
@@ -907,20 +923,8 @@ export function BioXpCockpit() {
     };
     const submitDeckV2 = (request: BioXpOperatorActionV2Request) => {
         if (!deckAuthorityCoherent || request.action_id !== 'oem.deck.move_to_location') return;
-        const submittedGeneration = generation;
-        setDeckMutationGeneration(submittedGeneration);
-        setDeckCommandId(null);
-        invokeDeckAction.mutate({ request }, {
-            onSuccess: (receipt) => {
-                if (currentGenerationRef.current !== submittedGeneration) return;
-                setDeckCommandId(receipt.command_id);
-            },
-            onError: (error) => {
-                if (currentGenerationRef.current !== submittedGeneration) return;
-                const identity = bioXpPostDispatchCommandIdentity(error);
-                if (identity !== null) setDeckCommandId(identity.commandId);
-            },
-        });
+        setDeckMutationGeneration(generation);
+        invokeDeckAction.submit(request);
     };
     const v2NormalEnvelope = (actionId?: 'oem.deck.collect_authority') => {
         const authority = actionId === 'oem.deck.collect_authority' && active
@@ -955,21 +959,12 @@ export function BioXpCockpit() {
     // An observed command in progress is not a recovery failure. Surface its
     // lifecycle before transient readiness loss caused by that same command;
     // neither this wording nor a receipt can grant new movement admission.
-    const deckCommandDisabledReason = invokeDeckAction.isPending
-        ? 'Deck enqueue is pending.'
-        : effectiveDeckCommandId === null ? null
-            : deckRecoveryRequired || (deckReceiptUnavailable && (
-                dashboardDeckReceipt?.status === 'ambiguous'
-                || dashboardDeckReceipt?.completion_class === 'recovery_required'
-                || dashboardDeckReceipt?.error?.code === 'reconciliation_required'))
-                ? 'Existing deck command requires reconciliation; do not resubmit.'
-                : deckReceiptQuery.error
-                    ? 'Deck receipt lookup is unavailable; outcome is not current. Do not resubmit.'
-                    : deckPending || (deckReceiptUnavailable && dashboardDeckReceipt?.terminal === false)
-                        ? 'Deck command is in progress; wait for its terminal receipt. Do not resubmit.'
-                        : deckReceiptUnavailable
-                            ? 'Waiting for the existing deck command receipt; do not resubmit.'
-                            : null;
+    const dashboardDeckFault = dashboardDeckReceipt != null
+        && (dashboardDeckReceipt.command_id !== effectiveDeckCommandId || !deckRecoveryResolved)
+        && (dashboardDeckReceipt.status === 'ambiguous' || dashboardDeckReceipt.completion_class === 'recovery_required'
+            || dashboardDeckReceipt.error?.code === 'reconciliation_required');
+    const deckCommandDisabledReason = deckRecoveryRequired || dashboardDeckFault
+        ? 'Existing deck command requires reconciliation; do not resubmit.' : null;
     const deckDisabledReason = deckCommandDisabledReason ?? (!v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
@@ -1071,7 +1066,7 @@ export function BioXpCockpit() {
         ? zHomeReceiptQuery.data
         : undefined;
     const zHomeFailureDetail = zHomeReceipt?.error?.detail;
-    const currentDeckInvokeError = deckMutationGeneration === generation ? invokeDeckAction.error : null;
+    const currentDeckInvokeError = invokeDeckAction.submissions.find(item => item.request.expected_connection_generation === generation && item.state === 'uncertain')?.error ?? null;
 
     const truthLabel = (value: boolean | null | undefined, positive: string, negative: string) => value === true
         ? positive
@@ -1226,7 +1221,7 @@ export function BioXpCockpit() {
                 </p>
                 <button
                     type="button"
-                    disabled={deckDisabledReason !== null || invokeDeckAction.isPending}
+                    disabled={deckDisabledReason !== null}
                     title={deckDisabledReason ? bioXpDeckReadinessText(deckDisabledReason) : 'Move to the selected destination'}
                     onClick={invokeDeckMove}
                     className="mt-3 rounded bg-teal-700 px-4 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-35"
@@ -1247,6 +1242,21 @@ export function BioXpCockpit() {
                         receipt unavailable / outcome uncertain. Do not resubmit. Reconcile by command ID until a terminal receipt is available.
                     </p>
                 )}
+                <div data-testid="canonical-command-queue" className="mt-3 text-xs">
+                    <p>Robot command queue: {currentDashboardV2?.command_queue == null ? 'unknown' : `${currentDashboardV2.command_queue.items.length} pending`}</p>
+                    {currentDashboardV2?.command_queue != null && <details><summary>Pending command details</summary>
+                        {currentDashboardV2.command_queue.items.map(item => <p key={item.command_id}>
+                            #{item.sequence} · {item.command_id} · {item.status}
+                        </p>)}
+                    </details>}
+                </div>
+                <details data-testid="deck-submissions" className="mt-3 space-y-1 text-xs">
+                    <summary>Local submission details ({invokeDeckAction.submissions.length})</summary>
+                    {invokeDeckAction.submissions.map(item => <DeckSubmissionRow key={item.request.idempotency_key}
+                        item={item} generation={generation} active={active} onTerminal={invokeDeckAction.retire}
+                        onSelect={commandId => { setDeckMutationGeneration(generation); setDeckCommandId(commandId); }} />)}
+                    <p>Settled receipts remain in command history.</p>
+                </details>
                 <details className="mt-3 text-xs">
                 <summary className="cursor-pointer text-slate-400">Deck command details</summary>
                 <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
@@ -1523,20 +1533,6 @@ export function BioXpCockpit() {
                                             {dashboard?.z_axis?.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
                                         </details>
                                     )}
-                                </div>
-                            )}
-                            {Object.entries(dashboard?.successive_move_queue ?? {})
-                                .filter(([, queue]) => queue.state !== 'idle' || queue.depth > 0)
-                                .length > 0 && (
-                                <div className="mt-2 rounded border border-amber-800/60 bg-amber-950/20 p-2 text-xs text-amber-100" data-testid="successive-move-queue">
-                                    <p className="font-semibold">Robot successive-move queue</p>
-                                    {Object.entries(dashboard?.successive_move_queue ?? {})
-                                        .filter(([, queue]) => queue.state !== 'idle' || queue.depth > 0)
-                                        .map(([queueAxis, queue]) => (
-                                            <p key={queueAxis} className="mt-1">
-                                                <strong>{queueAxis.toUpperCase()}:</strong> {queue.state} · {queue.depth} queued{queue.head_action_id ? ` · head ${queue.head_action_id}` : ''}{queue.active_command_id ? ` · active ${queue.active_command_id}` : ''}
-                                            </p>
-                                        ))}
                                 </div>
                             )}
                             <div className="mt-3 flex flex-wrap gap-2">
