@@ -952,7 +952,25 @@ export function BioXpCockpit() {
         || deckReceipt?.error?.code === 'reconciliation_required'
         || deckReceipt?.completion_class === 'recovery_required'));
 
-    const deckDisabledReason = !v2AuthorityCoherent
+    // An observed command in progress is not a recovery failure. Surface its
+    // lifecycle before transient readiness loss caused by that same command;
+    // neither this wording nor a receipt can grant new movement admission.
+    const deckCommandDisabledReason = invokeDeckAction.isPending
+        ? 'Deck enqueue is pending.'
+        : effectiveDeckCommandId === null ? null
+            : deckRecoveryRequired || (deckReceiptUnavailable && (
+                dashboardDeckReceipt?.status === 'ambiguous'
+                || dashboardDeckReceipt?.completion_class === 'recovery_required'
+                || dashboardDeckReceipt?.error?.code === 'reconciliation_required'))
+                ? 'Existing deck command requires reconciliation; do not resubmit.'
+                : deckReceiptQuery.error
+                    ? 'Deck receipt lookup is unavailable; outcome is not current. Do not resubmit.'
+                    : deckPending || (deckReceiptUnavailable && dashboardDeckReceipt?.terminal === false)
+                        ? 'Deck command is in progress; wait for its terminal receipt. Do not resubmit.'
+                        : deckReceiptUnavailable
+                            ? 'Waiting for the existing deck command receipt; do not resubmit.'
+                            : null;
+    const deckDisabledReason = deckCommandDisabledReason ?? (!v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
             ? 'Fresh matching catalog and dashboard deck authority is unavailable.'
@@ -966,11 +984,7 @@ export function BioXpCockpit() {
                         ? 'Robot destination catalog is empty.'
                         : currentDeckDestination?.enabled !== true
                             ? currentDeckDestination?.disabled_reason ?? 'Fresh selected destination authority is unavailable.'
-                            : invokeDeckAction.isPending
-                                ? 'Deck enqueue is pending.'
-                                : effectiveDeckCommandId !== null && (deckReceiptUnavailable || deckReceiptQuery.error || deckPending || deckRecoveryRequired)
-                                    ? 'Existing deck command requires reconciliation; do not resubmit.'
-                                    : null;
+                            : null);
     const invokeDeckMove = () => {
         if (deckDisabledReason !== null || selectedDeckDestination == null || deckAction?.expected_board_epoch_by_board == null) return;
         const envelope = v2NormalEnvelope();

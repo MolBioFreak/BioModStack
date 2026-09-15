@@ -5,6 +5,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
 import coherentFailureProducer from '../fixtures/bioxp_xy_coherent_failure.json';
+import deckQueryHistory from '../fixtures/bioxp_deck_query_history.json';
+import actualParkReceipt from '../fixtures/bioxp_park_completed_receipt.json';
 import bmsMetadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import actualY5 from '../fixtures/bioxp_xy_y5_compact.json';
 import manualReport from '../fixtures/bioxp_xy_manual_report.json';
@@ -2095,6 +2097,117 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         }
     });
 
+    it.each(['captured', 'failed-query', 'pending-query'])('L6 actual producer history keeps query identity separate from deck motion: %s', async (mode) => {
+        const receipts = structuredClone(deckQueryHistory.latest_receipts);
+        const query = receipts.find(row => row.action_id === 'oem.deck.collect_authority')!;
+        // Explicit fault variants of an actual producer identity, not claims
+        // that the captured completed query was pending or failed.
+        if (mode === 'failed-query') Object.assign(query, {
+            status: 'failed', terminal: true,
+            error: { code: 'reconciliation_required', message: 'query observation failed', retryable: false },
+        });
+        if (mode === 'pending-query') Object.assign(query, { status: 'dispatched', terminal: false });
+        catalogDashboard().latest_receipts = receipts;
+        catalogDashboard().active_commands = mode === 'pending-query' ? [query] : [];
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).not.toContain('Existing deck command requires reconciliation');
+        expect(state.receiptHookCalls.filter(call => call.commandId !== null)).toEqual([]);
+        // Fresh catalog admission, not the query receipt, determines movement.
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        action.enabled = false; action.disabled_reason = 'canonical_deck_authority_unavailable:deck_authority_unobserved';
+        await act(async () => root.render(<BioXpCockpit />));
+        expect(move.disabled).toBe(true);
+        expect(state.deckInvokeCalls).toHaveLength(0);
+        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(api.post).not.toHaveBeenCalled();
+    });
+
+    it.each(['queued', 'dispatched'])('L6 real Park identity reports %s as in progress, then accepts its actual terminal detail', async (phase) => {
+        nativeMetadataMode.receipts = true;
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        // Reconstruct the compact in-flight projection from the actual stored
+        // transition and receipt identity. This is replay, not a captured poll.
+        expect(actualParkReceipt.transitions.some(row => row.to_status === phase)).toBe(true);
+        const compactKeys = Object.keys(deckQueryHistory.latest_receipts[0]);
+        const pending = Object.fromEntries(Object.entries(actualParkReceipt).filter(([key]) => compactKeys.includes(key)));
+        Object.assign(pending, { status: phase, terminal: false, finished_at: null, completion_class: null,
+            state_version: phase === 'queued' ? 1 : 2 });
+        catalogDashboard().active_commands = [pending];
+        catalogDashboard().latest_receipts = structuredClone(deckQueryHistory.latest_receipts);
+        const action = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).find(a => a.action_id === 'oem.deck.move_to_location')!;
+        action.enabled = false; action.disabled_reason = 'canonical_deck_authority_unavailable:deck_authority_unobserved';
+        let finish!: (value: { data: typeof actualParkReceipt }) => void;
+        vi.mocked(api.get).mockImplementation(async (url) => {
+            expect(url).toBe(`/api/bioxp/operator-controls/v2/receipts/${actualParkReceipt.command_id}`);
+            return new Promise(resolve => { finish = resolve; });
+        });
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+            expect(move.disabled).toBe(true);
+            expect(move.title).toBe('Deck command is in progress; wait for its terminal receipt. Do not resubmit.');
+            expect(panel.textContent).not.toContain('Existing deck command requires reconciliation');
+            expect(panel.textContent).toContain(actualParkReceipt.command_id);
+            await act(async () => { finish({ data: structuredClone(actualParkReceipt) }); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(panel.textContent).toContain('Lifecyclecompleted');
+            expect(panel.textContent).toContain('Controller completionverified');
+            expect(panel.textContent).toContain('Physical observationnot observed');
+            expect(move.disabled).toBe(true); // completion does not renew admission
+            expect(move.title).not.toContain('in progress');
+            catalogDashboard().active_commands = [];
+            catalogDashboard().latest_receipts = [structuredClone(actualParkReceipt)];
+            action.enabled = true; action.disabled_reason = null;
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            expect(move.disabled).toBe(false);
+            expect(state.deckInvokeCalls).toHaveLength(0);
+            expect(state.yInvokeCalls).toHaveLength(0);
+            expect(api.post).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false;
+        }
+    });
+
+    it('L6 sparse recovery evidence stays explicit while detailed receipt GET is unavailable', async () => {
+        nativeMetadataMode.receipts = true;
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        const failed = structuredClone(deckQueryHistory.latest_receipts.find(row => row.action_id === 'oem.deck.move_to_location' && row.status === 'failed')!);
+        failed.completion_class = 'recovery_required'; // explicit negative control
+        catalogDashboard().latest_receipts = [failed];
+        vi.mocked(api.get).mockRejectedValue(new Error('receipt GET unavailable'));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+            const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+            expect(move.disabled).toBe(true);
+            expect(move.title).toBe('Existing deck command requires reconciliation; do not resubmit.');
+            expect(panel.textContent).toContain(failed.command_id);
+            expect(api.post).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.receipts = false;
+        }
+    });
+
+    it('L6 real failed move identity, not newer query history, owns recovery reconciliation', async () => {
+        const receipts = structuredClone(deckQueryHistory.latest_receipts);
+        const failed = receipts.find(row => row.action_id === 'oem.deck.move_to_location' && row.status === 'failed')!;
+        // Fault-inject a genuine recovery requirement on a captured motion
+        // identity. Sparse terminal failure alone must not invent that gate.
+        failed.completion_class = 'recovery_required';
+        catalogDashboard().latest_receipts = receipts;
+        await act(async () => root.render(<BioXpCockpit />));
+        const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
+        expect(panel.textContent).toContain('Existing deck command requires reconciliation');
+        expect(state.receiptHookCalls).toContainEqual({ commandId: failed.command_id, generation: 1, enabled: true });
+        expect(state.receiptHookCalls.some(call => receipts.some(row => row.action_id === 'oem.deck.collect_authority' && row.command_id === call.commandId))).toBe(false);
+        expect(state.deckInvokeCalls).toHaveLength(0);
+        expect(api.post).not.toHaveBeenCalled();
+    });
+
     it('deck harmonization cold expired catalog permits explicit query refresh but no motion or automatic collection', async () => {
         const actions = state.v2Catalog.data!.actions as Array<Record<string, unknown>>;
         actions.push({ action_id: 'oem.deck.collect_authority', enabled: true, disabled_reason: null, interrupt: false,
@@ -2268,7 +2381,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
         expect(move.disabled).toBe(true);
-        expect(panel.textContent).toContain('Existing deck command requires reconciliation; do not resubmit.');
+        expect(panel.textContent).toContain(terminal
+            ? 'Existing deck command requires reconciliation; do not resubmit.'
+            : 'Deck command is in progress; wait for its terminal receipt. Do not resubmit.');
         expect(panel.textContent).not.toContain(actionId);
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'canonical-internal-deck-command', generation: 1, enabled: true });
 
