@@ -376,7 +376,7 @@ async def test_same_worker_source_drift_admits_current_fresh_bundle(store, monke
         with pytest.raises(ArchiveBoundaryReached):
             bundle.prepare_remote_bundle(job=successor, target=target,
                 command=list(invocation.command), native_invocation=invocation)
-        archives = list((root / 'remote-execution' / 'staging').glob('*/source/.bms-source.tar'))
+        archives = list((root / 'remote-execution' / 'staging').glob('*/source/.bms-source.tar.gz'))
         assert len(archives) == 1
         with tarfile.open(archives[0]) as archive:
             archived_source = archive.extractfile('source.txt')

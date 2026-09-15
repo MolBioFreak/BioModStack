@@ -62,7 +62,12 @@ def approved(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, 'get_container_dir', lambda: containers)
     weights = tmp_path / 'weights'
     (weights / 'protenix').mkdir(parents=True)
-    (weights / 'protenix/model.pt').write_bytes(b'fixture weights')
+    for member in ('checkpoint/protenix-v2.pt', 'common/components.cif',
+                   'common/components.cif.rdkit_mol.pkl', 'common/clusters-by-entity-40.txt',
+                   'common/obsolete_release_date.csv'):
+        path = weights / 'protenix' / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'offline dependency fixture; not model data')
     monkeypatch.setattr(bundle, 'get_weights_root', lambda: weights)
     monkeypatch.setattr(paths, 'get_weights_root', lambda: weights)
     runtime = tmp_path / 'runtime'
@@ -168,7 +173,7 @@ def test_standalone_provisioning_preserves_semantic_name_without_original(approv
     assert len(image_entries) == 1
     entry = image_entries[0]
     assert (entry.source, entry.remote_destination, entry.sha256) == (image, 'containers/protenix.sif', digest)
-    assert len(entries) == (1 if kind == 'image' else 2)
+    assert len(entries) == (1 if kind == 'image' else 6)
 
 
 def test_public_availability_and_cm_callback_gate_are_unchanged(approved, monkeypatch, tmp_path):

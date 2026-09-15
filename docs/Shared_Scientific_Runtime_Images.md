@@ -1,5 +1,40 @@
 # Shared scientific runtime images
 
+## Shared remote weight consumption
+
+Remote attempts consume model weights from the existing artifact cache, not from
+`attempts/<id>/materialized/runtime/weights`. The cache publishes an immutable
+named layout at `cache/artifacts/v1/weights/<manifest-sha256>`. Its identity is the
+sorted selected file/relative-alias roster, content hashes, sizes and read/execute
+modes; it does not depend on the job ID or source revision. This is a named view
+of existing cache objects, not another downloader or physical weight store.
+Frozen read-only regular aliases share the cached inode. Executable members with
+nonmatching cache permissions are installed once, never chmodded through an
+alias. Published layouts are not silently repaired or retired.
+
+The existing envelope-bound runtime-reference file attests the selected layout.
+Warm staging checks its manifest, membership, modes and sizes without uploading,
+materializing or rehashing its model files. Immediately before execution the
+existing runtime launcher performs full no-follow byte verification, including
+read-time identity/membership checks. Missing, extra, replaced, writable or
+corrupt members fail closed. Attempt inputs, outputs, source isolation,
+cancellation/ownership fences, image leases and resource admission are unchanged.
+
+Kernel-backed Nextflow consumers bind shared weight roots read-only. The managed
+userspace launcher never passes a writable shared alias to a job: both explicit
+and automatic shared-weight binds receive private FICLONE views. Writable views
+allow task-local cache creation; read-only views retain mutation detection.
+There is no full-byte-copy fallback when CoW is unavailable. Protenix generated
+XDG/Triton/Matplotlib caches live in task scratch rather than installed weights.
+An older userspace binding without that protection must be refreshed through the
+existing attachment/setup owner before it can receive a shared-weight bundle.
+
+Source transport uses deterministic `git archive --format=tar.gz -6` output for
+the exact admitted commit. Prewarm and launch use identical compressed bytes;
+extracted source/member verification is unchanged. Existing retained uncompressed
+archives remain readable. Compression is transport reduction, not evidence of
+faster inference or approval to prune the scientific dependency closure.
+
 ## Contract and scope
 
 Protenix conformational-mapping preflight and NGS samtools use verified immutable SIF objects rather than task-local or source-parent-specific full snapshots. A machine shares image bytes across environments and attempts; references, receipts and aliases are small metadata, not another copy of the image.

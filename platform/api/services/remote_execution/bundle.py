@@ -55,6 +55,8 @@ class PreparedRemoteBundle:
     runtime_transfers: tuple[TransferPlan, ...]
     input_transfers: tuple[TransferPlan, ...]
     runtime_images: tuple[CacheTransferArtifact, ...] = ()
+    runtime_weights: tuple[CacheTransferArtifact, ...] = ()
+    weight_layout: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +122,7 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
             continue
         if relative.parts[0] == "source":
             # The archive carries every workflow/source leaf without thousands of SSH calls.
-            if record.relative_path != "source/.bms-source.tar":
+            if record.relative_path not in {"source/.bms-source.tar", "source/.bms-source.tar.gz"}:
                 continue
             leaf = PurePosixPath(*relative.parts[1:])
             source = bundle.source_transfer.source.joinpath(*leaf.parts)
@@ -203,7 +205,7 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
 def _safe_extract(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
-    with tarfile.open(archive_path, "r:") as archive:
+    with tarfile.open(archive_path, "r:*") as archive:
         for member in archive.getmembers():
             member_path = PurePosixPath(member.name)
             if member_path.is_absolute() or ".." in member_path.parts:
@@ -436,6 +438,18 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                     else Path(str(selected)).expanduser())
         else:
             path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
+        if dependency.selector_subpath is not None:
+            member = PurePosixPath(dependency.selector_subpath)
+            declared = PurePosixPath(relative) if relative else None
+            if (not dependency.selector or not member.parts or member.is_absolute()
+                    or '..' in member.parts or '\\' in dependency.selector_subpath
+                    or declared is None or declared.parts[-len(member.parts):] != member.parts):
+                raise RemoteBundleError('Selected runtime dependency has an invalid selector member: ' + dependency.logical_id)
+            if selected and path is not None:
+                selected_root = path
+                path = selected_root / member
+                if not path.resolve().is_relative_to(selected_root.resolve()):
+                    raise RemoteBundleError('Selected runtime dependency escapes selector root: ' + dependency.logical_id)
         if path is None or not path.is_absolute():
             raise RemoteBundleError('Selected runtime dependency has no managed binding: ' + dependency.logical_id)
         if dependency.kind == 'image' and (path.is_symlink() or any(parent.is_symlink() for parent in path.parents)):
@@ -740,7 +754,7 @@ def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocati
 def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                             references: list[dict[str, Any]], input_transfers: list[TransferPlan],
                             input_records: list[RemoteFileRecord], remote_runtime: str,
-                            remote_results: str) -> tuple[TransferPlan, RemoteFileRecord]:
+                            remote_results: str, shared_weights: str | None = None) -> tuple[TransferPlan, RemoteFileRecord]:
     """Seal placement separately, using the already-recorded transfer identities."""
     files = {}
     directories = {}
@@ -802,7 +816,8 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
     payload = {
         "schema": "bms.portable-input-bindings.v1",
         "roots": [remote_attempt + "/bundle/inputs", remote_runtime, remote_results,
-                  remote_attempt + "/work", remote_attempt + "/msa-cache"],
+                  remote_attempt + "/work", remote_attempt + "/msa-cache",
+                  *([shared_weights] if shared_weights else [])],
         "results_root": remote_attempt + "/bundle/inputs/trusted-results",
         "bindings": bindings,
         "directories": [{"source_path": source, "path": target,
@@ -908,7 +923,7 @@ def prepare_remote_bundle(
     staging_root = data_root / "remote-execution" / "staging" / attempt_id
     staging_root.mkdir(parents=True, exist_ok=False)
     source_root = staging_root / "source"
-    archive_path = staging_root / "source.tar"
+    archive_path = staging_root / "source.tar.gz"
     revision = str(job.execution_source_revision or "").strip()
     inherited_tree = str(job.execution_source_tree or "").strip()
     if not _SOURCE_IDENTITY_RE.fullmatch(revision) or not _SOURCE_IDENTITY_RE.fullmatch(
@@ -925,9 +940,11 @@ def prepare_remote_bundle(
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
+    # Git emits deterministic gzip bytes for this revision; hash the transported
+    # archive, retaining the complete tree and the same format used by prewarm.
     with archive_path.open("wb") as archive_handle:
         completed = subprocess.run(
-            ["git", "archive", "--format=tar", revision],
+            ["git", "archive", "--format=tar.gz", "-6", revision],
             cwd=repo_root,
             check=True,
             stdout=archive_handle,
@@ -938,7 +955,7 @@ def prepare_remote_bundle(
             raise RemoteBundleError("Unable to archive the committed BMS source")
     source_archive_sha256 = _sha256_file(archive_path)
     _safe_extract(archive_path, source_root)
-    archive_copy = source_root / ".bms-source.tar"
+    archive_copy = source_root / ".bms-source.tar.gz"
     archive_path.replace(archive_copy)
 
     # Byte-addressed cache objects are shared; runnable trees never are.
@@ -976,6 +993,9 @@ def prepare_remote_bundle(
     runtime_transfers: list[TransferPlan] = []
     runtime_path_map: dict[str, str] = {}
     images: dict[str, CacheTransferArtifact] = {}
+    weight_records: list[RemoteFileRecord] = []
+    weight_sources: dict[str, Path] = {}
+    shared_weights = f"{remote_root}/cache/artifacts/v1/weights"
     manifest_destination = ""
     manifest_sha256 = ""
     remote_runtime = f"{remote_attempt}/materialized/runtime"
@@ -1010,13 +1030,15 @@ def prepare_remote_bundle(
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
         recorded = _records_for_source(source, f"runtime/{relative}", "runtime")
-        runtime_records.extend(recorded)
+        (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})
         # Reuse this exact inventory for typed runtime fields; no second tree scan.
         for record in recorded:
             suffix = record.relative_path[len(f"runtime/{relative}"):].lstrip("/")
             original = path / suffix if suffix else path
+            if relative.startswith("weights/"):
+                weight_sources[record.relative_path] = original
             if record.link_target is None:
                 runtime_references[str(original)] = dict(
                     sha256=record.sha256, size_bytes=record.size_bytes,
@@ -1038,12 +1060,55 @@ def prepare_remote_bundle(
                     path=destination if suffix == "." else destination + "/" + suffix)
         runtime_transfers.append(TransferPlan(source, destination, origin=path))
         runtime_path_map[str(path.resolve())] = destination
+    # Member selectors bind an installed root even when only selected files
+    # belong to the dependency closure. Keep custom root relocation intact.
+    assert native_invocation.execution_plan is not None  # validated by _runtime_assets
+    for dependency in native_invocation.execution_plan.metadata.dependencies:
+        member = dependency.selector_subpath
+        selected = effective_params.get(dependency.selector) if dependency.selector else None
+        if dependency.kind == 'weights' and member and selected:
+            assert dependency.relative_path is not None  # validated selector/member pair
+            destination = PurePosixPath('weights') / dependency.relative_path
+            for _ in PurePosixPath(member).parts:
+                destination = destination.parent
+            selected_root = Path(str(selected)).expanduser()
+            runtime_paths.add(selected_root.resolve())
+            for original in (str(selected_root), str(selected_root.resolve())):
+                mapped = remote_runtime + '/' + str(destination)
+                if original in runtime_path_map and runtime_path_map[original] != mapped:
+                    raise RemoteBundleError('Selected runtime root has conflicting bindings: ' + dependency.logical_id)
+                runtime_path_map[original] = mapped
     verify_selected_runtime_hashes(native_invocation.execution_plan, runtime_hashes)
-    if images:
+    from tools.bms_artifact_cache import weight_layout
+    weight_entries = [dict(name=r.relative_path.removeprefix("runtime/weights/"),
+                           sha256=r.sha256, size_bytes=r.size_bytes, mode=r.mode,
+                           **({"target": r.link_target} if r.link_target is not None else {}))
+                      for r in weight_records]
+    weights = []
+    if weight_entries:
+        if binding and binding.get('environment', {}).get('BMS_CONTAINER_BACKEND') == 'udocker' and binding['environment'].get('BMS_SHARED_WEIGHTS_MODE') != 'cow':
+            raise RemoteBundleError('Managed shared-weight isolation needs updating; reattach the target')
+        weight_digest, weight_entries, _ = weight_layout(weight_entries)
+        shared_weights += '/' + weight_digest
+        old = remote_runtime + '/weights'
+        runtime_path_map = {k: (shared_weights + v[len(old):] if v == old or v.startswith(old + '/') else v)
+                            for k, v in runtime_path_map.items()}
+        for reference in runtime_references.values():
+            value = reference['path']
+            if value == old or value.startswith(old + '/'):
+                reference['path'] = shared_weights + value[len(old):]
+        runtime_transfers = [t for t in runtime_transfers if not t.remote_destination.startswith(old + '/')]
+        for record in weight_records:
+            if record.link_target is None:
+                weights.append(CacheTransferArtifact(weight_sources[record.relative_path],
+                    shared_weights + '/' + record.relative_path.removeprefix('runtime/weights/'),
+                    record.sha256, record.size_bytes, record.mode, 'runtime'))
+    if images or weight_entries:
         manifest = staging_root / ".bms-runtime-images.json"
         manifest.write_bytes(_canonical_bytes({
             "schema": "bms.runtime-image-references.v1",
             "runtime_root": remote_runtime,
+            **({"weights": weight_entries} if weight_entries else {}),
             "images": [{"sha256": image.sha256, "size_bytes": image.size_bytes,
                         "aliases": list(image.aliases)} for image in sorted(images.values(), key=lambda x: x.sha256)],
         }))
@@ -1111,7 +1176,7 @@ def prepare_remote_bundle(
         staging_root=staging_root, remote_attempt=remote_attempt,
         references=native_references, input_transfers=input_transfers,
         input_records=input_records, remote_runtime=remote_runtime,
-        remote_results=remote_results)
+        remote_results=remote_results, shared_weights=shared_weights if weight_entries else None)
     input_transfers.append(bindings_transfer)
     input_records.append(bindings_record)
     path_map: dict[str, str] = {
@@ -1119,7 +1184,7 @@ def prepare_remote_bundle(
         **input_path_map,
         str(repo_root): remote_source,
         str(container_root): f"{remote_runtime}/containers",
-        str(weights_root): f"{remote_runtime}/weights",
+        str(weights_root): shared_weights if weight_entries else f"{remote_runtime}/weights",
         str(data_root): f"{remote_attempt}/data",
         str(local_output): remote_results,
     }
@@ -1136,7 +1201,7 @@ def prepare_remote_bundle(
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{support_root}/venv/bin/python"
 
-    if images:
+    if images or weight_entries:
         # The normal worker authenticates this small manifest as a regular bundle file.
         # This stdlib-only boundary verifies immutable objects and all semantic aliases
         # before exec; no SIF or external symlink is smuggled through file records.
@@ -1182,7 +1247,8 @@ def prepare_remote_bundle(
         "BMS_TARGET_RESOURCES": json.dumps(resources, sort_keys=True),
         "BMS_HOME": remote_source,
         "BMS_DATA": f"{remote_attempt}/data",
-        "BMS_WEIGHTS": f"{remote_runtime}/weights",
+        "BMS_WEIGHTS": shared_weights if weight_entries else f"{remote_runtime}/weights",
+        **({"BMS_SHARED_WEIGHTS_ROOT": shared_weights} if weight_entries else {}),
         "BMS_CONTAINER_DIR": f"{remote_runtime}/containers",
         "BMS_RUNTIME_IMAGE_STORE": f"{remote_root}/cache/runtime-images",
         "BMS_CM_API_RUNTIME_DIR": support_root,
@@ -1283,4 +1349,6 @@ def prepare_remote_bundle(
         runtime_transfers=tuple(runtime_transfers),
         input_transfers=tuple(input_transfers),
         runtime_images=tuple(sorted(images.values(), key=lambda image: image.sha256)),
+        runtime_weights=tuple(weights),
+        weight_layout=tuple(weight_entries),
     )

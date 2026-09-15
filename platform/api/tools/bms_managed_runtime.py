@@ -587,6 +587,7 @@ def container_environment(worker_root, release, backend):
         raise ValueError('unsupported_container_backend')
     tools = worker_root / 'tools/udocker-1.3.17'
     env = dict(BMS_CONTAINER_BACKEND=backend,
+               BMS_SHARED_WEIGHTS_MODE='cow' if backend == 'udocker' else 'ro',
                BMS_RUNTIME_IMAGE_STORE=str(worker_root / 'cache/runtime-images'),
                BMS_CONTAINER_WORK_ROOT=str(worker_root / 'container-workspaces'))
     if backend == 'udocker':

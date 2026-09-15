@@ -14,7 +14,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 
-def test_nextflow_reuses_shared_image_without_staging_sif(tmp_path: Path) -> None:
+@pytest.mark.parametrize("shared_weights", [False, True])
+def test_nextflow_reuses_shared_image_without_staging_sif(tmp_path: Path, shared_weights) -> None:
     configured = os.environ.get("BMS_TEST_NEXTFLOW_JAR")
     jars = [Path(configured)] if configured else sorted((Path.home() / ".nextflow/framework").glob("*/nextflow-*-one.jar"))
     if not jars or not shutil.which("java"):
@@ -101,6 +102,9 @@ raise SystemExit(subprocess.run(args[index+1:], env=os.environ | {{'APPTAINER_CO
                         "NXF_ANSI_LOG": "false", "BMS_TEST_APPTAINER_LOG": str(log),
                         "BMS_DATA": str(tmp_path / 'data'), "XDG_CACHE_HOME": str(tmp_path / 'cache'),
                         "BMS_HOME": str(REPO), "BMS_CONTAINER_DIR": str(tmp_path)}
+    if shared_weights:
+        env["BMS_SHARED_WEIGHTS_ROOT"] = str(weights)
+        env["BMS_CONTAINER_BACKEND"] = "apptainer"
     run = subprocess.run(["java", "-jar", str(jars[-1]), "-log", str(tmp_path / "nextflow.log"),
                           "run", "main.nf", "-profile", "workstation_ryzen7960x", "-offline", "-params-file", "params.json"],
                          cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
@@ -116,6 +120,10 @@ raise SystemExit(subprocess.run(args[index+1:], env=os.environ | {{'APPTAINER_CO
     assert list(store.rglob("*.sif")) == [shared]
     launches = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(launches) == 2
+    expected_weights_bind = f"{weights}:/protenix_weights" + (":ro" if shared_weights else "")
+    assert all(expected_weights_bind in launch["bind"] for launch in launches)
+    if not shared_weights:
+        assert all(expected_weights_bind + ":ro" not in launch["bind"] for launch in launches)
     assert all(launch["image"] == str(shared) for launch in launches)
     assert all(f"{shared.parent}:{shared.parent}:ro" in launch["bind"] for launch in launches)
     # Reusing an existing preflight must still validate the reference before

@@ -130,7 +130,7 @@ def snapshot(path):
     return views.snapshot_tree(path)
 
 
-def copy_input(source, target, guest, direct_images):
+def copy_input(source, target, guest, direct_images, *, writable=False):
     """Private CoW projection over pinned ancestry; no shared writable binds."""
     directories = []
     for parent, name, relative, info in views._walk_tree(source):
@@ -139,7 +139,7 @@ def copy_input(source, target, guest, direct_images):
             os.symlink(os.readlink(name, dir_fd=parent), destination)
         elif stat.S_ISDIR(info.st_mode):
             destination.mkdir(mode=0o700)
-            directories.append((destination, stat.S_IMODE(info.st_mode)))
+            directories.append((destination, stat.S_IMODE(info.st_mode) | (0o200 if writable else 0)))
         elif Path(name).suffix == '.sif':
             # SIFs remain original provenance capabilities, not copied storage.
             original = source if relative == '.' else source / relative
@@ -153,7 +153,7 @@ def copy_input(source, target, guest, direct_images):
                 out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
                     fcntl.ioctl(out, views.FICLONE, fd)
-                    os.fchmod(out, stat.S_IMODE(before.st_mode))
+                    os.fchmod(out, stat.S_IMODE(before.st_mode) | (0o200 if writable else 0))
                 finally:
                     os.close(out)
     for directory, mode in reversed(directories):
@@ -222,17 +222,30 @@ def execute(invocation, identity):
                 mount = resolved if resolved.is_dir() else resolved.parent
                 volumes.append((str(mount), str(mount)))
         volumes.extend((p, p) for p in ('/proc', '/sys', '/dev') if Path(p).exists())
-        for index, (source_name, target, mode) in enumerate(invocation.binds):
+        shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
+        shared = Path(shared).absolute() if shared else None
+        requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
+        volumes = []
+        for index, (source_name, target, mode) in enumerate(requested):
             source = Path(source_name).resolve(strict=True)
-            if mode == 'rw':
+            protected = shared is not None and source.is_relative_to(shared)
+            if shared is not None and shared != source and shared.is_relative_to(source):
+                raise ValueError('broad bind exposes the shared weight authority')
+            if mode == 'rw' and not protected:
                 volumes.append((str(source), target))
                 continue
             before = snapshot(source)
             projected = inputs / str(index)
-            copy_input(source, projected, target, direct_images)
+            # PRoot can temporarily chmod frozen 0444/0555 inputs even for a
+            # read. Normalize only the PRIVATE CoW view before its strict ro
+            # baseline; shared originals and write-and-restore detection stay.
+            if protected:
+                copy_input(source, projected, target, direct_images, writable=True)
+            else:
+                copy_input(source, projected, target, direct_images)
             if snapshot(source) != before:
                 raise ValueError('declared input changed during projection')
-            guarded.append((source, before, projected, snapshot(projected)))
+            guarded.append((source, before, projected, snapshot(projected) if mode == "ro" else None))
             volumes.append((str(projected), target))
         volumes.extend(direct_images)
         # Executing SIF identity stays truthful for native provenance consumers.
@@ -290,7 +303,7 @@ def execute(invocation, identity):
         command += ['bms-pinned-image', '/bin/bash', '/.bms-exec.sh', *invocation.command]
         result = run_owned(command, environment, original_fds + [view['image_fd']], identity)
         for source, before, projected, original_view in guarded:
-            if snapshot(source) != before or snapshot(projected) != original_view:
+            if snapshot(source) != before or (original_view is not None and snapshot(projected) != original_view):
                 raise ValueError('declared scientific input changed during execution')
         return result
 

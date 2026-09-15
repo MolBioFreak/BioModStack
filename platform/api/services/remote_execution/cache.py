@@ -72,7 +72,7 @@ finally:
 
 
 async def _cache_artifacts(*, connection, artifacts, operation_id, progress, check_fence,
-                           materialize=False, links=(), runtime_root=None, track_artifacts=False):
+                           materialize=False, links=(), runtime_root=None, track_artifacts=False, helper=None):
     # Caller owns operation identity and destination authority; never use public paths.
     uuid.UUID(operation_id)
     artifacts = tuple(artifacts)
@@ -81,7 +81,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         previous = unique.setdefault((entry.role == 'image', entry.sha256), entry)
         if previous.size_bytes != entry.size_bytes:
             raise ValueError('Conflicting cache object sizes')
-    tool = await _install_helper(connection, check_fence)
+    tool = helper or await _install_helper(connection, check_fence)
     root = f'{connection.remote_root}/cache/artifacts/v1'
     async def call(request):
         await check_fence()
@@ -264,10 +264,36 @@ p.mkdir(mode=0o700,exist_ok=False)
              and record.relative_path.startswith('runtime/')
              and record.relative_path != 'runtime/support-python'
              and not record.relative_path.startswith('runtime/support-python/')]
-    return await _cache_artifacts(connection=connection, artifacts=cache_transfer_artifacts(bundle),
-                                  operation_id=bundle.attempt_id, progress=progress,
-                                  check_fence=check_fence, materialize=True,
-                                  links=links, runtime_root=bundle.remote_runtime_dir)
+    helper = await _install_helper(connection, check_fence)
+    receipts = []
+    if bundle.weight_layout:
+        async def weights(action):
+            await check_fence()
+            result = await run_remote(connection, ['python3', helper, '--root',
+                connection.remote_root + '/cache/artifacts/v1'],
+                input_bytes=json.dumps(dict(action=action, entries=list(bundle.weight_layout))).encode(), timeout=3600)
+            await check_fence()
+            response = json.loads(result.stdout)
+            if response.get('root') != bundle.envelope.environment['BMS_WEIGHTS']:
+                raise ValueError('Shared weight placement identity mismatch')
+            return response
+        await progress(dict(phase='checking', artifact=None, message='Resolving installed model weights'))
+        observed = await weights('weights_probe')
+        if observed['state'] == 'missing':
+            receipts = await _cache_artifacts(connection=connection, artifacts=bundle.runtime_weights,
+                operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
+            if (await weights('weights_install'))['state'] != 'ready':
+                raise ValueError('Shared model weights were not installed')
+        elif observed['state'] != 'ready':
+            raise ValueError('Shared model weights are damaged')
+        else:
+            receipts = [dict(name=e.remote_destination.removeprefix(connection.remote_root + '/'),
+                             sha256=e.sha256, size_bytes=e.size_bytes) for e in bundle.runtime_weights]
+    receipts += await _cache_artifacts(connection=connection, artifacts=cache_transfer_artifacts(bundle),
+                                      operation_id=bundle.attempt_id, progress=progress,
+                                      check_fence=check_fence, materialize=True, helper=helper,
+                                      links=links, runtime_root=bundle.remote_runtime_dir)
+    return receipts
 
 
 def _prewarm_plan(job, command, source_revision, source_tree, directory, *, native_invocation):
@@ -279,16 +305,16 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
         raise ValueError('Prewarm source identity does not match current committed source')
     _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
                                                 native_invocation=native_invocation)
-    archive = directory / 'source.tar'
+    archive = directory / 'source.tar.gz'
     with archive.open('wb') as stream:
-        subprocess.run(['git', 'archive', '--format=tar', source_revision], cwd=repo,
+        subprocess.run(['git', 'archive', '--format=tar.gz', '-6', source_revision], cwd=repo,
                        stdout=stream, stderr=subprocess.PIPE, check=True, timeout=300)
     source = directory / 'source'
     _safe_extract(archive, source)
-    archive.replace(source / '.bms-source.tar')
+    archive.replace(source / '.bms-source.tar.gz')
 
     entries = []
-    assets = [(source / '.bms-source.tar', 'source/.bms-source.tar')]
+    assets = [(source / '.bms-source.tar.gz', 'source/.bms-source.tar.gz')]
     assets.extend((path, 'runtime/' + relative) for path, relative in
                   _runtime_assets(str(job.model_id), str(job.mode), effective,
                                   native_invocation=native_invocation)

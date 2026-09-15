@@ -321,13 +321,14 @@ process RunShapeProtenixValidator {
     """
     set -euo pipefail
     export PROTENIX_ROOT_DIR=/protenix_weights
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
     python3 ${params.code_root}/scripts/shape_blueprint/run_shape_validator_suite.py \\
         --mode native --validator protenix_v2 \\
         --sequence '${sequence}' --sequence-name '${sequence_name}' \\

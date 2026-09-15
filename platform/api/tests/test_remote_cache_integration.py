@@ -1,4 +1,5 @@
 """Offline real helper protocol exercised through a local transport double."""
+import gzip
 import hashlib
 import io
 import json
@@ -77,7 +78,7 @@ def local_transport(monkeypatch):
     return calls, uploads
 
 
-def make_bundle(tmp_path):
+def make_bundle(tmp_path, compressed=False):
     source = tmp_path / 'source'
     source.mkdir()
     archive = source / '.bms-source.tar'
@@ -85,6 +86,11 @@ def make_bundle(tmp_path):
         info = tarfile.TarInfo('workflow.nf')
         info.size = len(b'workflow')
         tar.addfile(info, io.BytesIO(b'workflow'))
+    if compressed:
+        payload = gzip.compress(archive.read_bytes(), mtime=0)
+        archive.unlink()
+        archive = source / '.bms-source.tar.gz'
+        archive.write_bytes(payload)
     weights = tmp_path / 'weights'
     weights.mkdir()
     (weights / 'model').write_bytes(b'model')
@@ -93,7 +99,7 @@ def make_bundle(tmp_path):
     attempt_id = str(uuid.uuid4())
     generation = remote / 'attempts' / attempt_id / 'materialized'
     runtime = str(generation / 'runtime')
-    files = [record('source/.bms-source.tar', archive.read_bytes(), 'source'),
+    files = [record('source/' + archive.name, archive.read_bytes(), 'source'),
              record('source/workflow.nf', b'workflow', 'source'),
              record('runtime/weights/model', b'model'),
              record('runtime/weights/alias', b'model', link_target='model'),
@@ -101,6 +107,7 @@ def make_bundle(tmp_path):
              record('inputs/secret', b'excluded', 'input'),
              record('results/secret', b'excluded', 'result')]
     bundle = SimpleNamespace(attempt_id=attempt_id, envelope=SimpleNamespace(files=files),
+                             weight_layout=(), runtime_weights=(),
                              source_transfer=TransferPlan(source, str(generation / 'source')),
                              remote_source_dir=str(generation / 'source'), remote_runtime_dir=runtime,
                              runtime_transfers=(TransferPlan(weights, runtime + '/weights'),
@@ -120,8 +127,9 @@ def next_attempt(connection, bundle):
 
 
 @pytest.mark.asyncio
-async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport):
-    connection, bundle = make_bundle(tmp_path)
+@pytest.mark.parametrize('compressed', [False, True])
+async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport, compressed):
+    connection, bundle = make_bundle(tmp_path, compressed=compressed)
     artifacts = cache_transfer_artifacts(bundle)
     assert len(artifacts) == 2
     assert [p.remote_destination for p in uncached_runtime_transfers(bundle)] == [bundle.remote_runtime_dir + '/support-python']
@@ -218,7 +226,7 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
         return
     planned = cache._prewarm_plan(job, list(invocation.command), revision, tree, directory,
                                 native_invocation=invocation)
-    assert calls == [['git', 'archive', '--format=tar', revision]]
+    assert calls == [['git', 'archive', '--format=tar.gz', '-6', revision]]
     launched = cache_transfer_artifacts(bundle)
     assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
     assert all('support-python' not in a.remote_destination for a in planned)
@@ -256,9 +264,18 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert second.remote_source_dir == second.remote_attempt_dir + '/materialized/source'
     assert second.remote_runtime_dir == second.remote_attempt_dir + '/materialized/runtime'
     assert second.envelope.working_directory == second.remote_source_dir
-    assert second.envelope.environment['BMS_WEIGHTS'] == second.remote_runtime_dir + '/weights'
+    shared = Path(second.envelope.environment['BMS_WEIGHTS'])
+    assert str(shared) == first.envelope.environment['BMS_WEIGHTS']
+    assert shared.is_relative_to(Path(target.remote_root) / 'cache/artifacts/v1/weights')
+    assert not (Path(second.remote_runtime_dir) / 'weights').exists()
+    assert sum(row['action'] == 'weights_install' for row in calls) == 1
+    assert sum(row['action'] == 'weights_probe' for row in calls) == 2
+    # No cached model object is copied into any attempt.
+    assert not any('/weights/' in row['destination'] for call in calls if call['action'] == 'materialize_many' for row in call['entries'])
     assert (Path(second.remote_source_dir) / 'main.nf').is_file()
-    assert (Path(second.remote_runtime_dir) / 'weights/protenix/model.pt').is_file()
+    assert (shared / 'protenix/checkpoint/protenix-v2.pt').read_bytes() == b'offline dependency fixture; not model data'
+    assert not any(r.relative_path.startswith('runtime/weights/') for r in second.envelope.files)
+    assert second.runtime_weights
     assert not (Path(second.remote_source_dir) / 'unexpected.py').exists()
     assert not (Path(second.remote_runtime_dir) / 'weights/protenix/unexpected.ckpt').exists()
     assert all(path.read_bytes() == b'preserve-old-generation' for path in preserved)

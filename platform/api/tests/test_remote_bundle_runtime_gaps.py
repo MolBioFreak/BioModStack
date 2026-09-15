@@ -100,7 +100,12 @@ def package(tmp_path, monkeypatch):
     monkeypatch.setenv('BMS_REMOTE_API_BASE_URL', 'https://bms.example.invalid')
     (roots['containers']/'protenix.sif').write_bytes(b'image-not-executed')
     (roots['weights']/'protenix').mkdir()
-    (roots['weights']/'protenix/model.pt').write_bytes(b'weights-not-executed')
+    for member in ('checkpoint/protenix-v2.pt', 'common/components.cif',
+                   'common/components.cif.rdkit_mol.pkl', 'common/clusters-by-entity-40.txt',
+                   'common/obsolete_release_date.csv'):
+        path = roots['weights'] / 'protenix' / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'offline dependency fixture; not model data')
     seq = roots['inputs']/'seq.fasta'
     seq.write_text('>A\nAAAA\n')
     (roots['repo']/'main.nf').write_text('workflow {}\n')
@@ -243,7 +248,9 @@ def test_normalized_bundle_relocates_real_runtime(package, tmp_path, monkeypatch
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command,
                                             native_invocation=job.native_invocation)
     envelope = prepared.envelope
-    assert len(prepared.runtime_transfers) == (2 if shared_critical else 3)
+    assert len(prepared.runtime_transfers) == (1 if shared_critical else 2)
+    assert prepared.runtime_weights and prepared.weight_layout
+    assert not any(t.remote_destination.endswith("/weights/protenix") for t in prepared.runtime_transfers)
     if shared_critical:
         binding = target.capabilities['critical_runtime_binding']
         assert binding['paths']['nextflow'] in envelope.command
@@ -258,6 +265,14 @@ def test_normalized_bundle_relocates_real_runtime(package, tmp_path, monkeypatch
     assert not any(flag in envelope.command for flag in ('--af2_models','--boltz_models','--msa_local_db'))
     assert str(roots['results']) not in ' '.join(envelope.command)
     assert str(tmp_path/'controller') not in ' '.join(envelope.command + list(envelope.environment.values()))
+    from tools.bms_artifact_cache import Cache
+    weight_cache = Cache(Path(target.remote_root) / "cache/artifacts/v1")
+    for item in prepared.runtime_weights:
+        incoming = Path(weight_cache.root) / 'incoming' / item.sha256
+        incoming.write_bytes(item.source.read_bytes())
+        weight_cache.ingest({"sha256": item.sha256, "size_bytes": item.size_bytes}, incoming)
+    shared_weights = weight_cache.weights(list(prepared.weight_layout), install=True, full=True)
+    assert shared_weights["root"] == envelope.environment["BMS_WEIGHTS"]
     for transfer in (*prepared.runtime_transfers, *prepared.input_transfers, prepared.source_transfer):
         destination = Path(transfer.remote_destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +287,7 @@ def test_normalized_bundle_relocates_real_runtime(package, tmp_path, monkeypatch
     # Remove the complete temporary controller, including its original base stdlib.
     shutil.rmtree(tmp_path/'controller')
     assert not release.exists()
+    assert weight_cache.weights(list(prepared.weight_layout), full=True) == shared_weights
     worker.verify_bundle(attempt)
     interpreter = envelope.environment['BMS_API_PYTHON']
     assert interpreter == envelope.command[envelope.command.index('--api_python')+1]
@@ -342,6 +358,11 @@ def test_selected_prediction_managed_closure_uses_native_names(method, expected,
         'pred_method': method, 'run_frustrampnn': False,
         'protenix_use_msa': False, 'boltz_use_msa': False,
     }, 'workflows/structure_prediction.nf')
+    if 'protenix' in expected:
+        expected = (expected - {'protenix'}) | {
+            'protenix/checkpoint/protenix-v2.pt', 'protenix/common/components.cif',
+            'protenix/common/components.cif.rdkit_mol.pkl',
+            'protenix/common/clusters-by-entity-40.txt', 'protenix/common/obsolete_release_date.csv'}
     refs = {ref.relative_path for ref in metadata.dependencies if ref.kind in {'image', 'weights'}}
     assert refs == expected
     assert 'boltz2-v2.9.5-7ebf1be.sif' not in refs
@@ -572,7 +593,9 @@ def test_actual_normalized_nextflow_command_omits_unrelated_original_params(pack
     argv = compile_native(job, normalized)
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv,
                                             native_invocation=job.native_invocation)
-    assert len(prepared.runtime_transfers) == 3
+    assert len(prepared.runtime_transfers) == 2
+    assert prepared.runtime_weights
+    assert not any(r.relative_path.startswith("runtime/weights/") for r in prepared.envelope.files)
     assert len(prepared.input_transfers) == 2
     assert prepared.input_transfers[0].remote_destination.endswith('/.bms/portable-input-bindings.json')
     assert prepared.input_transfers[1].remote_destination.endswith('/component-resources.config')

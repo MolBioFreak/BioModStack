@@ -266,7 +266,7 @@ LABEL_ASSETS = {
     'RFDpoly': ('rfdpoly_v2.sif', None, 'rfdpoly', None),
     'nampnn': ('nampnn.sif', None, 'nampnn', None),
     'PPIFlow': ('ppiflow.sif', None, 'ppiflow', 'ppiflow_weights_dir'),
-    'Protenix': ('protenix.sif', 'protenix_container_path', 'protenix', 'protenix_weights'),
+    'Protenix': ('protenix.sif', 'protenix_container_path', None, None),
     'dorado_gpu': ('dorado.sif', 'dorado_runtime_sif', 'dorado', None),
     'dorado_cpu': ('dorado.sif', 'dorado_runtime_sif', None, None),
     'fastq_qc_cpu': ('dorado.sif', 'dorado_runtime_sif', None, None),
@@ -834,9 +834,9 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         if cfg:
             backend = cfg.get('backend')
             if backend == 'protenix_v2_ensemble':
-                after = a.chain(['PrepareProtenixExecution', 'CanonicalProtenixEnsemble'])
                 from services.conformational_mapping.request_builder import canonical_msa_params
                 a.p.update(canonical_msa_params(cfg))
+                after = a.chain(['PrepareProtenixExecution', 'CanonicalProtenixEnsemble'])
                 a.msa('protenix', after, consumer='modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble')
             elif backend == 'confornets':
                 after = a.chain(['PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets',

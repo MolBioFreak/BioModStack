@@ -186,9 +186,10 @@ PY
     mkdir -p "protenix_runtime_weights/\$(dirname "\$CHECKPOINT_REL")"
     cp --reflink=auto "\$CHECKPOINT_SNAPSHOT" "protenix_runtime_weights/\$CHECKPOINT_REL"
     export PROTENIX_ROOT_DIR="\$PWD/protenix_runtime_weights"
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1 PIP_NO_USER=1
 
     EXTRA=()

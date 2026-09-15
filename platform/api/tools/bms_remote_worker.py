@@ -269,7 +269,7 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
     source_archives = [
         record
         for record in envelope.get("files", [])
-        if isinstance(record, dict) and record.get("relative_path") == "source/.bms-source.tar"
+        if isinstance(record, dict) and record.get("relative_path") in {"source/.bms-source.tar", "source/.bms-source.tar.gz"}
     ]
     if len(source_archives) != 1 or source_archives[0].get("sha256") != envelope.get("source_archive_sha256"):
         raise RuntimeError("source archive identity does not match the execution envelope")

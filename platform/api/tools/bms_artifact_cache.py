@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -57,8 +58,10 @@ def artifact(value):
 
 
 def regular(fd):
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError('not_regular_file')
+    return info
 
 
 def verified(fd, item, progress=lambda **kw: None):
@@ -74,11 +77,52 @@ def verified(fd, item, progress=lambda **kw: None):
     return done == item['size_bytes'] and digest.hexdigest() == item['sha256']
 
 
+def weight_layout(entries):
+    """Named, immutable projection of existing CAS bytes, not another cache.
+
+    Job IDs and source revisions are deliberately absent from its identity.
+    Acquisition, locking and publication remain owned by Cache.
+    """
+    rows, names = [], set()
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('invalid_weight_layout')
+    for value in entries:
+        row = dict(value)
+        path = PurePosixPath(row['name'])
+        if (set(row) != {'name', 'sha256', 'size_bytes', 'mode'} | ({'target'} if 'target' in row else set())
+                or str(path) != row['name'] or path.is_absolute() or '..' in path.parts
+                or not path.parts or path.parts[0].startswith('.') or row['name'] in names
+                or type(row['mode']) is not int or not 0 <= row['mode'] <= 0o777):
+            raise ValueError('invalid_weight_member')
+        artifact({k: row[k] for k in ('sha256', 'size_bytes')})
+        names.add(row['name'])
+        if 'target' not in row:
+            row['mode'] &= 0o555
+        rows.append(row)
+    directories = {str(p) for name in names for p in PurePosixPath(name).parents if str(p) != '.'}
+    if names & directories:
+        raise ValueError('conflicting_weight_members')
+    for row in rows:
+        if 'target' in row:
+            target = row['target']
+            dest = PurePosixPath(posixpath.normpath(str(PurePosixPath(row['name']).parent / target)))
+            if (not isinstance(target, str) or not target or PurePosixPath(target).is_absolute()
+                    or '..' in dest.parts or str(dest) not in names | directories
+                    or PurePosixPath(row['name']).is_relative_to(dest)
+                    or any(r['name'] == str(dest) and 'target' in r for r in rows)
+                    or row['mode'] != 0o777 or row['size_bytes'] != len(target.encode())
+                    or row['sha256'] != hashlib.sha256(target.encode()).hexdigest()):
+                raise ValueError('invalid_weight_link')
+    rows.sort(key=lambda row: row['name'])
+    payload = json.dumps(rows, sort_keys=True, separators=(',', ':')).encode()
+    return hashlib.sha256(payload).hexdigest(), rows, payload
+
+
 class Cache:
     def __init__(self, root, events=None):
         self.root = PurePosixPath(str(root))
         self.events = events or (lambda value: None)
-        for name in ('objects/sha256', 'locks', 'incoming'):
+        for name in ('objects/sha256', 'incoming', 'locks', 'weights'):
             with directory(self.root / name, create=True):
                 pass
 
@@ -172,6 +216,134 @@ class Cache:
             return {**item, 'state': 'ready'}
         return self.materialize(row['artifact'], row['destination'], destination_root, row.get('mode', 0o644))
 
+    def weights(self, entries, *, install=False, full=False):
+        """Resolve an immutable named view of the existing content objects.
+
+        The only durable bytes are still CAS objects. Read-only aliases are
+        never exposed as writable task binds. A warm lookup reads metadata;
+        execute_runtime verifies the selected bytes at the use boundary.
+        """
+        digest, rows, payload = weight_layout(entries)
+        root = Path(self.root) / 'weights' / digest
+        expected = {r['name']: r for r in rows}
+        dirs = {str(p) for n in expected for p in PurePosixPath(n).parents if str(p) != '.'}
+
+        def check(path, content=False):
+            seen, before = set(), {}
+            def walk(parent, prefix=''):
+                info = os.fstat(parent)
+                if stat.S_IMODE(info.st_mode) != 0o555:
+                    raise ValueError('writable_weight_directory')
+                before[prefix] = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+                for name in sorted(os.listdir(parent)):
+                    rel = prefix + name
+                    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    if rel in dirs:
+                        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                        try:
+                            walk(child, rel + '/')
+                        finally:
+                            os.close(child)
+                        continue
+                    if rel == '.bms-weights.json':
+                        item = dict(sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload), mode=0o444)
+                    else:
+                        item = expected.get(rel)
+                        if item is None:
+                            raise ValueError('unexpected_weight_member')
+                    seen.add(rel)
+                    if 'target' in item:
+                        if not stat.S_ISLNK(info.st_mode) or os.readlink(name, dir_fd=parent) != item['target']:
+                            raise ValueError('weight_link_changed')
+                    else:
+                        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                        try:
+                            first = regular(fd)
+                            signature = (first.st_dev, first.st_ino, first.st_size, first.st_mode,
+                                         first.st_mtime_ns, first.st_ctime_ns)
+                            if first.st_size != item['size_bytes'] or stat.S_IMODE(first.st_mode) != item['mode']:
+                                raise ValueError('weight_identity_changed')
+                            if (content or rel == '.bms-weights.json') and not verified(fd, item):
+                                raise ValueError('weight_hash_mismatch')
+                            last = regular(fd)
+                            if signature != (last.st_dev, last.st_ino, last.st_size, last.st_mode,
+                                             last.st_mtime_ns, last.st_ctime_ns):
+                                raise ValueError('weight_changed_during_read')
+                            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                            if (current.st_dev, current.st_ino) != (first.st_dev, first.st_ino):
+                                raise ValueError('weight_path_changed')
+                        finally:
+                            os.close(fd)
+                after = os.fstat(parent)
+                if before[prefix] != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError('weight_directory_changed')
+            with directory(path) as fd:
+                walk(fd)
+                with directory(path) as current:
+                    info = os.fstat(current)
+                    if before[''] != (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns):
+                        raise ValueError('weight_root_changed')
+            if seen != set(expected) | {'.bms-weights.json'}:
+                raise ValueError('missing_weight_member')
+
+        with self.locked(dict(sha256='weights-' + digest, size_bytes=0)):
+            try:
+                check(root, full)
+            except FileNotFoundError:
+                # A damaged published generation is never repaired in place.
+                if root.exists() or root.is_symlink():
+                    raise ValueError('damaged_weight_layout')
+                if not install:
+                    return dict(state='missing', root=str(root), sha256=digest)
+                stage = self.root / 'weights' / ('.partial-' + uuid.uuid4().hex)
+                with directory(stage, create=True):
+                    pass
+                for row in sorted(rows, key=lambda r: 'target' in r):
+                    destination = stage / row['name']
+                    if 'target' in row:
+                        with directory(destination.parent, create=True) as out:
+                            os.symlink(row['target'], destination.name, dir_fd=out)
+                            os.fsync(out)
+                        continue
+                    with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
+                        source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
+                        try:
+                            info = regular(source)
+                            if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
+                                raise ValueError('corrupt_weight_object')
+                            if row['mode'] == 0o444:
+                                os.link(row['sha256'], destination.name, src_dir_fd=objects,
+                                        dst_dir_fd=out, follow_symlinks=False)
+                                linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
+                                if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
+                                    raise ValueError('weight_object_changed')
+                                os.fsync(out)
+                            else:
+                                # An executable permission projection cannot chmod
+                                # other aliases of an immutable content object.
+                                self._publish_copy(source, out, destination.name, row, row['mode'])
+                        finally:
+                            os.close(source)
+                with directory(stage) as parent:
+                    fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(payload)
+                        stream.flush()
+                        os.fchmod(stream.fileno(), 0o444)
+                        os.fsync(stream.fileno())
+                for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
+                    with directory(stage / name) as fd:
+                        os.fchmod(fd, 0o555)
+                        os.fsync(fd)
+                with directory(stage) as fd:
+                    os.fchmod(fd, 0o555)
+                    os.fsync(fd)
+                check(stage)
+                with directory(root.parent) as parent:
+                    os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
+                    os.fsync(parent)
+        return dict(state='ready', root=str(root), sha256=digest)
+
     def execute_runtime(self, manifest, command, expected_sha256):
         path = Path(manifest)
         with directory(path.parent) as parent:
@@ -191,6 +363,11 @@ class Cache:
                 raise ValueError('missing_runtime_alias')
             for alias in row['aliases']:
                 self.runtime_alias(row, alias, references['runtime_root'], check=True)
+        if references.get('weights'):
+            result = self.weights(references['weights'], full=True)
+            if result['state'] != 'ready':
+                raise ValueError('shared_weights_missing')
+            os.environ['BMS_SHARED_WEIGHTS_ROOT'] = result['root']
         if not command:
             raise ValueError('missing_runtime_command')
         os.execvp(command[0], command)
@@ -378,7 +555,9 @@ class Cache:
                 if not verified(source.fileno(), item):
                     raise ValueError('corrupt_source_archive')
                 source.seek(0)
-                with tarfile.open(fileobj=source, mode='r:') as archive:
+                # Autodetection also permits retained uncompressed attempts. The
+                # digest above authenticates transport bytes before decompression.
+                with tarfile.open(fileobj=source, mode='r:*') as archive:
                     members = archive.getmembers()
                     for member in members:
                         path = PurePosixPath(member.name)
@@ -543,6 +722,8 @@ def main():
         result = cache.extract_source(request['artifact'], request['destination'])
     elif action == 'materialize_links':
         result = {'artifacts': [cache.materialize_link(row['artifact'], row['destination'], request['destination_root'], row['target']) for row in request['entries']]}
+    elif action in {'weights_probe', 'weights_install'}:
+        result = cache.weights(request['entries'], install=action == 'weights_install')
     elif action == 'materialize_many':
         result = {'artifacts': [cache.materialize_entry(row, request['destination_root']) for row in request['entries']]}
     elif action == 'materialize':

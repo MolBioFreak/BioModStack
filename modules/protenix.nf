@@ -81,16 +81,17 @@ process ProtenixPredict {
     #!/bin/bash
     set -euo pipefail
 
-    # Persist Protenix caches/checkpoints in the shared model-weights store.
+    # Read checkpoints/common data from the installed model-weights store.
     # nextflow.config binds params.protenix_weights into this container at /protenix_weights.
     export PROTENIX_ROOT_DIR="/protenix_weights"
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
 
     # Validate the container has Python available for the repo-local wrapper.
     if ! command -v python3 &> /dev/null; then
@@ -410,13 +411,14 @@ process ProtenixFromComplex {
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
     fi
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
     RESOLVED_FIXED_TARGET_SOURCE_PATH="${resolvedFixedTargetSourcePath}"
 
     # Validate container runtime is self-contained (no runtime installs or patching).

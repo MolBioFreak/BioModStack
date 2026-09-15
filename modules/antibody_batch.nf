@@ -313,12 +313,13 @@ process BatchProtenixValidation {
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
     fi
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
 
     if ! command -v python3 &> /dev/null; then
         echo "[BatchProtenixValidation] ERROR: python3 not found in container image" >&2
