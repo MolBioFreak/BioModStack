@@ -10577,23 +10577,34 @@ async def get_job_logs(
             except OSError:
                 return None
 
-        from services.remote_execution.executor import retained_result_view, retained_result_file, RemoteExecutionError
+        from services.remote_execution.executor import (
+            retained_result_view, retained_result_file, remote_live_logs,
+            RemoteExecutionError, RemoteTransportError, TERMINAL_REMOTE_STATES,
+        )
         diagnostics = job.status in {'failed', 'cancelled'}
+        receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+        active = (job.status in {'queued', 'running', 'awaiting_input'}
+                  and receipt.get('state') not in TERMINAL_REMOTE_STATES
+                  and job.remote_state not in {'results_available', 'result_pull_failed',
+                                               'returning', 'validating_return', 'ingested'})
         try:
-            root, relative, manifest, status = await asyncio.to_thread(retained_result_view, job, diagnostics=diagnostics)
-            logs_data['exit_code'] = status.exit_code
-            logs_data['remote_result_identity'] = {
-                'attempt_id': status.attempt_id, 'generation': status.generation,
-                'result_manifest_sha256': status.result_manifest_sha256,
-                'kind': 'diagnostics' if diagnostics else 'current',
-            }
-            for field, name in [('nextflow_log', 'nextflow.log'), ('command_log', 'supervisor.log')]:
-                member = (relative / '_remote' / name).as_posix()
-                if any(a.relative_path == member for a in manifest.artifacts):
-                    path = await asyncio.to_thread(retained_result_file, root, manifest, member)
-                    logs_data[field] = await asyncio.to_thread(_bounded_remote_log, path)
-            logs_data['nextflow_log_source'] = 'remote_diagnostics' if diagnostics else 'remote_returned'
-        except (RemoteExecutionError, OSError, ValueError, KeyError) as exc:
+            if active:
+                logs_data.update(await remote_live_logs(session, job, tail=tail))
+            else:
+                root, relative, manifest, status = await asyncio.to_thread(retained_result_view, job, diagnostics=diagnostics)
+                logs_data['exit_code'] = status.exit_code
+                logs_data['remote_result_identity'] = {
+                    'attempt_id': status.attempt_id, 'generation': status.generation,
+                    'result_manifest_sha256': status.result_manifest_sha256,
+                    'kind': 'diagnostics' if diagnostics else 'current',
+                }
+                for field, name in [('nextflow_log', 'nextflow.log'), ('command_log', 'supervisor.log')]:
+                    member = (relative / '_remote' / name).as_posix()
+                    if any(a.relative_path == member for a in manifest.artifacts):
+                        path = await asyncio.to_thread(retained_result_file, root, manifest, member)
+                        logs_data[field] = await asyncio.to_thread(_bounded_remote_log, path)
+                logs_data['nextflow_log_source'] = 'remote_diagnostics' if diagnostics else 'remote_returned'
+        except (RemoteExecutionError, RemoteTransportError, OSError, ValueError, KeyError) as exc:
             logs_data['remote_read_error'] = str(exc)[:1000]
         logs_data["parsed_error"] = extract_error_from_logs(
             logs_data["command_log"],

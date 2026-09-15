@@ -1297,7 +1297,7 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     return destination
 
 
-async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
+async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
     target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
@@ -1312,7 +1312,7 @@ async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
             timeout=30,
         )
     except RemoteTransportError as exc:
-        if str(job.remote_state or "") != "staging":
+        if not recover_staging or str(job.remote_state or "") != "staging":
             raise RemoteExecutionError(str(exc)) from exc
         try:
             response = await run_remote(
@@ -1340,6 +1340,43 @@ async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
     if prior_boot and status.boot_id != prior_boot and status.state not in TERMINAL_REMOTE_STATES:
         raise RemoteExecutionError("Attempt boot epoch changed without lost/terminal reconciliation")
     return status
+
+
+async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) -> dict:
+    """Observe only the current attempt; never prepare, pull, or publish results."""
+    from copy import deepcopy
+    from tools import bms_remote_log_reader as reader
+
+    receipt = deepcopy((job.provenance or {}).get('remote_execution_receipt') or {})
+    ownership = (job.execution_target_id, job.remote_attempt_id, job.status)
+    observed = await remote_status(session, job, recover_staging=False)
+    if observed.state in TERMINAL_REMOTE_STATES:
+        raise RemoteExecutionError('Remote attempt is terminal; retained result logs are not yet available')
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    if target is None:
+        raise RemoteExecutionError('Remote execution target record is missing')
+    connection, attempt_dir = _connection_for_attempt(target, job)
+    identity = {key: getattr(observed, key) for key in reader.IDENTITY_FIELDS}
+    response = await run_remote(connection, [
+        connection.runtime_binding['paths']['python'] if connection.runtime_binding else 'python3',
+        '-c', Path(reader.__file__).read_text(), attempt_dir,
+        json.dumps(identity), str(max(1, min(int(tail), 5000))),
+    ], timeout=30)
+    # A retry/reattachment while SSH was in flight must not expose predecessor logs.
+    await session.refresh(job)
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    if (ownership != (job.execution_target_id, job.remote_attempt_id, job.status)
+            or receipt != ((job.provenance or {}).get('remote_execution_receipt') or {})
+            or target is None or _connection_for_attempt(target, job) != (connection, attempt_dir)):
+        raise RemoteExecutionError('Active attempt log ownership changed during read')
+    if len(response.stdout) > 16 * reader.MAX_LOG_BYTES:
+        raise RemoteExecutionError('Remote logs exceed bounded response size')
+    payload = json.loads(response.stdout)
+    if (not isinstance(payload, dict) or set(payload) != {'nextflow_log', 'command_log'}
+            or any(value is not None and (not isinstance(value, str)
+                or len(value) > reader.MAX_LOG_BYTES) for value in payload.values())):
+        raise RemoteExecutionError('Remote log response is invalid')
+    return dict(payload, nextflow_log_source='remote_live', remote_attempt_identity=identity)
 
 
 def _safe_result_path(root: Path, relative_path: str, *, allow_root: bool = False) -> Path:
