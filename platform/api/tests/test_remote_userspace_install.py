@@ -312,8 +312,11 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path)])
     monkeypatch.setattr(urllib.request, 'urlopen', lambda url, **kwargs:
                         Path(wheel if url.endswith('.whl') else engines).open('rb'))
-    for _ in range(2):
-        exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
+    exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
+    def no_network(*args, **kwargs):
+        raise AssertionError('verified repeat installation must stay offline')
+    monkeypatch.setattr(urllib.request, 'urlopen', no_network)
+    exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
     installed = tmp_path / 'tools/udocker-1.3.17'
     record = json.loads((installed / 'manifest.json').read_text())
     assert 'bin/udocker' in record['files']
@@ -324,6 +327,11 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
     assert '1.3.17' in output.stdout
     (installed / 'engines/bin/proot-x86_64').write_bytes(b'corrupt')
     with pytest.raises(ValueError, match='udocker installed byte mismatch'):
+        exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
+    import hashlib
+    record['files']['engines/bin/proot-x86_64'] = hashlib.sha256(b'corrupt').hexdigest()
+    (installed / 'manifest.json').write_text(json.dumps(record, sort_keys=True))
+    with pytest.raises(ValueError, match='udocker installation identity mismatch'):
         exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
 
 

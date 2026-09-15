@@ -72,50 +72,99 @@ final = root / 'tools/udocker-1.3.17'
 final.parent.mkdir(parents=True, exist_ok=True)
 if final.parent.is_symlink():
     raise ValueError('udocker tool root must not be a symlink')
-with tempfile.TemporaryDirectory(prefix='.udocker-', dir=final.parent) as tmp:
-    tmp = pathlib.Path(tmp)
-    assets = [
-        ('wheel', 'https://files.pythonhosted.org/packages/55/d6/caafad263b0e2375c2a8c586ac8b91fb7d3e363e6d1ab1e35a365d684254/udocker-1.3.17-py2.py3-none-any.whl', 'fd6589de0f3af7c1cd6a29554f2c00f2ef1fbd91da184ca30f8cea1eb42bcd2b', 119558),
-        ('engines', 'https://download.a.incd.pt/udocker/udocker-englib-1.2.11.tar.gz', '2a4804ba82e087ca3e99305fce9887227925d2b56aaefcad6474c4cb86b7a157', 46237418)]
-    stage = tmp / 'install'
-    (stage / 'bin').mkdir(parents=True)
-    for name, url, digest, size in assets:
-        path = tmp / name
-        with urllib.request.urlopen(url, timeout=180) as response, path.open('wb') as out:
-            shutil.copyfileobj(response, out)
-        with path.open('rb') as stream:
-            if path.stat().st_size != size or hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
-                raise ValueError('upstream checksum mismatch')
-    with zipfile.ZipFile(tmp / 'wheel') as wheel:
-        for name in wheel.namelist():
-            if name.startswith('udocker/') and not name.endswith('/'):
-                if '..' in pathlib.PurePosixPath(name).parts:
-                    raise ValueError('unsafe wheel member')
-                target = stage / 'lib' / name
+# Derived from the two checksum-pinned upstream archives and launcher below.
+# This independently authenticates the receipt; a locally rewritten receipt
+# must never be able to bless altered installed files.
+INSTALLED_MANIFEST_SHA256 = 'ef096a752afa07c42be568c2b4ff4eda2ce5fbf8ea25191d28829596df159c76'
+
+def installed_file(name, *, retain=False):
+    import stat
+    path = final.absolute() / name
+    fds = [os.open('/', os.O_RDONLY | os.O_DIRECTORY)]
+    links = []
+    try:
+        for part in path.parts[1:-1]:
+            fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fds[-1])
+            links.append((fds[-1], part, fd)); fds.append(fd)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fds[-1])
+        links.append((fds[-1], path.name, fd)); fds.append(fd)
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('udocker installed byte mismatch')
+        with os.fdopen(os.dup(fd), 'rb') as stream:
+            value = stream.read(1024 * 1024) if retain else hashlib.file_digest(stream, 'sha256').hexdigest()
+            if retain and stream.read(1):
+                raise ValueError('udocker installation identity mismatch')
+        after = os.fstat(fd)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('udocker installed byte mismatch')
+        for parent, member, opened in links:
+            a, b = os.stat(member, dir_fd=parent, follow_symlinks=False), os.fstat(opened)
+            if (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino):
+                raise ValueError('udocker installed path changed')
+        return value
+    finally:
+        for fd in reversed(fds):
+            os.close(fd)
+
+def installed():
+    if not final.exists() and not final.is_symlink():
+        return False
+    receipt = installed_file('manifest.json', retain=True)
+    if hashlib.sha256(receipt).hexdigest() != INSTALLED_MANIFEST_SHA256:
+        raise ValueError('udocker installation identity mismatch')
+    for name, digest in json.loads(receipt)['files'].items():
+        if installed_file(name) != digest:
+            raise ValueError('udocker installed byte mismatch')
+    return True
+
+if not installed():
+    with tempfile.TemporaryDirectory(prefix='.udocker-', dir=final.parent) as tmp:
+        tmp = pathlib.Path(tmp)
+        assets = [
+            ('wheel', 'https://files.pythonhosted.org/packages/55/d6/caafad263b0e2375c2a8c586ac8b91fb7d3e363e6d1ab1e35a365d684254/udocker-1.3.17-py2.py3-none-any.whl', 'fd6589de0f3af7c1cd6a29554f2c00f2ef1fbd91da184ca30f8cea1eb42bcd2b', 119558),
+            ('engines', 'https://download.a.incd.pt/udocker/udocker-englib-1.2.11.tar.gz', '2a4804ba82e087ca3e99305fce9887227925d2b56aaefcad6474c4cb86b7a157', 46237418)]
+        stage = tmp / 'install'
+        (stage / 'bin').mkdir(parents=True)
+        for name, url, digest, size in assets:
+            path = tmp / name
+            with urllib.request.urlopen(url, timeout=180) as response, path.open('wb') as out:
+                shutil.copyfileobj(response, out)
+            with path.open('rb') as stream:
+                if path.stat().st_size != size or hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
+                    raise ValueError('upstream checksum mismatch')
+        with zipfile.ZipFile(tmp / 'wheel') as wheel:
+            for name in wheel.namelist():
+                if name.startswith('udocker/') and not name.endswith('/'):
+                    if '..' in pathlib.PurePosixPath(name).parts:
+                        raise ValueError('unsafe wheel member')
+                    target = stage / 'lib' / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(wheel.read(name))
+        with tarfile.open(tmp / 'engines') as archive:
+            for name in ('bin/proot-x86_64', 'bin/proot-x86_64-4_8_0', 'lib/VERSION'):
+                member = archive.getmember('udocker_dir/' + name)
+                if not member.isfile():
+                    raise ValueError('unsafe engine member')
+                target = stage / 'engines' / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(wheel.read(name))
-    with tarfile.open(tmp / 'engines') as archive:
-        for name in ('bin/proot-x86_64', 'bin/proot-x86_64-4_8_0', 'lib/VERSION'):
-            member = archive.getmember('udocker_dir/' + name)
-            if not member.isfile():
-                raise ValueError('unsafe engine member')
-            target = stage / 'engines' / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.extractfile(member).read())
-            target.chmod(0o755 if name.startswith('bin/') else 0o644)
-    launcher = stage / 'bin/udocker'
-    launcher.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))\nfrom udocker.maincmd import main\nsys.exit(main())\n")
-    launcher.chmod(0o755)
-    records = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest()
-               for p in stage.rglob('*') if p.is_file()}
-    (stage / 'manifest.json').write_text(json.dumps(dict(assets=assets, files=records), sort_keys=True))
-    if final.exists():
-        if final.is_symlink() or (final / 'manifest.json').read_bytes() != (stage / 'manifest.json').read_bytes():
-            raise ValueError('udocker installation identity mismatch')
-        for name, digest in records.items():
-            path = final / name
-            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                raise ValueError('udocker installed byte mismatch')
-    else:
-        os.rename(stage, final)
+                target.write_bytes(archive.extractfile(member).read())
+                target.chmod(0o755 if name.startswith('bin/') else 0o644)
+        launcher = stage / 'bin/udocker'
+        launcher.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))\nfrom udocker.maincmd import main\nsys.exit(main())\n")
+        launcher.chmod(0o755)
+        records = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in stage.rglob('*') if p.is_file()}
+        (stage / 'manifest.json').write_text(json.dumps(dict(assets=assets, files=records), sort_keys=True))
+        if hashlib.sha256((stage / 'manifest.json').read_bytes()).hexdigest() != INSTALLED_MANIFEST_SHA256:
+            raise ValueError('udocker upstream installation manifest mismatch')
+        if final.exists():
+            if final.is_symlink() or (final / 'manifest.json').read_bytes() != (stage / 'manifest.json').read_bytes():
+                raise ValueError('udocker installation identity mismatch')
+            for name, digest in records.items():
+                path = final / name
+                if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                    raise ValueError('udocker installed byte mismatch')
+        else:
+            os.rename(stage, final)
 PY_INSTALL
