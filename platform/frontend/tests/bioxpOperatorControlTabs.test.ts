@@ -46,16 +46,19 @@ test('action forms and route provenance come only from the robot catalog and adm
     // a generation-reset receipt union preserve ordinary, interrupt and lifecycle evidence.
     assert.doesNotMatch(cockpit, /updateFreshness|useBioXpFreshness/);
     assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && latestOperatorReceipt/);
+    // Current command evidence survives an unrelated history read failure.
+    assert.match(cockpit, /const displayedLatestReceipt = latestReceiptQuery\.data\?\.command_id === latestOperatorReceipt\?\.command_id/);
+    assert.match(cockpit, /\? latestReceiptQuery\.data : latestOperatorReceipt/);
     assert.match(cockpit, /const latestOperatorReceipt = interruptAggregateAbort\.data \?\? interruptZStop\.data \?\? interruptYStop\.data \?\? interruptXStop\.data \?\? invokeDeckAction\.data \?\? invokeLifecycleActionMutation\.data \?\? invokeYAction\.data \?\? xyReceipt \?\? invokeOperatorAction\.data/);
     assert.match(cockpit, /resetInterruptAggregateAbort\(\)/);
     assert.match(cockpit, /resetInvokeLifecycleAction\(\)/);
-    // R5 history depth is part of identity; updates retain all current-generation
-    // depth caches, deduplicate by command ID, and preserve each exact limit.
-    assert.match(client, /queryKey: \[\.\.\.operatorHistoryKey, connectionGeneration, limit\]/);
-    assert.match(client, /findAll\(\{ queryKey: \[\.\.\.operatorHistoryKey, generation\] \}\)/);
-    assert.match(client, /row\.command_id !== receipt\.command_id\)\]\.slice\(0, limit\)/);
-    assert.match(client, /updateBioXpHistoryCaches\(queryClient, variables.connectionGeneration, receipt\)/);
+    // Current history is canonical cursor pagination, not a synthesized local
+    // receipt union. Generation/limit/cursor retain each page's identity; a
+    // settled command invalidates its generation for authoritative re-reading.
+    assert.match(client, /queryKey: \[\.\.\.operatorHistoryKey, connectionGeneration, limit, cursor\]/);
+    assert.match(client, /params: cursor === null \? undefined : \{ cursor \}/);
+    assert.match(client, /invalidateQueries\(\{ queryKey: \[\.\.\.operatorHistoryKey, variables\.request\.expected_connection_generation\] \}\)/);
+    assert.doesNotMatch(client, /updateBioXpHistoryCaches/);
 });
 
 test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
@@ -73,7 +76,9 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(dashboard, /error !== null && error !== undefined/);
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
     // R5: current embedded telemetry, not an extra retired dashboard poll.
-    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, linkConnected\)/);
+    // Same-generation read-only catalog polling recovers status observation loss;
+    // fresh currentCatalogV2 still owns physical admission below.
+    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, active\)/);
     assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
     assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/);
     assert.match(cockpit, /data=\{displayTelemetry\}/);

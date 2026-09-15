@@ -263,6 +263,9 @@ class BioXpRobotClient:
         self._camera_age_anchor: tuple[tuple[int, int, object, object], float] | None = None
         self._snapshot_retry_backoff_seconds = snapshot_retry_backoff_seconds
         self._snapshot_retry_after = 0.0
+        # Scheduling cost only, never an observation or command permission.
+        # A new generation-bound client cannot inherit the previous target's cost.
+        self._snapshot_acquisition_seconds: float | None = None
         pinned_transport = PinnedAddressTransport(target, transport=transport)
         self._client = httpx.AsyncClient(
             base_url=target.api_url,
@@ -273,9 +276,11 @@ class BioXpRobotClient:
         )
 
     async def probe(self) -> dict[str, Any]:
+        started = self._monotonic_clock()
         payload = await self.probe_status_only()
         now = self._monotonic_clock()
-        if _hardware_evidence_needs_refresh(payload) and now < self._snapshot_retry_after:
+        needs_refresh = _hardware_evidence_needs_refresh(payload, self._snapshot_acquisition_seconds)
+        if needs_refresh and now < self._snapshot_retry_after:
             payload = dict(payload)
             payload["automatic_snapshot_refresh"] = {
                 "attempted": False,
@@ -284,7 +289,7 @@ class BioXpRobotClient:
                 "retry_after_s": max(0.0, self._snapshot_retry_after - now),
             }
             return payload
-        if _hardware_evidence_needs_refresh(payload):
+        if needs_refresh:
             try:
                 collected = await self.request(
                     "collect_hardware_snapshot",
@@ -301,12 +306,27 @@ class BioXpRobotClient:
                         "retry_after_s": 0.5, "reason": "operator_action_pending"}}
                 snapshot_id = _require_published_snapshot(collected)
                 payload = await self.probe_status_only()
+                # Include status, admission/transport, the whole collection and
+                # final readback, not just the producer's hardware phase.
+                elapsed = self._monotonic_clock() - started
+                if math.isfinite(elapsed) and elapsed >= 0:
+                    self._snapshot_acquisition_seconds = elapsed
                 payload = dict(payload)
                 payload["automatic_snapshot_refresh"] = {
                     "attempted": True,
                     "published": True,
                     "snapshot_id": snapshot_id,
                 }
+                # A deck sample can already be several seconds old when the
+                # full collection returns. Do not then unconditionally sleep a
+                # whole status tick. Only successful, still-fresh observations
+                # can request an earlier next probe; missing/failed evidence
+                # retains normal polling/backoff rather than a zero-delay loop.
+                if _hardware_refresh_due_in(payload) > 0:
+                    next_probe = _hardware_refresh_due_in(payload, self._snapshot_acquisition_seconds)
+                    if next_probe > 0 or (self._snapshot_acquisition_seconds is not None
+                                          and self._snapshot_acquisition_seconds >= 1.0):
+                        payload["automatic_snapshot_refresh"]["next_probe_after_s"] = next_probe
                 self._snapshot_retry_after = 0.0
             except (RobotResponseError, RobotTransportError) as exc:
                 # Runtime reachability remains truthful when only the query-only
@@ -722,7 +742,9 @@ async def _read_limited_body(
     return bytes(body)
 
 
-def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:
+def _hardware_evidence_needs_refresh(
+    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
+) -> bool:
     runtime_ready = payload.get("runtime_ready")
     if not isinstance(runtime_ready, bool):
         runtime_ready = payload.get("runtime_available")
@@ -731,19 +753,46 @@ def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:
     capabilities = payload.get("capabilities")
     if not isinstance(capabilities, (list, tuple, set)) or "collect_hardware_snapshot" not in capabilities:
         return False
-    freshness = payload.get("freshness")
-    freshness = freshness if isinstance(freshness, Mapping) else {}
-    available = payload.get("available") is True
-    cache_fresh = payload.get("cache_state") == "fresh" and freshness.get("state") == "fresh"
-    age_s = freshness.get("age_s")
-    fresh_for_s = freshness.get("fresh_for_s")
-    if not available or not cache_fresh:
-        return True
-    if isinstance(age_s, bool) or not isinstance(age_s, (int, float)):
-        return True
-    if isinstance(fresh_for_s, bool) or not isinstance(fresh_for_s, (int, float)) or fresh_for_s <= 0:
-        return True
-    return float(age_s) >= float(fresh_for_s) / 2.0
+    return _hardware_refresh_due_in(payload, acquisition_seconds) <= 0.0
+
+
+def _hardware_refresh_due_in(
+    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
+) -> float:
+    """Query scheduling only; these observations never grant command authority.
+
+    Generic status covers different domains and may remain fresh after motion
+    invalidates axes/gripper. Require the producer's admission-domain projection
+    and the independent deck sample, with their original source-owned budgets.
+    Missing or malformed evidence requests collection, never stale readiness.
+    """
+    remaining = []
+    for key in ("admission_observation", "deck_authority"):
+        observation = payload.get(key)
+        if not isinstance(observation, Mapping):
+            return 0.0
+        # A fresh negative observation (for example unreferenced axes) is
+        # still a completed query. It is not permission and must not cause a
+        # full-collection storm; absence/invalidation is expressed by freshness.
+        if key == "admission_observation" and observation.get("cache_state") != "fresh":
+            return 0.0
+        freshness = observation.get("freshness")
+        if not isinstance(freshness, Mapping) or freshness.get("state") != "fresh":
+            return 0.0
+        age, window = freshness.get("age_s"), freshness.get("fresh_for_s")
+        if (isinstance(age, bool) or not isinstance(age, (int, float))
+                or isinstance(window, bool) or not isinstance(window, (int, float))
+                or not math.isfinite(age) or not math.isfinite(window)
+                or age < 0 or window <= 0):
+            return 0.0
+        # The existing worker checks at <=1s. Reserve that tick as well as
+        # the measured previous full replacement cost, retaining half-budget
+        # when earlier. Neither cost nor scheduling can extend source expiry.
+        threshold = window / 2.0
+        if acquisition_seconds is not None:
+            threshold = min(threshold, window - acquisition_seconds - 1.0)
+        remaining.append(max(0.0, threshold - age))
+    return min(remaining)
 
 
 def _require_published_snapshot(response: object) -> str:

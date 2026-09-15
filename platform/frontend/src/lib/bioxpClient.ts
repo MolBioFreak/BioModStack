@@ -1642,6 +1642,9 @@ export interface BioXpOperatorInterruptReceiptV1 {
 const useInvokeBioXpOperatorActionV2Mutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        // Physical submissions must never inherit a retry/offline replay policy.
+        retry: false,
+        networkMode: 'always',
         mutationFn: async ({ request }: { request: BioXpOperatorActionV2Request }) => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;

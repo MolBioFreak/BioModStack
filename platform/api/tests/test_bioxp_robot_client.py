@@ -80,6 +80,14 @@ class SnapshotRefreshTransport(httpx.AsyncBaseTransport):
                 "available": True,
                 "cache_state": "fresh",
                 "freshness": {"state": "fresh", "age_s": self.age_s, "fresh_for_s": 30.0},
+                "admission_observation": {
+                    "available": True, "cache_state": "fresh",
+                    "freshness": {"state": "fresh", "age_s": self.age_s, "fresh_for_s": 30.0},
+                },
+                "deck_authority": {
+                    "available": True,
+                    "freshness": {"state": "fresh", "age_s": self.age_s, "fresh_for_s": 15.0},
+                },
                 "runtime_available": True,
                 "hardware_connected": True,
                 "capabilities": ["collect_hardware_snapshot"],

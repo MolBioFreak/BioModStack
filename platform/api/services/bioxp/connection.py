@@ -18,7 +18,7 @@ from .models import (
     BioXpSnapshot,
 )
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse
+from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse, _hardware_refresh_due_in
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -125,8 +125,10 @@ class BioXpConnectionService:
         if v2_enqueue_timeout_seconds <= 0 or interrupt_timeout_seconds <= 0:
             raise ValueError("BioXP request timeouts must be positive")
         self.active_probe_interval_seconds = active_probe_interval_seconds
+        # Check the existing observer promptly after command invalidation. This
+        # is a status cadence, not a hardware collection interval or authority TTL.
         self.snapshot_refresh_interval_seconds = (
-            max(20.0, active_probe_interval_seconds * 2.0)
+            1.0
             if active_probe_interval_seconds is not None
             else None
         )
@@ -927,7 +929,8 @@ class BioXpConnectionService:
         try:
             while True:
                 await asyncio.sleep(delay)
-                delay = await self._snapshot_refresh_once() or self.snapshot_refresh_interval_seconds
+                next_delay = await self._snapshot_refresh_once()
+                delay = self.snapshot_refresh_interval_seconds if next_delay is None else next_delay
         except asyncio.CancelledError:
             raise
         except (ConnectionStateError, TargetPolicyError):
@@ -986,15 +989,13 @@ class BioXpConnectionService:
                 return min(interval, float(retry))
             if refresh.get("error"):
                 return interval  # retain the client's transport-failure backoff
-        freshness = payload.get("freshness")
-        if isinstance(freshness, Mapping) and freshness.get("state") == "fresh":
-            age, window = freshness.get("age_s"), freshness.get("fresh_for_s")
-            if (isinstance(age, (int, float)) and not isinstance(age, bool)
-                    and isinstance(window, (int, float)) and not isinstance(window, bool)
-                    and isfinite(age) and isfinite(window) and age >= 0 and window > 0):
-                remaining = window / 2.0 - age
-                if remaining > 0:
-                    return min(interval, remaining)
+            next_probe = refresh.get("next_probe_after_s")
+            if (refresh.get("published") is True and isinstance(next_probe, (int, float))
+                    and not isinstance(next_probe, bool) and isfinite(next_probe) and next_probe >= 0):
+                return min(interval, float(next_probe))
+        remaining = _hardware_refresh_due_in(payload)
+        if remaining > 0:
+            return min(interval, remaining)
         # Missing/invalid evidence or a collection already past its refresh
         # threshold must not spin this worker in a zero-delay retry loop.
         return interval

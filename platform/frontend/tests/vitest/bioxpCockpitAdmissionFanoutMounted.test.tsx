@@ -10,10 +10,10 @@ import actualY5 from '../fixtures/bioxp_xy_y5_compact.json';
 import manualReport from '../fixtures/bioxp_xy_manual_report.json';
 import actualY5History from '../fixtures/bioxp_xy_y5_history.json';
 import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false }));
+const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
@@ -505,6 +505,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         reset: state.stableReset,
     }),
     useInvokeBioXpOperatorActionV2: () => {
+        if (nativeMetadataMode.mutations) return real.useInvokeBioXpOperatorActionV2();
         // Cockpit mounts lifecycle, axis, then XY mutations each render.
         const lifecycle = state.v2MutationHookCalls % 3 === 0;
         const xy = state.v2MutationHookCalls % 3 === 2;
@@ -546,6 +547,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
             }
             : {
                 data: state.yInvokeData,
+                variables: state.yInvokeCalls.at(-1),
                 error: state.yInvokeError,
                 isPending: state.axisInvokePending,
                 mutate: (
@@ -553,7 +555,11 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
                     callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
                 ) => {
                     state.yInvokeCalls.push(payload);
-                    if (state.normalQueuedReceipt !== undefined) callbacks?.onSuccess?.(state.normalQueuedReceipt);
+                    callbacks?.onSuccess?.(state.normalQueuedReceipt ?? {
+                        command_id: `axis-command-${state.yInvokeCalls.length}`,
+                        action_id: (payload.request as Record<string, unknown>).action_id,
+                        status: 'completed', terminal: true,
+                    });
                 },
                 reset: state.stableReset,
             };
@@ -768,6 +774,26 @@ describe('primary cockpit query ownership', () => {
             expect(stop.disabled).toBe(pending === 'interrupt');
         }
         expect(state.yInvokeCalls).toHaveLength(0);
+    });
+
+    it.each(['X', 'Y', 'Z'])('labels a rejected %s request by its submitted axis without retrying', async axis => {
+        const render = () => act(async () => root.render(<BioXpCockpit />));
+        await render();
+        const panel = [...container.querySelectorAll('article')].find(node => node.querySelector('h3')?.textContent === `${axis} Axis`)!;
+        const move = [...panel.querySelectorAll('button')].find(node => node.textContent === 'Go absolute')!;
+        expect(move.disabled).toBe(false);
+        await act(async () => move.click());
+        expect(state.yInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: `oem.${axis.toLowerCase()}.move_absolute` } });
+        state.yInvokeError = { response: { status: 409, data: { detail: {
+            code: 'operator_action_busy', message: 'A normal action is active; observe its receipt before submitting another.',
+        } } } };
+        await render();
+        expect(container.textContent).toContain(axis === 'Y' ? 'Y enqueue failed' : `${axis} command failed`);
+        expect(container.textContent).toContain('operator_action_busy');
+        if (axis !== 'Y') expect(container.textContent).not.toContain('Y enqueue failed');
+        await render();
+        expect(state.yInvokeCalls).toHaveLength(1);
     });
 
     it('renders real manual producer admission transitions without submitting motion', async () => {
@@ -1242,6 +1268,8 @@ beforeEach(() => {
     state.yInterruptError = null;
     state.yInvokeData = undefined;
     state.normalQueuedReceipt = undefined;
+    nativeMetadataMode.mutations = false;
+    nativeMetadataMode.receipts = false;
     state.yInterruptData = undefined;
     state.yReceipt.data = undefined;
     state.yReceipt.error = null;
@@ -1426,6 +1454,109 @@ beforeEach(() => {
 afterEach(async () => {
     await act(async () => root.unmount());
     document.body.replaceChildren();
+});
+
+describe('L3 rapid submission and receipt reconciliation', () => {
+    beforeEach(() => { vi.mocked(api.post).mockReset(); vi.mocked(api.get).mockReset(); });
+    const settle = async () => { await new Promise(resolve => setTimeout(resolve, 25)); };
+    const moveFor = (axis: string) => [...container.querySelectorAll('article')]
+        .find(node => node.querySelector('h3')?.textContent === `${axis.toUpperCase()} Axis`)!
+        .querySelectorAll<HTMLButtonElement>('button');
+    const positive = (axis: string) => [...moveFor(axis)].find(button => button.textContent === 'Move +')!;
+
+    it.each(['x', 'y', 'z'])('L3 reserves %s synchronously, drops rapid cross-axis clicks and preserves a real 409 without retry', async axis => {
+        nativeMetadataMode.mutations = true;
+        let reject!: (reason: unknown) => void;
+        vi.mocked(api.post).mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        const client = new QueryClient({ defaultOptions: { mutations: { retry: 3 }, queries: { retry: false } } });
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            await act(async () => {
+                positive(axis).click(); positive(axis).click(); positive(axis === 'x' ? 'y' : 'x').click();
+                await settle();
+            });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(api.post).mock.calls[0][0]).toContain(`oem.${axis}.move_steps`);
+            expect(positive(axis).disabled).toBe(true);
+            expect([...moveFor(axis)].find(button => button.textContent === 'Stop')!.disabled).toBe(false);
+            await act(async () => {
+                reject({ response: { status: 409, data: { detail: { error: 'operator_action_busy' } } } });
+                await settle();
+            });
+            expect(container.textContent).toContain(`${axis === 'y' ? 'Y enqueue' : `${axis.toUpperCase()} command`} failed · HTTP 409`);
+            expect(positive(axis).disabled).toBe(false);
+            await act(async () => { await settle(); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+        } finally { await act(async () => root.unmount()); client.clear(); root = createRoot(container); }
+    });
+
+    it('L3 never parks a click for online replay and fences a late response after generation replacement', async () => {
+        nativeMetadataMode.mutations = true;
+        const pending: Array<(value: unknown) => void> = [];
+        vi.mocked(api.post).mockImplementation(() => new Promise(resolve => { pending.push(resolve as (value: unknown) => void); }));
+        const client = new QueryClient();
+        const render = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>); await settle(); }); };
+        try {
+            await render();
+            onlineManager.setOnline(false);
+            await act(async () => { positive('x').click(); await settle(); });
+            // The explicit request fails or returns now; React Query must not
+            // retain an offline command and execute it on a later reconnect.
+            expect(api.post).toHaveBeenCalledTimes(1);
+            state.connectionGeneration += 1;
+            await render();
+            await act(async () => { positive('y').click(); await settle(); });
+            expect(api.post).toHaveBeenCalledTimes(2);
+            await act(async () => { pending[0]({ data: { ...manualReport, command_id: 'l3-old-owner', action_id: 'oem.x.move_steps' } }); await settle(); });
+            expect(container.textContent).not.toContain('l3-old-owner');
+            expect(positive('y').disabled).toBe(true);
+            await act(async () => { positive('x').click(); onlineManager.setOnline(true); await settle(); });
+            expect(api.post).toHaveBeenCalledTimes(2);
+            await act(async () => { pending[1]({ data: { ...manualReport, command_id: 'l3-current-owner', action_id: 'oem.y.move_steps' } }); await settle(); });
+            expect(positive('y').disabled).toBe(false);
+        } finally { onlineManager.setOnline(true); await act(async () => root.unmount()); client.clear(); root = createRoot(container); }
+    });
+
+    it.each(['x', 'y'])('L3 reconciles uncertain %s by real GET through status failure and terminal failure, without a delayed replay', async axis => {
+        nativeMetadataMode.mutations = true;
+        nativeMetadataMode.receipts = true;
+        const commandId = `l3-${axis}-uncertain`;
+        const actionId = `oem.${axis}.move_steps`;
+        vi.mocked(api.post).mockRejectedValue({ response: { status: 502, data: { detail: {
+            error: 'post_dispatch_receipt_validation_failed', command_id: commandId,
+            status_path: `/operator/v2/actions/receipts/${commandId}`,
+            retry_guidance: 'do_not_resubmit_reconcile_by_command_id',
+        } } } });
+        let terminal = false;
+        vi.mocked(api.get).mockImplementation(async url => {
+            if (!String(url).includes(`/receipts/${commandId}`)) throw new Error(`Unexpected GET ${url}`);
+            if (!terminal) throw new Error('receipt temporarily unavailable');
+            return { data: { ...actualY5Detail, command_id: commandId, action_id: actionId } } as never;
+        });
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const render = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>); await settle(); }); };
+        try {
+            await render();
+            await act(async () => { positive(axis).click(); await settle(); });
+            expect(positive(axis).disabled).toBe(true);
+            expect(container.textContent).toContain(commandId);
+            state.statusError = true; state.connectionReachable = false;
+            await render();
+            const before = vi.mocked(api.get).mock.calls.length;
+            terminal = true;
+            await act(async () => { await client.refetchQueries({ queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt'] }); await settle(); });
+            expect(vi.mocked(api.get).mock.calls.length).toBeGreaterThan(before);
+            expect(container.textContent).toContain(`${actionId} · failed · ${commandId}`);
+            state.statusError = false; state.connectionReachable = true;
+            await render();
+            expect(positive(axis).disabled).toBe(false);
+            expect(api.post).toHaveBeenCalledTimes(1);
+            state.connectionGeneration += 1;
+            await render();
+            expect(container.textContent).not.toContain(commandId);
+            expect(api.post).toHaveBeenCalledTimes(1);
+        } finally { await act(async () => root.unmount()); client.clear(); root = createRoot(container); }
+    });
 });
 
 describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
@@ -3347,6 +3478,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(move.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         await act(async () => move.click());
+        await act(async () => state.xyCallbacks?.onSuccess?.({
+            ...manualReport, command_id: 'xy-route-test', action_id: 'oem.xy.move_absolute',
+            status: 'completed', terminal: true,
+        }));
         await act(async () => home.click());
         expect(state.methodCalls).toHaveLength(0);
         expect(state.xyCalls).toHaveLength(2);

@@ -657,7 +657,8 @@ def test_connection_and_active_monitor_are_status_only_while_snapshot_refresh_ru
 
         assert service.snapshot().observation_fresh is True
         assert clients[0].status_only_probes >= 3
-        assert clients[0].probes == 0  # automatic full refresh has a deliberate 20s floor
+        assert clients[0].probes == 0  # connect/initial status monitor never collect
+        assert service.snapshot_refresh_interval_seconds == 1.0
         await service._snapshot_refresh_once()
         assert clients[0].probes == 1
 
