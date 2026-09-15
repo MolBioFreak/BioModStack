@@ -62,10 +62,12 @@ export interface MetricDatasetMetadata {
     readonly descriptorId: string;
     readonly documentIds: readonly string[];
     readonly shape?: readonly [number, number];
-    readonly rowAxis?: readonly ResidueRef[];
-    readonly columnAxis?: readonly ResidueRef[];
+    readonly rowAxis?: readonly AtomRef[];
+    readonly columnAxis?: readonly AtomRef[];
     /** Explicit directed matrix identity; absent retains the legacy symmetric renderer. */
     readonly matrixDirection?: 'directed';
+    /** Exact dense values in declared axis order; avoids repeating identities per cell. */
+    readonly matrix?: readonly (readonly number[])[];
     readonly originalIndices?: readonly number[];
     readonly reduction?: { readonly method: string; readonly sourceShape: readonly [number, number]; readonly parameters: Readonly<Record<string, number | string | boolean>> };
 }
@@ -79,8 +81,8 @@ export interface ChainPairIdentity {
     readonly secondInstanceId?: string;
 }
 export interface ResiduePairIdentity {
-    readonly first: ResidueRef;
-    readonly second: ResidueRef;
+    readonly first: AtomRef;
+    readonly second: AtomRef;
 }
 export interface GeometryAnnotationIdentity {
     readonly annotationId: string;

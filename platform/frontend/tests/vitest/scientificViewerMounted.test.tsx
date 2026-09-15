@@ -97,10 +97,11 @@ it('late residue response cannot overwrite the newer candidate, even without tra
     let finishOld!: (value: unknown) => void;
     const old = new Promise(resolve=>{finishOld=resolve;});
     vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ok:true,json:()=>url.includes('/candidate/residue-metrics') ? old : Promise.resolve({plddt:[22],residue_numbers:[1]})})));
-    const legacy={...design,core_protein_scientific_contract:undefined,confidence_metrics:{confornets_request:{chain_id:'H'}}};
+    const legacy={...design,core_protein_scientific_contract:undefined,scientific_structure_document:undefined,confidence_metrics:{confornets_request:{chain_id:'H'}}};
     const p={...props,colorMode:'plddt',selectedDesign:legacy,viewerAnalyses:{}};
     await act(async () => { mounted=create(wrap(p)); });
     await act(async () => mounted!.update(wrap({...p,selectedDesignId:'candidate-b',selectedDesign:{...legacy,id:'candidate-b'}})));
+    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,15));});
     const points=()=>JSON.parse(mounted!.root.findByProps({'data-workbench':true}).props['data-residue-points']);
     expect(points().map((p:any)=>p.value)).toEqual([22]);
     await act(async () => finishOld({plddt:[99],residue_numbers:[1]}));

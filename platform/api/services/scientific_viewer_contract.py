@@ -39,15 +39,28 @@ class NativeResidue(IdentityWire):
     entity_instance_id: str | None
 
 
+class NativeAtom(NativeResidue):
+    """AtomRef-aligned identity; index is the native axis position, not residue number."""
+    label_atom_id: str
+    auth_atom_id: str
+    element: str
+
+    @model_validator(mode='after')
+    def atom_identity(self):
+        if not all(v.strip() for v in (self.label_atom_id, self.auth_atom_id, self.element)):
+            raise ValueError('missing native atom identity')
+        return self
+
+
 class NativeAxis(ProducerBinding):
     source_sha256: str
-    residues: list[NativeResidue]
+    residues: list[NativeResidue | NativeAtom]
 
 
 class NativeChain(IdentityWire):
     native_asym_id: int
     source_chain_index: int
-    output_asym_id: int
+    output_asym_id: int | None
     chain_id: str
     native_entity_id: int
     native_sym_id: int
@@ -99,6 +112,21 @@ class ScientificResidueMetric(NativeMetricBase):
     def vector_shape(self):
         if len(self.values) != len(self.axis.residues) or any(not 0 <= v <= 1 for v in self.values):
             raise ValueError('invalid native fraction vector')
+        return self
+
+
+class ScientificAtomMetric(NativeMetricBase):
+    metric: Literal['atom_plddt']
+    units: Literal['fraction']
+    values: list[float]
+
+    @model_validator(mode='after')
+    def vector_shape(self):
+        if (len(self.values) != len(self.axis.residues)
+                or self.native_positions != list(range(len(self.values)))
+                or not all(isinstance(r, NativeAtom) for r in self.axis.residues)
+                or any(not 0 <= v <= 1 for v in self.values)):
+            raise ValueError('invalid native atom confidence')
         return self
 
 

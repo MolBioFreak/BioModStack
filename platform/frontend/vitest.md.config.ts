@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+    cacheDir: process.env.BMS_SCIENTIFIC_VITE_CACHE,
     test: {
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
@@ -30,6 +31,7 @@ export default defineConfig({
             ...(process.env.BMS_TEST_BOLTZ_WIRE ? ['./tests/vitest/publishedBoltzPaeMounted.test.tsx', './tests/vitest/publishedBoltzNativeMounted.test.tsx'] : []),
             './tests/vitest/truthfulAnalyticsMounted.test.tsx',
             './tests/vitest/scientificPairMatrixMounted.test.tsx',
+            './tests/vitest/nativeAtomViewerMounted.test.tsx',
             './tests/vitest/scientificViewerIdentity.test.ts',
             './tests/vitest/scientificViewerMounted.test.tsx',
             './tests/vitest/mdResultsMolstarMounted.test.tsx',

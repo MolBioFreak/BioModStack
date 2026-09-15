@@ -2503,14 +2503,15 @@ export function ResultsViewer() {
     const selectedDesignSupportsAntibodyAnalyzer = supportsAnalyzer(selectedDesign, 'antibody_annotation_pack');
     const selectedDesignSupportsChainMetrics = supportsAnalyzer(selectedDesign, 'chain_metrics');
     const selectedDesignSupportsIpsae = supportsAnalyzer(selectedDesign, 'ipsae_interface');
-    const selectedDesignSupportsPaeMatrix = supportsAnalyzer(selectedDesign, 'pae_matrix');
+    const hasNativeSpatialDocument = Boolean(selectedDesign?.scientific_structure_document);
+    const selectedDesignSupportsPaeMatrix = !hasNativeSpatialDocument && supportsAnalyzer(selectedDesign, 'pae_matrix');
     const selectedDesignSupportsContactMap = supportsAnalyzer(selectedDesign, 'contact_map');
     const selectedDesignCanRunStructureSummary = isAnalyzerAvailable(selectedDesign, 'structure_summary');
     const selectedDesignCanRunAntibodyAnalysis = isAnalyzerAvailable(selectedDesign, 'antibody_annotation_pack');
     const selectedDesignCanRunChainMetrics = isAnalyzerAvailable(selectedDesign, 'chain_metrics');
     const selectedDesignCanRunSequenceAnalysis = isAnalyzerAvailable(selectedDesign, 'fampnn_psce_profile');
     const selectedDesignCanRunIpsae = isAnalyzerAvailable(selectedDesign, 'ipsae_interface');
-    const selectedDesignCanRunPaeMatrix = isAnalyzerAvailable(selectedDesign, 'pae_matrix');
+    const selectedDesignCanRunPaeMatrix = !hasNativeSpatialDocument && isAnalyzerAvailable(selectedDesign, 'pae_matrix');
     const selectedDesignCanRunContactMap = isAnalyzerAvailable(selectedDesign, 'contact_map');
     const visibleReviewTabs = useMemo(() => {
         const visibleIds = new Set(getVisibleReviewTabs(selectedDesign));
@@ -2875,16 +2876,16 @@ export function ResultsViewer() {
         },
     });
     const paeMatrixSummary = useMemo(() => {
-        const raw = paeMatrixAnalysisRun?.status === 'completed' ? paeMatrixAnalysisRun.result : null;
+        const raw = !hasNativeSpatialDocument && paeMatrixAnalysisRun?.status === 'completed' ? paeMatrixAnalysisRun.result : null;
         if (!raw) return null;
-        if (selectedDesign?.core_protein_scientific_contract != null) {
-            const parsed = parseScientificPae(raw, selectedDesign.scientific_structure_document);
+        if (typeof raw === 'object' && 'schema_name' in raw && raw.schema_name === 'core_protein_viewer_metric') {
+            const parsed = parseScientificPae(raw, selectedDesign?.scientific_structure_document,selectedDesignId ?? undefined);
             return parsed.status === 'ok' ? `${parsed.rows.length} × ${parsed.columns.length} matrix` : parsed.reason;
         }
         return typeof raw === 'object' && 'size' in raw && typeof raw.size === 'number' && Number.isSafeInteger(raw.size)
             ? `${raw.size} × ${raw.size} matrix` : null;
-    }, [paeMatrixAnalysisRun, selectedDesign?.core_protein_scientific_contract, selectedDesign?.scientific_structure_document]);
-    const paeMatrixAnalysis = paeMatrixAnalysisRun?.status === 'completed'
+    }, [hasNativeSpatialDocument, paeMatrixAnalysisRun, selectedDesignId, selectedDesign?.scientific_structure_document]);
+    const paeMatrixAnalysis = !hasNativeSpatialDocument && paeMatrixAnalysisRun?.status === 'completed'
         ? (paeMatrixAnalysisRun.result ?? null)
         : null;
     const runPaeMatrixAnalysis = useMutation({
@@ -2892,6 +2893,7 @@ export function ResultsViewer() {
             if (!selectedDesignId) {
                 throw new Error('No design selected');
             }
+            if (hasNativeSpatialDocument) throw new Error('Native PAE is read directly from the retained result');
             const response = await triggerDesignAnalysis<unknown>(selectedDesignId, 'pae_matrix', { max_size: 200 });
             return response.data;
         },

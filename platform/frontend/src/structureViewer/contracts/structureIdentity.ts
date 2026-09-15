@@ -44,6 +44,14 @@ export interface AtomRef extends ResidueRef {
     readonly atomIndex?: number;
 }
 
+/** Spatial metrics may address a complete residue token or a distinct atom token. */
+export const canonicalSpatialRefKey = (ref: AtomRef): string => {
+    const residue = canonicalResidueRefKey(ref);
+    return ref.labelAtomId !== undefined || ref.authAtomId !== undefined
+        ? `${residue}|label_atom=${encodeURIComponent(ref.labelAtomId ?? '')}|auth_atom=${encodeURIComponent(ref.authAtomId ?? '')}|element=${encodeURIComponent(ref.element ?? '')}`
+        : residue;
+};
+
 const present = (value: string | undefined): boolean => Boolean(value?.trim());
 const integer = (value: number | undefined): boolean => value !== undefined && Number.isInteger(value);
 

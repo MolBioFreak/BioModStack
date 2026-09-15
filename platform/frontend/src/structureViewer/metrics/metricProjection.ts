@@ -1,5 +1,5 @@
 import type { MolstarResidueMetricLayer, MolstarRgbColor } from '../../lib/molstar-metrics.js';
-import type { ResidueRef } from '../contracts/structureIdentity.js';
+import type { AtomRef, ResidueRef } from '../contracts/structureIdentity.js';
 import { viewerOk, viewerUnsupported, type ViewerResult } from '../contracts/viewerResults.js';
 import type { MetricLayer, MetricValue } from './metricContracts.js';
 
@@ -29,6 +29,19 @@ const paletteColor = (colors: readonly MolstarRgbColor[], fraction: number): Mol
 const finiteValues = (values: readonly MetricValue<ResidueRef>[]): number[] => values.flatMap((entry) => (
     typeof entry.value === 'number' && Number.isFinite(entry.value) && entry.missingness === undefined ? [entry.value] : []
 ));
+
+export const projectAtomMetricLayer = (layer: MetricLayer) => {
+    if (layer.descriptor.dimension !== 'atom-scalar' || layer.descriptor.projectionPolicy !== 'direct') return [];
+    const domain = layer.descriptor.palette?.domain ?? layer.descriptor.valueRange;
+    if (!domain) return [];
+    const palette = (layer.descriptor.palette?.colors ?? ['#2563eb','#f8fafc','#dc2626']).map(parseColor).filter((c): c is MolstarRgbColor => c !== null);
+    if (!palette.length) return [];
+    return (layer.values as readonly MetricValue<AtomRef>[]).flatMap(entry => {
+        if (typeof entry.value !== 'number' || !Number.isFinite(entry.value) || entry.missingness !== undefined) return [];
+        return [{identity:entry.identity, color: (entry.displayColor ? parseColor(entry.displayColor) : null) ?? paletteColor(palette, (entry.value-domain[0])/(domain[1]-domain[0])),
+            tooltip:`${layer.descriptor.label}: ${entry.value} ${layer.descriptor.units ?? ''} · ${layer.descriptor.provenance.source}`}];
+    });
+};
 
 export const projectResidueMetricLayer = (layer: MetricLayer, options: MetricProjectionOptions = {}): ViewerResult<MolstarResidueMetricLayer> => {
     if (layer.descriptor.dimension !== 'residue-scalar' || layer.descriptor.projectionPolicy !== 'direct') {

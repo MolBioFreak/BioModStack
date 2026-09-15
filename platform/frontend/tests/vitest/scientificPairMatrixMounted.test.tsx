@@ -73,7 +73,7 @@ it.each(['foreign-axis','duplicate-axis','foreign-cell','duplicate-cell','confli
         if(kind==='foreign-cell') values[0]={...values[0],identity:{...values[0].identity,first:{...values[0].identity.first,modelId:'foreign'}}};
         if(kind==='duplicate-cell' || kind==='conflicting-cell') values.push({...values[0],value:kind==='conflicting-cell'?999:values[0].value});
         if(kind==='shape') dataset.shape=[6,5];
-        if(kind==='overflow') {dataset.rowAxis=Array.from({length:513},(_,i)=>({...dataset.rowAxis![0],authSeqId:i}));dataset.shape=[513,5];}
+        if(kind==='overflow') {dataset.rowAxis=Array.from({length:1025},(_,i)=>({...dataset.rowAxis![0],authSeqId:i}));dataset.shape=[1025,5];}
         if(kind==='missing-cell') values=values.slice(1);
         if(kind==='document') dataset.documentIds=['foreign'];
         if(kind==='missing-axis') dataset.columnAxis=undefined;
@@ -97,10 +97,10 @@ function largePayload(count: number) {
     return p;
 }
 it('API-shaped MAX_AXIS overflow remains explicit unavailable through the builder', async () => {
-    await mount(largePayload(513));
-    expect(state.layer!.dataset!.shape).toEqual([513,513]);
+    await mount(largePayload(1025));
+    expect(state.layer!.dataset!.shape).toEqual([1025,1025]);
     expect(state.layer!.values).toHaveLength(0);
-    expect(text(mounted!.root.findByType(PairMatrixExtension).findByProps({role:'status'}))).toContain('declared axis exceeds 512');
+    expect(text(mounted!.root.findByType(PairMatrixExtension).findByProps({role:'status'}))).toContain('declared axis exceeds 1024');
     expect(mounted!.root.findAllByType('canvas')).toHaveLength(0);
 });
 it('provider sampled projection of oversized native source is supported without re-reducing', async () => {
@@ -112,13 +112,14 @@ it('provider sampled projection of oversized native source is supported without 
 });
 it('supported 512 axes pass every cell beyond the old 250000-pair bound', async () => {
     await mount(largePayload(512));
-    expect(state.layer!.values).toHaveLength(512*512);
+    expect(state.layer!.values).toHaveLength(0);
+    expect(state.layer!.dataset!.matrix).toHaveLength(512);
     expect(image.width).toBe(512);expect(image.height).toBe(512);
     expect([...image.data.slice(-4)]).toEqual([245,80,30,255]);
     expect(text(mounted!.root)).toContain('Table lists the first 1000 directed cells');
 });
 it('unmarked overflow keeps the existing bounded symmetric behavior', async () => {
-    state.transform=layer=>({...layer,dataset:undefined,values:Array.from({length:513},(_,i)=>{
+    state.transform=layer=>({...layer,dataset:undefined,values:Array.from({length:1025},(_,i)=>{
         const ref={...layer.values[0].identity.first,authSeqId:i};
         return {identity:{first:ref,second:ref},value:i};
     })});

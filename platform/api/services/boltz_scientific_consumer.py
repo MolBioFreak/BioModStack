@@ -53,6 +53,10 @@ async def verified_boltz_design(design, session):
         return dict(selected, design_id=row.id, publication_root=root, publication_receipt=receipt)
 
 
+async def verified_native_design(design, session, *, structure_only=False):
+    return await verified_boltz_design(design, session)
+
+
 async def scientific_document(design, session):
     # Missing compact materialization is not an invitation to legacy inference.
     if not isinstance(getattr(design, 'confidence_metrics', None), dict) or not design.confidence_metrics.get('core_protein_scientific'):

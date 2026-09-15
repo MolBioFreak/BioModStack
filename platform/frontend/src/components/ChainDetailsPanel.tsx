@@ -102,7 +102,7 @@ export function ChainDetailsPanel(props: ChainDetailsPanelProps) {
             <h4>Chain Details ({metric.chains.length} chains)</h4>
             <div>Roles unavailable: missing_role_assignment</div>
             {metric.chains.map(chain=><div key={chain.providerIndex} data-native-chain={chain.chainId}>
-                Chain {chain.chainId} · pTM {chain.ptm.toFixed(3)} · {chain.residues.length} residues
+                Chain {chain.chainId} · pTM {chain.ptm.toFixed(3)} · {chain.residues.length} native positions
             </div>)}
             <table aria-label="Directed native chain iPTM"><thead><tr><th>From / to</th>{metric.chains.map(c=><th key={c.providerIndex}>{c.chainId}</th>)}</tr></thead>
                 <tbody>{metric.chains.map(row=><tr key={row.providerIndex}><th>{row.chainId}</th>{metric.chains.map(col=><td key={col.providerIndex}>{metric.pairChainsIptm[row.providerIndex][col.providerIndex].toFixed(3)}</td>)}</tr>)}</tbody>

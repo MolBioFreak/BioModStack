@@ -354,6 +354,8 @@ async def _dispatch_ipsae_interface(design, params, session, *, selected=None):
         selected = selected or await verified_native_spatial_design(design, session)
         if selected["design_id"] != design.id:
             raise ValueError("foreign selected snapshot")
+        if 'aligned_error' not in selected['native']:
+            raise ValueError('unsupported_model_native_spatial_metric')
         native = selected["native"]
         # Use the existing verified producer descriptors, not Design paths or
         # inferred matrix/structure order. No additional producer is admitted.

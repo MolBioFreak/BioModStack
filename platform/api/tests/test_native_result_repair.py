@@ -45,6 +45,7 @@ async def test_selected_snapshot_does_not_read_siblings(tmp_path, monkeypatch, c
                 assert (await verified_boltz_design(rows[0], session))['artifacts'] == selected['artifacts']
                 with pytest.raises(RuntimeError):
                     await ingest_job_results('job', str(tmp_path), session)
+                await session.refresh(rows[0])  # rollback expires ORM state, not the retained snapshot
             # Retained response bytes remain bound; the next request denies mutation.
             Path(rows[0].pdb_path).write_bytes(b'changed')
             assert hashlib.sha256(selected['snapshots']['structure']).hexdigest() == selected['artifacts']['structure']['sha256']
@@ -122,23 +123,29 @@ async def test_marked_spatial_applicability_agrees_with_routes(tmp_path, monkeyp
                 assert detail.status_code == 200, detail.text
                 assert detail.json()['scientific_structure_document'] is None
                 structure = await client.get(f'/designs/{row.id}/pdb')
-                assert structure.status_code == 200 and b'ATOM' in structure.content
+                if model == 'protenix':
+                    assert structure.status_code == 409  # copied Boltz custody is not Protenix authority
+                else:
+                    assert structure.status_code == 200 and b'ATOM' in structure.content
                 for metric_path in ['residue-metrics', 'chain-metrics', 'pae']:
                     response = await client.get(f'/designs/{row.id}/{metric_path}')
                     assert response.status_code == 200, response.text
-                    assert response.json()['reason'] == 'unsupported_model_native_spatial_metric'
+                    assert response.json()['reason'] == ('missing_or_invalid_protenix_native_evidence'
+                        if model == 'protenix' else 'unsupported_model_native_spatial_metric')
             from routers.designs import get_residue_metrics, get_chain_metrics, get_pae_data
             from services.core_protein_scientific_contract import compute_persisted_native_metric, compute_persisted_pae
             for name, endpoint in [('residue_plddt', get_residue_metrics), ('chain_metrics', get_chain_metrics)]:
                 direct = await endpoint(row.id, session)
                 expected = await compute_persisted_native_metric(row, name, session)
                 assert direct.model_dump(mode='json') == expected.model_dump(mode='json')
-                assert direct.reason == 'unsupported_model_native_spatial_metric'
+                assert direct.reason == ('missing_or_invalid_protenix_native_evidence'
+                    if model == 'protenix' else 'unsupported_model_native_spatial_metric')
             expected, _, _ = await compute_persisted_pae(row, {}, session)
             direct = await get_pae_data(row.id, 300, session)
             assert direct.reason == expected['reason']
             from services.analysis_subprocess import _dispatch_ipsae_interface
-            assert (await _dispatch_ipsae_interface(row, {}, session))[0]['reason'] == expected['reason']
+            assert (await _dispatch_ipsae_interface(row, {}, session))[0]['reason'] == (
+                'missing_or_invalid_producer_identity_or_roles' if model == 'protenix' else expected['reason'])
             if model == 'esmfold2':
                 # Actual persisted-analysis worker must publish the same explicit
                 # unsupported state as the direct endpoint, not a Boltz error.
@@ -248,12 +255,11 @@ async def test_actual_boltz_frustra_terminal_chain_and_retry(tmp_path, monkeypat
         async with factory() as session:
             rows = list((await session.execute(select(Design))).scalars())
             native = next(row for row in rows if row.source_stage is None)
-            derived = next(row for row in rows if row.source_stage == 'frustrampnn_candidate')
-            assert len(rows) == 2
-            assert derived.parent_design_id == native.id
-            assert derived.id == request['candidate_id']
+            # Current canonical owner attaches Frustra to its primary, not a duplicate Design.
+            assert len(rows) == 1
             result = (await session.execute(select(FrustraMPNNResult))).scalar_one()
-            assert result.design_id == derived.id
+            assert result.design_id == native.id
+            assert result.candidate_id == request['candidate_id']
             from services.boltz_scientific_consumer import verified_boltz_design, compute_persisted_pae
             selected = await verified_boltz_design(native, session)
             assert selected['artifacts']['structure']['sha256'] == manifest['candidates'][0]['producer_artifact_sha256']

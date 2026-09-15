@@ -145,8 +145,6 @@ async def build_analysis_input_signature(
                 detected_target_chain=subject.detected_target_chain,
                 producer_record=subject.confidence_metrics)
         try:
-            if not isinstance(getattr(subject, 'confidence_metrics', None), dict) or not subject.confidence_metrics.get('core_protein_scientific'):
-                raise ValueError('missing_producer_native_axis_ledger')
             selected = native_selection or await verified_native_spatial_design(subject, session)
             if selected["design_id"] != subject.id:
                 raise ValueError("foreign selected snapshot")
@@ -205,7 +203,7 @@ def normalize_pae_matrix_params(raw: dict[str, Any] | None) -> dict[str, Any]:
         max_size_value = int(max_size)
     except (TypeError, ValueError):
         max_size_value = 200
-    max_size_value = max(50, min(max_size_value, 500))
+    max_size_value = max(50, min(max_size_value, 1024))
     return {"max_size": max_size_value}
 
 

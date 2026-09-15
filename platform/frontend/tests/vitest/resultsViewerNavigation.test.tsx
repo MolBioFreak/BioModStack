@@ -22,6 +22,22 @@ const calls: Array<{ url: string; params: Record<string, any> }> = [];
 let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
+
+test('bound native document reads direct PAE without saved-analysis GET or queued-action exposure in ResultsViewer', async()=>{
+    const native:any={...design('native','protenix'),core_protein_scientific_contract:1,
+        scientific_structure_document:{documentId:'native-doc',candidateId:'native',contentSha256:'a'.repeat(64),sourceKind:'mmcif'},
+        supported_analyzers:['pae_matrix']};
+    native.review_artifact_manifest.artifacts.aligned_error={state:'ready'};
+    const fetcher=vi.fn(async()=>({ok:false}));vi.stubGlobal('fetch',fetcher);
+    try {
+        await setup('/designs/parent?design_id=native',false,[native]);
+        const pane=renderer!.root.findByType(StructureViewerPane);
+        expect(pane.props.viewerAnalyses.onRunPaeMatrix).toBeUndefined();
+        expect(pane.props.viewerAnalyses.paeMatrixData).toBeNull();
+        expect(calls.some(call=>call.url.includes('/analyses/pae_matrix'))).toBe(false);
+        expect(fetcher.mock.calls.some(call=>String(call[0]).includes('/pae?max_size=1024'))).toBe(true);
+    } finally {vi.unstubAllGlobals();}
+});
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
 const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;

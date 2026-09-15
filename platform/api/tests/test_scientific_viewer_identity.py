@@ -29,7 +29,11 @@ async def test_revision_cache_separates_legacy_without_changing_legacy_signature
     monkeypatch.setattr(registry, 'scientific_contract_revision', resolver, raising=False)
     assert await registry.build_analysis_input_signature(definition, design, {}, None) == 'legacy'
     resolver.return_value = 1
-    assert await registry.build_analysis_input_signature(definition, design, {}, None) != 'legacy'
+    from contextlib import nullcontext
+    session = SimpleNamespace(no_autoflush=nullcontext(), scalar=AsyncMock(return_value=
+        SimpleNamespace(model_id='esmfold2', provenance={'core_protein_scientific_contract': 1})))
+    assert await registry.build_analysis_input_signature(definition, design, {}, session) != 'legacy'
+    session.scalar.assert_awaited_once()
 
 
 def test_marked_pae_without_producer_map_never_calls_legacy_loader(monkeypatch):

@@ -187,6 +187,20 @@ def sequence_manifest(manifest: dict[str, Any], metadata: dict[str, Any]) -> dic
     }
 
 
+def protenix_confidence_names(structure_name: str) -> dict[str, str]:
+    """Pinned DataDumper uses the identical rank for all three native outputs.
+
+    Only a producer-declared full CIF is accepted; this is not a directory scan
+    or a legacy basename fallback. Consumers must separately verify custody.
+    """
+    match = re.fullmatch(r"(.+)_sample_(\d+)\.cif", structure_name)
+    if match is None:
+        raise ValueError("not a native Protenix full structure name")
+    sample, rank = match.groups()
+    return {"metrics": f"{sample}_summary_confidence_sample_{rank}.json",
+            "pae": f"{sample}_full_data_sample_{rank}.json"}
+
+
 def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str, Any]],
                       manifest: dict[str, Any], predictions_root: Path,
                       publication_dir: Path, published_structure_root: str) -> None:
@@ -215,6 +229,18 @@ def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str
                          "published_relative_path": destination, "sha256": digest,
                          "size_bytes": source.stat().st_size,
                          "source_format": candidate["source_format"]})
+        # Bind optional native confidence while the original predictor task owns
+        # the files. Local and remote publishDir retain the same descriptors.
+        if candidate['producer_method'] == 'protenix' and re.fullmatch(r"(.+)_sample_(\d+)\.cif", source.name):
+            from write_sequence_producer_manifest import _regular_file_bytes
+            confidence = {}
+            for kind, name in protenix_confidence_names(source.name).items():
+                companion = source.with_name(name)
+                if companion.exists() or companion.is_symlink():
+                    raw = _regular_file_bytes(companion, root=root)
+                    confidence[kind] = dict(published_relative_path=(target_root / name).as_posix(),
+                                            sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
+            bindings[-1]['confidence'] = confidence
     manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
     descriptor = {
         "schema_name": "structure_producer_publication", "schema_version": 1,

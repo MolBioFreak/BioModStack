@@ -22,7 +22,7 @@ import re
 from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
 from database import get_session, Design, Job
 from services.analysis_registry import scientific_contract_revision, unavailable_scientific_identity
-from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificChainMetric, ViewerDocument
+from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric, ScientificChainMetric, ViewerDocument
 from paths import resolve_runtime_data_path, to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
 from services.cdr_annotator import extract_sequence_from_pdb
@@ -2898,12 +2898,13 @@ async def get_design_pdb(
     if native_consumer is not None:
         from fastapi.responses import Response
         try:
-            selected = await verified_native_spatial_design(design, session)
+            selected = await verified_native_spatial_design(design, session, structure_only=True)
         except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
             raise HTTPException(status_code=409, detail="invalid_scientific_structure_binding")
         # Serve the very snapshot validated with the metric ledger, never reopen
         # a mutable pathname via FileResponse after verification.
-        return Response(content=selected['snapshots']['structure'], media_type='chemical/x-pdb',
+        return Response(content=selected['snapshots']['structure'],
+                        media_type='chemical/x-mmcif' if selected.get('source_kind') == 'mmcif' else 'chemical/x-pdb',
                         headers={'Cache-Control': 'no-store'})
     pdb_path = resolve_runtime_data_path(design.pdb_path)
     return _structure_file_response(pdb_path, design.name)
@@ -2947,7 +2948,7 @@ class ResidueMetrics(BaseModel):
     length: int
 
 
-@router.get("/{design_id}/residue-metrics", response_model=Union[ResidueMetrics, ScientificViewerMetric, ScientificResidueMetric])
+@router.get("/{design_id}/residue-metrics", response_model=Union[ResidueMetrics, ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric])
 async def get_residue_metrics(
     design_id: str,
     session: AsyncSession = Depends(get_session)

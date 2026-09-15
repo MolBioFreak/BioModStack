@@ -225,6 +225,9 @@ async def native_spatial_consumer(design, session):
         if job.model_id in ('boltz', 'boltz2'):
             from services import boltz_scientific_consumer
             return boltz_scientific_consumer
+        if job.model_id == 'protenix':
+            from services import protenix_scientific_consumer
+            return protenix_scientific_consumer
     return None
 
 
@@ -234,11 +237,11 @@ async def scientific_document(design, session):
     return await consumer.scientific_document(design, session) if consumer is not None else None
 
 
-async def verified_native_spatial_design(design, session):
+async def verified_native_spatial_design(design, session, *, structure_only=False):
     consumer = await native_spatial_consumer(design, session)
     if consumer is None:
         raise ValueError('unsupported_model_native_spatial_metric')
-    return await consumer.verified_boltz_design(design, session)
+    return await consumer.verified_native_design(design, session, structure_only=structure_only)
 
 
 async def compute_persisted_native_metric(design, metric, session, *, selected=None):

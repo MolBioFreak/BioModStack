@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
-import { assessResidueRef, canonicalResidueRefKey, type ResidueRef } from '../../contracts/structureIdentity.js';
+import { assessResidueRef, canonicalSpatialRefKey, type AtomRef as ResidueRef } from '../../contracts/structureIdentity.js';
 import type { MetricLayer, MetricSelection, ResiduePairIdentity } from '../../metrics/metricContracts.js';
 
 export interface PairMatrixExtensionProps {
@@ -8,7 +8,8 @@ export interface PairMatrixExtensionProps {
 }
 
 const MAX_AXIS = 512;
-const label = (residue: ResidueRef): string => `${residue.authAsymId ?? residue.labelAsymId}:${residue.authSeqId ?? residue.labelSeqId}${residue.insertionCode ?? ''}`;
+const MAX_DIRECTED_AXIS = 1024;
+const label = (residue: ResidueRef): string => `${residue.authAsymId ?? residue.labelAsymId}:${residue.authSeqId ?? residue.labelSeqId}${residue.insertionCode ?? ''}${residue.labelAtomId || residue.authAtomId ? `:${residue.labelAtomId ?? residue.authAtomId}` : ''}`;
 
 export function PairMatrixExtension({ layer, onSelection }: PairMatrixExtensionProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,13 +21,13 @@ export function PairMatrixExtension({ layer, onSelection }: PairMatrixExtensionP
             const rows = dataset.rowAxis ?? [], columns = dataset.columnAxis ?? [];
             const unavailable = (reason: string) => ({ rows: [] as readonly ResidueRef[], columns: [] as readonly ResidueRef[], cells: new Map<string, typeof layer.values[number]>(), min: 0, max: 1, truncated: false, directed: true, reason });
             if (!rows.length || !columns.length || dataset.shape?.length !== 2 || dataset.shape[0] !== rows.length || dataset.shape[1] !== columns.length) return unavailable('declared axis shape mismatch');
-            if (rows.length > MAX_AXIS || columns.length > MAX_AXIS) return unavailable(`declared axis exceeds ${MAX_AXIS}; provide a supported sampled projection`);
+            if (rows.length > MAX_DIRECTED_AXIS || columns.length > MAX_DIRECTED_AXIS) return unavailable(`declared axis exceeds ${MAX_DIRECTED_AXIS}; provide a supported sampled projection`);
             if (dataset.documentIds.length !== 1 || !dataset.documentIds[0] || dataset.descriptorId !== layer.descriptor.id) return unavailable('matrix document or descriptor mismatch');
             const axisIndex = (axis: readonly ResidueRef[]) => {
                 const index = new Map<string, number>();
                 for (const [position, ref] of axis.entries()) {
                     if (!ref || ref.documentId !== dataset.documentIds[0] || assessResidueRef(ref).status !== 'ok') return null;
-                    const key = canonicalResidueRefKey(ref);
+                    const key = canonicalSpatialRefKey(ref);
                     if (index.has(key)) return null;
                     index.set(key, position);
                 }
@@ -34,11 +35,29 @@ export function PairMatrixExtension({ layer, onSelection }: PairMatrixExtensionP
             };
             const rowIndex = axisIndex(rows), columnIndex = axisIndex(columns);
             if (!rowIndex || !columnIndex) return unavailable('foreign, incomplete or duplicate axis identity');
+            if (dataset.matrix) {
+                const data = dataset.matrix;
+                if (layer.values.length || data.length !== rows.length || data.some(row => row.length !== columns.length || row.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0))) return unavailable('invalid dense matrix');
+                let min = Infinity, max = -Infinity;
+                for (const row of data) for (const value of row) { min = Math.min(min, value); max = Math.max(max, value); }
+                const get = (key: string) => {
+                    const [r,c] = key.split(':').map(Number);
+                    return data[r]?.[c] === undefined ? undefined : {identity:{first:rows[r],second:columns[c]},value:data[r][c], missingness:undefined};
+                };
+                const cells = {size:rows.length * columns.length, get, *entries() {
+                    // Only the accessible preview is materialized; cursor/heatmap access every cell.
+                    for (let i=0; i<Math.min(1000, rows.length * columns.length); i++) {
+                        const key = `${Math.floor(i / columns.length)}:${i % columns.length}`;
+                        yield [key,get(key)!] as const;
+                    }
+                }};
+                return {rows, columns, cells, min, max, truncated:false, directed:true, reason:null};
+            }
             let min = Infinity, max = -Infinity;
             for (const entry of layer.values) {
                 const pair = entry.identity as ResiduePairIdentity;
                 if (!pair?.first || !pair?.second) return unavailable('missing cell identity');
-                const row = rowIndex.get(canonicalResidueRefKey(pair.first)), column = columnIndex.get(canonicalResidueRefKey(pair.second));
+                const row = rowIndex.get(canonicalSpatialRefKey(pair.first)), column = columnIndex.get(canonicalSpatialRefKey(pair.second));
                 if (row === undefined || column === undefined) return unavailable('cell identity outside declared axes');
                 const key = `${row}:${column}`;
                 if (cells.has(key)) return unavailable('duplicate directed cell');
@@ -52,16 +71,16 @@ export function PairMatrixExtension({ layer, onSelection }: PairMatrixExtensionP
         const residues = new Map<string, ResidueRef>();
         for (const entry of layer.values) {
             const pair = entry.identity as ResiduePairIdentity;
-            residues.set(canonicalResidueRefKey(pair.first), pair.first);
-            residues.set(canonicalResidueRefKey(pair.second), pair.second);
+            residues.set(canonicalSpatialRefKey(pair.first), pair.first);
+            residues.set(canonicalSpatialRefKey(pair.second), pair.second);
         }
         const axis = [...residues.values()].slice(0, MAX_AXIS);
-        const index = new Map(axis.map((residue, position) => [canonicalResidueRefKey(residue), position]));
+        const index = new Map(axis.map((residue, position) => [canonicalSpatialRefKey(residue), position]));
         const cells = new Map<string, typeof layer.values[number]>();
         for (const entry of layer.values) {
             const pair = entry.identity as ResiduePairIdentity;
-            const row = index.get(canonicalResidueRefKey(pair.first));
-            const column = index.get(canonicalResidueRefKey(pair.second));
+            const row = index.get(canonicalSpatialRefKey(pair.first));
+            const column = index.get(canonicalSpatialRefKey(pair.second));
             if (row === undefined || column === undefined) continue;
             cells.set(`${row}:${column}`, entry);
             cells.set(`${column}:${row}`, entry);
@@ -116,9 +135,9 @@ export function PairMatrixExtension({ layer, onSelection }: PairMatrixExtensionP
     };
     const current = matrix.cells.get(`${cursor[0]}:${cursor[1]}`);
 
-    if (matrix.reason) return <section aria-label={`${layer.descriptor.label} residue pair matrix`}><div role="status">{layer.descriptor.label} unavailable: {matrix.reason}.</div></section>;
+    if (matrix.reason) return <section aria-label={`${layer.descriptor.label} spatial pair matrix`}><div role="status">{layer.descriptor.label} unavailable: {matrix.reason}.</div></section>;
 
-    return <section className="space-y-2" aria-label={`${layer.descriptor.label} residue pair matrix`}>
+    return <section className="space-y-2" aria-label={`${layer.descriptor.label} spatial pair matrix`}>
         <div role="grid" tabIndex={0} onKeyDown={keyboard} aria-rowcount={matrix.rows.length} aria-colcount={matrix.columns.length} aria-label={`Matrix cursor row ${cursor[0] + 1}, column ${cursor[1] + 1}`} className="rounded border border-slate-700 p-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
             <canvas ref={canvasRef} onClick={click} className="h-auto w-full max-h-96 cursor-crosshair [image-rendering:pixelated]" role="img" aria-label={`${matrix.rows.length} by ${matrix.columns.length} heatmap; use arrow keys and Enter on the focused matrix`} />
         </div>
