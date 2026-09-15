@@ -18,11 +18,12 @@ vi.mock('../../src/components/ReferenceSelector',()=>({default:()=>null}));
 vi.mock('../../src/components/MolstarViewerImpl',()=>({default:(props:any)=>{state.gpu=props;return <div data-engine/>;}}));
 // Keep actual shared host, registry, palette, directed renderer and selection owner.
 vi.mock('../../src/structureViewer/StructureWorkbench',()=>({StructureWorkbench:(props:any)=>{
-    state.layers=props.metricLayers;return <StructureViewerHost {...props} showMetricWorkbench showSequenceTrack={false} showM6Workbench={true} showMeasurements={false}/>;
+    state.layers=props.metricLayers;return <StructureViewerHost {...props} />;
 }}));
 let mounted:ReactTestRenderer|undefined;
 const text=(node:any):string=>typeof node==='string'?node:(node.children??[]).map(text).join('');
 afterEach(async()=>{if(mounted)await act(async()=>mounted!.unmount());mounted=undefined;vi.unstubAllGlobals();state.layers=[];});
+const openMetrics=async()=>{await act(async()=>mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!.props.onClick());};
 const settle=async()=>{await act(async()=>{await new Promise(resolve=>setTimeout(resolve,15));});};
 async function mount(payload=nativeAtomFixture(),extra:any={}) {
     const design:any={id:payload.document.candidateId,name:'Candidate',job_id:'job',pdb_path:'candidate.cif',review_profile_id:'structure_prediction',scientific_structure_document:payload.document,...extra.design};
@@ -43,15 +44,45 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     expect(q.filter((q:any)=>q.authAsymId==='E').map((q:any)=>q.authAtomIds)).toEqual([['C1'],['C2']]);
     expect(q[3].color).not.toEqual(q[4].color);
     expect(state.gpu.scenePresentation.tooltipQueries[3].tooltip).toContain('0.25 fraction');
-    await act(async()=>mounted!.root.findByProps({'data-native-residue-index':3}).props.onClick());
-    expect(state.gpu.scenePresentation.colorQueries.some((q:any)=>q.authAtomIds?.[0]==='C1'&&q.color.g===185)).toBe(true);
+    expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
+    expect(mounted!.root.findAllByProps({'aria-label':'Native atom confidence'})).toHaveLength(0);
+    await openMetrics();
+    const options=()=>mounted!.root.findByProps({'aria-label':'Linked atom track'}).findAllByProps({role:'option'});
+    expect(text(options()[3])).toBe('E:1:C125.0%');
+    await act(async()=>options()[3].props.onClick());
+    expect(options()[3].props['aria-selected']).toBe(true);
+    expect(options()[4].props['aria-selected']).toBe(false);
+    expect(state.gpu.scenePresentation.colorQueries.filter((q:any)=>q.focus).map((q:any)=>q.authAtomIds)).toEqual([['C1']]);
+    await act(async()=>mounted!.root.findByProps({'aria-label':'Minimize metric workbench'}).props.onClick());
+    expect(mounted!.root.findAllByProps({'aria-label':'Linked atom track'})).toHaveLength(0);
+    expect(state.gpu.scenePresentation.colorQueries.some((q:any)=>q.authAtomIds?.[0]==='C1'&&q.focus)).toBe(true);
+    await openMetrics();
     expect(text(mounted!.root)).toContain('Native atom pLDDT');
     expect(text(mounted!.root)).not.toContain('Boltz verified');
     expect(fetcher.mock.calls.some(([url])=>url.includes('/pae?max_size=1024'))).toBe(true);
     expect(fetcher.mock.calls.some(([url])=>url.includes('/analyses'))).toBe(false);
 });
+it('fullscreen starts clear but explicit Show metrics and minimize remain usable',async()=>{
+    await mount();
+    const descriptor=Object.getOwnPropertyDescriptor(document,'fullscreenElement');
+    try {
+        Object.defineProperty(document,'fullscreenElement',{configurable:true,value:document.body});
+        await act(async()=>document.dispatchEvent(new Event('fullscreenchange')));
+        expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
+        await openMetrics();
+        expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(1);
+        expect(mounted!.root.findAllByProps({'aria-label':'Linked atom track'})).toHaveLength(1);
+        await act(async()=>mounted!.root.findByProps({'aria-label':'Minimize metric workbench'}).props.onClick());
+        expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
+        expect(mounted!.root.findAllByProps({'aria-label':'Linked atom track'})).toHaveLength(0);
+    } finally {
+        if(descriptor)Object.defineProperty(document,'fullscreenElement',descriptor);
+        else Reflect.deleteProperty(document,'fullscreenElement');
+    }
+});
 it('full 588-token matrix uses dense shared storage and selects distinct ligand atoms',async()=>{
     await mount(nativeAtomFixture(588));
+    await openMetrics();
     const layer=state.layers.find(l=>l.descriptor.id==='pae');
     expect(layer.values).toHaveLength(0);expect(layer.dataset.matrix).toHaveLength(588);
     expect(validateMetricLayer(layer).status).toBe('ok');
@@ -132,6 +163,15 @@ it.skipIf(!process.env.BMS_TEST_NATIVE_WIRES)('retained actual native owner wire
     expect(confidence.values).toHaveLength(4746);expect(matrix.rows).toHaveLength(588);expect(chains.chains).toHaveLength(5);
     const fetcher=vi.fn(async(url:string)=>({ok:true,json:async()=>url.includes('residue-metrics')?payload.confidence:url.includes('/pae?')?payload.pae:chain}));
     await mount(payload,{fetcher});
+    expect(mounted!.root.findAllByProps({role:'option'})).toHaveLength(0);
+    expect(mounted!.root.findAllByProps({'aria-label':'Native atom confidence'})).toHaveLength(0);
+    await openMetrics();
+    expect(mounted!.root.findByProps({'aria-label':'Native chain metrics'}).findAll(el=>el.props['data-native-chain']!==undefined)).toHaveLength(5);
+    const track=mounted!.root.findByProps({'aria-label':'Linked atom track'});
+    expect(track.findAllByProps({role:'option'})).toHaveLength(120);
+    await act(async()=>track.findByProps({role:'listbox'}).props.onScroll({currentTarget:{scrollLeft:4746*80}}));
+    expect(track.findAllByProps({role:'option'})).toHaveLength(120);
+    expect(text(track.findAllByProps({role:'option'}).at(-1))).toContain(`${(payload.confidence.values.at(-1)*100).toFixed(1)}%`);
     const atom=state.layers.find(l=>l.descriptor.dimension==='atom-scalar');
     const pae=state.layers.find(l=>l.descriptor.id==='pae');
     expect(validateMetricLayer(atom).status).toBe('ok');expect(validateMetricLayer(pae).status).toBe('ok');

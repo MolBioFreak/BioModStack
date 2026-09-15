@@ -547,14 +547,10 @@ export default function StructureViewerPane({
         if(!response.ok) throw Error('Chain metric request failed');
         return response.json();
     },retry:false});
-    const [nativeSelection, setNativeSelection] = useState<{document: unknown; index: number} | null>(null);
     const nativeDocument = selectedDesign?.id === selectedDesignId && selectedDesign.scientific_structure_document?.candidateId === selectedDesignId
         && !(colorMode === 'cdr' && antibodyStructureUrl) ? selectedDesign.scientific_structure_document : null;
     const nativeResidue = useMemo(()=>parseScientificNativeMetric(residueQuery.data,nativeDocument,'residue_plddt',selectedDesignId ?? undefined),[residueQuery.data,nativeDocument,selectedDesignId]);
     const nativeChains = useMemo(()=>parseScientificNativeMetric(chainQuery.data,nativeDocument,'chain_metrics',selectedDesignId ?? undefined),[chainQuery.data,nativeDocument,selectedDesignId]);
-    const nativeResidueSelections = nativeResidue.status === 'ok' && nativeSelection?.document === nativeDocument
-        && nativeResidue.residues[nativeSelection.index] ? [nativeResidue.residues[nativeSelection.index]] : [];
-    useEffect(()=>{setNativeSelection(null);},[selectedDesignId,nativeDocument]);
     const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
         descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
             provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
@@ -3014,7 +3010,6 @@ export default function StructureViewerPane({
                                 alphafoldView={!requiresBoundMetrics && !nativeMetrics && effectiveColorMode === 'plddt' && !plddtResidueColors}
                                 selections={effectiveColorMode === 'cdr' ? antibodySelections : undefined}
                                 overlayStructures={viewerOverlayStructures}
-                                residueSelections={requiresBoundMetrics ? nativeResidueSelections : undefined}
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
                                 showComplexWorkbench={false}
@@ -3026,7 +3021,13 @@ export default function StructureViewerPane({
                                 structureContentSha256={nativeDocument?.contentSha256}
                                 derivedComponents={derivedComponents}
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
-                                showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}
+                                showMetricWorkbench={!shapeMetrics && metricWorkbenchOpen}
+                                metricDetails={selectedDesign && nativeChains.status === 'ok' ? (
+                                    <details className="rounded border border-slate-700 bg-slate-900/95 p-2 text-xs">
+                                        <summary className="cursor-pointer font-semibold">Chain metrics</summary>
+                                        <ChainDetailsPanel design={selectedDesign} chainMetrics={null} nativeMetric={nativeChains}/>
+                                    </details>
+                                ) : undefined}
                                 onMetricWorkbenchVisibilityChange={shapeMetrics ? undefined : setMetricWorkbenchOpen}
                                 showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
                                 height="100%"
@@ -3040,27 +3041,6 @@ export default function StructureViewerPane({
                                 {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
                                 {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
                             </div>
-                        )}
-                        {nativeResidue.status === 'ok' && (
-                            <section aria-label={nativeResidue.metric === 'atom_plddt' ? 'Native atom confidence' : 'Native residue confidence'} className="absolute top-12 left-2 right-2 max-h-56 overflow-auto bg-slate-950/90 p-2 text-xs">
-                                {nativeResidue.status === 'ok' && <>
-                                <div>Native {nativeResidue.metric === 'atom_plddt' ? 'atom' : 'residue'} pLDDT — percent display (native fraction × 100)</div>
-                                <svg viewBox={`0 0 ${nativeResidue.values.length} 100`} className="w-full h-24" preserveAspectRatio="none" aria-label="Native pLDDT percent chart">
-                                    <polyline points={nativeResidue.values.map((v,i)=>`${i},${100-v*100}`).join(' ')} fill="none" stroke="#38bdf8" strokeWidth="0.5"/>
-                                    {nativeResidue.values.map((v,index)=><circle key={index} data-native-chart-index={index}
-                                        cx={index} cy={100-v*100} r="0.5" fill="#38bdf8" role="button" tabIndex={0}
-                                        aria-label={`Select native ${nativeResidue.metric === 'atom_plddt' ? 'atom' : 'residue'} ${index + 1}`}
-                                        onClick={()=>setNativeSelection({document:nativeDocument,index})}
-                                        onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setNativeSelection({document:nativeDocument,index});}}}/>)}
-                                </svg>
-                                <div className="flex flex-wrap gap-1">{nativeResidue.residues.map((residue,index)=><button key={index}
-                                    data-native-residue-index={index} data-display-percent={nativeResidue.values[index]*100}
-                                    onClick={()=>setNativeSelection({document:nativeDocument,index})}>
-                                    {residue.authAsymId??residue.labelAsymId}:{residue.authSeqId??residue.labelSeqId}{residue.insertionCode}{residue.labelAtomId || residue.authAtomId ? `:${residue.labelAtomId ?? residue.authAtomId}` : ''} {(nativeResidue.values[index]*100).toFixed(1)}%
-                                </button>)}</div>
-                                </>}
-                                {selectedDesign && <ChainDetailsPanel design={selectedDesign} chainMetrics={null} nativeMetric={nativeChains}/>}
-                            </section>
                         )}
                         {showReferenceDock && (
                             <div
