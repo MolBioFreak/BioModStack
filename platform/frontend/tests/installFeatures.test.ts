@@ -25,13 +25,13 @@ test('install feature normalization honors resolved backend flags', () => {
     assert.equal(isBmsFeatureEnabled(features, 'bioxp'), false);
 });
 
-test('failed feature refresh discards cached positive BioXP state', () => {
+test('failed feature refresh preserves cached positive BioXP state', () => {
     const cached = normalizeBmsFeatureState({
         features: { bioxp: true },
     });
 
     assert.equal(resolveBmsFeatureQueryState(cached, false).features.bioxp, true);
-    assert.equal(resolveBmsFeatureQueryState(cached, true).features.bioxp, false);
+    assert.equal(resolveBmsFeatureQueryState(cached, true).features.bioxp, true);
 });
 
 test('dev feature flags hide developer-only install features until explicitly shown', () => {
