@@ -19,13 +19,20 @@ from test_remote_rectify_return import mounted
 
 @pytest_asyncio.fixture
 async def active(store, tmp_path, monkeypatch):
+    from tools import bms_remote_worker as worker
+    child = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE,
+        env={**os.environ, 'SERVICE_TOKEN': 'envelope-value', 'API_KEY': 'secret-file-value',
+             'INHERITED_PASSWORD': 'inherited-value'})
     root = tmp_path / 'remote'
     attempt = root / 'attempts' / 'attempt'
     attempt.mkdir(parents=True)
     status = RemoteAttemptStatus(job_id='job', attempt_id='attempt', state='running',
-        generation=1, boot_id='worker-boot', continuation_lease_id='continuation',
+        generation=1, diagnostic_offsets={}, boot_id=worker.boot_id(), continuation_lease_id='continuation',
+        workflow_pid=child.pid, workflow_start_ticks=worker.process_start_ticks(child.pid),
         plan_sha256='d' * 64, native_output_directory=str(attempt / 'results' / 'continued'))
     (attempt / 'status.json').write_text(status.model_dump_json())
+    (attempt / 'execution-envelope.json').write_text(json.dumps(dict(job_id='job', attempt_id='attempt',
+        working_directory=str(attempt), environment={})))
     (attempt / 'nextflow.log').write_text('old\nactive nextflow\n')
     (attempt / 'supervisor.log').write_text('active supervisor\n')
     async with store() as s:
@@ -35,7 +42,7 @@ async def active(store, tmp_path, monkeypatch):
         job.provenance = {'remote_execution_receipt': dict(
             attempt_id='attempt', execution_target_id='target', provider_instance_id='1',
             ssh_host=target.host, ssh_port=22, ssh_username='user', remote_root=str(root),
-            remote_attempt_dir=str(attempt), state='running', generation=1, boot_id='worker-boot',
+            remote_attempt_dir=str(attempt), state='running', generation=1, boot_id=worker.boot_id(),
             continuation_lease_id='continuation')}
         await s.commit()
     calls = []
@@ -51,7 +58,11 @@ async def active(store, tmp_path, monkeypatch):
             raise RemoteTransportError(result.stderr)
         return CommandResult(result.returncode, result.stdout, result.stderr)
     monkeypatch.setattr(ex, 'run_remote', rpc)
-    return attempt, status, calls, rpc
+    try:
+        yield attempt, status, calls, rpc
+    finally:
+        child.stdin.close()
+        child.wait(timeout=10)
 
 
 @pytest.mark.asyncio
