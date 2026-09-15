@@ -571,12 +571,32 @@ async def _launch_remote_job_owned(
     try:
         target = await get_ready_target(session, str(job.execution_target_id))
         connection = RemoteConnection.from_target(target)
+        def target_generation(row):
+            return (RemoteConnection.from_target(row), row.host_key_sha256, row.activated_at,
+                    row.leased_job_id, row.lease_acquired_at,
+                    (row.provider_metadata or {}).get("setup", {}).get("started_at"),
+                    (row.capabilities or {}).get("runner_sha256"),
+                    (row.capabilities or {}).get("nextflow_launcher_sha256"))
+
+        admitted_generation = target_generation(target)
+
+        async def refresh_admission_target():
+            nonlocal fenced
+            # Bundle hashing/transfer can outlive the inventory freshness window.
+            # Read its current DB observation, but never adopt another attachment
+            # or lease merely because that newer generation is itself ready.
+            await session.refresh(target)
+            if target_generation(target) != admitted_generation:
+                fenced = True
+                raise RemoteExecutionError("Remote target attachment or lease changed during preparation")
+
         await _verify_launch_runner(session, job, connection, target)
         bundle = await asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             native_invocation=native_invocation,
             environment=environment, attempt_id=requested_attempt_id,
         )
+        await refresh_admission_target()
         from .targets import admit_target_resources
         from .bundle import bind_resource_admission
         resources = json.loads(bundle.envelope.environment['BMS_TARGET_RESOURCES'])
@@ -616,6 +636,7 @@ async def _launch_remote_job_owned(
                     and current.remote_attempt_id == attempt_id
                     and current.nextflow_run_id == run_id and current.execution_target_id == target_id
                     and owner.leased_job_id == job_id and owner.lease_acquired_at == lease_epoch
+                    and target_generation(owner) == admitted_generation
                     and dict((current.provenance or {}).get("remote_execution_assignment") or {}) == assignment)
             if not valid:
                 fenced = True
@@ -637,7 +658,7 @@ async def _launch_remote_job_owned(
         # File-based remote stage receipts need no workstation callback credential.
         await run_remote(connection, _worker_argv(connection, "prepare", bundle.remote_attempt_dir), timeout=300)
         await check_fence()
-        await session.refresh(target)
+        await refresh_admission_target()
         # Declared bundle storage is now materialized, not a second pending copy.
         # Its original capacity receipt remains sealed in the execution envelope.
         fresh_admission = await admit_target_resources(target, required_cpus=required['cpus'],
