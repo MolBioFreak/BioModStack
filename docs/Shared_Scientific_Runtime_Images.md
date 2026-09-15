@@ -97,8 +97,16 @@ source/derivation state is rejected, never silently re-extracted or repaired.
 
 The context retains an ordinary source execution lease in the existing
 `references/state.json` authority, in addition to the caller's durable
-cache/attempt/admission/resume references. It rechecks source descriptor/hash and
-derivation integrity before execution and on exit. Normal exceptions and
+cache/attempt/admission/resume references. With an existing derivation, each launch
+fully verifies the source SIF and unique derived file contents once. For that launch only, no-follow
+inode/mode/link/size/mtime/ctime observations bind those verified bytes to the
+retained descriptor and derivation manifest. Cloning and exit recheck every tree
+member, symlink and membership identity, rejecting even write-and-restore or
+same-byte replacement without rereading unchanged contents. Observations never
+persist or authorize another launch; ordinary standalone verification and
+retirement retain full content checks. Tree walks hold no-follow ancestry rather
+than reopening every ancestor for every file. Read-only inputs still receive
+independent CoW projections and source/projected mutation checks. Normal exceptions and
 cancellation remove private views and release that execution lease. A SIGKILL
 cannot run a Python finalizer: its lease remains conservatively pinned and its
 private workspace requires the existing owner's explicit cleanup. This API

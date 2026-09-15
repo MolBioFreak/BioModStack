@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .shared_runtime_images import (
     SharedRuntimeImageError as Error, _absolute, _digest, _directory, _file,
-    _check_file, _check_directory, _hash, _same, _DIRECTORY_FLAGS, verify_image,
+    _check_file, _check_directory, _hash, _same, _identity, _member,
+    _DIRECTORY_FLAGS, verify_image,
 )
 from . import runtime_image_lifecycle as lifecycle
 
@@ -52,13 +53,56 @@ def _remove(parent, name):
         os.unlink(name, dir_fd=parent)
 
 
-def _inventory(path, *, freeze=False):
+def _walk_tree(path):
+    """Walk once using held no-follow ancestry; reject replacement/mutation.
+
+    Yielded parent FDs are borrowed only until the next iteration. No regular
+    bytes are read. A write-and-restore still changes ctime and fails recheck.
+    """
+    path = _absolute(path)
+    def walk(parent, name, relative):
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        kind = stat.S_IFMT(before.st_mode)
+        if kind not in {stat.S_IFDIR, stat.S_IFREG, stat.S_IFLNK}:
+            raise Error('unsupported input file type')
+        if kind == stat.S_IFDIR:
+            fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent)
+            try:
+                if not _same(before, os.fstat(fd)):
+                    raise Error('tree directory changed')
+                yield parent, name, relative, before
+                for child in sorted(os.listdir(fd)):
+                    yield from walk(fd, child, relative + '/' + child)
+                if not _same(before, os.fstat(fd)):
+                    raise Error('tree directory membership changed')
+            finally:
+                os.close(fd)
+        else:
+            yield parent, name, relative, before
+        if not _same(before, os.stat(name, dir_fd=parent, follow_symlinks=False)):
+            raise Error('tree member changed')
+    with _directory(path.parent) as parent:
+        yield from walk(parent, path.name, '.')
+        _check_directory(path.parent, parent)
+
+
+def snapshot_tree(path):
+    return {relative: _identity(info) + (
+                os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None,)
+            for parent, name, relative, info in _walk_tree(path)}
+
+
+def _inventory(path, *, freeze=False, identities=None):
     """No-follow content/mode inventory; optionally freeze extracted inodes.
 
     Original modes are retained separately and restored only on private views.
     Hardlinks are allowed only when every link is contained in this rootfs.
     """
-    entries, links, original_modes = {}, {}, {}
+    entries, links, original_modes, hashes = {}, {}, {}, {}
+
+    def record(relative, info, target=None):
+        if identities is not None:
+            identities['.' if relative == '.' else './' + relative] = _identity(info) + (target,)
 
     def readable(parent, name, bits):
         info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -71,40 +115,53 @@ def _inventory(path, *, freeze=False):
                      dir_fd=parent, follow_symlinks=False)
         return original_modes[key]
 
-    def walk(directory, prefix):
-        with _directory(directory.parent) as parent:
-            info = os.stat(directory.name, dir_fd=parent, follow_symlinks=False)
-            if not stat.S_ISDIR(info.st_mode):
-                raise Error('derived rootfs directory is not a directory')
-            mode = readable(parent, directory.name, 0o500)
-        with _directory(directory) as fd:
+    def walk(parent, name, prefix):
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise Error('derived rootfs directory is not a directory')
+        mode = readable(parent, name, 0o500)
+        fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino):
+                raise Error('derived rootfs directory changed')
+            record(prefix, before)
             names = sorted(os.listdir(fd))
             entries[prefix] = {"kind": "directory", "mode": mode}
-            for name in names:
-                rel = name if prefix == "." else prefix + "/" + name
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                child = directory / name
+            for child in names:
+                rel = child if prefix == "." else prefix + "/" + child
+                info = os.stat(child, dir_fd=fd, follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
-                    walk(child, rel)
+                    walk(fd, child, rel)
                 elif stat.S_ISLNK(info.st_mode):
-                    entries[rel] = {"kind": "symlink", "target": os.readlink(name, dir_fd=fd)}
-                    if not _same(info, os.stat(name, dir_fd=fd, follow_symlinks=False)):
+                    target = os.readlink(child, dir_fd=fd)
+                    entries[rel] = {"kind": "symlink", "target": target}
+                    record(rel, info, target)
+                    if not _same(info, os.stat(child, dir_fd=fd, follow_symlinks=False)):
                         raise Error("derived symlink changed")
                 elif stat.S_ISREG(info.st_mode):
-                    mode = readable(fd, name, 0o400)
-                    with _file(child) as (source, parent, observed):
+                    mode = readable(fd, child, 0o400)
+                    with _member(fd, child) as (source, observed):
+                        stamp = _identity(observed)
+                        digest = hashes.get(stamp)
+                        if digest is None:
+                            digest = hashes[stamp] = _hash(source)
                         row = {"kind": "file", "mode": mode,
-                               "sha256": _hash(source), "size": observed.st_size}
-                        _check_file(child, source, parent, observed)
+                               "sha256": digest, "size": observed.st_size}
+                        record(rel, observed)
                         key = (observed.st_dev, observed.st_ino)
                         links.setdefault(key, []).append((rel, observed.st_nlink))
                         entries[rel] = row
                 else:
                     raise Error("unsupported special entry in extracted rootfs: " + rel)
-            if names != sorted(os.listdir(fd)):
+            if not _same(before, os.fstat(fd)) or not _same(
+                    before, os.stat(name, dir_fd=parent, follow_symlinks=False)):
                 raise Error("derived directory membership changed")
-            _check_directory(directory, fd)
-    walk(path, ".")
+        finally:
+            os.close(fd)
+    with _directory(path.parent) as parent:
+        walk(parent, path.name, '.')
+        _check_directory(path.parent, parent)
     for group in links.values():
         if any(count != len(group) for _, count in group):
             raise Error("derived rootfs has an external hardlink")
@@ -124,20 +181,32 @@ def _inventory(path, *, freeze=False):
     return entries
 
 
-def verify_derivation(path, identity):
+def verify_derivation(path, identity, *, verification=None):
     try:
-        return _verify_derivation(path, identity)
+        return _verify_derivation(path, identity, verification=verification)
     except (ValueError, TypeError, KeyError) as exc:
         raise Error('invalid derived rootfs metadata') from exc
 
 
-def _verify_derivation(path, identity):
+def _verify_derivation(path, identity, *, verification=None):
     with _directory(path) as fd:
+        envelope = _identity(os.fstat(fd))
         if stat.S_IMODE(os.fstat(fd).st_mode) != 0o500 or set(os.listdir(fd)) != {"rootfs", "manifest.json"}:
             raise Error("invalid derived rootfs envelope")
         with _file(path / "manifest.json") as (meta, parent, before):
             if stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1:
                 raise Error("invalid derived rootfs metadata")
+            if verification:
+                if (verification['path'] != str(path) or verification['source'] != identity
+                        or verification['envelope'] != envelope
+                        or verification['metadata'] != _identity(before)
+                        or snapshot_tree(path / 'rootfs') != verification['tree']):
+                    raise Error('derived rootfs integrity changed')
+                _check_file(path / 'manifest.json', meta, parent, before)
+                _check_directory(path, fd)
+                if envelope != _identity(os.fstat(fd)):
+                    raise Error('derived rootfs envelope changed')
+                return verification['receipt'], verification['manifest']
             metadata_hash = _hash(meta)
             os.lseek(meta, 0, os.SEEK_SET)
             with os.fdopen(os.dup(meta)) as stream:
@@ -145,19 +214,27 @@ def _verify_derivation(path, identity):
             _check_file(path / "manifest.json", meta, parent, before)
         if set(manifest) != {"schema_version", "source", "original", "frozen"} or manifest["schema_version"] != 1 or manifest["source"] != identity:
             raise Error("derived rootfs source identity mismatch")
-        if _inventory(path / "rootfs") != manifest["frozen"]:
+        tree = {} if verification is not None else None
+        if _inventory(path / "rootfs", identities=tree) != manifest["frozen"]:
             raise Error("derived rootfs integrity mismatch")
         # Original modes are the only differences permitted in the restoration map.
         original = manifest["original"]
-        expected = json.loads(json.dumps(original))
+        expected = {name: dict(row) for name, row in original.items()}
         for row in expected.values():
             if row["kind"] in {"file", "directory"}:
                 row["mode"] = (row["mode"] & ~0o222) | (0o400 if row["kind"] == "file" else 0o500)
         if expected != manifest["frozen"]:
             raise Error("invalid derived mode restoration metadata")
         _check_directory(path, fd)
-        return {"metadata_sha256": metadata_hash, "device": os.fstat(fd).st_dev,
-                "inode": os.fstat(fd).st_ino}, manifest
+        if envelope != _identity(os.fstat(fd)):
+            raise Error('derived rootfs envelope changed')
+        receipt = {"metadata_sha256": metadata_hash, "device": os.fstat(fd).st_dev,
+                   "inode": os.fstat(fd).st_ino}
+        if verification is not None:
+            verification.update(path=str(path), source=identity, envelope=envelope,
+                                metadata=_identity(before), tree=tree,
+                                receipt=receipt, manifest=manifest)
+        return receipt, manifest
 
 
 def _recover_stages(root, digest):
@@ -177,12 +254,12 @@ def _recover_stages(root, digest):
             os.fsync(fd)
 
 
-def _derive(root, digest, image_fd, identity, extract):
+def _derive(root, digest, image_fd, identity, extract, *, verification=None):
     path = derived_path(root, digest)
     _recover_stages(root, digest)
     with _directory(path.parent) as parent:
         if path.name in os.listdir(parent):
-            return path, verify_derivation(path, identity)[1]
+            return path, verify_derivation(path, identity, verification=verification)[1]
         name = ".derive-" + digest + "-" + uuid.uuid4().hex
         os.mkdir(name, 0o700, dir_fd=parent)
         stage = path.parent / name
@@ -210,22 +287,30 @@ def _derive(root, digest, image_fd, identity, extract):
         finally:
             if name in os.listdir(parent):
                 _remove(parent, name)
+        if verification is not None:
+            verify_derivation(path, identity, verification=verification)
         return path, manifest
 
 
 def _clone(source, destination, manifest):
     rows = manifest["original"]
     destination.mkdir(mode=0o700)
-    for rel, row in sorted(rows.items(), key=lambda pair: (pair[0].count("/"), pair[0])):
-        if rel == ".":
+    for parent, name, relative, info in _walk_tree(source):
+        if relative == '.':
             continue
+        rel = relative[2:]
+        row = rows.get(rel)
+        if row is None:
+            raise Error('derived rootfs membership changed during cloning')
         target = destination / rel
         if row["kind"] == "directory":
             target.mkdir(mode=0o700)
         elif row["kind"] == "symlink":
             target.symlink_to(row["target"])
         elif "hardlink" not in row:
-            with _file(source / rel) as (src, parent, before):
+            with _member(parent, name) as (src, before):
+                if not _same(info, before):
+                    raise Error('derived rootfs changed during cloning')
                 out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
                     try:
@@ -234,7 +319,6 @@ def _clone(source, destination, manifest):
                         if exc.errno in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
                             raise CoWUnavailable("private image views require FICLONE; no byte-copy fallback") from exc
                         raise
-                    _check_file(source / rel, src, parent, before)
                 finally:
                     os.close(out)
     for rel, row in rows.items():
@@ -264,20 +348,28 @@ def private_image_view(store_root, digest, workspace_root, extract):
         with _file(image) as (image_fd, image_parent, before):
             def check_source():
                 _check_file(image, image_fd, image_parent, before)
-                if verify_image(image, digest) != identity or _hash(image_fd) != digest:
+                # acquire_lease already hashed this exact immutable generation.
+                # ctime catches writes even if bytes/mtime are restored. Never
+                # reuse this observation across launches or persist a new cache.
+                if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
+                        or stat.S_IMODE(os.fstat(image_parent).st_mode) != 0o500
+                        or (before.st_dev, before.st_ino, before.st_size,
+                            before.st_mtime_ns, before.st_ctime_ns) !=
+                           (identity['device'], identity['inode'], identity['size'],
+                            identity['mtime_ns'], identity['ctime_ns'])):
                     raise Error("executing image identity changed")
             check_source()
+            verification = {}
             with lifecycle.transaction(root):
-                derived, manifest = _derive(root, digest, image_fd, identity, extract)
-                derived_identity = verify_derivation(derived, identity)[0]
+                derived, manifest = _derive(root, digest, image_fd, identity, extract,
+                                            verification=verification)
             with _directory(workspace, create=True) as parent:
                 name = ".image-view-" + uuid.uuid4().hex
                 os.mkdir(name, 0o700, dir_fd=parent)
                 private = workspace / name / "rootfs"
                 try:
                     _clone(derived / "rootfs", private, manifest)
-                    if verify_derivation(derived, identity)[0] != derived_identity:
-                        raise Error("derived rootfs replaced during cloning")
+                    verify_derivation(derived, identity, verification=verification)
                     check_source()
                     _check_directory(workspace, parent)
                     os.lseek(image_fd, 0, os.SEEK_SET)
@@ -285,8 +377,7 @@ def private_image_view(store_root, digest, workspace_root, extract):
                         yield {"rootfs": private, "image": image, "image_fd": image_fd, "identity": identity}
                     finally:
                         check_source()
-                        if verify_derivation(derived, identity)[0] != derived_identity:
-                            raise Error("derived rootfs replaced during execution")
+                        verify_derivation(derived, identity, verification=verification)
                 finally:
                     _remove(parent, name)
     finally:
