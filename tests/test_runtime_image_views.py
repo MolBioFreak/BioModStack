@@ -51,6 +51,103 @@ def derive(store):
         return views._derive(root, digest, fd, identity, extract)
 
 
+@pytest.fixture
+def clone_double(monkeypatch):
+    """Byte-sized filesystem double, NOT live CoW/performance qualification."""
+    def clone(destination, operation, source):
+        assert operation == views.FICLONE
+        os.write(destination, os.pread(source, os.fstat(source).st_size, 0))
+    monkeypatch.setattr(views.fcntl, 'ioctl', clone)
+
+
+def test_warm_launch_hashes_each_generation_once(store, monkeypatch, clone_double):
+    root, digest, workspace, image = store
+    path, _ = derive(store)
+    program = path / 'rootfs/bin/program'
+    watched = {image.stat().st_ino, program.stat().st_ino}
+    calls = []
+    original_hash = shared._hash
+    def measured(fd):
+        info = os.fstat(fd)
+        if info.st_ino in watched:
+            calls.append(info.st_ino)
+        return original_hash(fd)
+    monkeypatch.setattr(shared, '_hash', measured)
+    monkeypatch.setattr(views, '_hash', measured)
+    for _ in range(2):
+        calls.clear()
+        with views.private_image_view(root, digest, workspace,
+                                      lambda *_: pytest.fail('warm launch extracted')):
+            assert calls.count(image.stat().st_ino) == 1
+            assert calls.count(program.stat().st_ino) == 1  # includes its hardlink
+        assert calls.count(image.stat().st_ino) == 1
+        assert calls.count(program.stat().st_ino) == 1
+    assert not lifecycle.load_state(root)['leases']
+
+
+@pytest.mark.parametrize('phase', ['cloning', 'execution'])
+@pytest.mark.parametrize('mutation', ['source_restore', 'tree_restore', 'replace',
+                                    'symlink', 'metadata', 'membership', 'hardlink'])
+def test_generation_rechecks_reject_mutation(store, monkeypatch, clone_double, phase, mutation):
+    root, digest, workspace, image = store
+    path, _ = derive(store)
+    program = path / 'rootfs/bin/program'
+    def mutate():
+        if mutation in {'source_restore', 'tree_restore', 'metadata'}:
+            selected = image if mutation == 'source_restore' else (
+                path / 'manifest.json' if mutation == 'metadata' else program)
+            info, content = selected.stat(), selected.read_bytes()
+            selected.chmod(0o600)
+            selected.write_bytes(b'X' * len(content))
+            selected.write_bytes(content)
+            os.utime(selected, ns=(info.st_atime_ns, info.st_mtime_ns))
+            selected.chmod(info.st_mode & 0o7777)
+        elif mutation == 'hardlink':
+            os.link(program, workspace / 'unexpected-link')
+        else:
+            folder = program.parent
+            folder.chmod(0o700)
+            if mutation == 'replace':
+                payload = program.read_bytes()
+                program.unlink()
+                program.write_bytes(payload)
+                program.chmod(0o555)
+            elif mutation == 'symlink':
+                program.unlink()
+                program.symlink_to('/not-an-admitted-input')
+            else:
+                (folder / 'new-member').write_text('not admitted')
+            folder.chmod(0o555)
+    real_clone = views._clone
+    def clone(*args):
+        real_clone(*args)
+        if phase == 'cloning':
+            mutate()
+    monkeypatch.setattr(views, '_clone', clone)
+    with pytest.raises(shared.SharedRuntimeImageError):
+        with views.private_image_view(root, digest, workspace, extract):
+            assert phase == 'execution', 'changed generation reached engine'
+            mutate()
+    assert not lifecycle.load_state(root)['leases']
+    assert not any(p.name.startswith('.image-view-') for p in workspace.iterdir())
+
+
+def test_inventory_and_snapshot_open_ancestry_once(store, monkeypatch):
+    path, manifest = derive(store)
+    rootfs = path / 'rootfs'
+    original = views._directory
+    calls = []
+    def counted(path, **kwargs):
+        calls.append(path)
+        return original(path, **kwargs)
+    monkeypatch.setattr(views, '_directory', counted)
+    views.snapshot_tree(rootfs)
+    assert calls == [rootfs.parent]
+    calls.clear()
+    assert views._inventory(rootfs) == manifest['frozen']
+    assert calls == [rootfs.parent]
+
+
 def test_real_cow_preserves_modes_hardlinks_and_source(store):
     root, digest, workspace, image = store
     before = shared.verify_image(image, digest)

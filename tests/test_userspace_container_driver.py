@@ -1,5 +1,7 @@
 """Shared userspace command boundary, independent of live science/SSH."""
 import importlib.util
+import os
+import stat
 from pathlib import Path
 import sys
 
@@ -86,3 +88,87 @@ def test_snapshot_detects_content_and_membership_mutation(tmp_path):
 def test_image_downloads_not_disguised_as_execution(tmp_path):
     with pytest.raises(ValueError, match='published local image'):
         driver.canonical_image('docker://python:latest', tmp_path)
+
+
+def test_input_projection_preserves_bytes_modes_and_symlinks(tmp_path, monkeypatch):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    (source / 'nested').mkdir(parents=True)
+    item = source / 'nested' / 'payload'
+    item.write_bytes(b'input bytes')
+    item.chmod(0o755)
+    (source / 'alias').symlink_to('nested/payload')
+    source.chmod(0o555)
+    (source / 'nested').chmod(0o555)
+    before = driver.snapshot(source)
+    cloned = []
+    def clone(out, operation, fd):
+        assert operation == driver.views.FICLONE
+        cloned.append(os.fstat(fd).st_ino)
+        os.write(out, os.pread(fd, os.fstat(fd).st_size, 0))
+    monkeypatch.setattr(driver.fcntl, 'ioctl', clone)
+    images = []
+    try:
+        driver.copy_input(source, target, '/input', images)
+        assert cloned == [item.stat().st_ino]
+        assert not images
+        assert driver.snapshot(source) == before
+        assert (target / 'nested/payload').read_bytes() == b'input bytes'
+        assert stat.S_IMODE((target / 'nested/payload').stat().st_mode) == 0o755
+        assert os.readlink(target / 'alias') == 'nested/payload'
+        assert stat.S_IMODE(target.stat().st_mode) == 0o555
+        (target / 'nested/payload').write_bytes(b'private edit')
+        assert item.read_bytes() == b'input bytes'
+    finally:
+        for node in [source, source / 'nested', target, target / 'nested']:
+            if node.exists():
+                node.chmod(0o755)
+
+
+@pytest.mark.parametrize('mutation', ['replace_file', 'replace_directory', 'write_restore'])
+def test_input_projection_rejects_inflight_mutation(tmp_path, monkeypatch, mutation):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    source.mkdir()
+    item = source / 'payload'
+    item.write_bytes(b'input bytes')
+    def mutate(out, operation, fd):
+        os.write(out, os.pread(fd, os.fstat(fd).st_size, 0))
+        if mutation == 'replace_directory':
+            source.rename(tmp_path / 'old-source')
+            source.symlink_to(tmp_path / 'old-source', target_is_directory=True)
+        elif mutation == 'replace_file':
+            item.rename(source / 'old-payload')
+            item.symlink_to('old-payload')
+        else:
+            info, content = item.stat(), item.read_bytes()
+            item.write_bytes(b'X' * len(content))
+            item.write_bytes(content)
+            os.utime(item, ns=(info.st_atime_ns, info.st_mtime_ns))
+    monkeypatch.setattr(driver.fcntl, 'ioctl', mutate)
+    with pytest.raises((OSError, RuntimeError, ValueError)):
+        driver.copy_input(source, target, '/input', [])
+
+
+def test_input_projection_has_no_byte_copy_fallback(tmp_path, monkeypatch):
+    source = tmp_path / 'input'
+    source.write_bytes(b'unchanged')
+    def fail(*args):
+        raise OSError('CoW unsupported')
+    monkeypatch.setattr(driver.fcntl, 'ioctl', fail)
+    with pytest.raises(OSError, match='CoW unsupported'):
+        driver.copy_input(source, tmp_path / 'output', '/input', [])
+    assert source.read_bytes() == b'unchanged'
+
+
+def test_input_snapshot_no_per_file_ancestor_reopening(tmp_path, monkeypatch):
+    (tmp_path / 'nested').mkdir()
+    for index in range(30):
+        (tmp_path / 'nested' / str(index)).write_text('small file')
+    original, calls = os.open, []
+    def counted(path, flags, *args, **kwargs):
+        if flags & os.O_DIRECTORY:
+            calls.append(path)
+        return original(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, 'open', counted)
+    assert len(driver.snapshot(tmp_path)) == 32
+    # Two ancestry checks plus the actual directories, not per-file traversal.
+    assert len(calls) <= 2 * len(tmp_path.parts) + 2

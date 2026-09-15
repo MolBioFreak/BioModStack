@@ -126,58 +126,38 @@ def extract_sif(fd, destination):
 
 
 def snapshot(path):
-    """Stable no-follow identities: byte writes necessarily change inode ctime."""
-    result = {}
-    def walk(node, relative):
-        with _directory(node.parent) as parent:
-            info = os.stat(node.name, dir_fd=parent, follow_symlinks=False)
-            kind = stat.S_IFMT(info.st_mode)
-            if kind not in {stat.S_IFDIR, stat.S_IFREG, stat.S_IFLNK}:
-                raise ValueError('unsupported input file type')
-            result[relative] = (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
-                                info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                                os.readlink(node.name, dir_fd=parent) if kind == stat.S_IFLNK else None)
-        if kind == stat.S_IFDIR:
-            with _directory(node) as directory:
-                names = sorted(os.listdir(directory))
-                for name in names:
-                    walk(node / name, relative + '/' + name)
-                if names != sorted(os.listdir(directory)):
-                    raise ValueError('input membership changed')
-    walk(path, '.')
-    return result
+    """Stable no-follow identities, without reopening ancestors per member."""
+    return views.snapshot_tree(path)
 
 
 def copy_input(source, target, guest, direct_images):
-    """Private CoW input projection, never a copied SIF or shared hardlink."""
-    with _directory(source.parent) as parent:
-        info = os.stat(source.name, dir_fd=parent, follow_symlinks=False)
+    """Private CoW projection over pinned ancestry; no shared writable binds."""
+    directories = []
+    for parent, name, relative, info in views._walk_tree(source):
+        destination = target if relative == '.' else target / relative
         if stat.S_ISLNK(info.st_mode):
-            os.symlink(os.readlink(source.name, dir_fd=parent), target)
+            os.symlink(os.readlink(name, dir_fd=parent), destination)
         elif stat.S_ISDIR(info.st_mode):
-            target.mkdir(mode=0o700)
-            with _directory(source) as directory:
-                for name in sorted(os.listdir(directory)):
-                    copy_input(source / name, target / name, str(PurePosixPath(guest) / name), direct_images)
-            target.chmod(stat.S_IMODE(info.st_mode))
-        elif stat.S_ISREG(info.st_mode):
-            if source.suffix == '.sif':
-                # The archive is a pinned provenance capability, not writable
-                # execution storage. Retain original identity; never copy it.
-                canonical_image(str(source), Path(os.environ['BMS_RUNTIME_IMAGE_STORE']))
-                target.touch(mode=0o400)
-                direct_images.append((str(source), guest))
-            else:
-                with _file(source) as (fd, source_parent, before):
-                    out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                    try:
-                        fcntl.ioctl(out, views.FICLONE, fd)
-                        os.fchmod(out, stat.S_IMODE(before.st_mode))
-                    finally:
-                        os.close(out)
-                    _check_file(source, fd, source_parent, before)
+            destination.mkdir(mode=0o700)
+            directories.append((destination, stat.S_IMODE(info.st_mode)))
+        elif Path(name).suffix == '.sif':
+            # SIFs remain original provenance capabilities, not copied storage.
+            original = source if relative == '.' else source / relative
+            canonical_image(str(original), Path(os.environ['BMS_RUNTIME_IMAGE_STORE']))
+            destination.touch(mode=0o400)
+            direct_images.append((str(original), str(PurePosixPath(guest) / relative)))
         else:
-            raise ValueError('unsupported input file type')
+            with views._member(parent, name) as (fd, before):
+                if not views._same(info, before):
+                    raise ValueError('declared input changed during projection')
+                out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    fcntl.ioctl(out, views.FICLONE, fd)
+                    os.fchmod(out, stat.S_IMODE(before.st_mode))
+                finally:
+                    os.close(out)
+    for directory, mode in reversed(directories):
+        directory.chmod(mode)
 
 
 def inherited_fds():

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
-_URL_CREDENTIAL_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:)([^@\s]+)(@)")
+_URL_CREDENTIAL_RE = re.compile(r"(?<![a-zA-Z0-9+.-])([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:)([^@\s]+)(@)")
 _SECRET_LABEL = r"[A-Za-z0-9_-]*(?:password|passwd|token|secret|api[_-]?key|authorization)[A-Za-z0-9_-]*"
 _SECRET_KEY_RE = re.compile(_SECRET_LABEL, re.IGNORECASE)
 _SECRET_ASSIGNMENT_RE = re.compile(

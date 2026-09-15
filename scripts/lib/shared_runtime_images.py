@@ -46,10 +46,37 @@ def _absolute(path: Path) -> Path:
     return Path(os.path.abspath(path))
 
 
+def _identity(info: os.stat_result) -> tuple:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _same(left: os.stat_result, right: os.stat_result) -> bool:
-    return all(getattr(left, key) == getattr(right, key) for key in (
-        "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
-    ))
+    return _identity(left) == _identity(right)
+
+
+@contextmanager
+def _member(parent: int, name: str) -> Iterator[tuple[int, os.stat_result]]:
+    """Pin a regular member of an already pinned directory, without traversal.
+
+    The caller retains and validates the directory's reachable ancestry. This
+    avoids reopening every ancestor for every file in a verified tree walk.
+    """
+    if not name or name in {'.', '..'} or os.sep in name:
+        raise SharedRuntimeImageError('invalid runtime image member name')
+    fd = os.open(name, _FILE_FLAGS, dir_fd=parent)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise SharedRuntimeImageError('runtime image is not a regular file')
+        if not _same(before, os.stat(name, dir_fd=parent, follow_symlinks=False)):
+            raise SharedRuntimeImageError('runtime image path or inode changed')
+        yield fd, before
+        if not _same(before, os.fstat(fd)) or not _same(
+                before, os.stat(name, dir_fd=parent, follow_symlinks=False)):
+            raise SharedRuntimeImageError('runtime image path or inode changed')
+    finally:
+        os.close(fd)
 
 
 @contextmanager
