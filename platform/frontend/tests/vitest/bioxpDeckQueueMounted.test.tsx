@@ -28,8 +28,9 @@ const advance = async (ms = 1) => { await act(async () => { await vi.advanceTime
 const render = async () => { await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>)); await advance(); };
 const panel = () => container.querySelector('[data-testid="oem-deck-movement"]')!;
 const move = () => [...panel().querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
-const submit = async (target: string) => {
+const submit = async (target: string, cameraOffset = false) => {
     await act(async () => { const select = panel().querySelector('select')!; select.value = target; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { const checkbox = panel().querySelector('input[type=checkbox]') as HTMLInputElement; if (!checkbox.disabled && checkbox.checked !== cameraOffset) checkbox.click(); });
     expect(move().disabled).toBe(false);
     await act(async () => move().click()); await advance();
 };
@@ -59,12 +60,15 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.useRealTimers(); });
 it.each([2, 7])('retains %s ordered rapid intents and continuing entry while earlier receipts are running', async count => {
     await render(); const targets = deckCatalog.action.destination_options.slice(0, count).map(x => x.target);
-    for (const target of targets) await submit(target);
+    for (const [index, target] of targets.entries()) await submit(target, index % 2 === 0);
     expect(admissions).toHaveLength(1);
     expect(panel().querySelectorAll('[data-request-key]')).toHaveLength(count);
     expect(panel().textContent).toContain('submitting / not yet accepted');
     expect((panel().querySelector('select') as HTMLSelectElement).disabled).toBe(false);
-    for (let i = 0; i < count; i++) { expect(admissions[i].body.inputs.target).toBe(targets[i]); await accept(i); }
+    for (let i = 0; i < count; i++) {
+        expect(admissions[i].body.inputs).toEqual({ target: targets[i], camera_offset: i % 2 === 0 && deckCatalog.action.destination_options[i].camera_offset_option });
+        await accept(i);
+    }
     expect(new Set(admissions.map(x => x.body.idempotency_key)).size).toBe(count);
     for (let i = 0; i < count; i++) expect(panel().textContent).toContain(`queue-${i}`);
     await submit(targets[0]); expect(admissions).toHaveLength(count + 1); await accept(count);
