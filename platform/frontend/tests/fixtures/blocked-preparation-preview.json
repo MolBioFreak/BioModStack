@@ -1,0 +1,39 @@
+{
+  "dependencies": [
+    {
+      "name": "containers/boltz2.sif",
+      "kind": "image",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "name": "weights/boltz",
+      "kind": "weights",
+      "sha256": null,
+      "size_bytes": null
+    }
+  ],
+  "estimates_complete": false,
+  "selection": {
+    "kind": "model",
+    "model_id": "boltz2"
+  },
+  "preview_sha256": "c0a1dc798aed024586caa327ce40e92244f053ec0a600b0d523223e57d429993",
+  "artifacts": [],
+  "total_bytes": 0,
+  "scientific_ready": false,
+  "scope": "managed_asset_activation",
+  "destination": {
+    "target_id": "vast:1",
+    "remote_root": "/opt/biomodstack"
+  },
+  "effective_params": null,
+  "plan_sha256": null,
+  "asset_states": [],
+  "transfer_bytes": 0,
+  "storage_bytes": 0,
+  "inventory_state": "unobserved",
+  "blockers": [
+    "host_asset_unavailable: Unavailable: containers/boltz2.sif. Install the selected assets on the host using managed setup (including any required license), then preview again. Worker/backend presence is separate."
+  ]
+}

@@ -35,6 +35,12 @@ async def test_missing_host_assets_are_actionable_and_cannot_start(store, assets
             assert preview['blockers']
             import json, os
             from pathlib import Path
+            # Shared with the unconditional mounted UI regression. The assets/store
+            # fixtures pin source and target identities, so compare the entire real
+            # route response (including its digest) without normalization.
+            wire_fixture = (Path(__file__).resolve().parents[2] / 'frontend/tests/fixtures'
+                            / 'blocked-preparation-preview.json')
+            assert preview == json.loads(wire_fixture.read_text())
             if evidence := os.environ.get('BMS_PREPARATION_WIRE_DIR'):
                 Path(evidence, 'blocked-preview.json').write_text(json.dumps(preview, indent=2))
             assert 'host_asset_unavailable' in preview['blockers'][0]

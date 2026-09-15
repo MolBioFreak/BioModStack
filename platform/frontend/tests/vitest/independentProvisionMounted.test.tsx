@@ -1,5 +1,5 @@
 import React, { act } from 'react';
-import { readFileSync } from 'node:fs';
+import blockedPreviewWire from '../fixtures/blocked-preparation-preview.json?raw';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -114,8 +114,9 @@ it('renders exact dependency estimates and blocks mutation on preview blockers',
   expect(button('Start provision').disabled).toBe(true);
 });
 
-it.skipIf(!process.env.BMS_PREPARATION_WIRE_DIR)('renders the actual blocked route wire with unknown bytes and no start', async () => {
-  const wire: ProvisionPreview = JSON.parse(readFileSync(`${process.env.BMS_PREPARATION_WIRE_DIR}/blocked-preview.json`, 'utf8'));
+it('renders the actual blocked route wire with unknown bytes and no start', async () => {
+  // Full response equality is enforced by test_remote_preparation_preview.py.
+  const wire: ProvisionPreview = JSON.parse(blockedPreviewWire);
   catalog.push(wire.selection);
   try {
     await render(); await select('Provision model', 'boltz2');
