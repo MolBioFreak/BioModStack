@@ -115,8 +115,8 @@ async def test_native_provision_plan_preserves_settings_input_identity_without_w
     assert bindings[0]["expected_sha256"] == ONE_AKI_SHA256
     assert not list(tmp_path.iterdir())
     seen = []
-    def assets(model, mode, params, *, include_support, native_invocation, selected_plan):
-        assert native_invocation is None and selected_plan is plan
+    def assets(model, mode, params, *, include_support, selected_plan):
+        assert selected_plan is plan
         seen.append(selected_plan)
         return []
     monkeypatch.setattr(cache, "_runtime_assets", assets)

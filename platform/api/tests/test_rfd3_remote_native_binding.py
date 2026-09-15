@@ -39,7 +39,9 @@ def test_nonexecuting_preview_uses_complete_native_generation(tmp_path, monkeypa
     assert item.relative_path == 'requests/rfd3_generation_request.json'
     effective = json.loads(invocation.effective_json)
     assert json.loads(item.payload) == effective['rfd3_generation_request']
-    assert effective['rfd3_generation_request_path'] in invocation.command
+    assert not hasattr(invocation, 'command')
+    assert effective['rfd3_generation_request_path'] == invocation.native_parameters[
+        'rfd3_generation_request_path']
     stages = {row.component_key for row in invocation.execution_plan.metadata.static_components}
     assert {'PrepareGeneralRFD3Input', 'RunRFD3', 'BuildGeneralRFD3ResultManifest',
             'FilterRFD3', 'PublishResults'} <= stages
@@ -214,13 +216,14 @@ def test_workflow_provision_uses_native_plan_without_staging_biology(tmp_path, m
     monkeypatch.setattr(cache, 'current_source_identity', lambda: (source.revision, source.tree))
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'not-created')
     seen = []
-    def unavailable_runtime(model, mode, params, *, include_support, native_invocation):
+    def unavailable_runtime(model, mode, params, *, include_support, selected_plan):
         assert (model, mode) == (MODEL, MODE)
         assert include_support is False
-        assert native_invocation.execution_plan.complete
-        assert params['rfd3_generation_request_path'] == native_invocation.native_parameters['rfd3_generation_request_path']
-        assert len(native_invocation.generated_inputs) == 1
-        seen.append(native_invocation.execution_plan)
+        assert selected_plan.complete
+        assert not hasattr(selected_plan, 'command')
+        native = json.loads(selected_plan.native_parameters_json)
+        assert params['rfd3_generation_request_path'] == native['rfd3_generation_request_path']
+        seen.append(selected_plan)
         # Missing dependencies remain setup blockers, not implicit materialization.
         raise FileNotFoundError('controlled missing scientific runtime')
     monkeypatch.setattr(cache, '_runtime_assets', unavailable_runtime)

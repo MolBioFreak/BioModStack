@@ -1,4 +1,5 @@
 """Offline process regressions for durable worker status publication."""
+from pathlib import Path
 import subprocess
 import sys
 
@@ -57,13 +58,22 @@ def test_worker_launch_restores_only_authenticated_portable_bindings(tmp_path, m
     keys = ("BMS_PORTABLE_INPUT_BINDINGS", "APPTAINERENV_BMS_PORTABLE_INPUT_BINDINGS")
     for bound in (True, False):
         attempt = tmp_path / str(bound)
-        source = attempt / "bundle/source"
+        source_bundle = attempt / "bundle/source"
+        source = attempt / "materialized/source"
         inputs = attempt / "bundle/inputs"
-        source.mkdir(parents=True)
+        source_bundle.mkdir(parents=True)
         inputs.mkdir()
-        archive = source / ".bms-source.tar"
-        with tarfile.open(archive, "w"):
-            pass
+        archive = source_bundle / ".bms-source.tar"
+        source_files = {
+            "scripts/lib/portable_inputs.py": Path(__file__).resolve().parents[3] / "scripts/lib/portable_inputs.py",
+            "scripts/lib/native_diagnostics.py": Path(__file__).resolve().parents[3] / "scripts/lib/native_diagnostics.py",
+        }
+        with tarfile.open(archive, "w") as source_archive:
+            for arcname, source_file in source_files.items():
+                source_archive.add(source_file, arcname=arcname)
+        source.mkdir(parents=True)
+        with tarfile.open(archive) as source_archive:
+            source_archive.extractall(source, filter="data")
         artifact = inputs / "native.txt"
         artifact.write_text("verified native input")
         bindings = inputs / "bindings.json"
