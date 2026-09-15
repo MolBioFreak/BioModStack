@@ -159,9 +159,12 @@ describe('mounted BioXP four-channel pipette panel', () => {
         expect(container.textContent).toContain('Group error: channel 3 · code 17');
         expect(container.textContent).toContain('Last transaction: condition_or_status_failed');
         expect(container.textContent).toContain('Latest receipt: unavailable');
-        expect(container.textContent).toContain('Application evidence: plan only; physical execution blocked');
-        expect(container.textContent).toContain('Robot-owned blocker: physical_pipette_execution_not_authorized');
-        expect(container.textContent).toContain('Dependency blockers: gantry:unbound');
+        expect(container.textContent).not.toContain('physical execution blocked');
+        expect(container.textContent).not.toContain('Robot-owned blocker');
+        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
+        const planner = [...container.querySelectorAll('h4')].find(node => node.textContent === 'No-motion application planner')?.parentElement;
+        expect(planner?.textContent).toContain('Planner dependencies: gantry:unbound');
+        expect(planner?.querySelector('[data-physical-pipette-control]')).toBeNull();
 
         const physicalControls = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
         expect(physicalControls).toHaveLength(5);
@@ -246,6 +249,11 @@ describe('mounted BioXP four-channel pipette panel', () => {
         ]);
         const blocked = buttons.find((button) => button.textContent === 'Detect fluid physically');
         expect(blocked?.title).toBe('Motion arm is not confirmed.');
+        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
+        expect(container.textContent).toContain('No-motion application planner');
+        expect(invokeCalls).toEqual([]);
+        await act(async () => blocked?.click());
+        expect(invokeCalls).toEqual([]);
 
         await act(async () => {
             buttons.find((button) => button.textContent === 'Lift pipette head (Z)')?.click();

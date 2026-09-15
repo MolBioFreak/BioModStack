@@ -151,7 +151,6 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     };
 
     const application = pipettes?.application ?? status.data;
-    const blocker = application?.blocker ?? 'physical_pipette_execution_not_authorized';
     const transactionOutcome = typeof pipettes?.last_group_transaction?.outcome === 'string'
         ? pipettes.last_group_transaction.outcome
         : null;
@@ -242,15 +241,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 <div><dt className="text-slate-500">Group error</dt><dd>{pipettes?.last_error ? `Group error: channel ${pipettes.last_error.channel + 1} · code ${pipettes.last_error.error_code}` : 'Group error: none reported'}</dd></div>
                 <div><dt className="text-slate-500">Group transaction</dt><dd>Last transaction: {transactionOutcome ?? 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Receipt evidence</dt><dd>{pipettes?.latest_receipt ? `Latest receipt: ${pipettes.latest_receipt.operation} · ${pipettes.latest_receipt.receipt_id}` : 'Latest receipt: unavailable'}</dd></div>
-                <div><dt className="text-slate-500">Application evidence</dt><dd>{application ? 'Application evidence: plan only; physical execution blocked' : 'Application evidence: unavailable'}</dd></div>
             </dl>
 
-            <p className="mt-3 rounded border border-amber-700/60 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">Robot-owned blocker: {blocker}</p>
-            {application && application.dependency_blockers.length > 0 && (
-                <p className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
-                    Dependency blockers: {application.dependency_blockers.join(', ')}
-                </p>
-            )}
             <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 {PHYSICAL_CONTROLS.map((label) => {
                     const actionId = physicalActionIdFor(label);
@@ -286,6 +278,11 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
 
             <div className="mt-4 rounded border border-slate-700 bg-slate-950/40 p-3">
                 <h4 className="text-sm font-semibold text-slate-200">No-motion application planner</h4>
+                {application && application.dependency_blockers.length > 0 && (
+                    <p className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+                        Planner dependencies: {application.dependency_blockers.join(', ')}
+                    </p>
+                )}
                 <label className="mt-2 block text-xs text-slate-300">Operation
                     <select value={operation} onChange={(event) => setOperation(event.target.value as BioXpPipetteApplicationOperation)} className="ml-2 rounded bg-slate-900 px-2 py-1">
                         {OPERATIONS.map((value) => <option key={value} value={value}>{value}</option>)}
