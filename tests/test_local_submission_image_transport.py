@@ -100,6 +100,7 @@ def test_job_compiler_to_production_nextflow_apptainer(tmp_path, monkeypatch, lo
         # The first canonical container (request prep) is stopped before reading it.
         request.write_text(json.dumps(dict(schema_name='cm_request', schema_version=1,
             request_id='transport', backend='confornets', frustrampnn_requiredness='required',
+            feature_policy={'mode': 'features_disabled_control_v1'}, confornets={'confornet_count': 1},
             frustrampnn_settings={}, targets=[dict(target_id='transport', target_order=0)], ordered_seeds=[42])))
         params = dict(cm_request_path=str(request), gpu_id=0, run_frustrampnn=True)
         model, mode, entrypoint, process_name = ('conformational_mapping', 'map', 'conformational_mapping.nf', 'PrepCanonicalConforNetsRequest')
