@@ -4384,7 +4384,10 @@ def _bind_protenix_msa_transport(invocation, params):
         else:
             command.extend([flag, str(value)])
         native[key] = value
-    plan = (_bind_prepared_protenix_plan(invocation, supplied)
+    from services.model_msa_handoff import bind_prepared_fold_cp_plan
+    plan = (bind_prepared_fold_cp_plan(invocation, supplied)
+            if invocation.model_id == 'boltz_cp_experimental' else
+            _bind_prepared_protenix_plan(invocation, supplied)
             if invocation.model_id == 'protenix' else
             _bind_prepared_boltz_plan(invocation, supplied)
             if invocation.model_id == 'boltz2' else invocation.execution_plan)

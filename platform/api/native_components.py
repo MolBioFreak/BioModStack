@@ -823,7 +823,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         after = a.chain(['RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'])
         if p.get('bcp_repo_path'):
             a.asset('runtime_data', None, 'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental', 'bcp_repo_path')
-        a.msa('boltz2', ('RunBoltzCPExperimental',))
+        from services.model_msa_handoff import fold_cp_msa_intent
+        from component_runtime import NativeArtifactRole
+        service = fold_cp_msa_intent(p, tuple(role.role_id for role in roles
+            if role.component_key == 'RunBoltzCPExperimental' and role.direction == 'input'))
+        services.append(service)
+        roles.append(NativeArtifactRole('boltz_cp_experimental:msa_artifacts',
+            'RunBoltzCPExperimental', 'input', 'native_chain_alignments', service.authority,
+            requiredness='required' if service.state != 'disabled' else 'optional',
+            format='bms.boltz-cp-msa-inputs.v1', identity_authority=service.authority))
         if p.get('run_frustrampnn') is not False:
             a.frustra(after)
         return True
