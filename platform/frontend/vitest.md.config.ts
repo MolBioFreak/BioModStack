@@ -6,6 +6,7 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/foldCpPlacementMounted.test.tsx',
             './tests/vitest/installFeaturesMounted.test.tsx',
             './tests/vitest/msaProviderReadinessMounted.test.tsx',
             './tests/vitest/esmfold2SettingsMounted.test.tsx',

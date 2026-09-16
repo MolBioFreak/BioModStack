@@ -1070,7 +1070,15 @@ def _derive_boltz_cp_gpu_launch_settings(
         raw_gpu_ids = scheduler_gpu_id
 
     parsed_gpu_ids = _parse_boltz_cp_gpu_ids(raw_gpu_ids)
-    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+    size_cp = _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+    if requested_size_cp not in (None, ""):
+        requested = _coerce_int(requested_size_cp, 0)
+        if requested < 1 or requested != size_cp or (requested > 1 and not parsed_gpu_ids):
+            raise ValueError(
+                f"Fold-CP size_cp {requested_size_cp} requires an explicit GPU selection "
+                "divisible by that square CP size; CP cannot be reduced automatically"
+            )
+    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), size_cp
 
 
 def _normalize_boltz_cp_component_id(value: object, fallback: str) -> List[str]:

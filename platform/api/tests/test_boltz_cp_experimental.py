@@ -191,25 +191,16 @@ def test_boltz_cp_structure_launcher_defaults_size_cp_to_largest_square_divisor(
 
 
 
-def test_boltz_cp_structure_launcher_clamps_requested_size_cp_to_valid_square_divisor() -> None:
-    registry = ModelRegistry()
-    validation_params = jobs._normalize_boltz_cp_params_for_validation(
-        "boltz_cp_experimental",
-        {
-            "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
-            "sequence_name": "cp_square_divisor_requested_case",
-            "structure_launch_variant": "boltz_cp_experimental",
-            "bcp_input_format": "config_files",
-            "bcp_output_format": "mmcif",
-            "bcp_write_full_pae": False,
-            "bcp_gpu_ids": "2,3",
-            "bcp_size_cp": 4,
-        },
-    )
-
-    assert validation_params["gpu_ids"] == "2,3"
-    assert validation_params["size_cp"] == 1
-    assert registry.validate_job_params("boltz_cp_experimental", "design", validation_params) == []
+def test_boltz_cp_structure_launcher_rejects_incompatible_requested_size_cp() -> None:
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        jobs._normalize_boltz_cp_params_for_validation(
+            "boltz_cp_experimental",
+            {"sequence": "MKTIIALSYIFCLVFADYKDDDDA", "bcp_gpu_ids": "2,3", "bcp_size_cp": 4},
+        )
+    assert error.value.status_code == 422
+    assert "cannot be reduced automatically" in error.value.detail
 
 
 
