@@ -142,6 +142,37 @@ def test_registration_is_required_even_for_valid_canonical_environment(installat
         compile_request()
 
 
+def test_explicit_retained_selection_precedes_new_lane_and_environment(installation, monkeypatch):
+    containers, store, source, digest = installation
+    retained = publish(installation)
+    source.write_bytes(b'newer registered Fold-CP fixture')
+    newer_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    publish_references(store, 'development', {KEY: {'source': str(source), 'sha256': newer_digest}})
+    newer = store / 'objects' / 'sha256' / newer_digest / 'runtime.sif'
+    monkeypatch.setenv(KEY, str(newer))
+    native = []
+    argv = nextflow.build_nextflow_command(MODEL, 'design', {
+        'sequence': 'MKTIIALSYIFCLVFADYKDDDDA', 'pinned_gpus': [0],
+        'bcp_container_path': str(retained), 'boltz_use_msa': False, 'run_frustrampnn': False,
+    }, str(containers.parent / 'out'), job_id='fixture-retained', native_invocations=native)
+    assert argv[argv.index('--bcp_container_path') + 1] == str(retained)
+    assert images.resolve_image('fold-cp.sif', containers) == newer
+    assert [(p, n) for p, n in bundle._runtime_assets(MODEL, 'design',
+        native[0].native_parameters, native_invocation=native[0], only_kinds=frozenset({'image'}))] == [
+            (retained, 'containers/fold-cp.sif')]
+
+
+def test_development_registration_does_not_select_production(installation, monkeypatch):
+    containers, store, source, digest = installation
+    publish(installation)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'production')
+    assert images.resolve_image('fold-cp.sif', containers) == containers / 'fold-cp.sif'
+    # No cross-lane adoption: the emitted legacy path cannot override an
+    # existing registration from another lane at the asset boundary.
+    with pytest.raises(ValueError, match='not a retained managed reference'):
+        cache.workflow_plan(None, compiled_plan=compile_request().execution_plan)
+
+
 def test_public_workflow_preparation_uses_real_compiler(installation):
     from schemas import JobCreate
     image = publish(installation)

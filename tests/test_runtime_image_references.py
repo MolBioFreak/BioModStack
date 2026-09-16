@@ -71,7 +71,9 @@ def test_fold_cp_joins_legacy_development_projection_without_other_lane_changes(
     refs = store / 'references'
     refs.mkdir(exist_ok=True)
     key = 'BMS_PROTENIX_CONTAINER_PATH'
-    (refs / 'development.env').write_text(f'{key}={existing}\n')
+    (refs / 'development.env').write_text(
+        '# Managed shared runtime references; image digest is encoded in each path.\n'
+        f'BMS_RUNTIME_IMAGE_STORE={store}\n{key}={existing}\n')
     source.write_bytes(b'Fold-CP fixture')
     cp_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     publish_references(store, 'development', {
