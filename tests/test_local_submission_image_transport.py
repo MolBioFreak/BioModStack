@@ -188,8 +188,9 @@ def test_registered_frustra_component_to_pinned_apptainer_and_digest_rejection(t
     source = source.replace("print('LOCAL_TRANSPORT_STOP:", f'''if 'sha256sum' in args:
     import hashlib
     assets = {assets!r}
-    asset = Path(assets[args[-1]])
-    print(hashlib.sha256(asset.read_bytes()).hexdigest() + '  ' + args[-1])
+    for target in args[args.index('sha256sum') + 1:]:
+        asset = Path(assets[target])
+        print(hashlib.sha256(asset.read_bytes()).hexdigest() + '  ' + target)
     raise SystemExit(0)
 print('LOCAL_TRANSPORT_STOP:''')
     recorder.write_text(source)
@@ -235,7 +236,8 @@ print('LOCAL_TRANSPORT_STOP:''')
         component.run_component(**kwargs)
     log = tmp_path / 'invocations.jsonl'
     records = [json.loads(line) for line in log.read_text().splitlines()]
-    assert len(records) == 3, records
+    assert len(records) == 2, records
+    assert records[0]["argv"][2:] == ["sha256sum", identity.executable_path, identity.checkpoint_path]
     assert all(r['image'].startswith('/proc/self/fd/') for r in records)
     assert all(r['resolved'] == str(image) for r in records)
     assert all((r['device'], r['inode']) == (image.stat().st_dev, image.stat().st_ino) for r in records)
@@ -247,7 +249,7 @@ print('LOCAL_TRANSPORT_STOP:''')
     # request. No selector is added and no digest/closure validator is replaced.
     with pytest.raises(component.ComponentRunError, match='runtime does not match'):
         component.run_component(**(kwargs | {'runtime_identity': replace(identity, sif_sha256='0' * 64)}))
-    assert len(log.read_text().splitlines()) == 3
+    assert len(log.read_text().splitlines()) == 2
     # Also reject actual tampering of the selected object before any Apptainer.
     image.chmod(0o600)
     image.write_bytes(b'CHANGED SYNTHETIC SCIENTIFIC IMAGE BYTES')
@@ -255,5 +257,5 @@ print('LOCAL_TRANSPORT_STOP:''')
     with pytest.raises(component.ComponentRunError, match='SHA-256 differs from expected digest') as rejected:
         component.run_component(**kwargs)
     assert rejected.value.failure_class == 'runtime_identity_mismatch'
-    assert len(log.read_text().splitlines()) == 3
+    assert len(log.read_text().splitlines()) == 2
     print('Frustra: registered structure_prediction v3 preparation -> component closure -> strict CAS reader -> two asset hashes + predict argv via same-inode pinned FD; digest changes rejected; no science executed')

@@ -172,7 +172,7 @@ class _DirectProcessVisitor(ast.NodeVisitor):
         if is_subprocess:
             owner = self.functions[-1] if self.functions else ""
             if self.relative.endswith("/services/frustrampnn/runtime.py") and owner in {
-                "container_sha256",
+                "_container_sha256_many",
                 "execute_frustrampnn",
             }:
                 pass

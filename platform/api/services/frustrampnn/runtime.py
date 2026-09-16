@@ -267,7 +267,14 @@ def open_verified_container(path: Path | str, expected_sha256: object) -> Pinned
                                    ("ctime_ns", "st_ctime_ns"))
         ):
             raise RuntimeValidationError("verified FrustraMPNN image generation changed")
-        actual = sha256_fd(descriptor)
+        if shared_identity is not None:
+            if stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1:
+                raise RuntimeValidationError("verified FrustraMPNN image mode or link count changed")
+            # Reuse only this call's authenticated exact-generation receipt;
+            # legacy images still require a descriptor hash below.
+            actual = shared_identity["sha256"]
+        else:
+            actual = sha256_fd(descriptor)
         after = os.fstat(descriptor)
         if any(getattr(before, key) != getattr(after, key) for key in
                ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")):
@@ -349,10 +356,30 @@ def container_sha256(
 ) -> str:
     """Hash one in-container asset through the inherited pinned SIF descriptor."""
 
+    target = _validate_container_internal_path(internal_path, label="container asset")
+    return _container_sha256_many(
+        apptainer, container, (target,), container_fd=container_fd
+    )[target]
+
+
+def _container_sha256_many(
+    apptainer: Path | str,
+    container: Path | str,
+    internal_paths: tuple[Path | str, ...],
+    *,
+    container_fd: int | None = None,
+) -> dict[str, str]:
+    """Authenticate an exact asset roster in one pinned container launch."""
+
     executable = container_executable(apptainer)
     if not isinstance(executable, str) or not executable or "\x00" in executable:
         raise RuntimeValidationError("Apptainer executable is invalid")
-    target = _validate_container_internal_path(internal_path, label="container asset")
+    targets = tuple(
+        _validate_container_internal_path(path, label="container asset")
+        for path in internal_paths
+    )
+    if not targets or len(set(targets)) != len(targets):
+        raise RuntimeValidationError("container asset roster must be non-empty and unique")
     pass_fds: tuple[int, ...] = ()
     if container_fd is not None:
         if isinstance(container_fd, bool) or not isinstance(container_fd, int) or container_fd < 0:
@@ -363,16 +390,26 @@ def container_sha256(
         pass_fds = (container_fd,)
     try:
         result = subprocess.run(
-            [executable, "exec", os.fspath(container), "sha256sum", target],
+            [executable, "exec", os.fspath(container), "sha256sum", *targets],
             check=True,
             capture_output=True,
             text=True,
             pass_fds=pass_fds,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeValidationError(f"cannot authenticate container asset: {target}") from exc
-    digest = result.stdout.split(maxsplit=1)[0] if result.stdout.strip() else ""
-    return _validate_digest(digest, label=f"container asset {target}")
+        raise RuntimeValidationError(f"cannot authenticate container assets: {targets}") from exc
+    digests: dict[str, str] = {}
+    for record in result.stdout.splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64}) [ *](.+)", record)
+        if match is None:
+            raise RuntimeValidationError("container asset SHA-256 record is malformed")
+        digest, target = match.groups()
+        if target not in targets or target in digests:
+            raise RuntimeValidationError("container asset SHA-256 roster has unexpected or duplicate records")
+        digests[target] = digest
+    if set(digests) != set(targets):
+        raise RuntimeValidationError("container asset SHA-256 roster is incomplete")
+    return digests
 
 
 def verify_container_assets(
@@ -383,24 +420,20 @@ def verify_container_assets(
 ) -> dict[str, str]:
     if pinned.closed:
         raise RuntimeValidationError("verified FrustraMPNN container is already closed")
-    executable_sha256 = container_sha256(
+    digests = _container_sha256_many(
         apptainer,
         pinned.proc_path,
-        identity.executable_path,
+        (identity.executable_path, identity.checkpoint_path),
         container_fd=pinned.fd,
     )
+    executable_sha256 = digests[identity.executable_path]
     if executable_sha256 != _validate_digest(
         identity.executable_sha256, label="registered FrustraMPNN executable"
     ):
         raise RuntimeValidationError(
             "FrustraMPNN executable SHA-256 does not match the central runtime registry"
         )
-    checkpoint_sha256 = container_sha256(
-        apptainer,
-        pinned.proc_path,
-        identity.checkpoint_path,
-        container_fd=pinned.fd,
-    )
+    checkpoint_sha256 = digests[identity.checkpoint_path]
     if checkpoint_sha256 != _validate_digest(
         identity.checkpoint_sha256, label="registered FrustraMPNN checkpoint"
     ):
