@@ -120,8 +120,9 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} statisticsOverride={baseDetail.statistics_json} />);
         expect(container.textContent).not.toContain('Result authority:');
         expect(container.querySelector('details')?.open).toBe(false);
-        expect(container.textContent).toContain('Requested: all_protein_entities');
-        expect(container.textContent).toContain('Resolved chains: 1');
+        expect(container.textContent).toContain('Requested selection: all_protein_entities');
+        const resolvedChains = Array.from(container.querySelectorAll('div')).find((node) => node.textContent === 'Resolved chains');
+        expect(resolvedChains?.parentElement?.querySelector('.font-mono')?.textContent).toBe('1');
         expect(container.textContent).toContain('Requested model');
         expect(container.textContent).toContain('Effective model');
         expect(container.textContent).toContain('Requested altloc');
@@ -139,7 +140,7 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
     it('does not use inline statistics when the dedicated response is absent', async () => {
         const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} />);
         expect(container.textContent).toContain('Statistics unavailable');
-        expect(container.textContent).not.toContain('Scoreable slots');
+        expect(container.textContent).not.toContain('Scores available');
         expect(container.textContent).toContain('Settings used');
         await act(async () => root.unmount());
     });

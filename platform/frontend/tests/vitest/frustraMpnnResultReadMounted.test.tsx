@@ -102,7 +102,7 @@ describe('captured FrustraMPNN result-read mounted boundary acceptance', () => {
                     expect(container.querySelector('[role="alert"]')).not.toBeNull();
                     if (mode === 'statistics-http-failure') expect(container.textContent).toContain('TEST statistics transport failure');
                 } else {
-                    expect(container.textContent).toContain('Scoreable slots');
+                    expect(container.textContent).toContain('Scores available');
                     expect(container.textContent).not.toContain('Statistics unavailable');
                 }
                 expect(forbidden).toEqual([]);
