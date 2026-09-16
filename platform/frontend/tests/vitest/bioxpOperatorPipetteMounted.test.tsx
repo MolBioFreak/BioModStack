@@ -140,6 +140,9 @@ describe('mounted BioXP four-channel pipette panel', () => {
         const cards = [...container.querySelectorAll('[data-pipette-channel]')];
         expect(cards).toHaveLength(4);
         expect(cards.map((card) => card.getAttribute('data-pipette-channel'))).toEqual(['0', '1', '2', '3']);
+        expect(container.textContent).toContain('Include data sweep');
+        expect([...container.querySelectorAll('h3, h4, label, button, [title]')]
+            .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ')).not.toMatch(/\bOEM\b/);
         expect(container.textContent).toContain('Channel 1');
         expect(container.textContent).toContain('Channel 4');
         expect(cards[1].textContent).toContain('Unavailable — channel missing from projection');
@@ -156,9 +159,12 @@ describe('mounted BioXP four-channel pipette panel', () => {
         expect(container.textContent).toContain('Group error: channel 3 · code 17');
         expect(container.textContent).toContain('Last transaction: condition_or_status_failed');
         expect(container.textContent).toContain('Latest receipt: unavailable');
-        expect(container.textContent).toContain('Application evidence: plan only; physical execution blocked');
-        expect(container.textContent).toContain('Robot-owned blocker: physical_pipette_execution_not_authorized');
-        expect(container.textContent).toContain('Dependency blockers: gantry:unbound');
+        expect(container.textContent).not.toContain('physical execution blocked');
+        expect(container.textContent).not.toContain('Robot-owned blocker');
+        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
+        const planner = [...container.querySelectorAll('h4')].find(node => node.textContent === 'No-motion application planner')?.parentElement;
+        expect(planner?.textContent).toContain('Planner dependencies: gantry:unbound');
+        expect(planner?.querySelector('[data-physical-pipette-control]')).toBeNull();
 
         const physicalControls = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
         expect(physicalControls).toHaveLength(5);
@@ -167,8 +173,8 @@ describe('mounted BioXP four-channel pipette panel', () => {
             'Load tip physically',
             'Move to waste physically',
             'Detect fluid physically',
-            'Plunger up physically',
-            'Plunger down physically',
+            'Lift pipette head (Z)',
+            'Lower pipette head (Z)',
         ]);
         expect(state.planCalls).toEqual([]);
         expect(state.readbackCalls).toEqual([]);
@@ -238,14 +244,19 @@ describe('mounted BioXP four-channel pipette panel', () => {
             { label: 'Load tip physically', disabled: false },
             { label: 'Move to waste physically', disabled: false },
             { label: 'Detect fluid physically', disabled: true },
-            { label: 'Plunger up physically', disabled: false },
-            { label: 'Plunger down physically', disabled: false },
+            { label: 'Lift pipette head (Z)', disabled: false },
+            { label: 'Lower pipette head (Z)', disabled: false },
         ]);
         const blocked = buttons.find((button) => button.textContent === 'Detect fluid physically');
         expect(blocked?.title).toBe('Motion arm is not confirmed.');
+        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
+        expect(container.textContent).toContain('No-motion application planner');
+        expect(invokeCalls).toEqual([]);
+        await act(async () => blocked?.click());
+        expect(invokeCalls).toEqual([]);
 
         await act(async () => {
-            buttons.find((button) => button.textContent === 'Plunger up physically')?.click();
+            buttons.find((button) => button.textContent === 'Lift pipette head (Z)')?.click();
             await Promise.resolve();
         });
         expect(invokeCalls).toEqual([

@@ -51,7 +51,7 @@ def test_v3_core_result_is_available_before_statistics_complete() -> None:
 
     authority = frustrampnn_router._result_authority(cast(Any, result))
 
-    assert authority["authority_version"] == "v3"
+    assert "authority_version" not in authority
     assert authority["availability"] is True
     assert authority["statistics_available"] is False
     assert authority["missing_fields"] == [
@@ -243,7 +243,7 @@ PHASE4_FIELDS = [
 ]
 
 
-def _effective_settings_fixture() -> dict:
+def _effective_settings_fixture(schema_version: int = 2) -> dict:
     name = "_frustrampnn_source_fixture_for_results_api"
     path = TESTS_DIR / "test_frustrampnn_source_inspection.py"
     spec = importlib.util.spec_from_file_location(name, path)
@@ -272,9 +272,15 @@ def _effective_settings_fixture() -> dict:
             if row["status"] == "mapped"
         ],
     }
-    return resolve_effective_settings(
-        module._settings(selection), structure_map
-    ).model_dump(mode="json")
+    requested = module._settings(selection)
+    if schema_version == 1:
+        payload = requested.model_dump(mode="json")
+        payload["schema_version"] = 1
+        for key in ("batching_enabled", "structures_per_job"):
+            payload.pop(key)
+        payload["protein_selection"].pop("regions")
+        requested = type(requested).model_validate(payload)
+    return resolve_effective_settings(requested, structure_map).model_dump(mode="json")
 
 
 def _statistics_fixture() -> dict:
@@ -565,7 +571,6 @@ async def test_v2_statistics_returns_exact_persisted_receipt_and_audit_identity(
         "parent_job_id": "job-2",
         "candidate_id": "candidate-2",
         "invocation_id": "invoke-1",
-        "authority_version": "v2",
         "availability": True,
         "missing_fields": [],
         "settings_sha256": "4" * 64,
@@ -573,7 +578,6 @@ async def test_v2_statistics_returns_exact_persisted_receipt_and_audit_identity(
         "effective_settings_json": _effective_settings_fixture(),
         "capability_inventory_sha256": "6" * 64,
         "statistics_sha256": expected_statistics["statistics_sha256"],
-        "statistics_json": expected_statistics,
         "comparison_compatibility_id": expected_statistics[
             "comparison_compatibility_id"
         ],
@@ -592,14 +596,12 @@ async def test_historical_v1_statistics_is_explicitly_unavailable_without_defaul
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["authority_version"] == "historical_v1"
+    assert "authority_version" not in body
     assert body["availability"] is False
     assert body["statistics"] is None
     assert body["missing_fields"] == PHASE4_FIELDS
-    assert all(
-        body[field] is None
-        for field in PHASE4_FIELDS
-    )
+    assert "statistics_json" not in body
+    assert all(body[field] is None for field in PHASE4_FIELDS if field != "statistics_json")
     missing = await client.get(
         "/api/frustrampnn/results/invoke-1/statistics",
         params={"job_id": "job-other"},
@@ -635,7 +637,7 @@ async def test_typed_statistics_query_reads_persisted_levels_filters_and_v1_miss
     }
     assert unavailable["dataset"]["parent_job_id"] == "job-1"
     assert unavailable["availability"] is False
-    assert unavailable["unavailable_reason"] == "historical_v1_statistics_unavailable"
+    assert unavailable["unavailable_reason"] == "current_statistics_authority_incomplete"
     assert unavailable["distribution"] is None
 
     cases = [
@@ -693,6 +695,45 @@ async def test_statistics_query_is_bounded_closed_and_rejects_wrong_level_filter
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("schema_version", [1, 2])
+async def test_current_effective_settings_round_trip(api, schema_version, tmp_path) -> None:
+    from services.frustrampnn.settings import _effective_payload_sha256
+
+    client, sessions, _root = api
+    await _mark_job_2_as_v2(sessions)
+    produced = _effective_settings_fixture(schema_version)
+    async with sessions() as session:
+        result = await session.get(FrustraMPNNResult, ("job-2", "invoke-1"))
+        result.effective_settings_json = produced
+        result.effective_settings_sha256 = produced["effective_settings_sha256"]
+        result.settings_sha256 = produced["settings_sha256"]
+        await session.commit()
+    responses = []
+    for url in (
+        "/api/frustrampnn/jobs/job-2/results",
+        "/api/frustrampnn/results/invoke-1?job_id=job-2",
+        "/api/frustrampnn/results/invoke-1/statistics?job_id=job-2",
+    ):
+        response = await client.get(url)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        item = payload["items"][0] if "items" in payload else payload
+        if "items" in payload:
+            assert "effective_settings_json" not in item
+            assert "statistics_json" not in item
+        else:
+            assert item["effective_settings_json"] == produced
+        assert item["effective_settings_sha256"] == _effective_payload_sha256(produced)
+        responses.append(payload)
+    async with sessions() as session:
+        result = await session.get(FrustraMPNNResult, ("job-2", "invoke-1"))
+        assert result.effective_settings_json == produced
+    # Preserve actual wire payloads for the frontend contract consumer, not a
+    # separately authored success-shaped projection.
+    (tmp_path / "current-contract.json").write_text(json.dumps(responses))
+
+
+@pytest.mark.asyncio
 async def test_result_list_and_detail_expose_persisted_phase4_hashes(api) -> None:
     client, sessions, _root = api
     statistics = await _mark_job_2_as_v2(sessions)
@@ -704,16 +745,15 @@ async def test_result_list_and_detail_expose_persisted_phase4_hashes(api) -> Non
 
     assert listed.status_code == detail.status_code == 200
     for payload in (listed.json()["items"][0], detail.json()):
-        assert payload["authority_version"] == "v2"
+        assert "authority_version" not in payload
         assert payload["availability"] is True
         assert payload["statistics_available"] is True
         assert payload["missing_fields"] == []
         assert payload["settings_sha256"] == "4" * 64
         assert payload["effective_settings_sha256"] == "5" * 64
-        assert payload["effective_settings_json"] == _effective_settings_fixture()
         assert payload["capability_inventory_sha256"] == "6" * 64
         assert payload["statistics_sha256"] == statistics["statistics_sha256"]
-        assert payload["statistics_json"] == statistics
+        assert "statistics_json" not in payload
         assert (
             payload["comparison_compatibility_id"]
             == statistics["comparison_compatibility_id"]
@@ -725,6 +765,8 @@ async def test_result_list_and_detail_expose_persisted_phase4_hashes(api) -> Non
         assert payload["runtime_identity_sha256"] == "a" * 64
         assert "command_plan" not in payload["runtime_identity"]
         _assert_no_runtime_control_or_path(payload)
+    assert "effective_settings_json" not in listed.json()["items"][0]
+    assert detail.json()["effective_settings_json"] == _effective_settings_fixture()
     assert "execution_receipt" not in listed.json()["items"][0]
     assert detail.json()["execution_receipt"] == {
         "schema_name": "frustrampnn_execution_receipt",
@@ -972,10 +1014,10 @@ def test_openapi_describes_statistics_response_and_comparison_override() -> None
             load_schema("frustrampnn_statistics_v2"),
         ]
     }
-    for field in ("statistics_json", "statistics"):
-        field_schema = statistics_schema["properties"][field]
-        refs = [item.get("$ref") for item in field_schema["anyOf"]]
-        assert "#/components/schemas/FrustraMPNNStatisticsDocument" in refs
+    assert "statistics_json" not in statistics_schema["properties"]
+    field_schema = statistics_schema["properties"]["statistics"]
+    refs = [item.get("$ref") for item in field_schema["anyOf"]]
+    assert "#/components/schemas/FrustraMPNNStatisticsDocument" in refs
 
     analytics_response = schema["paths"]["/api/frustrampnn/analytics/points"]["get"][
         "responses"

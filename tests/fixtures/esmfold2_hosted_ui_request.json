@@ -1,0 +1,88 @@
+{
+  "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
+  "sequence_name": "saved-protein",
+  "pred_method": "esmfold2",
+  "num_parallel_jobs": 1,
+  "run_frustrampnn": true,
+  "frustrampnn_requiredness": "required",
+  "frustrampnn_settings": {
+    "schema_name": "frustrampnn_settings",
+    "schema_version": 2,
+    "batching_enabled": false,
+    "structures_per_job": 1,
+    "protein_selection": {
+      "mode": "all_protein_entities",
+      "entities": [],
+      "regions": [],
+      "residues": []
+    },
+    "source_structure": {
+      "selected_model_number": 1,
+      "preferred_altloc": ""
+    },
+    "classification_policy": {
+      "mode": "canonical",
+      "high_max": -1,
+      "minimal_min": 0.58
+    }
+  },
+  "model_variant": "full",
+  "quality_preset": "custom",
+  "num_loops": 3,
+  "num_sampling_steps": 200,
+  "num_diffusion_samples": 1,
+  "seed": 0,
+  "msa_max_sequences": null,
+  "msa_remove_insertions": true,
+  "esmf_use_msa": true,
+  "local_files_only": true,
+  "msa_provider": "neurosnap_api",
+  "msa_neurosnap_coverage_percent": 55.5,
+  "msa_neurosnap_identity_percent": 65.5,
+  "msa_neurosnap_max_sequences": 321,
+  "msa_neurosnap_force_uppercase": false,
+  "msa_neurosnap_pad_sequences": false,
+  "colabfold_use_env": true,
+  "colabfold_use_filter": true,
+  "colabfold_use_templates": false,
+  "colabfold_pairing_mode": "unpaired",
+  "colabfold_pairing_strategy": "greedy",
+  "msa_min_depth_warning": 100,
+  "msa_min_depth_fail": 0,
+  "complex_components": [
+    {
+      "type": "protein",
+      "id": "A",
+      "sequence": "MQIFVKTLTGKTITLEVEPSDTI",
+      "name": "saved-protein"
+    },
+    {
+      "type": "dna",
+      "id": "B",
+      "name": "Chain B",
+      "sequence": "GATATGTAGCTGCT"
+    },
+    {
+      "type": "ligand",
+      "id": "C",
+      "name": "Chain C",
+      "ccd": "MN"
+    },
+    {
+      "type": "ligand",
+      "id": "D",
+      "name": "Chain D",
+      "ccd": "MN"
+    },
+    {
+      "type": "ligand",
+      "id": "E",
+      "name": "Chain E",
+      "ccd": "GTP"
+    }
+  ],
+  "primary_chain_id": "A",
+  "target_chains": "A",
+  "lock_gpus": false,
+  "allow_retries": false
+}

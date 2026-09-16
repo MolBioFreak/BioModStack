@@ -46,8 +46,8 @@ const PHYSICAL_CONTROLS = [
     'Load tip physically',
     'Move to waste physically',
     'Detect fluid physically',
-    'Plunger up physically',
-    'Plunger down physically',
+    'Lift pipette head (Z)',
+    'Lower pipette head (Z)',
 ] as const;
 
 const validHardwareTip = (evidence: BioXpPipetteHardwareEvidence | null | undefined): boolean | null => (
@@ -96,10 +96,22 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
     );
 }
 
+function DirectLiquidEvidence({ owner }: { owner: Pick<ReturnType<typeof useReadBioXpPipetteReadback>, 'submission' | 'lookup' | 'detached' | 'identityConflict' | 'recoveryError' | 'refreshRecovery' | 'retainedHistory'> }) {
+    if (!owner.submission) return null;
+    return <div className="mt-2 text-xs text-slate-300">
+        <p>Request {owner.submission.idempotencyKey} · connection {owner.submission.expectedConnectionGeneration}</p>
+        <p>Lookup: {owner.detached ? 'detached — target changed' : owner.identityConflict ? 'identity conflict' : owner.recoveryError ? 'unavailable' : owner.lookup?.lookup_state ?? 'not requested'}</p>
+        <p>Stored evidence only; never permission to resend or proof of physical success.</p>
+        {owner.lookup?.record && <p>Command {owner.lookup.record.command_id} · pipette {owner.lookup.record.pipette_operation_id ?? 'missing'} · {owner.lookup.record.command_status} / {owner.lookup.record.pipette_status ?? 'missing'}</p>}
+        <button type="button" disabled={owner.detached || owner.identityConflict} onClick={() => void owner.refreshRecovery()} className="mt-1 underline disabled:opacity-50">Refresh stored evidence</button>
+        {(owner.retainedHistory ?? []).map((record) => <p key={record.idempotencyKey}>Retained prior request: {record.idempotencyKey} · connection {record.expectedConnectionGeneration}</p>)}
+    </div>;
+}
+
 export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness, actions = [], catalogLoading = false, invokePending = false, invokeAction }: Props) {
     const status = useBioXpPipetteApplicationStatus(generation, connected);
-    const planner = usePlanBioXpPipetteApplication();
-    const readback = useReadBioXpPipetteReadback();
+    const planner = usePlanBioXpPipetteApplication(generation, connected);
+    const readback = useReadBioXpPipetteReadback(generation, connected);
     const [includeData, setIncludeData] = useState(false);
     const [operation, setOperation] = useState<BioXpPipetteApplicationOperation>('move_to_waste');
     const [tipTray, setTipTray] = useState('');
@@ -124,9 +136,9 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                 return { location_id: 'WASTE_BIN' };
             case 'Detect fluid physically':
                 return { dry_run: false };
-            case 'Plunger up physically':
+            case 'Lift pipette head (Z)':
                 return { location_id: plungerLocation };
-            case 'Plunger down physically':
+            case 'Lower pipette head (Z)':
                 return { location_id: plungerLocation, overpress: false };
         }
     };
@@ -139,14 +151,13 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     };
 
     const application = pipettes?.application ?? status.data;
-    const blocker = application?.blocker ?? 'physical_pipette_execution_not_authorized';
     const transactionOutcome = typeof pipettes?.last_group_transaction?.outcome === 'string'
         ? pipettes.last_group_transaction.outcome
         : null;
     const freshnessState = freshness?.state ?? 'missing';
     const freshnessLabel = `${freshnessState.charAt(0).toUpperCase()}${freshnessState.slice(1)} snapshot · age ${typeof freshness?.age_s === 'number' ? `${freshness.age_s} s` : 'unavailable'}`;
 
-    const submitPlan = () => {
+    const submitPlan = (newOperation = false) => {
         setLocalError(null);
         let payload: BioXpPipetteApplicationPlanRequest;
         if (operation === 'load_tip') {
@@ -171,7 +182,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
         } else {
             payload = { operation: 'plunger_down' };
         }
-        planner.mutate(payload);
+        if (newOperation) planner.newOperation(payload);
+        else planner.mutate(payload);
     };
 
     return (
@@ -179,7 +191,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 className="font-semibold text-amber-100">Four-channel pipette controls</h3>
-                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical controls dispatch robot-owned OEM actions through the same admission gate as the X/Y/Z and gripper controls; the no-motion application planner stays plan-only.</p>
+                    <p className="mt-1 text-xs text-amber-200">Cached/software state and nested hardware-query evidence are shown separately. Physical pipette actions use the same safety checks as X/Y/Z and gripper controls. The application planner does not move hardware.</p>
                 </div>
                 <div className="text-right text-xs text-slate-300">
                     <p>Cached projection · live query performed {String(pipettes?.live_query_performed ?? false)}</p>
@@ -204,8 +216,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         <p className="text-slate-400">Explicit POST query; separate from the cached dashboard and the no-motion application planner.</p>
                     </div>
                     <div className="flex items-center gap-3">
-                        <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include OEM data sweep</label>
-                        <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
+                        <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>
+                        <button type="button" disabled={!connected || readback.isPending || Boolean(readback.submission)} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
                             {readback.isPending ? 'Reading hardware…' : 'Read live hardware'}
                         </button>
                     </div>
@@ -220,35 +232,29 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                     </div>
                 )}
                 {readback.error && <p className="mt-2 text-red-300">Readback failed: {bioXpErrorText(readback.error)}</p>}
+                <DirectLiquidEvidence owner={readback} />
+                {readback.submission && <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.newOperation({ include_data: includeData })}>New operation — read hardware</button>}
             </div>
 
             <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2 xl:grid-cols-3">
-                <div><dt className="text-slate-500">Liquid mutation gate</dt><dd>{pipettes?.liquid_mutation_enabled === true ? 'enabled by robot' : 'disabled by robot'}</dd></div>
                 <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes ? String(pipettes.allow_to_stop) : 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Group error</dt><dd>{pipettes?.last_error ? `Group error: channel ${pipettes.last_error.channel + 1} · code ${pipettes.last_error.error_code}` : 'Group error: none reported'}</dd></div>
                 <div><dt className="text-slate-500">Group transaction</dt><dd>Last transaction: {transactionOutcome ?? 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Receipt evidence</dt><dd>{pipettes?.latest_receipt ? `Latest receipt: ${pipettes.latest_receipt.operation} · ${pipettes.latest_receipt.receipt_id}` : 'Latest receipt: unavailable'}</dd></div>
-                <div><dt className="text-slate-500">Application evidence</dt><dd>{application ? 'Application evidence: plan only; physical execution blocked' : 'Application evidence: unavailable'}</dd></div>
             </dl>
 
-            <p className="mt-3 rounded border border-amber-700/60 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">Robot-owned blocker: {blocker}</p>
-            {application && application.dependency_blockers.length > 0 && (
-                <p className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
-                    Dependency blockers: {application.dependency_blockers.join(', ')}
-                </p>
-            )}
             <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 {PHYSICAL_CONTROLS.map((label) => {
                     const actionId = physicalActionIdFor(label);
                     const enabled = physicalActionEnabled(actionId);
-                    const reason = physicalActionReason(actionId, 'Robot-owned exact OEM pipette action.');
+                    const reason = physicalActionReason(actionId, 'Robot-owned physical primitive; not the full pipette-panel workflow.');
                     return (
                         <button
                             key={label}
                             type="button"
                             data-physical-pipette-control
                             disabled={!connected || catalogLoading || invokePending || !enabled}
-                            title={enabled ? 'Robot-owned exact OEM pipette action' : reason}
+                            title={enabled ? 'Robot-owned physical primitive; not the full pipette-panel workflow' : reason}
                             onClick={() => dispatchPhysical(label)}
                             className={enabled
                                 ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-xs text-amber-50 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-35'
@@ -259,7 +265,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
                 <label className="flex items-center gap-2">
-                    Plunger Z location
+                    Pipette head Z location
                     <input
                         value={plungerLocation}
                         onChange={(event) => setPlungerLocation(event.target.value.trim().toUpperCase())}
@@ -267,11 +273,16 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         className="w-40 rounded bg-slate-900 px-2 py-1 font-mono text-xs"
                     />
                 </label>
-                <span className="text-slate-500">PositionTable location for plunger up/down Z moves (e.g. LOC_TC, WASTE_BIN).</span>
+                <span className="text-slate-500">PositionTable location for head Z lift/lower (not liquid-plunger motion). Lower uses overpress=false. Planner tray, well, tip type and home-after fields below do not apply to these physical buttons.</span>
             </div>
 
             <div className="mt-4 rounded border border-slate-700 bg-slate-950/40 p-3">
                 <h4 className="text-sm font-semibold text-slate-200">No-motion application planner</h4>
+                {application && application.dependency_blockers.length > 0 && (
+                    <p className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+                        Planner dependencies: {application.dependency_blockers.join(', ')}
+                    </p>
+                )}
                 <label className="mt-2 block text-xs text-slate-300">Operation
                     <select value={operation} onChange={(event) => setOperation(event.target.value as BioXpPipetteApplicationOperation)} className="ml-2 rounded bg-slate-900 px-2 py-1">
                         {OPERATIONS.map((value) => <option key={value} value={value}>{value}</option>)}
@@ -295,9 +306,11 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         </select>
                     </label>
                 )}
-                <button type="button" disabled={!connected || planner.isPending} onClick={submitPlan} className="mt-3 rounded bg-amber-700 px-3 py-1 text-xs text-white disabled:opacity-50">
+                <button type="button" disabled={!connected || planner.isPending || Boolean(planner.submission)} onClick={() => submitPlan()} className="mt-3 rounded bg-amber-700 px-3 py-1 text-xs text-white disabled:opacity-50">
                     {planner.isPending ? 'Building plan…' : 'Build no-motion plan'}
                 </button>
+                <DirectLiquidEvidence owner={planner} />
+                {planner.submission && <button type="button" disabled={!connected || planner.isPending} onClick={() => submitPlan(true)}>New operation — build plan</button>}
             </div>
 
             {localError && <p className="mt-2 text-xs text-red-300">{localError}</p>}

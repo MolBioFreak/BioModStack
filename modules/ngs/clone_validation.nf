@@ -75,7 +75,6 @@ process RunCloneValidation {
     export NXF_OFFLINE=true
     export NXF_DISABLE_CHECK_LATEST=true
     export NXF_DOCKER_ENABLED=false
-    export NXF_SINGULARITY_ENABLED=true
     export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
@@ -85,12 +84,30 @@ process RunCloneValidation {
         --model "${basecallerModel}" \
         --output runtime_provenance.json
 
+    # Keep the nested engine on the same trusted runtime, using the validated
+    # offline URI inventory rather than downloading or substituting images.
+    runtime_args=(-profile singularity)
+    if [[ \${BMS_CONTAINER_BACKEND:-apptainer} == udocker ]]; then
+        export NXF_SINGULARITY_ENABLED=true
+        export NXF_APPTAINER_ENABLED=false
+        python3 - ${shellQuote(codeRoot)} ${lock} <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from scripts.lib.component_adapter import wf_clone_container_config
+Path('wf-clone-container.config').write_text(wf_clone_container_config(sys.argv[2]))
+PY
+        runtime_args=(-c "\$PWD/wf-clone-container.config")
+    else
+        export NXF_SINGULARITY_ENABLED=true
+    fi
+
     mkdir -p wf_clone_out
     set +e
-    /usr/local/bin/nextflow -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
+    "\${BMS_NEXTFLOW_EXECUTABLE:-/usr/local/bin/nextflow}" -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
         -offline \
         --disable_ping \
-        -profile singularity \
+        "\${runtime_args[@]}" \
         -w wf_clone_work \
         --bam "${bam}" \
         --sample "${sampleName}" \
@@ -124,7 +141,7 @@ process RunCloneValidation {
 }
 
 process CloneValidationAdapter {
-    label 'local_cpu'
+    label 'fastq_qc_cpu'
     publishDir "${params.out_dir}/assembly/adapter", mode: 'copy'
     tag "clone_validation_adapter"
 
@@ -150,16 +167,13 @@ process CloneValidationAdapter {
     def adapter = shellQuote("${codeRoot}/scripts/adapt_wf_clone_validation.py")
     def inputBuilder = shellQuote("${codeRoot}/scripts/build_construct_verification_input.py")
     def supportBuilder = shellQuote("${codeRoot}/scripts/build_fastq_support_tables.py")
-    def containerDir = params.container_dir ?: ''
-    def doradoImage = shellQuote("${containerDir}/dorado.sif")
+
     """
     set -euo pipefail
     if command -v samtools >/dev/null 2>&1; then
         SAMTOOLS_CMD=(samtools)
-    elif command -v apptainer >/dev/null 2>&1 && [[ -f ${doradoImage} ]]; then
-        SAMTOOLS_CMD=(apptainer exec ${doradoImage} samtools)
     else
-        echo "samtools not found on host and no fallback dorado container available" >&2
+        echo "samtools missing from the selected NGS runtime" >&2
         exit 127
     fi
 

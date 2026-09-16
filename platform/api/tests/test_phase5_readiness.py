@@ -29,7 +29,7 @@ async def test_native_readiness_does_not_require_workflow_adapter(monkeypatch) -
     monkeypatch.setattr(readiness, "http_readiness", lambda _url: _async_result(True, "ready"))
 
     result = await readiness.collect_runtime_readiness(
-        molbio={"status": "healthy", "ready": True},
+        molbio={"status": "healthy", "restriction_digest": {"ready": True}},
     )
 
     assert result["mode"] == "native"
@@ -59,7 +59,7 @@ async def test_container_readiness_requires_reachable_adapter(monkeypatch) -> No
     monkeypatch.setattr(readiness, "http_readiness", fake_http)
 
     result = await readiness.collect_runtime_readiness(
-        molbio={"status": "healthy", "ready": True},
+        molbio={"status": "healthy", "restriction_digest": {"ready": True}},
     )
 
     assert result["checks"]["workflow_adapter"]["required"] is True
@@ -128,7 +128,7 @@ async def test_runtime_readiness_degrades_when_telemetry_collection_is_stale(mon
         raising=False,
     )
 
-    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "ready": True})
+    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "restriction_digest": {"ready": True}})
 
     assert result["ready"] is False
     assert result["checks"]["telemetry_collection"] == {
@@ -150,7 +150,7 @@ async def test_runtime_readiness_degrades_when_core_migrations_are_behind(monkey
     monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
     monkeypatch.setattr(readiness, "core_migration_readiness", lambda: _async_migration_result(False, "behind"))
 
-    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "ready": True})
+    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "restriction_digest": {"ready": True}})
 
     assert result["ready"] is False
     assert result["checks"]["core_database"]["ready"] is True

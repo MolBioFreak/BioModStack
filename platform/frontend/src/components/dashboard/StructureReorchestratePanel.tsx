@@ -1,4 +1,9 @@
+import { Esmfold2SettingsControls } from '../Esmfold2SettingsControls';
+import { MsaProviderReadiness } from '../MsaProviderReadiness';
+import { ColabfoldMsaControls } from '../ColabfoldMsaControls';
+import { NeurosnapMsaControls } from '../NeurosnapMsaControls';
 import { useMemo } from 'react';
+import type { GpuCatalogEntry } from '../gpuCatalog';
 import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
 import { useLiveGpuCatalog } from '../useLiveGpuCatalog';
 import type { StructurePredictor, StructureReorchestrateSettings } from './reorchestrateStructureSettings.js';
@@ -7,6 +12,7 @@ interface StructureReorchestratePanelProps {
     settings: StructureReorchestrateSettings;
     onChange: (next: StructureReorchestrateSettings) => void;
     disabled?: boolean;
+    gpuOptions?: GpuCatalogEntry[];
 }
 
 const predictorLabel: Record<StructurePredictor, string> = {
@@ -28,9 +34,11 @@ export function StructureReorchestratePanel({
     settings,
     onChange,
     disabled = false,
+    gpuOptions: scopedGpuOptions,
 }: StructureReorchestratePanelProps) {
     const update = (patch: Partial<StructureReorchestrateSettings>) => onChange({ ...settings, ...patch });
-    const { gpuOptions } = useLiveGpuCatalog();
+    const { gpuOptions: localGpuOptions } = useLiveGpuCatalog();
+    const gpuOptions = scopedGpuOptions ?? localGpuOptions;
     const boltzCpFallbackGpuIds = useMemo(() => gpuOptions.map((gpu) => gpu.index).join(','), [gpuOptions]);
 
     const updateBoltz = (patch: Partial<StructureReorchestrateSettings['boltz']>) => {
@@ -56,6 +64,13 @@ export function StructureReorchestratePanel({
 
     return (
         <div className="space-y-4">
+            {settings.predictors.includes('esmfold2') && <fieldset disabled={disabled} className={sectionClass}>
+                <legend>ESMFold2 Settings</legend>
+                <Esmfold2SettingsControls value={{ ...settings.esmfold2, use_msa: settings.skipMsa ? false : settings.esmfold2.use_msa }}
+                    onChange={esmfold2 => update({ esmfold2,
+                        ...(esmfold2.use_msa !== (settings.skipMsa ? false : settings.esmfold2.use_msa) ? { skipMsa: !esmfold2.use_msa } : {}),
+                    })} />
+            </fieldset>}
             <div className={sectionClass}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -68,7 +83,9 @@ export function StructureReorchestratePanel({
                         <input
                             type="checkbox"
                             checked={settings.skipMsa}
-                            onChange={(event) => update({ skipMsa: event.target.checked })}
+                            onChange={(event) => update({ skipMsa: event.target.checked,
+                                ...(settings.predictors.includes('esmfold2') ? { esmfold2: { ...settings.esmfold2, use_msa: !event.target.checked } } : {}),
+                            })}
                             className="rounded border-slate-600 bg-slate-950"
                             disabled={disabled}
                         />
@@ -83,14 +100,15 @@ export function StructureReorchestratePanel({
                             <button
                                 type="button"
                                 onClick={() => update({ msaProvider: 'local' })}
+                                aria-disabled={true}
                                 className={`rounded-md px-3 py-2 text-sm transition-colors ${
                                     settings.msaProvider === 'local'
                                         ? 'bg-emerald-500/20 text-emerald-200'
                                         : 'text-slate-300 hover:text-slate-100'
                                 }`}
-                                disabled={disabled}
+                                disabled
                             >
-                                Local MMseqs2
+                                Local search disabled
                             </button>
                             <button
                                 type="button"
@@ -104,9 +122,10 @@ export function StructureReorchestratePanel({
                             >
                                 ColabFold API
                             </button>
+                            <button type="button" disabled={disabled} aria-pressed={settings.msaProvider === 'neurosnap_api'} onClick={() => update({ msaProvider: 'neurosnap_api' })}>Neurosnap API</button>
                         </div>
                         <p className="mt-2 text-xs text-slate-500">
-                            Toggle between the local stack and ColabFold before re-launching the exact predictors from this run.
+                            Choose ColabFold or Neurosnap before re-launching. Local search is disabled. Sequences leave BMS; Neurosnap may consume credits.
                         </p>
                     </div>
 
@@ -125,6 +144,9 @@ export function StructureReorchestratePanel({
                     </label>
                 </div>
 
+                <MsaProviderReadiness provider={settings.msaProvider} />
+                {(settings.msaProvider === 'colabfold_api' || settings.msaProvider === 'auto') && <ColabfoldMsaControls value={settings.colabfoldMsa} onChange={colabfoldMsa => update({ colabfoldMsa })} disabled={disabled} />}
+                {settings.msaProvider === 'neurosnap_api' && <NeurosnapMsaControls value={settings.neurosnapMsa} onChange={neurosnapMsa => update({ neurosnapMsa })} disabled={disabled} />}
                 <label className="mt-4 inline-flex items-center gap-2 text-sm text-slate-300">
                     <input
                         type="checkbox"

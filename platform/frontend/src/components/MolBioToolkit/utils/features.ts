@@ -20,7 +20,7 @@ type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
 
 export function featureSegments(feature: Feature): Array<{ start: number; end: number }> {
     if (feature.segments && feature.segments.length > 0) {
-        return [...feature.segments]
+        return feature.segments
             .map((segment) => ({ start: segment.start, end: segment.end }));
     }
     return [{ start: feature.start, end: feature.end }];
@@ -39,7 +39,7 @@ export function featureLength(feature: Feature): number {
 }
 
 function mergedCoverageSegments(feature: Feature): Segment[] {
-    const sorted = [...featureSegments(feature)].sort(
+    const sorted = featureSegments(feature).sort(
         (left, right) => left.start - right.start || left.end - right.end,
     );
     const merged: Segment[] = [];
@@ -92,7 +92,7 @@ export function featureCoordinateLabel(feature: Feature): string {
 }
 
 function normalizeSegments(segments: Segment[]): Segment[] {
-    return [...segments]
+    return segments
         .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
         .map((segment) => ({ start: segment.start, end: segment.end }));
 }

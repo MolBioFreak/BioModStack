@@ -2,11 +2,12 @@
  * SearchPanel - Find sequences, motifs, ORFs, and patterns in the current sequence
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { SequenceData, HighlightedRegion } from '../types';
 import type { Translation } from '../SequenceViewer';
 import { findOpenReadingFrames, type OpenReadingFrame } from '../utils/orfs';
-import { findExactSequenceMatches } from '../utils/search';
+import { startSequenceSearch } from './startSequenceSearch';
+import { useInputOwnership } from './useInputOwnership';
 
 interface SearchPanelProps {
     sequenceData: SequenceData;
@@ -23,6 +24,7 @@ interface SearchResult {
     segments: Array<{ start: number; end: number }>;
 }
 
+const EMPTY_SEARCH_RESULTS: SearchResult[] = [];
 type ORF = OpenReadingFrame;
 
 // Expanded motif patterns organized by category
@@ -137,66 +139,22 @@ export function SearchPanel({
         });
     }, [sequenceData.sequence.length]);
 
-    // Perform search
-    const searchResults = useMemo((): SearchResult[] => {
-        if (!searchQuery.trim() || searchQuery.length < 2) return [];
-
-        const results: SearchResult[] = [];
-        const sequence = caseSensitive
-            ? sequenceData.sequence
-            : sequenceData.sequence.toUpperCase();
-        const query = caseSensitive ? searchQuery : searchQuery.toUpperCase();
-
-        try {
-            if (useRegex) {
-                // Regex search
-                const regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
-                const sequenceLength = sequence.length;
-                const regexSequence = sequenceData.circular
-                    ? sequence + sequence.slice(0, Math.max(0, sequenceLength - 1))
-                    : sequence;
-                let match;
-                while ((match = regex.exec(regexSequence)) !== null) {
-                    if (match.index >= sequenceLength) break;
-                    if (match[0].length > sequenceLength) {
-                        regex.lastIndex = match.index + Math.max(1, match[0].length);
-                        continue;
-                    }
-                    const rawEnd = match.index + match[0].length;
-                    const segments = rawEnd <= sequenceLength
-                        ? [{ start: match.index, end: rawEnd }]
-                        : [
-                            { start: match.index, end: sequenceLength },
-                            { start: 0, end: rawEnd % sequenceLength },
-                        ].filter((segment) => segment.end > segment.start);
-                    results.push({
-                        start: match.index,
-                        end: rawEnd <= sequenceLength ? rawEnd : rawEnd % sequenceLength,
-                        strand: 1,
-                        sequence: segments
-                            .map((segment) => sequenceData.sequence.slice(segment.start, segment.end))
-                            .join(''),
-                        segments,
-                    });
-                    // Prevent infinite loops for zero-length matches
-                    if (match[0].length === 0) regex.lastIndex++;
-                }
-            } else {
-                results.push(...findExactSequenceMatches(sequenceData.sequence, query, {
-                    circular: sequenceData.circular,
-                    bothStrands: searchBothStrands,
-                    caseSensitive,
-                    sequenceType,
-                }));
-            }
-        } catch (e) {
-            // Invalid regex - return empty results
-            console.warn('Search error:', e);
-        }
-
-        // Sort by position
-        return results.sort((a, b) => a.start - b.start);
-    }, [searchQuery, caseSensitive, sequenceData.sequence, sequenceData.circular, useRegex, searchBothStrands, sequenceType]);
+    const [searchState, setSearchState] = useState<{ token: object; results: SearchResult[]; error?: string } | null>(null);
+    const searchOwner = useInputOwnership([activeTab, searchQuery, caseSensitive, sequenceData.sequence, sequenceData.circular, useRegex, searchBothStrands, sequenceType]);
+    const searchResults = searchState?.token === searchOwner.token ? searchState.results : EMPTY_SEARCH_RESULTS;
+    const searchError = searchState?.token === searchOwner.token ? searchState.error : undefined;
+    useEffect(() => {
+        if (activeTab !== 'search' || !searchQuery.trim() || searchQuery.length < 2) return;
+        let cancel = () => {};
+        const timer = window.setTimeout(() => {
+            cancel = startSequenceSearch({ sequence: sequenceData.sequence, query: searchQuery,
+                circular: sequenceData.circular, caseSensitive, regex: useRegex,
+                bothStrands: searchBothStrands, sequenceType }, reply => {
+                if (searchOwner.isCurrent()) setSearchState({ token: searchOwner.token, results: reply.results ?? [], error: reply.error });
+            });
+        }, 250);
+        return () => { window.clearTimeout(timer); cancel(); };
+    }, [searchOwner.token]);
 
     useEffect(() => {
         if (activeTab !== 'search') return;
@@ -304,6 +262,7 @@ export function SearchPanel({
     return (
         <div className="search-panel p-3 space-y-3 text-sm">
             <h4 className="font-semibold text-slate-200">Find & Analyze</h4>
+            {searchError && <p role="alert" className="text-red-400">{searchError}</p>}
 
             {/* Tab switcher */}
             <div className="flex gap-1 text-xs">
@@ -457,7 +416,8 @@ export function SearchPanel({
                     )}
 
                     {/* Empty state */}
-                    {searchQuery.length >= 2 && searchResults.length === 0 && (
+                    {searchQuery.trim().length >= 2 && searchState?.token !== searchOwner.token && <p role="status" className="text-slate-400 text-xs">Searching…</p>}
+                    {searchQuery.length >= 2 && searchState?.token === searchOwner.token && !searchError && searchResults.length === 0 && (
                         <div className="text-center text-slate-500 text-xs py-4">
                             No matches found
                         </div>

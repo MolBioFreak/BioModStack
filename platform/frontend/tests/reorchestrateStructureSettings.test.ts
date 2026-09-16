@@ -110,6 +110,11 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
 
     assert.deepEqual(overrides, {
         msa_provider: 'colabfold_api',
+        colabfold_use_env: true,
+        colabfold_use_filter: true,
+        colabfold_use_templates: false,
+        colabfold_pairing_mode: 'unpaired',
+        colabfold_pairing_strategy: 'greedy',
         msa_allow_empty_fallback: true,
         msa_target_shard_mode: 'required',
         msa_target_shards: 2,

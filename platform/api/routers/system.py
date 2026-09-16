@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, StrictFloat
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -75,6 +75,20 @@ class DbInfo(BaseModel):
 
 
 class InstallProfilePayload(BaseModel):
+    development_project_root: str | None = None
+    production_project_root: str | None = None
+    local_cpu_threads: StrictInt | None = None
+    local_memory_gib: StrictFloat | None = None
+    dev_data_root: str | None = None
+    dev_results_dir: str | None = None
+    results_dir: str | None = None
+    dev_api_host_port: int | None = None
+    development_workflow_adapter_url: str | None = None
+    production_workflow_adapter_url: str | None = None
+    api_image: str | None = None
+    web_image: str | None = None
+    host_agent_image: str | None = None
+    cpu_power_image: str | None = None
     data_root: str | None = None
     inputs_dir: str | None = None
     db_path: str | None = None
@@ -83,6 +97,8 @@ class InstallProfilePayload(BaseModel):
     colabfold_db: str | None = None
     msa_cache_dir: str | None = None
     sabdab_cache_dir: str | None = None
+    work_dir: str | None = None
+    analysis_cache_dir: str | None = None
     container_state_path: str | None = None
     inputs_container_path: str | None = None
     db_container_path: str | None = None

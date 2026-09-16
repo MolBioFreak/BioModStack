@@ -54,7 +54,11 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
-from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes, project_cm_structure_map
+from .frustrampnn_adapter import (
+    bind_cm_candidate_snapshot_bytes,
+    candidate_requested_settings,
+    project_cm_structure_map,
+)
 from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
@@ -763,7 +767,7 @@ async def ingest_result_bundle(
         raise ConformationalPersistenceError("result bundle resume identity mismatch")
     global_references = bundle.get("cm_frustrampnn_result_references")
     canonical_global_mode = global_references is not None
-    expected_settings_sha256: str | None = None
+    expected_settings_by_candidate: dict[str, str] = {}
     expected_snapshot_by_candidate: dict[str, str] = {}
     candidate_snapshot_bindings_by_path: dict[
         str, list[tuple[str, Mapping[str, Any]]]
@@ -782,10 +786,8 @@ async def ingest_result_bundle(
                 if target_id in snapshot_by_target:
                     raise ValueError("duplicate CM snapshot target")
                 snapshot_by_target[target_id] = snapshot
-            expected_settings_sha256 = requested_settings_sha256(
-                validate_persisted_requested_settings(
-                    record.request_json.get("frustrampnn_settings")
-                )
+            requested_settings = validate_persisted_requested_settings(
+                record.request_json.get("frustrampnn_settings")
             )
         except Exception as exc:
             raise ConformationalPersistenceError(
@@ -803,6 +805,11 @@ async def ingest_result_bundle(
                     "CM candidate has no persisted snapshot authority"
                 )
             relative_source = str(candidate.get("authoritative_structure_path") or "")
+            expected_settings_by_candidate[str(candidate["candidate_id"])] = requested_settings_sha256(
+                candidate_requested_settings(
+                    requested_settings, snapshot, backend=record.backend,
+                )
+            )
             candidate_snapshot_bindings_by_path.setdefault(relative_source, []).append(
                 (str(candidate["candidate_id"]), snapshot)
             )
@@ -947,7 +954,7 @@ async def ingest_result_bundle(
             if candidate_id in references_by_candidate:
                 raise ConformationalPersistenceError("canonical FrustraMPNN result reference is duplicated")
             if (
-                reference["requested_settings_sha256"] != expected_settings_sha256
+                reference["requested_settings_sha256"] != expected_settings_by_candidate.get(candidate_id)
                 or reference["cm_complex_snapshot_sha256"]
                 != expected_snapshot_by_candidate.get(candidate_id)
             ):

@@ -2,7 +2,8 @@
  * PrimerPanel - Primer design and management with library integration
  */
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useInputOwnership } from './useInputOwnership';
 import type { SequenceData, Primer, HighlightedRegion, SelectionInfo } from '../types';
 import {
     fetchPrimers,
@@ -49,6 +50,7 @@ interface PrimerPanelProps {
     selection: SelectionInfo | null;
     onHighlight: (regions: HighlightedRegion[]) => void;
     onAddPrimer: (primer: Primer) => void;
+    onAddPrimers?: (primers: Primer[]) => void;
     onRemovePrimer: (primerId: string) => void;
     tmOptions: PrimerTmOptionsResponse | null;
     tmSettings: PrimerTmSettings;
@@ -107,6 +109,7 @@ export function PrimerPanel({
     selection,
     onHighlight,
     onAddPrimer,
+    onAddPrimers,
     onRemovePrimer,
     tmOptions,
     tmSettings,
@@ -121,11 +124,13 @@ export function PrimerPanel({
 
     const [libraryPrimers, setLibraryPrimers] = useState<LibraryPrimer[]>([]);
     const [libraryLoading, setLibraryLoading] = useState(false);
+    const [libraryHasMore, setLibraryHasMore] = useState(false);
+    const libraryOffset = useRef(0);
     const [librarySearch, setLibrarySearch] = useState('');
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
     const [saveToLibrary, setSaveToLibrary] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [draftTmResult, setDraftTmResult] = useState<PrimerTmResult | null>(null);
+    const [draftTmState, setDraftTmState] = useState<{ token: object; value: PrimerTmResult | null } | null>(null);
     const [draftTmLoading, setDraftTmLoading] = useState(false);
     const [designTargetStart, setDesignTargetStart] = useState(1);
     const [designTargetEnd, setDesignTargetEnd] = useState(Math.min(sequenceData.sequence.length, 500));
@@ -143,13 +148,17 @@ export function PrimerPanel({
     const [designMaxPairs, setDesignMaxPairs] = useState(8);
     const [designOverhangForward, setDesignOverhangForward] = useState('');
     const [designOverhangReverse, setDesignOverhangReverse] = useState('');
-    const [designResult, setDesignResult] = useState<PrimerDesignResponse | null>(null);
+    const [designState, setDesignState] = useState<{ token: object; value: PrimerDesignResponse } | null>(null);
     const [designLoading, setDesignLoading] = useState(false);
     const [draftQc, setDraftQc] = useState<PrimerQcResponse['primers'][number]['qc'] | null>(null);
     const [sequenceQc, setSequenceQc] = useState<PrimerQcResponse | null>(null);
     const [qcLoading, setQcLoading] = useState(false);
 
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    const designOwner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, designTargetStart, designTargetEnd, designPrimerMinLength, designPrimerMaxLength, designProductMinLength, designProductMaxLength, designFlankSearch, designGcMin, designGcMax, designTargetTm, designTmDelta, designGcClampMin, designMaxPolyX, designMaxPairs, designOverhangForward, designOverhangReverse, tmSettings]);
+    const designResult = designState?.token === designOwner.token ? designState.value : null;
+    const setDesignResult = (value: PrimerDesignResponse | null) => setDesignState(value ? { token: designOwner.token, value } : null);
+    useEffect(() => { setDesignLoading(false); }, [designOwner.token]);
     const unitLabel = sequenceUnitLabel(sequenceType);
 
     const selectedRegion = useMemo(() => {
@@ -182,25 +191,49 @@ export function PrimerPanel({
         return cleanedDraftPrimer.slice(cleanedDraftPrimer.length - draftBinding.annealLength);
     }, [cleanedDraftPrimer, draftBinding]);
 
-    const loadLibrary = useCallback(async () => {
+    const tmOwner = useInputOwnership([draftTmSequence, tmSettings]);
+    const draftTmResult = draftTmState?.token === tmOwner.token ? draftTmState.value : null;
+    const setDraftTmResult = (value: PrimerTmResult | null) => setDraftTmState({ token: tmOwner.token, value });
+    const addOwner = useInputOwnership([sequenceData.sequence, sequenceData.circular, sequenceData.name, sequenceType, newPrimerSeq, newPrimerName, isReverse, selectionPrimerDraft, tmSettings]);
+    const libraryOwner = useInputOwnership([activeTab, librarySearch, showFavoritesOnly]);
+    const libraryRequest = useRef(0);
+    const loadLibrary = useCallback(async (append = false) => {
+        const request = ++libraryRequest.current;
         setLibraryLoading(true);
+        setError(null);
         try {
             const response = await fetchPrimers({
                 search: librarySearch || undefined,
                 favorites_only: showFavoritesOnly,
+                limit: 50,
+                offset: append ? libraryOffset.current : 0,
             });
-            setLibraryPrimers(response.data);
+            if (libraryOwner.isCurrent() && request === libraryRequest.current) {
+                libraryOffset.current = (append ? libraryOffset.current : 0) + response.data.length;
+                setLibraryPrimers(current => append ? [...current, ...response.data] : response.data);
+                setLibraryHasMore(response.data.length === 50);
+            }
         } catch (loadError) {
-            console.error('Failed to load primer library:', loadError);
+            if (libraryOwner.isCurrent() && request === libraryRequest.current) {
+                if (!append) setLibraryPrimers([]);
+                setError(loadError instanceof Error ? loadError.message : 'Primer library lookup failed');
+            }
         } finally {
-            setLibraryLoading(false);
+            if (libraryOwner.isCurrent() && request === libraryRequest.current) setLibraryLoading(false);
         }
-    }, [librarySearch, showFavoritesOnly]);
+    }, [libraryOwner.token, librarySearch, showFavoritesOnly]);
+    const currentLoadLibrary = useRef(loadLibrary);
+    currentLoadLibrary.current = loadLibrary;
 
     useEffect(() => {
-        if (activeTab === 'library') {
-            loadLibrary();
-        }
+        setLibraryPrimers([]);
+        setLibraryHasMore(false);
+        libraryOffset.current = 0;
+        if (activeTab !== 'library') return;
+        setLibraryLoading(true);
+        setError(null);
+        const timer = window.setTimeout(() => void loadLibrary(), 250);
+        return () => window.clearTimeout(timer);
     }, [activeTab, loadLibrary]);
 
     useEffect(() => {
@@ -247,41 +280,38 @@ export function PrimerPanel({
     }, [tmSettings]);
 
     useEffect(() => {
-        if (!cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) {
-            setDraftTmResult(null);
-            setDraftQc(null);
-            setDraftTmLoading(false);
-            return;
-        }
-
+        setDraftTmResult(null);
+        setDraftTmLoading(false);
+        if (activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
         let cancelled = false;
         setDraftTmLoading(true);
         const timer = window.setTimeout(async () => {
-            const [tmResult, qcResult] = await Promise.all([
-                calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence)),
-                calculatePrimerQc({
-                    primers: [{
-                        sequence: cleanedDraftPrimer,
-                        sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer),
-                    }],
-                    template_sequence: sequenceData.sequence,
-                    template_sequence_type: sequenceType,
-                    template_is_circular: sequenceData.circular,
-                    include_pairwise: false,
-                }).then((response) => response.data).catch(() => null),
-            ]);
-            if (!cancelled) {
-                setDraftTmResult(tmResult);
-                setDraftQc(qcResult?.primers[0]?.qc || null);
+            const value = await calculateTmForSequence(draftTmSequence, inferSequenceTypeFromSequence(draftTmSequence));
+            if (!cancelled && tmOwner.isCurrent()) {
+                setDraftTmResult(value);
                 setDraftTmLoading(false);
             }
         }, 250);
+        return () => { cancelled = true; window.clearTimeout(timer); };
+    }, [activeTab, calculateTmForSequence, cleanedDraftPrimer, draftTmSequence]);
 
-        return () => {
-            cancelled = true;
-            window.clearTimeout(timer);
-        };
-    }, [calculateTmForSequence, cleanedDraftPrimer, draftTmSequence, sequenceData.circular, sequenceData.sequence, sequenceType]);
+    // QC has no chemistry input: changing Tm settings must not repeat template QC.
+    useEffect(() => {
+        setDraftQc(null);
+        if (activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
+        let cancelled = false;
+        const timer = window.setTimeout(async () => {
+            const response = await calculatePrimerQc({
+                primers: [{ sequence: cleanedDraftPrimer, sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer) }],
+                template_sequence: sequenceData.sequence,
+                template_sequence_type: sequenceType,
+                template_is_circular: sequenceData.circular,
+                include_pairwise: false,
+            }).catch(() => null);
+            if (!cancelled) setDraftQc(response?.data.primers[0]?.qc || null);
+        }, 250);
+        return () => { cancelled = true; window.clearTimeout(timer); };
+    }, [activeTab, cleanedDraftPrimer, sequenceData.circular, sequenceData.sequence, sequenceType]);
 
     useEffect(() => {
         if (activeTab !== 'qc') {
@@ -373,11 +403,13 @@ export function PrimerPanel({
         }
 
         const sequenceTypeForPrimer = inferSequenceTypeFromSequence(cleanedPrimer);
-        const effectiveTmResult = draftTmResult ?? await calculateTmForSequence(
+        const annealSequence = cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength);
+        const effectiveTmResult = (annealSequence === draftTmSequence ? draftTmResult : null) ?? await calculateTmForSequence(
             cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength),
             inferSequenceTypeFromSequence(cleanedPrimer.slice(cleanedPrimer.length - binding.annealLength)),
         );
 
+        if (!addOwner.isCurrent()) return;
         const primerName = newPrimerName || `Primer_${(sequenceData.primers?.length || 0) + 1}`;
         const rawPrimer: Primer = usePinnedPlacement && selectionPrimerDraft && pinnedPrepared
             ? buildSelectionPrimer({
@@ -386,7 +418,7 @@ export function PrimerPanel({
                 snapshot: selectionPrimerDraft.snapshot,
                 prepared: pinnedPrepared,
                 tm: effectiveTmResult?.tm ?? undefined,
-                gcPercent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
+                gcPercent: effectiveTmResult?.gc_percent ?? calculateGcPercent(annealSequence),
                 tmAlgorithm: effectiveTmResult?.algorithm,
                 tmSaltCorrection: effectiveTmResult?.salt_correction,
                 tmSettings,
@@ -400,7 +432,7 @@ export function PrimerPanel({
                 end: binding.end,
                 strand: isReverse ? -1 : 1,
                 tm: effectiveTmResult?.tm ?? undefined,
-                gc_percent: effectiveTmResult?.gc_percent ?? calculateGcPercent(cleanedPrimer),
+                gc_percent: effectiveTmResult?.gc_percent ?? calculateGcPercent(annealSequence),
                 tm_algorithm: effectiveTmResult?.algorithm,
                 tm_salt_correction: effectiveTmResult?.salt_correction,
                 tm_settings: tmSettings,
@@ -434,6 +466,7 @@ export function PrimerPanel({
             }
         }
 
+        if (!addOwner.isCurrent()) return;
         setNewPrimerName('');
         setNewPrimerSeq('');
         setIsReverse(false);
@@ -473,6 +506,7 @@ export function PrimerPanel({
             inferSequenceTypeFromSequence(annealSequence),
         );
 
+        if (!addOwner.isCurrent()) return;
         const rawPrimer: Primer = {
             id: `primer_${Date.now()}`,
             name: libPrimer.name,
@@ -481,10 +515,10 @@ export function PrimerPanel({
             start: binding.start,
             end: binding.end,
             strand: (libPrimer.binding_strand === -1 ? -1 : 1) as 1 | -1,
-            tm: liveTmResult?.tm ?? libPrimer.tm ?? undefined,
-            gc_percent: liveTmResult?.gc_percent ?? libPrimer.gc_percent ?? undefined,
-            tm_algorithm: liveTmResult?.algorithm ?? libPrimer.tm_algorithm ?? undefined,
-            tm_salt_correction: liveTmResult?.salt_correction ?? libPrimer.tm_salt_correction ?? undefined,
+            tm: liveTmResult?.tm ?? undefined,
+            gc_percent: liveTmResult?.gc_percent ?? calculateGcPercent(annealSequence),
+            tm_algorithm: liveTmResult?.algorithm,
+            tm_salt_correction: liveTmResult?.salt_correction,
             tm_settings: tmSettings,
         };
         const primer: Primer = {
@@ -536,11 +570,11 @@ export function PrimerPanel({
                 overhang_reverse: designOverhangReverse,
                 tm_settings: tmSettings,
             });
-            setDesignResult(response.data);
+            if (designOwner.isCurrent()) setDesignResult(response.data);
         } catch (designError) {
-            setError(designError instanceof Error ? designError.message : 'Primer design failed');
+            if (designOwner.isCurrent()) setError(designError instanceof Error ? designError.message : 'Primer design failed');
         } finally {
-            setDesignLoading(false);
+            if (designOwner.isCurrent()) setDesignLoading(false);
         }
     };
 
@@ -574,28 +608,18 @@ export function PrimerPanel({
             tm_salt_correction: tmSettings.salt_correction,
             tm_settings: tmSettings,
         };
-        onAddPrimer({
-            ...forwardPrimer,
-            ...canonicalizePrimerPlacement(
-                forwardPrimer,
-                sequenceData.sequence.length,
-                sequenceData.circular,
-            ),
-        });
-        onAddPrimer({
-            ...reversePrimer,
-            ...canonicalizePrimerPlacement(
-                reversePrimer,
-                sequenceData.sequence.length,
-                sequenceData.circular,
-            ),
-        });
+        const pairPrimers = [forwardPrimer, reversePrimer].map(primer => ({
+            ...primer,
+            ...canonicalizePrimerPlacement(primer, sequenceData.sequence.length, sequenceData.circular),
+        }));
+        if (onAddPrimers) onAddPrimers(pairPrimers);
+        else pairPrimers.forEach(onAddPrimer);
     };
 
     const handleToggleFavorite = async (primerId: string) => {
         try {
             await togglePrimerFavorite(primerId);
-            loadLibrary();
+            void currentLoadLibrary.current();
         } catch (toggleError) {
             console.error('Failed to toggle favorite:', toggleError);
         }
@@ -604,7 +628,7 @@ export function PrimerPanel({
     const handleDeleteFromLibrary = async (primerId: string) => {
         try {
             await deletePrimerApi(primerId);
-            loadLibrary();
+            void currentLoadLibrary.current();
         } catch (deleteError) {
             console.error('Failed to delete primer:', deleteError);
         }
@@ -1286,7 +1310,9 @@ export function PrimerPanel({
                         </div>
                     )}
 
+                    {libraryHasMore && <button type="button" disabled={libraryLoading} onClick={() => void loadLibrary(true)} className="rounded bg-slate-700 px-3 py-2 text-slate-200 disabled:opacity-50">Load more primers</button>}
                     <div className="text-xs text-slate-500 text-center">
+                        {libraryPrimers.length} primers loaded. Refine search or load more when available.
                         Click + to add a library primer to the current construct using the active Tm model.
                     </div>
                 </div>

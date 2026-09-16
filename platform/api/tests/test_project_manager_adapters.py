@@ -46,73 +46,8 @@ def _canonical_sha(payload: object) -> str:
 
 
 def _write_rfd3_result(tmp_path: Path, *, job_id: str, request_id: str) -> tuple[dict, str, str, Path]:
-    source = tmp_path / "inputs" / f"{job_id}-source.pdb"
-    source.write_bytes(b"ATOM      1  CA  ALA A   1\n")
-    request = {
-        "schema": "bms.rfd3.local-redesign.request.v1",
-        "request_id": request_id,
-        "profile_id": "default",
-        "profile_registry_sha256": "3" * 64,
-        "profile": {"name": "default"},
-        "input": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
-    }
-    request_digest = request_sha256(request)
-    output_root = tmp_path / "results" / job_id
-    collected = output_root / "collected" / "protein_local_redesign"
-    candidate_root = collected / "candidates" / "candidate-1"
-    candidate_root.mkdir(parents=True)
-    native_request = collected / "native_request.json"
-    structure = candidate_root / "candidate.pdb"
-    metadata = candidate_root / "prediction.json"
-    native_request.write_text(json.dumps(request), encoding="utf-8")
-    structure.write_bytes(b"ATOM      1  CA  GLY A   1\n")
-    metadata.write_text('{"confidence":0.9}', encoding="utf-8")
-
-    def descriptor(role: str, path: Path, relative_path: str) -> dict:
-        return {
-            "role": role,
-            "relative_path": relative_path,
-            "storage_path": str(path.resolve()),
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "bytes": path.stat().st_size,
-            "media_type": "application/octet-stream",
-        }
-
-    source_descriptor = descriptor("source_structure", source, "source.pdb")
-    request_descriptor = descriptor(
-        "native_request", native_request, "collected/protein_local_redesign/native_request.json"
-    )
-    candidate_descriptors = [
-        descriptor(
-            "structure", structure, "collected/protein_local_redesign/candidates/candidate-1/candidate.pdb"
-        ),
-        descriptor(
-            "native_prediction_metadata",
-            metadata,
-            "collected/protein_local_redesign/candidates/candidate-1/prediction.json",
-        ),
-    ]
-    unsigned_manifest = {
-        "schema": "bms.rfd3.local-redesign.result.v1",
-        "request_sha256": request_digest,
-        "result_contract_id": "rfd3_local_redesign_v1",
-        "profile_id": "default",
-        "profile_registry_sha256": "3" * 64,
-        "profile": {"name": "default"},
-        "artifacts": [source_descriptor, request_descriptor, *candidate_descriptors],
-        "candidates": [
-            {
-                "candidate_id": "candidate-1",
-                "artifacts": candidate_descriptors,
-                "artifact_manifest_sha256": _canonical_sha(candidate_descriptors),
-            }
-        ],
-    }
-    manifest_digest = _canonical_sha(unsigned_manifest)
-    (collected / "rfd3_result_manifest.json").write_text(
-        json.dumps({**unsigned_manifest, "manifest_sha256": manifest_digest}), encoding="utf-8"
-    )
-    return request, request_digest, manifest_digest, output_root
+    from tests.rfd3_native_fixture import write_native_result
+    return write_native_result(tmp_path, job_id=job_id, request_id=request_id)
 
 
 def _project_payload() -> dict:
@@ -196,6 +131,8 @@ def _domain_payload(kind: str) -> dict:
 @pytest_asyncio.fixture
 async def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BMS_BUILD_SHA", "adapter-test-build")
+    monkeypatch.setattr(adapter_module, "source_build_revision", lambda: "adapter-test-build")
+    monkeypatch.setenv("BMS_DATA", str(tmp_path))
     results_root = tmp_path / "results"
     results_root.mkdir()
     monkeypatch.setenv("BMS_RESULTS_DIR", str(results_root))
@@ -261,8 +198,8 @@ async def test_rfd3_and_ngs_adapters_attach_idempotently_and_reopen(stores):
                 request_id="request-1",
                 job_id="rfd3-job-1",
                 request_sha256=native_digest,
-                profile_id="default",
-                profile_registry_sha256="3" * 64,
+                profile_id=native_request["profile_id"],
+                profile_registry_sha256=native_request["profile_registry_sha256"],
                 redesign_mode="local_redesign",
                 sequence_policy="fixed",
                 status="completed",
@@ -433,7 +370,7 @@ async def test_rfd3_and_ngs_adapters_attach_idempotently_and_reopen(stores):
             project_id=project.id,
             receipt_id=rfd3_receipt["source_receipt_id"],
         )
-        assert surface["route"] == "/designs/rfd3-job-1"
+        assert surface["route"]["path"] == "/designs/rfd3-job-1"
         assert surface["readiness"] == "ready"
         read_model = await build_project_manager_read_model(
             experiment_session,
@@ -443,7 +380,7 @@ async def test_rfd3_and_ngs_adapters_attach_idempotently_and_reopen(stores):
         )
         schema = json.loads((SCHEMA_ROOT / "project-manager-read-model-v1.schema.json").read_text())
         Draft202012Validator(schema).validate(read_model)
-        assert read_model["selection"]["canonical_surface"]["route"] == "/designs/rfd3-job-1"
+        assert read_model["selection"]["canonical_surface"]["route"]["path"] == "/designs/rfd3-job-1"
         assert read_model["counts"]["attached_entities"] == 2
         assert {node["node_type"] for node in read_model["tree"]["nodes"]} >= {
             "project", "global_experiment", "domain_experiment", "virtual_folder"
@@ -543,7 +480,7 @@ async def test_completed_rfd3_adapter_rejects_corrupt_manifest_or_required_artif
         manifest["manifest_sha256"] = "0" * 64
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     else:
-        (collected / "candidates" / "candidate-1" / "candidate.pdb").unlink()
+        (output_root / "run/rfd3/protein_local_redesign_0_0_model_0.cif.gz").unlink()
 
     async with core_factory() as core_session:
         core_session.add(
@@ -563,7 +500,7 @@ async def test_completed_rfd3_adapter_rejects_corrupt_manifest_or_required_artif
                 job_id=job_id,
                 request_sha256=request_digest,
                 profile_id="default",
-                profile_registry_sha256="3" * 64,
+                profile_registry_sha256=request["profile_registry_sha256"],
                 redesign_mode="local_redesign",
                 sequence_policy="fixed",
                 status="completed",
@@ -589,7 +526,7 @@ async def test_rfd3_artifact_replacement_cannot_escape_descriptor_bound_root(
         job_id=job_id,
         request_id="symlink-swap",
     )
-    relative_target = "collected/protein_local_redesign/candidates/candidate-1/candidate.pdb"
+    relative_target = "run/rfd3/protein_local_redesign_0_0_model_0.cif.gz"
     target = output_root / relative_target
     outside = tmp_path / "outside-candidate.pdb"
     outside.write_bytes(target.read_bytes())
@@ -659,7 +596,7 @@ async def test_rfd3_artifact_replacement_cannot_escape_descriptor_bound_root(
                 job_id=job_id,
                 request_sha256=request_digest,
                 profile_id="default",
-                profile_registry_sha256="3" * 64,
+                profile_registry_sha256=request["profile_registry_sha256"],
                 redesign_mode="local_redesign",
                 sequence_policy="fixed",
                 status="completed",

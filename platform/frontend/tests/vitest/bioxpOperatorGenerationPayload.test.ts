@@ -43,6 +43,17 @@ describe('BioXP OEM XY method input bounds', () => {
 });
 
 describe('BioXP OEM deck movement request', () => {
+    it.each(['LOC_OC', 'LOC_PARK', 'LOC_TC_BARCODE', 'LOC_RC_BARCODE'])('deck harmonization camera choice is branch coherent for %s', (target) => {
+        const request = { expected_connection_generation: 7, schema_version: 'bioxp.operator_action_request.v2' as const,
+            idempotency_key: 'camera-choice', expected_ownership_generation: 3,
+            expected_board_epoch_by_board: { '4': 11, '5': 12 }, action_id: 'oem.deck.move_to_location' as const,
+            inputs: { target, camera_offset: false } };
+        expect(() => assertBioXpOperatorActionV2Request(request)).not.toThrow();
+        request.inputs.camera_offset = true;
+        if (target === 'LOC_OC') expect(() => assertBioXpOperatorActionV2Request(request)).not.toThrow();
+        else expect(() => assertBioXpOperatorActionV2Request(request)).toThrow('ordinary deck destinations');
+    });
+
     it('accepts only semantic inputs and exact board 4/5 fences', () => {
         const request = {
             expected_connection_generation: 7,
@@ -97,18 +108,25 @@ describe('BioXP interrupt identity and reachability', () => {
         expect(source).toContain("v2InterruptActionById('oem.abort_all')");
         expect(source).not.toContain("operatorActionById('oem.abort_all')");
         expect(source).not.toContain("axis === 'y' ? '/motion/diagnostics/stop'");
-        expect(source).toMatch(/useBioXpOperatorControlCatalogV2\(\s*generation,\s*linkConnected,/);
-        expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById/);
+        // Catalog owns the embedded authority snapshot; unrelated dashboard aging
+        // cannot change its query identity. Both 15s mounted authority gates remain.
+        expect(source).toMatch(/useBioXpOperatorControlCatalogV2\(\s*generation,\s*active\s*\)/);
+        // Software cancellation uses published availability; addressed motor Stops do not.
+        expect(source).not.toMatch(/disabled=\{[^}\n]*v2InterruptActionById\('oem\.[xyz]\.stop'/);
+        expect(source).toContain("v2InterruptActionById('oem.abort_all')?.enabled !== true");
         for (const hook of [
             'interruptXStop',
             'interruptYStop',
             'interruptZStop',
-            'interruptZAbort',
             'interruptAggregateAbort',
         ]) {
             expect(source).toContain(`const ${hook} = useInterruptBioXpOperatorActionV1();`);
         }
-        for (const actionId of ['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.z.abort', 'oem.abort_all']) {
+        // R2 / ui-inventory UI-03: addressed Z Stop and all-board forceAbort
+        // are distinct; a duplicate standalone Z Abort is not an OEM entrypoint.
+        expect(source).not.toContain('interruptZAbort');
+        expect(source).not.toContain("'oem.z.abort'");
+        for (const actionId of ['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.abort_all']) {
             expect(source).toContain(`interruptPending('${actionId}')`);
         }
         expect(source).not.toContain('interruptYAction');

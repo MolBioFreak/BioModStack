@@ -109,6 +109,10 @@ COMPARISON_PRODUCER_FILENAMES = {
 }
 
 
+class ContainerBackendUnavailable(RuntimeError):
+    """The configured optional container executable is not installed."""
+
+
 class ContainerCleanupError(RuntimeError):
     pass
 
@@ -595,13 +599,25 @@ class OntSignalWorker:
         self._child: asyncio.subprocess.Process | None = None
         self._active_container: tuple[str, str] | None = None
 
-    async def start(self) -> None:
+    async def start(self) -> bool:
+        """Return False when the optional backend is absent; leave all work untouched.
+
+        A later explicit start (normally an API restart after provisioning) must
+        repeat container recovery before reclaiming leases or dispatching work.
+        Backend absence is not evidence that stale containers have been removed.
+        """
         if self._task is not None and not self._task.done():
-            return
-        await self._recover_stale_containers()
+            return True
+        try:
+            await self._recover_stale_containers()
+        except ContainerBackendUnavailable as exc:
+            self._stop.set()
+            logger.warning("ONT signal worker blocked: %s; recovery and dispatch withheld", exc)
+            return False
         await self._recover_expired()
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="ont-signal-workbench-worker")
+        return True
 
     async def stop(self) -> None:
         self._stop.set()
@@ -1165,11 +1181,16 @@ class OntSignalWorker:
         runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
-        process = await asyncio.create_subprocess_exec(
-            runtime, "ps", "-aq", "--filter", f"label={WORKER_LABEL}",
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                runtime, "ps", "-aq", "--filter", f"label={WORKER_LABEL}",
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            )
+        except FileNotFoundError as exc:
+            # Only failure to spawn the selected executable is optional. Discovery
+            # errors, timeouts and cleanup failures must still fail closed.
+            raise ContainerBackendUnavailable(f"container runtime {runtime!r} is not installed") from exc
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
         except asyncio.TimeoutError as exc:

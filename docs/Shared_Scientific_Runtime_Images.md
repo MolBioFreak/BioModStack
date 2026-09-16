@@ -1,0 +1,210 @@
+# Shared scientific runtime images
+
+## Shared remote weight consumption
+
+Remote attempts consume model weights from the existing artifact cache, not from
+`attempts/<id>/materialized/runtime/weights`. The cache publishes an immutable
+named layout at `cache/artifacts/v1/weights/<manifest-sha256>`. Its identity is the
+sorted selected file/relative-alias roster, content hashes, sizes and read/execute
+modes; it does not depend on the job ID or source revision. This is a named view
+of existing cache objects, not another downloader or physical weight store.
+Frozen read-only regular aliases share the cached inode. Executable members with
+nonmatching cache permissions are installed once, never chmodded through an
+alias. Published layouts are not silently repaired or retired.
+
+The existing envelope-bound runtime-reference file attests the selected layout.
+Warm staging checks its manifest, membership, modes and sizes without uploading,
+materializing or rehashing its model files. Immediately before execution the
+existing runtime launcher performs full no-follow byte verification, including
+read-time identity/membership checks. Missing, extra, replaced, writable or
+corrupt members fail closed. Attempt inputs, outputs, source isolation,
+cancellation/ownership fences, image leases and resource admission are unchanged.
+
+Kernel-backed Nextflow consumers bind shared weight roots read-only. The managed
+userspace launcher never passes a writable shared alias to a job: both explicit
+and automatic shared-weight binds receive private FICLONE views. Writable views
+allow task-local cache creation; read-only views retain mutation detection.
+There is no full-byte-copy fallback when CoW is unavailable. Protenix generated
+XDG/Triton/Matplotlib caches live in task scratch rather than installed weights.
+An older userspace binding without that protection must be refreshed through the
+existing attachment/setup owner before it can receive a shared-weight bundle.
+
+Source transport uses deterministic `git archive --format=tar.gz -6` output for
+the exact admitted commit. Prewarm and launch use identical compressed bytes;
+extracted source/member verification is unchanged. Existing retained uncompressed
+archives remain readable. Compression is transport reduction, not evidence of
+faster inference or approval to prune the scientific dependency closure.
+
+## Contract and scope
+
+Protenix conformational-mapping preflight and NGS samtools use verified immutable SIF objects rather than task-local or source-parent-specific full snapshots. A machine shares image bytes across environments and attempts; references, receipts and aliases are small metadata, not another copy of the image.
+
+The store is not yet a universal replacement for every legacy model registry. Do not relink an image merely because its hash matches: some retained/local readers require a regular file at a registered path or pin inode identity. Preserve those consumers until their exact transport is migrated. Distinct custom builds and checkpoints are not duplicate images merely because their sizes/names are similar.
+
+## Objects and environment references
+
+- Default store: `${BMS_CONTAINER_DIR}/.image-store`, resolved through the installation profile as well as explicit configuration. Override: `BMS_RUNTIME_IMAGE_STORE`.
+- Object: `objects/sha256/<digest>/runtime.sif`, file mode 0400, object directory 0500, one inode/link.
+- Publication independently copies a mutable source once, hashes/verifies it, fsyncs and atomically promotes it under a lifecycle/digest lock. Valid existing objects are reused without changing their identity. Corrupt objects fail closed; they are not silently overwritten.
+- Abruptly interrupted `.publish-<digest>-<uuid>` staging is recovered under the same publisher fence. Unknown staging entries/content fail closed rather than being recursively deleted.
+- Store ownership is an external trust boundary: chmod alone does not prevent the filesystem owner/root changing objects. Ordinary execution must not mutate published objects. Do not create writable hardlink aliases.
+
+Publish a complete lane selection with:
+
+```sh
+python scripts/publish_runtime_images.py --store-root PATH --lane development --manifest FILE
+```
+
+The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
+
+Managed Development API/adapter units consume the selected store's Development reference projection. Runtime-specific settings explicitly selected by a supported caller are resolved at execution rather than prematurely freezing Nextflow defaults. Publication alone never restarts services, migrates production, removes originals or proves live adoption.
+
+## Execution
+
+Protenix stages a verified receipt/reference, not a SIF-containing preflight directory. Execution resolves and verifies the shared image at its boundaries. NGS samtools retains no-follow descriptor/inode checks and execution through an inherited descriptor. Deferred Dorado Nextflow selectors and nested clone/construct commands preserve the configured image selection.
+
+Worker SIF transport publishes into the same per-worker `cache/runtime-images` store and transports small runtime aliases/reference manifests instead of full attempt copies for compatible readers. Input files, support tools and model data keep their existing materialization semantics. Retained legacy cache/attempt images are not automatically deleted by this change. Exact-path/no-follow scientific registries must retain their prior compatible materialization until explicitly migrated; cleanup must not disable a supported workflow just to claim zero copies.
+
+### FrustraMPNN canonical reader
+
+`BMS_FRUSTRAMPNN_SIF` is an installation-owned path selector. Set it to the existing shared store's `objects/sha256/c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da/runtime.sif`, with `BMS_RUNTIME_IMAGE_STORE` identifying that store (default `${BMS_CONTAINER_DIR}/.image-store`). The selector is snapshotted into the existing runtime identity at process startup; restart through the normal managed release process after changing it. It does not select a new model digest, executable or checkpoint. No public request parameter or digest override is added.
+
+Without this selector, the existing exact `${BMS_CONTAINER_DIR}/frustrampnn.sif` regular-file contract remains. With it, existing component/grouped/CM callers may supply that registered semantic name; the central validator returns the configured canonical path without reading or resolving the alias. Arbitrary alternate paths are rejected. The scientific reader verifies the shared store's immutable-object constraints, compares the verified generation with its no-follow descriptor, and retains that descriptor for executable/checkpoint authentication and inference. Opening a symlink directly remains forbidden.
+
+The registered `run_frustrampnn` workflow stage uses the ordinary shared worker image transport for prewarm and launch. Bundles select the canonical worker object through the existing authenticated envelope's `BMS_FRUSTRAMPNN_SIF` environment entry, alongside `BMS_RUNTIME_IMAGE_STORE`; the existing runtime-image manifest authenticates bytes and compatibility aliases. No Frustra-specific store, cache kind or reference schema exists. Same-digest names, provisioning and repeated attempts reuse one worker object rather than retaining ordinary-cache and per-attempt SIF copies. Public standalone model launch/provisioning availability is unchanged.
+
+The Protenix and canonical Confornets Nextflow labels defer their container selection until task evaluation, respecting `protenix_container_path` / `cm_confornets_container_path` (including their existing environment defaults) before semantic-name fallback.
+
+Retained capability inventories and execution configurations remain historical evidence: their own original content hashes are verified without rewriting them, and compatibility compares every scientific runtime field while excluding only the host `configured_sif_path`. The v1 global configuration keeps its original semantic installation path/hash. V1 receipt validation accepts that original registered installation path as provenance after canonical selection. A new retry configuration uses current placement; retained placement never authorizes execution. Fresh-process tests cover reopening/recompiling retained configurations with the original path absent; filesystem tests separately pin a real canonical fixture object with both original and alias absent.
+
+Publication/lane-key enablement and managed unit projection are coordinated with the shared lifecycle owner; reader migration alone neither removes old images nor authorizes live cleanup.
+
+## Retention and explicit retirement
+
+The lifecycle exposes durable leases (`acquire_lease`, `release_lease`) for callers that can bind queued/running/resumable job ownership. These are **not yet wired into every legacy admission/resume path** and do not expire merely because a process dies. No unattended collector is enabled.
+
+```sh
+python scripts/retire_runtime_images.py --store-root PATH list
+python scripts/retire_runtime_images.py --store-root PATH why-kept --digest SHA256
+python scripts/retire_runtime_images.py --store-root PATH plan --digest SHA256
+python scripts/retire_runtime_images.py --store-root PATH select-release --lane development --release ID
+python scripts/retire_runtime_images.py --store-root PATH forget-release --release ID
+```
+
+`plan` emits a JSON review receipt. Current lanes, retained releases, and durable leases protect their objects. Unknown reference files, stale projections, changed objects and stale plans fail closed. Forgetting a non-current release changes retention metadata only; it does not delete an image or establish that external jobs no longer use it.
+
+`apply --plan FILE --maintenance-authorization CHANGE_ID` revalidates under the lifecycle fence and **quarantines by rename, not deletion**. The authorization identifies an externally established maintenance window: admissions fenced, all legacy/queued/resumable users accounted for, and no untracked aliases/users. A string alone cannot establish those conditions. Quarantine reclaims zero bytes. Physical purge/grace policy is a separate explicitly reviewed maintenance action. Current references alone and an unprivileged open-FD scan are insufficient grounds for deletion.
+
+## Userspace private image views
+
+`lib.runtime_image_views.private_image_view(store_root, digest, workspace_root,
+extract)` is a context manager yielding a dictionary:
+
+- `rootfs: Path`: this execution's private CoW rootfs;
+- `image: Path`: the original canonical `runtime.sif`, never the extracted tree;
+- `image_fd: int`: retained read-only/no-follow original descriptor (explicitly
+  include it in subprocess `pass_fds` when inheritance is required);
+- `identity: dict`: the existing `verify_image` source receipt.
+
+The synchronous installation-owned callback `extract(image_fd, destination)`
+creates the initially absent destination using the pinned descriptor and must
+finish/reap extraction children before returning or raising. The runtime must
+likewise finish/reap execution children before leaving the context. The caller
+supplies a private workspace **outside both the store and Nextflow task cwd**, on
+a filesystem supporting reflinks from the derivation. There is no task-local SIF,
+full-byte rootfs-copy fallback, automatic engine fallback, or image acquisition
+in this API. `CoWUnavailable` is a fail-closed readiness error, not permission to
+copy. Existing direct SIF consumers and their source descriptors remain intact.
+
+One `.rootfs-<digest>` envelope lives beside the SIF object under
+`objects/sha256`, not inside its immutable 0500 directory. Publication never
+chmods or replaces the canonical source SIF or its parent. Extraction occurs in
+an exact `.derive-<digest>-<uuid>` stage under the existing lifecycle fence; the
+completed, fsynced envelope is atomically renamed into place. Its manifest binds
+source identity, tree content hashes, symlink targets, internal hardlink groups,
+and original/frozen modes. Special device/FIFO/socket entries and external
+hardlinks fail closed. Frozen files/directories have write bits removed and
+owner read/traversal enabled. Every private regular-file allocation uses Linux
+`FICLONE`; internal hardlinks only connect private inodes. Original permissions
+(including executable/sticky bits) are restored on the view. Symlink targets are
+preserved, never followed by tree verification or cleanup. Corrupt published
+source/derivation state is rejected, never silently re-extracted or repaired.
+
+The context retains an ordinary source execution lease in the existing
+`references/state.json` authority, in addition to the caller's durable
+cache/attempt/admission/resume references. With an existing derivation, each launch
+fully verifies the source SIF and unique derived file contents once. For that launch only, no-follow
+inode/mode/link/size/mtime/ctime observations bind those verified bytes to the
+retained descriptor and derivation manifest. Cloning and exit recheck every tree
+member, symlink and membership identity, rejecting even write-and-restore or
+same-byte replacement without rereading unchanged contents. Observations never
+persist or authorize another launch; ordinary standalone verification and
+retirement retain full content checks. Tree walks hold no-follow ancestry rather
+than reopening every ancestor for every file. Read-only inputs still receive
+independent CoW projections and source/projected mutation checks. Normal exceptions and
+cancellation remove private views and release that execution lease. A SIGKILL
+cannot run a Python finalizer: its lease remains conservatively pinned and its
+private workspace requires the existing owner's explicit cleanup. This API
+never infers resume safety from process death or expires admission references.
+
+`plan_retirement` includes the derivation identity. `apply_retirement` uses the
+same reference/lease/maintenance fences and approval receipt for both allocations:
+source quarantine rename first (immediately preventing admission), then derived
+quarantine rename. `recover_image_derivations(store_root)` is the explicit
+lifecycle restart operation: under the same fence it removes only recognized
+interrupted extraction stages and finishes already-approved quarantine pairs,
+verifying their original source/derived identities. Repeated recovery is
+idempotent; it does not unpin leases or physically purge retired images. It is
+not a second registry, format cache or unattended collector.
+
+These are trusted scientific execution views, **not a hostile-code sandbox**.
+POSIX owner/root access can alter shared bytes; the mechanism does not claim
+kernel-enforced read-only binds, PID/network namespaces or Apptainer-equivalent
+isolation. Host-path symlinks and input-bind policy remain the launcher's trust
+boundary. Source-integrity checks and independent private CoW allocations are
+the preservation contract; live engine/CUDA and actual-host CoW qualification
+remain separate from synthetic local filesystem tests.
+
+## Nextflow interpreter boundary
+
+The managed v2 critical runtime publishes `bin/bms-nextflow`, the unchanged pinned
+Nextflow distribution launcher, and a private `nextflow/container-bin/singularity`
+CLI bridge. For the udocker backend only, the managed launcher scopes that directory
+to its process PATH. Nextflow's built-in container builder wraps the actual Bash or
+Python interpreter, including explicit shebangs and its tracing wrapper. `process.shell`
+is an ordinary shell selection, never the container boundary. Real Apptainer remains
+available for SIF inspection/acquisition; the private bridge reports BMS/udocker
+identity, rejects acquisition and unsupported options, and removes its PATH entry
+before invoking `bms-container exec`. Inherited host environment forwarding remains
+distinct from explicit container overrides, so it does not replace the SIF's PATH
+or library setup. Nested workflow launchers use the same managed entrypoint and
+their validated existing offline image library; a missing image is not downloaded.
+
+V1 manifests remain readable historical records, not repaired-runtime qualification.
+V2 activation requires actual containerized Nextflow Bash, Python and headerless CUDA
+tasks against the existing canonical probe image, in addition to direct CUDA and
+support-runtime checks. The fixed minimal Python/CUDA probe has no procps, so its
+qualification does not request resource-metric tracing. This does not disable or
+change tracing for scientific workflows; their selected images supply that tool
+contract. Probe/task writers remain owned by the existing fenced
+process owner; cancellation does not delete live work or release a live compute slot.
+Recorder tests of generated Nextflow commands are distinct from real image/GPU and
+scientific workflow acceptance. No model settings, weights or image bytes change.
+
+## Acceptance boundary
+
+A deduplication fix is incomplete until every affected supported workflow actually
+invokes its selected singular image. Reader support, environment inspection and
+bytes reclaimed are not substitutes for this execution contract. Verification
+must cover the actual submission command compiler, local container launch, remote
+dependency inventory and translated worker command, saved-job prewarm, independent
+provisioning where publicly supported, managed startup probes, and retained retry
+configuration. Tests must remove conventional originals and record the actual
+container path or pinned image inode at invocation; repeated attempts must not
+create task-local SIF copies. Do not insert selector arguments in a test that the
+production compiler should have supplied. Distinct experimental and canonical
+builds retain distinct scientific identities even when both use the same store.
+
+Automated tests cover real temporary filesystem publication, concurrent publishers, killed publication processes, reference migration/rollback, retained leases, quarantine fencing, remote transport and real Nextflow configuration resolution. Synthetic fixture bytes and fake model commands do not prove scientific inference. Live-image checks must separately exercise real Apptainer execution and verify unchanged image identity/allocation; model/GPU qualification remains distinct.
+
+A host migration is complete only after consumer adoption, safe retirement of redundant originals and measured allocated-space reduction. Do not equate publication, a passing test count, or a symlink name with completed storage consolidation.

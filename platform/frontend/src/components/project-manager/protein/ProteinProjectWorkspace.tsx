@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+    getProjectResultContext,
     deleteProjectWorkflowSetup,
     getDomainExperiment,
     getGlobalExperiment,
     getProject,
     getProjectSummary,
-    internalRouteHref,
+    projectResultHref,
     projectManagerErrorMessage,
     proteinDomainAuthority,
     proteinWorkspaceHref,
@@ -135,13 +136,10 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
         mutationFn: async (receiptId: string) => {
             const surface = await reopenDomainResult(projectId, globalExperimentId, domainExperimentId, receiptId);
             if (!surface.route) throw new Error('The backend did not issue a canonical result route.');
-            const destination = new URL(internalRouteHref(surface.route), window.location.origin);
-            if (destination.origin !== window.location.origin) throw new Error('The canonical result route is not local to BioModStack.');
-            destination.searchParams.set('project_id', projectId);
-            destination.searchParams.set('global_experiment_id', globalExperimentId);
-            destination.searchParams.set('domain_experiment_id', domainExperimentId);
-            destination.searchParams.set('return_uri', proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'results'));
-            return `${destination.pathname}${destination.search}`;
+            if (!hierarchyValid || !globalExperimentData?.current_revision_id || !authority?.domain_revision_id) throw new Error('Exact hierarchy revision is unavailable.');
+            const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId,
+                proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'results'));
+            return projectResultHref(surface.route, context);
         },
         onSuccess: (destination) => navigate(destination),
     });

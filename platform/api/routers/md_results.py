@@ -225,6 +225,18 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
             detail={"code": "MD_DYNAMICS_GENERATION_CHANGED", "message": "Analysis retry must reuse the accepted immutable dynamics generation"},
         )
 
+    approved = None
+    if parent.execution_target_id:
+        approved = (parent.provenance or {}).get('execution_plan_approval') or {}
+        plan = approved.get('plan') or {}
+        templates = (plan.get('metadata') or {}).get('dynamic_templates') or []
+        if (not approved.get('approval_digest') or plan.get('complete') is not True
+                or not any((row.get('expansion_json') or {}).get('child_model') == 'molecular_dynamics'
+                    and (row.get('expansion_json') or {}).get('child_mode') == 'analyze'
+                    and (row.get('expansion_json') or {}).get('child_stage') == 'md_analysis'
+                    for row in templates)):
+            raise HTTPException(status_code=409, detail='Remote MD analysis retry requires its retained approved analysis expansion')
+
     provenance = dict(parent.provenance or {})
     md = dict(provenance.get("md") or {})
     md.update(
@@ -263,8 +275,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
             }
             work_item_path = work_item_dir / f"replica_{replica}.json"
             publish_json_immutable(work_item, work_item_path)
-            response = await create_job(
-                JobCreate(
+            child_request = JobCreate(
                     name=f"{parent.name} - MD analysis retry replica {replica}",
                     model_id="molecular_dynamics",
                     mode="analyze",
@@ -282,10 +293,18 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
                     child_stage="md_analysis",
                     pinned_gpu=None,
                     sequence_length=None,
-                ),
-                BackgroundTasks(),
-                session,
-            )
+                )
+            handoff = {}
+            if approved is not None:
+                from component_runtime import canonical_bytes
+                from routers.jobs import ApprovedExecutionPlan
+                child_request.execution_target_id = parent.execution_target_id
+                handoff['_approved_execution_plan'] = ApprovedExecutionPlan(
+                    canonical_bytes(child_request.model_dump(mode='json')),
+                    canonical_bytes({'approval_digest': approved['approval_digest'],
+                        'plan': approved['plan'], 'admissible': True,
+                        'deferred_preparation': [], 'blockers': []}))
+            response = await create_job(child_request, BackgroundTasks(), session, **handoff)
             created_ids.append(str(response.id))
     except Exception as exc:
         await session.rollback()

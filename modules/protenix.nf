@@ -35,16 +35,18 @@ process ProtenixPredict {
     label 'Protenix'
     label 'gpu'
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/protenix/producer", mode: 'copy', pattern: "producer_publication/**/*.json", saveAs: { filename -> filename.substring('producer_publication/'.length()) }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> "protenix_msa_report.json" }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(producer_meta), val(sequence), val(sequence_name)
+    tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)
 
     output:
-    tuple val(producer_meta), path("predictions/**/*.cif"), emit: typed_cifs, optional: true
+    tuple val(producer_meta), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: typed_cifs
+    path "producer_publication/**/*.json", emit: producer_publication
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "msa_prepared/msa_report.json", emit: msa_report, optional: true
@@ -52,7 +54,7 @@ process ProtenixPredict {
 
     script:
     def model_name = params.protenix_model_weights ?: 'protenix-v2'
-    def seeds = params.protenix_seeds ?: '42'
+    def seeds = params.protenix_seeds != null ? params.protenix_seeds : '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
@@ -68,6 +70,7 @@ process ProtenixPredict {
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
 
     // V2 is an invariant even when MSA is disabled; do not silently downgrade.
+    def producerMetadataBase64 = groovy.json.JsonOutput.toJson(producer_meta).getBytes('UTF-8').encodeBase64().toString()
     def use_msa = (params.protenix_use_msa == true || params.protenix_use_msa == 'true' || params.protenix_use_msa == null)
     if (model_name != 'protenix-v2') {
         throw new IllegalArgumentException("Protenix is pinned to V2 weights; received ${model_name}")
@@ -78,16 +81,17 @@ process ProtenixPredict {
     #!/bin/bash
     set -euo pipefail
 
-    # Persist Protenix caches/checkpoints in the shared model-weights store.
+    # Read checkpoints/common data from the installed model-weights store.
     # nextflow.config binds params.protenix_weights into this container at /protenix_weights.
     export PROTENIX_ROOT_DIR="/protenix_weights"
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
 
     # Validate the container has Python available for the repo-local wrapper.
     if ! command -v python3 &> /dev/null; then
@@ -147,18 +151,16 @@ PY
     # Generate Protenix input JSON
     # Uses proteinChain entity format.
     # ═══════════════════════════════════════════════════════════════════════
-    cat > input.json << 'ENDJSON'
-[{
-    "name": "${sequence_name}",
-    "modelSeeds": [${seeds}],
-    "sequences": [{
-        "proteinChain": {
-            "sequence": "${sequence}",
-            "count": 1
-        }
-    }]
-}]
-ENDJSON
+    python3 - << 'PY'
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "${params.code_root}/scripts")
+from prepare_protenix_msa import build_native_protenix_input
+payload = build_native_protenix_input(
+    seeds=[${seeds}], sequences=[("${sequence_name}", "${sequence}")])
+Path("input.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
 
     PROTENIX_INPUT_JSON="input.json"
     if [ "${use_template}" = "true" ]; then
@@ -194,6 +196,7 @@ PY
             echo "[PROTENIX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            ${prepared_msa ? '--prepared-inputs "' + prepared_msa + '" --prepared-sha256 "' + params.protenix_prepared_msa_sha256 + '"' : ''} \\
             --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
@@ -259,6 +262,14 @@ PY
     fi
 
     echo "[PROTENIX] Prediction complete. Listing outputs:"
+    python3 '${params.code_root}/scripts/write_structure_producer_manifest.py' \\
+      --predictions-root predictions \\
+      --producer-method protenix \\
+      --sequence-metadata-base64 '${producerMetadataBase64}' \\
+      --format mmcif \\
+      --publication-dir producer_publication \\
+      --published-structure-root pdb_files/predictions \\
+      --output producer_candidates.json
     find predictions/ -type f \\( -name "*.cif" -o -name "*confidence*.json" \\) | head -20 || true
     """
 }
@@ -274,13 +285,13 @@ process PrepProtenixComplex {
     label 'CPU'
 
     input:
-    tuple val(name), path(complex_json), path(msa_file)
+    tuple val(name), path(complex_json), path(msa_file), path(prepared_msa)
 
     output:
-    tuple val(name), path("protenix_input.json"), emit: protenix_json
+    tuple val(name), path("protenix_input.json"), path(prepared_msa), emit: protenix_json
 
     script:
-    def seeds = params.protenix_seeds ?: '42'
+    def seeds = params.protenix_seeds != null ? params.protenix_seeds : '42'
     """
     #!/usr/bin/env python3
     import json, sys
@@ -288,77 +299,11 @@ process PrepProtenixComplex {
 
     input_path = Path("${complex_json}")
 
-    type_map = {
-        'protein': 'proteinChain',
-        'peptide': 'proteinChain',
-        'dna': 'dnaSequence',
-        'rna': 'rnaSequence',
-    }
-
-    def convert_entry(bms, default_name):
-        sequences = []
-        for comp in bms.get('components', []):
-            t = comp.get('type', 'protein').lower()
-            seq = comp.get('sequence', '')
-            comp_id = str(comp.get('id') or '').strip()
-            count_raw = comp.get('count', 1)
-            try:
-                count = max(1, int(count_raw))
-            except Exception:
-                count = 1
-
-            if t in type_map:
-                if seq:
-                    chain_entry = {"sequence": seq, "count": count}
-                    if comp_id:
-                        chain_entry["id"] = [comp_id]
-                    sequences.append({type_map[t]: chain_entry})
-            elif t == 'ligand':
-                ccd = comp.get('ccd', '')
-                smiles = comp.get('smiles', '')
-                entry = {}
-                if ccd:
-                    ligand_id = str(ccd)
-                    if not ligand_id.startswith("CCD_"):
-                        ligand_id = f"CCD_{ligand_id}"
-                    ligand_entry = {"ligand": ligand_id, "count": count}
-                    if comp_id:
-                        ligand_entry["id"] = [comp_id]
-                    entry = {"ligand": ligand_entry}
-                elif smiles:
-                    ligand_entry = {"ligand": str(smiles), "count": count}
-                    if comp_id:
-                        ligand_entry["id"] = [comp_id]
-                    entry = {"ligand": ligand_entry}
-                if entry:
-                    sequences.append(entry)
-            elif t == 'ion':
-                entry = {}
-                ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
-                if ion:
-                    ion_entry = {"ion": str(ion).upper(), "count": count}
-                    if comp_id:
-                        ion_entry["id"] = [comp_id]
-                    entry = {"ion": ion_entry}
-                if entry:
-                    sequences.append(entry)
-
-        protenix_entry = {
-            "name": str(bms.get("name") or default_name),
-            "modelSeeds": [${seeds}],
-            "sequences": sequences,
-        }
-        return protenix_entry
-
-    protenix_input = []
-    input_files = [input_path]
-    if input_path.is_dir():
-        input_files = sorted(path for path in input_path.glob("*.json") if path.is_file())
-
-    for path in input_files:
-        with open(path) as f:
-            bms = json.load(f)
-        protenix_input.append(convert_entry(bms, path.stem))
+    sys.path.insert(0, "${params.code_root}/scripts")
+    from prepare_protenix_msa import load_native_protenix_input
+    protenix_input = load_native_protenix_input({
+        "complex_json_path": str(input_path), "protenix_seeds": "${seeds}"
+    })
 
     with open("protenix_input.json", "w") as f:
         json.dump(protenix_input, f, indent=2)
@@ -374,21 +319,35 @@ process PrepProtenixComplex {
 // Handles: protein + DNA + RNA + ligand + ion complexes
 // Input: Pre-built Protenix-format JSON (from build_nextflow_command or UI)
 
+// Match the native geometry finalizer's applicability; only its PDB carries
+// conditioned/frozen coordinates. Keep the original CIF as a raw artifact.
+def protenixComplexFinalizesGeometry(config) {
+    def anchored = config.protenix_anchor_target == true || config.protenix_anchor_target == 'true'
+    def mode = config.protenix_target_geometry_mode ?: (anchored ? 'conditioned' : 'flexible')
+    return mode != 'flexible' && config.fixed_target_source_path &&
+        config.fixed_target_source_chains && config.target_chains
+}
+
 process ProtenixFromComplex {
     label 'Protenix'
     label 'gpu'
     errorStrategy { params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'ignore' : 'terminate' }
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/protenix/producer", mode: 'copy', pattern: "producer_publication/**/*.json", saveAs: { filename -> filename.substring('producer_publication/'.length()) }
     publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'msa'}", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'msa_report.json' : 'protenix_complex_msa_report.json' }
-    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}", saveAs: { filename -> filename.split('/')[-1] }
+    // Use the module's lexical helper, not the process-directive delegate.
+    publishDir "${params.out_dir}/run/protenix_complex/raw", mode: 'copy', pattern: "predictions/**/*.cif", enabled: this.protenixComplexFinalizesGeometry(params)
     publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
-    tuple val(input_sample), path(complex_json)
+    tuple val(input_sample), path(complex_json), path(prepared_msa)
 
     output:
-    tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: canonical_structures, optional: true
+    tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}"), emit: canonical_structures
+    path "producer_publication/**/*.json", emit: producer_publication
+    path "predictions/**/*.cif", emit: raw_structures
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "msa_prepared/msa_report.json", emit: msa_report, optional: true
@@ -396,7 +355,7 @@ process ProtenixFromComplex {
 
     script:
     def model_name = params.protenix_model_weights ?: 'protenix-v2'
-    def seeds = params.protenix_seeds ?: '42'
+    def seeds = params.protenix_seeds != null ? params.protenix_seeds : '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
     def n_cycle = params.protenix_n_cycle ?: 10
@@ -452,13 +411,14 @@ process ProtenixFromComplex {
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
     fi
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
     export PATH="/root/miniconda3/bin:\$PATH"
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
     RESOLVED_FIXED_TARGET_SOURCE_PATH="${resolvedFixedTargetSourcePath}"
 
     # Validate container runtime is self-contained (no runtime installs or patching).
@@ -582,6 +542,8 @@ PY
             echo "[PROTENIX-COMPLEX] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            ${!prepared_msa && (params.plr_validator_suite_active == true || params.plr_validator_suite_active == 'true') ? '--generated-service protenix:generated_msa' : ''} \\
+            ${prepared_msa ? '--prepared-inputs "' + prepared_msa + '" --prepared-sha256 "' + params.protenix_prepared_msa_sha256 + '"' : ''} \\
             --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
@@ -665,12 +627,12 @@ PY
         exit 85
     fi
 
-    if [ "${geometryMode}" != "flexible" ] && [ -n "${params.fixed_target_source_path ?: ''}" ] && [ -n "${params.fixed_target_source_chains ?: ''}" ] && [ -n "${params.target_chains ?: ''}" ]; then
+    if [ "${protenixComplexFinalizesGeometry(params)}" = "true" ]; then
         python3 ${params.code_root}/scripts/finalize_target_geometry.py \\
             --prediction_dir predictions \\
             --backend protenix \\
             --geometry_mode "${geometryMode}" \\
-            --target_pdb "${params.fixed_target_source_path}" \\
+            --target_pdb "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" \\
             --reference_target_chains "${params.fixed_target_source_chains}" \\
             --predicted_target_chains "${params.target_chains}" \\
             ${params.fixed_target_model_number ? '--target_model_number ' + params.fixed_target_model_number : ''} \\
@@ -683,7 +645,9 @@ PY
       --predictions-root predictions \
       --producer-method protenix \
       --producer-sample-base64 '${producerSampleBase64}' \
-      --format mmcif \
+      --format ${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'mmcif'} \
+      --publication-dir producer_publication \\
+      --published-structure-root '${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}' \\
       --output producer_candidates.json
     """
 }

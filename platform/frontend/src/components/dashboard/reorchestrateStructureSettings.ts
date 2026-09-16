@@ -1,3 +1,5 @@
+import { hydrateEsmfold2Settings, buildEsmfold2Params, esmfold2SettingsError, type Esmfold2Settings } from '../esmfold2Settings';
+import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, hydrateMsaProvider, hydrateNeurosnapMsaSettings, type NeurosnapMsaSettings, type SavedMsaProvider } from '../../lib/msaPolicy';
 import type { Job } from '../../lib/api.js';
 import {
     buildBoltzCpSubmitParams,
@@ -15,15 +17,27 @@ import {
 } from '../structurePredictionUiState.js';
 
 export type StructurePredictor = StructurePredictorFamily;
-export type StructureMsaProvider = 'local' | 'colabfold_api';
+export type StructureMsaProvider = SavedMsaProvider;
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureBoltzCpOutputFormat = 'mmcif' | 'pdb';
 
 type StructureRetryJob = Pick<Job, 'model_id' | 'mode' | 'params'>;
 
+// Placement is narrower than legacy predictor-hint retry controls.
+export const canChangeStructureExecutionTarget = (job: Job): boolean => (
+    ['failed', 'cancelled'].includes(job.status)
+    && ((['boltz2', 'protenix', 'esmfold2'].includes(job.model_id) && ['predict', 'complex'].includes(job.mode))
+        || (job.model_id === 'boltz_cp_experimental' && job.mode === 'design'))
+    && !job.parent_job_id && !job.child_stage && !job.awaiting_input
+    && !isLegacyRf3StructureJob(job)
+);
+
 export interface StructureReorchestrateSettings {
     predictors: StructurePredictor[];
+    esmfold2: Esmfold2Settings;
     msaProvider: StructureMsaProvider;
+    neurosnapMsa: NeurosnapMsaSettings;
+    colabfoldMsa: ColabfoldMsaSettings;
     msaPreset: StructureMsaPreset;
     msaTargetShardMode: StructureMsaTargetShardMode;
     msaTargetShards: number;
@@ -60,7 +74,10 @@ export interface StructureReorchestrateSettings {
 
 const DEFAULTS: StructureReorchestrateSettings = {
     predictors: ['boltz'],
+    esmfold2: hydrateEsmfold2Settings(),
     msaProvider: 'colabfold_api',
+    neurosnapMsa: hydrateNeurosnapMsaSettings({}),
+    colabfoldMsa: hydrateColabfoldMsaSettings({}),
     msaPreset: 'fast',
     msaTargetShardMode: 'auto',
     msaTargetShards: 4,
@@ -113,9 +130,7 @@ const toInteger = (value: unknown, fallback: number, min = 1): number => {
     return Number.isFinite(parsed) ? Math.max(min, parsed) : fallback;
 };
 
-const normalizeMsaProvider = (value: unknown): StructureMsaProvider => (
-    value === 'local' ? 'local' : 'colabfold_api'
-);
+const normalizeMsaProvider = hydrateMsaProvider;
 
 const normalizeMsaPreset = (value: unknown): StructureMsaPreset => {
     if (value === 'maximum' || value === 'balanced' || value === 'fast') return value;
@@ -250,12 +265,15 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
 
     const settings: StructureReorchestrateSettings = {
         predictors: predictors.length > 0 ? predictors : DEFAULTS.predictors,
-        msaProvider: normalizeMsaProvider(params.msa_provider),
+        msaProvider: normalizeMsaProvider(params.msa_provider ?? (['none', 'esm'].includes(String(params.protenix_msa_backend)) ? undefined : params.protenix_msa_backend)),
+        neurosnapMsa: hydrateNeurosnapMsaSettings(params),
+        colabfoldMsa: hydrateColabfoldMsaSettings(params),
         msaPreset: normalizeMsaPreset(params.msa_preset),
         msaTargetShardMode: normalizeMsaTargetShardMode(params.msa_target_shard_mode),
         msaTargetShards: normalizeMsaTargetShards(params.msa_target_shards),
         msaTargetShardMinSizeGb: normalizeMsaTargetShardMinSizeGb(params.msa_target_shard_min_size_gb),
         skipMsa: false,
+        esmfold2: hydrateEsmfold2Settings(params),
         msaAllowEmptyFallback: toBoolean(params.msa_allow_empty_fallback, DEFAULTS.msaAllowEmptyFallback),
         boltz: {
             useMsa: toBoolean(params.boltz_use_msa, DEFAULTS.boltz.useMsa),
@@ -288,6 +306,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
     const activeUseMsa = settings.predictors.map((predictor) => {
         if (predictor === 'boltz' || predictor === 'fold_cp') return settings.boltz.useMsa;
         if (predictor === 'protenix') return settings.protenix.useMsa;
+        if (predictor === 'esmfold2') return settings.esmfold2.use_msa;
         return false;
     });
     settings.skipMsa = activeUseMsa.length > 0 && activeUseMsa.every((value) => value === false);
@@ -298,6 +317,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
 export const buildStructureReorchestrateOverrides = (
     job: StructureRetryJob,
     next: StructureReorchestrateSettings,
+    targetFallbackGpuIds?: string,
 ): Record<string, unknown> => {
     if (isLegacyRf3StructureJob(job)) {
         throw new Error('RF3 is retained for historical result review only and cannot be retried.');
@@ -314,14 +334,24 @@ export const buildStructureReorchestrateOverrides = (
     // This value comes from an explicit visible control. Always submit it so a
     // summary-row modal cannot silently inherit the source job's provider.
     overrides.msa_provider = next.msaProvider;
+    if (next.msaProvider === 'neurosnap_api') Object.assign(overrides, next.neurosnapMsa);
+    if (next.msaProvider === 'colabfold_api' || next.msaProvider === 'auto') {
+        for (const [name, value] of Object.entries(next.colabfoldMsa)) {
+            if (name in (job.params ?? {}) || value !== previous.colabfoldMsa[name as keyof ColabfoldMsaSettings] || next.msaProvider !== previous.msaProvider) overrides[name] = value;
+        }
+        if ('msa_use_env' in (job.params ?? {})) overrides.msa_use_env = next.colabfoldMsa.colabfold_use_env;
+    }
+    if (next.predictors.includes('protenix') && next.msaProvider !== previous.msaProvider) {
+        overrides.protenix_msa_backend = next.msaProvider;
+    }
     maybeSet('msa_preset', next.msaPreset, previous.msaPreset);
     maybeSet('msa_target_shard_mode', next.msaTargetShardMode, previous.msaTargetShardMode);
     maybeSet('msa_target_shards', next.msaTargetShards, previous.msaTargetShards);
     maybeSet('msa_target_shard_min_size_gb', next.msaTargetShardMinSizeGb, previous.msaTargetShardMinSizeGb);
     maybeSet('msa_allow_empty_fallback', next.msaAllowEmptyFallback, previous.msaAllowEmptyFallback);
 
-    if (next.predictors.includes('boltz')) {
-        maybeSet('boltz_use_msa', next.skipMsa ? false : previous.boltz.useMsa, previous.boltz.useMsa);
+    if (next.predictors.includes('boltz') || next.predictors.includes('fold_cp')) {
+        maybeSet('boltz_use_msa', next.skipMsa ? false : previous.skipMsa ? true : next.boltz.useMsa, previous.boltz.useMsa);
         maybeSet('boltz_recycling_steps', next.boltz.recyclingSteps, previous.boltz.recyclingSteps);
         maybeSet('boltz_sampling_steps', next.boltz.samplingSteps, previous.boltz.samplingSteps);
         maybeSet('boltz_num_samples', next.boltz.numSamples, previous.boltz.numSamples);
@@ -339,7 +369,7 @@ export const buildStructureReorchestrateOverrides = (
         const nextLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: next.boltzCp.pinnedGpus,
             requestedSizeCp: next.boltzCp.sizeCp,
-            fallbackGpuIds,
+            fallbackGpuIds: targetFallbackGpuIds ?? fallbackGpuIds,
         });
         const previousParams = buildBoltzCpSubmitParams({
             outputFormat: previous.boltzCp.outputFormat,
@@ -366,16 +396,33 @@ export const buildStructureReorchestrateOverrides = (
             next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.lockGpus : false,
             previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.lockGpus : false,
         );
-        maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
-        maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
+        if (targetFallbackGpuIds !== undefined) {
+            // Ordinal equality across workers does not preserve physical placement.
+            overrides.bcp_size_cp = nextParams.bcp_size_cp;
+            overrides.bcp_gpu_ids = nextParams.bcp_gpu_ids ?? null;
+        } else {
+            maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
+            maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
+        }
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
         maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);
     }
 
 
+    if (next.predictors.includes('esmfold2')) {
+        const settings = { ...next.esmfold2, use_msa: next.skipMsa ? false : previous.skipMsa ? true : next.esmfold2.use_msa };
+        const error = esmfold2SettingsError(settings);
+        if (error) throw new Error(error);
+        const prior = buildEsmfold2Params(previous.esmfold2);
+        for (const [key, value] of Object.entries(buildEsmfold2Params(settings))) maybeSet(key, value, prior[key]);
+    }
+
     if (next.predictors.includes('protenix')) {
-        maybeSet('protenix_use_msa', next.skipMsa ? false : previous.protenix.useMsa, previous.protenix.useMsa);
+        maybeSet('protenix_use_msa', next.skipMsa ? false : previous.skipMsa ? true : next.protenix.useMsa, previous.protenix.useMsa);
+        if (!next.skipMsa && previous.skipMsa && ['none', 'esm'].includes(String(job.params?.protenix_msa_backend))) {
+            overrides.protenix_msa_backend = next.msaProvider;
+        }
         maybeSet('protenix_model_weights', next.protenix.modelWeights, previous.protenix.modelWeights);
         maybeSet('protenix_seeds', next.protenix.seeds, previous.protenix.seeds);
         maybeSet('protenix_n_sample', next.protenix.nSample, previous.protenix.nSample);

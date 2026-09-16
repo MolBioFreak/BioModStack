@@ -1,0 +1,854 @@
+{
+  "action_id": "oem.xy.move_absolute",
+  "admission_completed_at": 1789286108.971511,
+  "authority_fingerprint": "c825e10ace6c73e7ac3c2f625ff33d11b085bb68b7e5decd46409c19074b5a78",
+  "authority_receipt_id": "operator_1789286108362_aadc650274ac",
+  "authority_receipt_status": "failed",
+  "command_id": "operator_1789286108362_aadc650274ac",
+  "completion_ambiguous": false,
+  "completion_verified": false,
+  "controller_acknowledged": true,
+  "delivery_verified": false,
+  "dispatched_at": 1789286108.9715736,
+  "duration_ms": 23592.96226501465,
+  "error": "Robot route reported an HTTP conflict.",
+  "finished_at": "1789286131.9553802",
+  "hardware_postcondition_verified": false,
+  "hardware_precondition_verified": false,
+  "idempotency_key": "aaadbd90-30a0-455a-9b27-2204935a84aa",
+  "idempotency_replay_enabled": true,
+  "inputs": {
+    "timeout_s": 120.0,
+    "x": 85000,
+    "y": 0
+  },
+  "kind": "primitive",
+  "lock_acquired_at": 1789286106.831668,
+  "machine_assessment": "fail",
+  "observation_receipt_id": null,
+  "observes_command_id": null,
+  "operator_assessment": null,
+  "operator_note": null,
+  "ownership_generation": 1,
+  "physical_effect_verified": false,
+  "provider_entry_at": 1789286108.9715736,
+  "provider_returned_at": 1789286131.9544644,
+  "queued_at": 1789286108.8071916,
+  "receipt_persist_started_at": 1789286131.9554036,
+  "reconciliation_required": false,
+  "remote_acknowledged": false,
+  "request_received_at": 1789286106.8182178,
+  "requested_inputs": {
+    "x": 85000,
+    "y": 0
+  },
+  "response": {
+    "body": {
+      "detail": {
+        "authority_receipt": {
+          "command_id": "operator_1789286108362_aadc650274ac",
+          "critical_evidence": {
+            "controller_failure": {
+              "ack": {
+                "omitted": "summary_depth_limit"
+              },
+              "before": {
+                "omitted": "summary_depth_limit"
+              },
+              "event_window": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": true,
+              "pre_stop": {
+                "omitted": "summary_depth_limit"
+              },
+              "timeout_position": {
+                "omitted": "summary_depth_limit"
+              },
+              "wait": {
+                "omitted": "summary_depth_limit"
+              }
+            },
+            "ok": false,
+            "physical_effect_verified": false,
+            "reference_before": {
+              "ok": true,
+              "rows": {
+                "omitted": "summary_depth_limit"
+              }
+            },
+            "terminal_classification": {
+              "readbacks": {
+                "omitted": "summary_depth_limit"
+              }
+            }
+          },
+          "result": {
+            "critical_evidence": {
+              "before": {
+                "omitted": "summary_depth_limit"
+              },
+              "board_present": {
+                "omitted": "summary_depth_limit"
+              },
+              "commands": {
+                "omitted": "summary_depth_limit"
+              },
+              "controller_failure": {
+                "omitted": "summary_depth_limit"
+              },
+              "distances": {
+                "omitted": "summary_depth_limit"
+              },
+              "ignored_compatibility_inputs": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": false,
+              "physical_effect_verified": false,
+              "reference_before": {
+                "omitted": "summary_depth_limit"
+              },
+              "requested": {
+                "omitted": "summary_depth_limit"
+              },
+              "terminal_classification": {
+                "omitted": "summary_depth_limit"
+              }
+            },
+            "failure": "xy_intent_exception:OemMotionCompletionError:Reach GZ position time out! board=4; axis=0; position=0",
+            "ok": false,
+            "state": "prepared_unreferenced"
+          },
+          "status": "failed"
+        },
+        "axis": "xy",
+        "critical_evidence": {
+          "controller_failure": {
+            "ack": {
+              "status": 100
+            },
+            "before": {
+              "ack": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": true
+            },
+            "event_window": {
+              "router_cleared": {
+                "omitted": "summary_depth_limit"
+              }
+            },
+            "ok": true,
+            "pre_stop": {
+              "ack": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": true
+            },
+            "timeout_position": {
+              "ack": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": true
+            },
+            "wait": {
+              "completion_class": null,
+              "event_window": {
+                "omitted": "summary_depth_limit"
+              },
+              "failure": "oem_moveToAbs_target_event_timeout",
+              "ok": false,
+              "physical_effect_verified": false,
+              "reached": {
+                "omitted": "summary_depth_limit"
+              },
+              "source_wait_signaled": false
+            }
+          },
+          "ok": false,
+          "physical_effect_verified": false,
+          "reference_before": {
+            "ok": true,
+            "rows": {
+              "x": {
+                "omitted": "summary_depth_limit"
+              },
+              "y": {
+                "omitted": "summary_depth_limit"
+              }
+            }
+          },
+          "terminal_classification": {
+            "admitted_authority": {
+              "x": {
+                "omitted": "summary_depth_limit"
+              },
+              "y": {
+                "omitted": "summary_depth_limit"
+              }
+            },
+            "observation": {
+              "axis": {
+                "omitted": "summary_depth_limit"
+              },
+              "ok": true
+            },
+            "readbacks": {
+              "x": {
+                "omitted": "summary_depth_limit"
+              },
+              "y": {
+                "omitted": "summary_depth_limit"
+              }
+            }
+          }
+        },
+        "failure": "xy_intent_exception:OemMotionCompletionError:Reach GZ position time out! board=4; axis=0; position=0",
+        "ok": false,
+        "state": "prepared_unreferenced"
+      }
+    },
+    "http_status": 409
+  },
+  "retry_forbidden": false,
+  "safety_class": "motion",
+  "schema_version": "bioxp.operator_action_receipt.v1",
+  "source_identity": {
+    "evidence_lock_identity_verified": true,
+    "evidence_lock_sha256": "a69454df24e9348fd34d8c89f2a2e089576587152bdcc20754f9d700ecbaf03c",
+    "registry_sha256": "2eea910263c00f2b9f2edbb81112cea7054658205173623975e0699c12287dec",
+    "release_id": "bioxp-critical-9c008aa",
+    "release_verified": true,
+    "robot_identity": "serial206",
+    "source_aggregate_sha256": "bc166dbefb301be086976f812346447d02a8bd436bd6ecd55b17bfaf9840bb97",
+    "source_manifest_sha256": "a194b7f6add538d8b1e96c2d0c2337be6b7f87617e21c947ba5da62fe11ae33d"
+  },
+  "stage_receipts": [],
+  "started_at": "1789286108.362418",
+  "status": "failed",
+  "xy_failure": {
+    "before": {
+      "x": 85000,
+      "y": 86000
+    },
+    "board_present": {
+      "x": true,
+      "y": true
+    },
+    "branch": "near_axis_sequential",
+    "commands": {},
+    "controller_failure": {
+      "ack": {
+        "board": 4,
+        "cmd": 4,
+        "provenance": {
+          "ack_received": false,
+          "attempts": [
+            {
+              "attempt_ordinal": 1,
+              "outcome": "completion",
+              "receive_sequence": 3019,
+              "response_attempt_attribution": "single_write",
+              "response_present": true,
+              "tx_timestamp": 625773.08783804,
+              "tx_write_completed_at": 625773.09253874,
+              "wait_signaled": true
+            }
+          ],
+          "command_family": "tmcl",
+          "completion_received": true,
+          "expected_board": 4,
+          "expected_command": 4,
+          "matcher": "tmcl:4:4",
+          "multipart_received": false,
+          "observed_rx_dlc": 8,
+          "observed_rx_id": 0,
+          "oem_receive_queue_cleared": 0,
+          "ok": true,
+          "outcome": "completion",
+          "owner_generation": 1,
+          "receive_timestamp": 625773.090069301,
+          "registration_timestamp": 625773.087775298,
+          "skipped_count": 0,
+          "skipped_frames_truncated": false,
+          "timeout_ms": 60000,
+          "transaction_id": "0ae23d9309124aefbdeec36112115b53",
+          "tx_dlc": 7,
+          "tx_id": 4,
+          "tx_timestamp": 625773.08783804,
+          "tx_write_completed_at": 625773.09253874,
+          "wait_policy": {
+            "classification": "OEM-DIRECT",
+            "mode": "oem_synchronous_send_wait",
+            "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+          }
+        },
+        "status": 100,
+        "status_str": "Success",
+        "value": 0
+      },
+      "before": {
+        "ack": {
+          "board": 4,
+          "cmd": 6,
+          "provenance": {
+            "ack_received": false,
+            "attempts": [
+              {
+                "attempt_ordinal": 1,
+                "outcome": "completion",
+                "receive_sequence": 3017,
+                "response_attempt_attribution": "single_write",
+                "response_present": true,
+                "tx_timestamp": 625773.019029787,
+                "tx_write_completed_at": 625773.020245537,
+                "wait_signaled": true
+              }
+            ],
+            "command_family": "tmcl",
+            "completion_received": true,
+            "expected_board": 4,
+            "expected_command": 6,
+            "matcher": "tmcl:4:6",
+            "multipart_received": false,
+            "observed_rx_dlc": 8,
+            "observed_rx_id": 0,
+            "oem_receive_queue_cleared": 0,
+            "ok": true,
+            "outcome": "completion",
+            "owner_generation": 1,
+            "receive_timestamp": 625773.021063492,
+            "registration_timestamp": 625773.018942166,
+            "skipped_count": 0,
+            "skipped_frames_truncated": false,
+            "timeout_ms": 60000,
+            "transaction_id": "afa17136ad444d49b3868424f1b18281",
+            "tx_dlc": 7,
+            "tx_id": 4,
+            "tx_timestamp": 625773.019029787,
+            "tx_write_completed_at": 625773.020245537,
+            "wait_policy": {
+              "classification": "OEM-DIRECT",
+              "mode": "oem_synchronous_send_wait",
+              "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+            }
+          },
+          "status": 100,
+          "status_str": "Success",
+          "value": 86000
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "position": 86000,
+        "position_reply_valid": true,
+        "position_source": "controller_reply"
+      },
+      "board": 4,
+      "command_sent": true,
+      "event_window": {
+        "after_sequence": 3018,
+        "cleared": 0,
+        "oem_wait_latch_reset": true,
+        "owner_generation": 1,
+        "preserved_for_oem_null_query_stop": false,
+        "queue_purge_omitted_by_source": true,
+        "receive_owner": "edbb3106eb654752a731c68c9456909c",
+        "router_cleared": {}
+      },
+      "low_level_source_return_code": 0,
+      "motor": 0,
+      "oem_wait_for_stop": true,
+      "ok": true,
+      "pre_stop": {
+        "ack": {
+          "board": 4,
+          "cmd": 138,
+          "provenance": {
+            "ack_received": false,
+            "attempts": [
+              {
+                "attempt_ordinal": 1,
+                "outcome": "completion",
+                "receive_sequence": 3018,
+                "response_attempt_attribution": "single_write",
+                "response_present": true,
+                "tx_timestamp": 625773.054802735,
+                "tx_write_completed_at": 625773.069422918,
+                "wait_signaled": true
+              }
+            ],
+            "command_family": "tmcl",
+            "completion_received": true,
+            "expected_board": 4,
+            "expected_command": 138,
+            "matcher": "tmcl:4:138",
+            "multipart_received": false,
+            "observed_rx_dlc": 8,
+            "observed_rx_id": 0,
+            "oem_receive_queue_cleared": 0,
+            "ok": true,
+            "outcome": "completion",
+            "owner_generation": 1,
+            "receive_timestamp": 625773.059311239,
+            "registration_timestamp": 625773.054743348,
+            "skipped_count": 0,
+            "skipped_frames_truncated": false,
+            "timeout_ms": 60000,
+            "transaction_id": "4a64eb2540344ee6942334cfbf93a5bf",
+            "tx_dlc": 7,
+            "tx_id": 4,
+            "tx_timestamp": 625773.054802735,
+            "tx_write_completed_at": 625773.069422918,
+            "wait_policy": {
+              "classification": "OEM-DIRECT",
+              "mode": "oem_synchronous_send_wait",
+              "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+            }
+          },
+          "status": 100,
+          "status_str": "Success",
+          "value": 0
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "source_return_code": 0,
+        "wait_latch_reset": true
+      },
+      "requested_position": 0,
+      "retry_ack": null,
+      "source_return_code": 0,
+      "timeout_position": {
+        "ack": {
+          "board": 4,
+          "cmd": 6,
+          "provenance": {
+            "ack_received": false,
+            "attempts": [
+              {
+                "attempt_ordinal": 1,
+                "outcome": "completion",
+                "receive_sequence": 3020,
+                "response_attempt_attribution": "single_write",
+                "response_present": true,
+                "tx_timestamp": 625793.105574635,
+                "tx_write_completed_at": 625793.10866771,
+                "wait_signaled": true
+              }
+            ],
+            "command_family": "tmcl",
+            "completion_received": true,
+            "expected_board": 4,
+            "expected_command": 6,
+            "matcher": "tmcl:4:6",
+            "multipart_received": false,
+            "observed_rx_dlc": 8,
+            "observed_rx_id": 0,
+            "oem_receive_queue_cleared": 0,
+            "ok": true,
+            "outcome": "completion",
+            "owner_generation": 1,
+            "receive_timestamp": 625793.108109864,
+            "registration_timestamp": 625793.105507821,
+            "skipped_count": 0,
+            "skipped_frames_truncated": false,
+            "timeout_ms": 60000,
+            "transaction_id": "fd6a21d5f08a40f394f9b74fc37e280a",
+            "tx_dlc": 7,
+            "tx_id": 4,
+            "tx_timestamp": 625793.105574635,
+            "tx_write_completed_at": 625793.10866771,
+            "wait_policy": {
+              "classification": "OEM-DIRECT",
+              "mode": "oem_synchronous_send_wait",
+              "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+            }
+          },
+          "status": 100,
+          "status_str": "Success",
+          "value": 5
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "position": 5,
+        "position_reply_valid": true,
+        "position_source": "controller_reply"
+      },
+      "wait": {
+        "board": 4,
+        "completion_class": null,
+        "elapsed_ms": 20000,
+        "event": null,
+        "event_window": {
+          "after_sequence": 3018,
+          "cleared": 0,
+          "oem_wait_latch_reset": true,
+          "owner_generation": 1,
+          "preserved_for_oem_null_query_stop": false,
+          "queue_purge_omitted_by_source": true,
+          "receive_owner": "edbb3106eb654752a731c68c9456909c",
+          "router_cleared": {}
+        },
+        "events": [],
+        "failure": "oem_moveToAbs_target_event_timeout",
+        "motor": 0,
+        "no24v": false,
+        "ok": false,
+        "pending": [
+          [
+            4,
+            0
+          ]
+        ],
+        "physical_effect_verified": false,
+        "reached": {},
+        "source_wait_signaled": false,
+        "target_reached": false
+      },
+      "wire_position": 0
+    },
+    "distances": {
+      "x": 0,
+      "y": 86000
+    },
+    "failed_axis": "y",
+    "ignored_compatibility_inputs": {
+      "acc": null,
+      "speed": null,
+      "wait_timeout_s": 120.0
+    },
+    "oem_wait_timeout_ms": 5000,
+    "ok": false,
+    "physical_effect_verified": false,
+    "reference_before": {
+      "axes": [
+        "x",
+        "y"
+      ],
+      "durable_clean": true,
+      "ok": true,
+      "persisted": true,
+      "rows": {
+        "x": {
+          "axis": "x",
+          "last_motion_kind": "move_xy",
+          "note": "Serial-206 X authority invalidated: x_board_lifecycle_generation_changed",
+          "origin_position_steps": 0,
+          "source": "serial206.x",
+          "state": "desynced",
+          "state_version": 54,
+          "updated_at": "2026-09-13T07:53:36.036482+00:00"
+        },
+        "y": {
+          "axis": "y",
+          "last_motion_kind": "move_xy",
+          "note": "Returned home/zero evidence plus separate current GAP1 at y-set-home; no physical observation.",
+          "origin_position_steps": 0,
+          "source": "serial206.initializeMotors.controller_verified_home",
+          "state": "referenced",
+          "state_version": 26,
+          "updated_at": "2026-09-13T07:53:36.036626+00:00"
+        }
+      },
+      "verified": true
+    },
+    "requested": {
+      "x": 85000,
+      "y": 0
+    },
+    "source_anchor": "ClassControlInterface.cs:4285-4367",
+    "source_context": null,
+    "source_context_sealed": false,
+    "source_operation": "ClassControlInterface.moveXY",
+    "terminal_classification": {
+      "admitted_authority": {
+        "generation": 1,
+        "x": {
+          "active_receipt": null,
+          "board_lifecycle_generation": 1,
+          "current_board_lifecycle_generation": 1,
+          "generation": 1,
+          "interrupt_active": false,
+          "interrupt_epoch": 0,
+          "lifecycle_state": "prepared_unreferenced",
+          "pending_ticket": null
+        },
+        "y": {
+          "active_board_epoch": 44,
+          "board_state": "active",
+          "interrupt_epoch": 11,
+          "lifecycle_state": "prepared_unreferenced",
+          "ownership_generation": 1,
+          "pending_ticket": null,
+          "prepared_board_epoch": 44,
+          "software_interrupt_active": false,
+          "software_interrupt_epoch": 0
+        }
+      },
+      "authority_scope": "classified_terminal_epoch_not_current_admission",
+      "authority_unchanged": true,
+      "classification": "failed_with_coherent_stopped_coordinates",
+      "observation": {
+        "axis": {
+          "axis": "y",
+          "board_id": 4,
+          "interrupt_epoch": 11,
+          "last_command_id": null,
+          "last_discrepancy_steps": 5,
+          "last_receipt_id": "operator_1789286108362_aadc650274ac",
+          "lifecycle_state": "prepared_unreferenced",
+          "motor_id": 0,
+          "observed_position_steps": 5,
+          "origin_position_steps": 0,
+          "ownership_generation": 1,
+          "prepared_board_epoch": 44,
+          "profile_fingerprint": "07dc18ca88abf829b7cb12f642ead6329b17cb04da7942d413da63d4ed4f1fe1",
+          "reference_state": "unreferenced",
+          "state_version": 77,
+          "updated_at": 1789286131.7382426
+        },
+        "discrepancy_steps": 5,
+        "ok": true,
+        "reconciled_to_observed": true
+      },
+      "readbacks": {
+        "x": {
+          "position": {
+            "ack": {
+              "board": 5,
+              "cmd": 6,
+              "provenance": {
+                "ack_received": false,
+                "attempts": [
+                  {
+                    "attempt_ordinal": 1,
+                    "outcome": "completion",
+                    "receive_sequence": 3021,
+                    "response_attempt_attribution": "single_write",
+                    "response_present": true,
+                    "tx_timestamp": 625793.223597315,
+                    "tx_write_completed_at": 625793.228159856,
+                    "wait_signaled": true
+                  }
+                ],
+                "command_family": "tmcl",
+                "completion_received": true,
+                "expected_board": 5,
+                "expected_command": 6,
+                "matcher": "tmcl:5:6",
+                "multipart_received": false,
+                "observed_rx_dlc": 8,
+                "observed_rx_id": 0,
+                "oem_receive_queue_cleared": 0,
+                "ok": true,
+                "outcome": "completion",
+                "owner_generation": 1,
+                "receive_timestamp": 625793.25249861,
+                "registration_timestamp": 625793.223527648,
+                "skipped_count": 0,
+                "skipped_frames_truncated": false,
+                "timeout_ms": 60000,
+                "transaction_id": "99a84bd9803c45a79f59863e1843f7a9",
+                "tx_dlc": 7,
+                "tx_id": 5,
+                "tx_timestamp": 625793.223597315,
+                "tx_write_completed_at": 625793.228159856,
+                "wait_policy": {
+                  "classification": "OEM-DIRECT",
+                  "mode": "oem_synchronous_send_wait",
+                  "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+                }
+              },
+              "status": 100,
+              "status_str": "Success",
+              "value": 85000
+            },
+            "board": 5,
+            "motor": 0,
+            "ok": true,
+            "position": 85000,
+            "position_reply_valid": true,
+            "position_source": "controller_reply"
+          },
+          "speed": {
+            "ack": {
+              "board": 5,
+              "cmd": 6,
+              "provenance": {
+                "ack_received": false,
+                "attempts": [
+                  {
+                    "attempt_ordinal": 1,
+                    "outcome": "completion",
+                    "receive_sequence": 3022,
+                    "response_attempt_attribution": "single_write",
+                    "response_present": true,
+                    "tx_timestamp": 625793.268089137,
+                    "tx_write_completed_at": 625793.270518801,
+                    "wait_signaled": true
+                  }
+                ],
+                "command_family": "tmcl",
+                "completion_received": true,
+                "expected_board": 5,
+                "expected_command": 6,
+                "matcher": "tmcl:5:6",
+                "multipart_received": false,
+                "observed_rx_dlc": 8,
+                "observed_rx_id": 0,
+                "oem_receive_queue_cleared": 0,
+                "ok": true,
+                "outcome": "completion",
+                "owner_generation": 1,
+                "receive_timestamp": 625793.292810192,
+                "registration_timestamp": 625793.268033061,
+                "skipped_count": 0,
+                "skipped_frames_truncated": false,
+                "timeout_ms": 60000,
+                "transaction_id": "71f6b967071445548d1db3a3f8d4edde",
+                "tx_dlc": 7,
+                "tx_id": 5,
+                "tx_timestamp": 625793.268089137,
+                "tx_write_completed_at": 625793.270518801,
+                "wait_policy": {
+                  "classification": "OEM-DIRECT",
+                  "mode": "oem_synchronous_send_wait",
+                  "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+                }
+              },
+              "status": 100,
+              "status_str": "Success",
+              "value": 0
+            },
+            "board": 5,
+            "motor": 0,
+            "ok": true,
+            "speed": 0,
+            "speed_reply_valid": true,
+            "speed_source": "controller_reply"
+          }
+        },
+        "y": {
+          "position": {
+            "ack": {
+              "board": 4,
+              "cmd": 6,
+              "provenance": {
+                "ack_received": false,
+                "attempts": [
+                  {
+                    "attempt_ordinal": 1,
+                    "outcome": "completion",
+                    "receive_sequence": 3023,
+                    "response_attempt_attribution": "single_write",
+                    "response_present": true,
+                    "tx_timestamp": 625793.305751973,
+                    "tx_write_completed_at": 625793.310912012,
+                    "wait_signaled": true
+                  }
+                ],
+                "command_family": "tmcl",
+                "completion_received": true,
+                "expected_board": 4,
+                "expected_command": 6,
+                "matcher": "tmcl:4:6",
+                "multipart_received": false,
+                "observed_rx_dlc": 8,
+                "observed_rx_id": 0,
+                "oem_receive_queue_cleared": 0,
+                "ok": true,
+                "outcome": "completion",
+                "owner_generation": 1,
+                "receive_timestamp": 625793.310147092,
+                "registration_timestamp": 625793.305692217,
+                "skipped_count": 0,
+                "skipped_frames_truncated": false,
+                "timeout_ms": 60000,
+                "transaction_id": "1758c9a3d0b644e9a3f097e97f2a3440",
+                "tx_dlc": 7,
+                "tx_id": 4,
+                "tx_timestamp": 625793.305751973,
+                "tx_write_completed_at": 625793.310912012,
+                "wait_policy": {
+                  "classification": "OEM-DIRECT",
+                  "mode": "oem_synchronous_send_wait",
+                  "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+                }
+              },
+              "status": 100,
+              "status_str": "Success",
+              "value": 5
+            },
+            "board": 4,
+            "motor": 0,
+            "ok": true,
+            "position": 5,
+            "position_reply_valid": true,
+            "position_source": "controller_reply"
+          },
+          "speed": {
+            "ack": {
+              "board": 4,
+              "cmd": 6,
+              "provenance": {
+                "ack_received": false,
+                "attempts": [
+                  {
+                    "attempt_ordinal": 1,
+                    "outcome": "completion",
+                    "receive_sequence": 3024,
+                    "response_attempt_attribution": "single_write",
+                    "response_present": true,
+                    "tx_timestamp": 625793.324670074,
+                    "tx_write_completed_at": 625793.325936222,
+                    "wait_signaled": true
+                  }
+                ],
+                "command_family": "tmcl",
+                "completion_received": true,
+                "expected_board": 4,
+                "expected_command": 6,
+                "matcher": "tmcl:4:6",
+                "multipart_received": false,
+                "observed_rx_dlc": 8,
+                "observed_rx_id": 0,
+                "oem_receive_queue_cleared": 0,
+                "ok": true,
+                "outcome": "completion",
+                "owner_generation": 1,
+                "receive_timestamp": 625793.326759294,
+                "registration_timestamp": 625793.324593813,
+                "skipped_count": 0,
+                "skipped_frames_truncated": false,
+                "timeout_ms": 60000,
+                "transaction_id": "e680f147623c4c328321a680f75d89b8",
+                "tx_dlc": 7,
+                "tx_id": 4,
+                "tx_timestamp": 625793.324670074,
+                "tx_write_completed_at": 625793.325936222,
+                "wait_policy": {
+                  "classification": "OEM-DIRECT",
+                  "mode": "oem_synchronous_send_wait",
+                  "source_anchor": "ClassNovo.TransmitMessage; ClassNovoCANUSB.sendCommand"
+                }
+              },
+              "status": 100,
+              "status_str": "Success",
+              "value": 0
+            },
+            "board": 4,
+            "motor": 0,
+            "ok": true,
+            "speed": 0,
+            "speed_reply_valid": true,
+            "speed_source": "controller_reply"
+          }
+        }
+      }
+    },
+    "wait_schedule": "unsealed_legacy_WaitAll"
+  },
+  "sequence": 1782
+}

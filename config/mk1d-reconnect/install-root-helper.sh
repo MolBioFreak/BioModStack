@@ -33,6 +33,10 @@ if [[ ! "$native_api_home" =~ ^/ ]] || [[ ! -d "$native_api_home" ]]; then
     exit 2
 fi
 profile_env="${BMS_CORE_RUNTIME_ENV_FILE:-${XDG_CONFIG_HOME:-$native_api_home/.config}/biomodstack/core-runtime.env}"
+if [[ -d "${XDG_CONFIG_HOME:-$native_api_home/.config}/biomodstack/configuration-v1" ]]; then
+    printf "%s\n" "Managed first-install configuration requires a future qualified recovery-artifact workflow." >&2
+    exit 78
+fi
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
     printf '%s\n' 'Docker Compose plugin is required to render the recovery artifact.' >&2
     exit 2

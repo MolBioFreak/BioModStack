@@ -1,3 +1,4 @@
+import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, resolveMsaSearchBackend, hydrateNeurosnapMsaSettings, type NeurosnapMsaSettings, type SavedMsaProvider } from '../lib/msaPolicy';
 import {
     buildFrustraMpnnLaunchParams,
     type FrustraMpnnRequestedSettings,
@@ -11,7 +12,7 @@ export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api'
 export type StructurePredictorRequest = StructurePredictorSelection | LegacyStructurePredictorSelection;
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
-export type StructureMsaProvider = 'local' | 'colabfold_api';
+export type StructureMsaProvider = SavedMsaProvider;
 export type StructureMsaPreset = 'maximum' | 'balanced' | 'fast';
 export type StructureMsaTargetShardMode = 'auto' | 'required' | 'off';
 
@@ -28,7 +29,7 @@ export interface StructurePredictorOption {
 }
 
 export interface ResolvedStructurePredictorSelection {
-    requestedSelection: StructurePredictorRequest;
+    requestedSelection: string;
     canonicalSelection: StructurePredictorSelection;
     families: StructurePredictorFamily[];
     valid: boolean;
@@ -97,6 +98,8 @@ export interface BoltzCpSubmitParamsInput {
 
 export interface StructureMsaSubmitParamsInput {
     provider: StructureMsaProvider;
+    neurosnap?: Partial<NeurosnapMsaSettings>;
+    colabfold?: Partial<ColabfoldMsaSettings>;
     preset: StructureMsaPreset;
     targetShardMode?: StructureMsaTargetShardMode | string | null;
     targetShards?: number | string | null;
@@ -297,7 +300,9 @@ export const resolveStructureSubmitTarget = ({
                     : resolvedSelection.canonicalSelection === 'esmfold2'
                         ? 'esmfold2'
                         : 'boltz2',
-        mode: resolvedSelection.canonicalSelection === 'fold_cp' ? 'design' : predictionMode,
+        mode: resolvedSelection.canonicalSelection === 'fold_cp'
+            ? 'design'
+            : resolvedSelection.canonicalSelection === 'esmfold2' ? 'predict' : predictionMode,
     };
 };
 
@@ -348,20 +353,17 @@ export const buildStructureFrustraMpnnSubmitParams = (
 export const buildStructureMsaSubmitParams = ({
     provider,
     preset,
-    targetShardMode,
-    targetShards,
-    targetShardMinSizeGb,
+    neurosnap,
+    colabfold,
 }: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => {
-    const normalizedProvider = provider === 'colabfold_api' ? 'colabfold_api' : 'local';
+    const normalizedProvider = resolveMsaSearchBackend(provider);
     const params: StructureMsaSubmitParams = {
-        msa_provider: normalizedProvider,
-        msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
+        msa_provider: provider,
+        ...(normalizedProvider === 'neurosnap_api' || neurosnap ? hydrateNeurosnapMsaSettings(neurosnap ?? {}) : {}),
+        ...(colabfold ? hydrateColabfoldMsaSettings(colabfold) : {}),
+        ...(normalizedProvider === 'colabfold_api' ? { msa_preset: preset } : {}),
     };
-    if (normalizedProvider === 'local') {
-        params.msa_target_shard_mode = normalizeMsaTargetShardMode(targetShardMode);
-        params.msa_target_shards = normalizeMsaTargetShards(targetShards);
-        params.msa_target_shard_min_size_gb = normalizeMsaTargetShardMinSizeGb(targetShardMinSizeGb);
-    }
+
     return params;
 };
 
@@ -384,7 +386,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel complex prediction', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
-    { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
+    { id: 'esmfold2', name: 'ESMFold2', desc: 'All-atom co-folding with optional MSA', color: 'blue' },
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
 ];
 
@@ -395,7 +397,7 @@ export const isLegacyStructurePredictorSelection = (
     return normalized === 'rf3' || normalized === 'both' || normalized === 'all';
 };
 
-const toPredictorSelection = (value: string | null | undefined): StructurePredictorRequest => {
+const toPredictorSelection = (value: string | null | undefined): string => {
     const normalized = String(value || '').trim().toLowerCase();
     if (isLegacyStructurePredictorSelection(normalized)) {
         return normalized;
@@ -403,7 +405,7 @@ const toPredictorSelection = (value: string | null | undefined): StructurePredic
     if (normalized === 'boltz_api' || normalized === 'fold_cp' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'boltz_protenix') {
         return normalized;
     }
-    return 'boltz';
+    return normalized === 'boltz2' || !normalized ? 'boltz' : normalized;
 };
 
 export const getStructurePredictorOptions = (mode: StructurePredictionMode): StructurePredictorOption[] => (
@@ -415,6 +417,15 @@ export const resolveStructurePredictorSelection = (
     selection: StructurePredictorSelection | string | null | undefined,
 ): ResolvedStructurePredictorSelection => {
     const requestedSelection = toPredictorSelection(selection);
+
+    if (!['boltz', 'boltz_api', 'fold_cp', 'protenix', 'esmfold2', 'boltz_protenix', 'rf3', 'both', 'all'].includes(requestedSelection)) {
+        return { requestedSelection, canonicalSelection: 'boltz', families: [], valid: false,
+            error: `Unknown saved predictor ${requestedSelection}. Select a supported predictor explicitly.` };
+    }
+    if (mode !== 'complex' && requestedSelection === 'boltz_protenix') {
+        return { requestedSelection, canonicalSelection: 'boltz_protenix', families: [], valid: false,
+            error: 'Boltz + Protenix requires complex mode. The saved ensemble was not replaced.' };
+    }
 
     if (isLegacyStructurePredictorSelection(requestedSelection)) {
         return {

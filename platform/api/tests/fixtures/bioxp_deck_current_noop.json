@@ -1,0 +1,644 @@
+{
+  "schema_version": "bioxp.operator_action_receipt.v2",
+  "command_id": "1b002843-ee8a-4297-8ee8-42fce209b5f3",
+  "action_id": "oem.deck.move_to_location",
+  "status": "completed",
+  "terminal": true,
+  "sequence": 59,
+  "method_id": null,
+  "ownership_generation": 1,
+  "expected_board_epoch_by_board": {
+    "4": 59,
+    "5": 1
+  },
+  "state_version": 3,
+  "status_path": "/operator/v2/actions/receipts/1b002843-ee8a-4297-8ee8-42fce209b5f3",
+  "accepted_at": 1789409351.7223668,
+  "queued_at": 1789409351.7223668,
+  "dispatched_at": 1789409351.7364516,
+  "finished_at": 1789409355.8006034,
+  "terminal_receipt_id": null,
+  "completion_class": "source_noop",
+  "physical_effect_verified": false,
+  "error": null,
+  "transport_exchanges": [],
+  "transport_retention_errors": [],
+  "interrupt_evidence": null,
+  "z_move": null,
+  "xy_failure": null,
+  "source_receipt": {
+    "schema_version": "bioxp.operator_command_receipt.v1",
+    "source": "legacy_operator_plane",
+    "command_id": "1b002843-ee8a-4297-8ee8-42fce209b5f3",
+    "method_id": null,
+    "method_sequence": null,
+    "stream_sequence": 21,
+    "action_id": "oem.deck.move_to_location",
+    "status": "completed",
+    "stored_status": "completed",
+    "recovery_required": false,
+    "automatic_retry": false,
+    "physical_outcome": null,
+    "ownership_generation": 1,
+    "requested_inputs": {
+      "camera_offset": false,
+      "target": "LOC_BSC"
+    },
+    "effective_inputs": {
+      "camera_offset": false,
+      "target": "LOC_BSC"
+    },
+    "accepted_at": 1789409351.7223668,
+    "queued_at": 1789409351.7223668,
+    "dispatched_at": 1789409351.7364516,
+    "finished_at": 1789409355.8006034,
+    "source_noop": true,
+    "source_noop_reason": "already_at_target",
+    "remote_acknowledged": false,
+    "controller_acknowledged": false,
+    "physical_effect_verified": false,
+    "terminal_evidence": {
+      "completion_class": "source_noop",
+      "delivery_attempted": false,
+      "response": {
+        "admitted": true,
+        "authority_snapshot_digest": "7fecd5a119fcf354352bfcde4c965083419805b3d3e2a8b302ebd86526f092fa",
+        "controller_command_acknowledged": false,
+        "controller_completion_verified": false,
+        "deck_movement": {
+          "controller_completion_verified": false,
+          "physical_observation_verified": false,
+          "semantic_state_committed": true,
+          "source_branch": "ordinary",
+          "target": "LOC_BSC",
+          "target_label": "LOC_TC_COVER"
+        },
+        "delivery_attempted": false,
+        "hardware_postcondition_verified": false,
+        "ok": true,
+        "physical_effect_verified": false,
+        "plan_digest": "f0d5d7b60fc9a9a9da10dd6247d11af7126f868047f9d9ed36ab86c865d9c9b5",
+        "provider_results": [
+          {
+            "controller_command_acknowledged": false,
+            "controller_completion_verified": true,
+            "delivery_attempted": false,
+            "hardware_postcondition_verified": false,
+            "oem_effective_x_steps": 42518,
+            "oem_effective_y_steps": 8779,
+            "oem_requested_x_steps": 42518,
+            "oem_requested_y_steps": 8779,
+            "ok": true,
+            "primitive_result": {
+              "before": {
+                "x": 42518,
+                "y": 8779,
+                "z": 0
+              },
+              "branch": "confirmed_gripper_no_tip_moveXY",
+              "controller_child_evidence": [
+                {
+                  "acknowledged": false,
+                  "command_required": false,
+                  "terminal": true
+                }
+              ],
+              "controller_command_acknowledged": false,
+              "controller_completion_verified": true,
+              "controller_terminal_state_verified": true,
+              "effective_xy_target": {
+                "x": 42518,
+                "y": 8779
+              },
+              "ok": true,
+              "operations": [
+                {
+                  "after": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "before": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "board_present": {
+                    "x": true,
+                    "y": true
+                  },
+                  "branch": "source_noop",
+                  "command_issued": false,
+                  "controller_command_acknowledged": false,
+                  "controller_error_events": [],
+                  "controller_terminal_state_verified": false,
+                  "distances": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "failure": null,
+                  "ignored_compatibility_inputs": {
+                    "acc": null,
+                    "speed": null,
+                    "wait_timeout_s": 5.0
+                  },
+                  "motion_metadata_recorded": false,
+                  "noop_reason": "both_axes_already_at_target",
+                  "oem_wait_timeout_ms": 5000,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "physical_motion_commanded": false,
+                  "reference_before": {
+                    "axes": [
+                      "x",
+                      "y"
+                    ],
+                    "durable_clean": true,
+                    "ok": true,
+                    "persisted": true,
+                    "rows": {
+                      "x": {
+                        "axis": "x",
+                        "last_motion_kind": "move_xy",
+                        "note": null,
+                        "origin_position_steps": 0,
+                        "source": "serial206.x.controller_verified_home",
+                        "state": "referenced",
+                        "state_version": 90,
+                        "updated_at": "2026-09-14T18:08:40.811681+00:00"
+                      },
+                      "y": {
+                        "axis": "y",
+                        "last_motion_kind": "move_xy",
+                        "note": null,
+                        "origin_position_steps": 0,
+                        "source": "serial206.y.controller_verified_home",
+                        "state": "referenced",
+                        "state_version": 36,
+                        "updated_at": "2026-09-14T18:08:40.811770+00:00"
+                      }
+                    },
+                    "verified": true
+                  },
+                  "requested": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "source_anchor": "ClassControlInterface.cs:4285-4367",
+                  "source_context": "ClassControlInterface.btnLOC1_Click",
+                  "source_context_sealed": true,
+                  "source_noop": true,
+                  "source_noop_verified": true,
+                  "source_operation": "ClassControlInterface.moveXY",
+                  "target_event_128_observed": false,
+                  "wait_schedule": "STA_WaitAny_X_then_Y",
+                  "y_authority": {
+                    "axis": "y",
+                    "command_id": "move-xy-1789409355151653026",
+                    "discrepancy_steps": 0,
+                    "observation": {
+                      "axis": {
+                        "axis": "y",
+                        "board_id": 4,
+                        "interrupt_epoch": 11,
+                        "last_command_id": null,
+                        "last_discrepancy_steps": 0,
+                        "last_receipt_id": "move-xy-1789409355151653026",
+                        "lifecycle_state": "referenced_ready",
+                        "motor_id": 0,
+                        "observed_position_steps": 8779,
+                        "origin_position_steps": 0,
+                        "ownership_generation": 1,
+                        "prepared_board_epoch": 59,
+                        "profile_fingerprint": "07dc18ca88abf829b7cb12f642ead6329b17cb04da7942d413da63d4ed4f1fe1",
+                        "reference_state": "referenced",
+                        "state_version": 128,
+                        "updated_at": 1789409355.1536794
+                      },
+                      "discrepancy_steps": 0,
+                      "ok": true,
+                      "reconciled_to_observed": true
+                    },
+                    "observed_position_steps": 8779,
+                    "ok": true,
+                    "reconciled_to_observed": true
+                  }
+                }
+              ],
+              "pseudo_z_home": 500,
+              "restore_acc": {
+                "x": {
+                  "ack": {
+                    "omitted": "item_limit"
+                  },
+                  "board": 5,
+                  "controller_command_acknowledged": true,
+                  "motor": 0,
+                  "ok": true,
+                  "param": 5,
+                  "readback": null,
+                  "set_value": 350,
+                  "source_call_completed": true,
+                  "source_return_code": {
+                    "omitted": "item_limit"
+                  }
+                },
+                "y": {
+                  "omitted": "item_limit"
+                }
+              },
+              "source_anchor": "ClassControlInterface.moveTo:4463-4620",
+              "source_noop": true,
+              "source_return_code": 0,
+              "target": {
+                "omitted": "item_limit"
+              }
+            },
+            "provider_command_id": null,
+            "raw_requested_x_steps": 42518,
+            "raw_requested_y_steps": 8779,
+            "source_anchor": "ClassControlInterface.btnLOC1_Click:1932-1959->moveTo:3691-3716",
+            "source_noop": true
+          }
+        ],
+        "semantic_state_committed": true,
+        "source_branch": "ordinary"
+      },
+      "response_evidence": {
+        "content_sha256": "9c51b174f5aa9082ca115ce5b167da978c1d3ed157d330c1d455bd22fe18303b",
+        "evidence_id": "1b002843-ee8a-4297-8ee8-42fce209b5f3:provider_response:9c51b174f5aa9082ca115ce5b167da978c1d3ed157d330c1d455bd22fe18303b",
+        "evidence_kind": "provider_response",
+        "payload_bytes": 4099
+      }
+    },
+    "sequence": 59,
+    "state_version": 3,
+    "expected_board_epoch_by_board": {
+      "4": 59,
+      "5": 1
+    },
+    "terminal_receipt_id": null,
+    "completion_class": "source_noop",
+    "transition_sequence": 180
+  },
+  "canonical_inputs": {
+    "camera_offset": false,
+    "target": "LOC_BSC"
+  },
+  "requested_values": {
+    "camera_offset": false,
+    "target": "LOC_BSC"
+  },
+  "effective_values": {
+    "camera_offset": false,
+    "target": "LOC_BSC"
+  },
+  "observed_values": {},
+  "raw_return_layers": {
+    "source_identity": null,
+    "completion_ambiguous": false,
+    "retry_forbidden": false
+  },
+  "controller_evidence": {
+    "controller_completion_verified": false
+  },
+  "transport_artifacts": [],
+  "child_receipts": [],
+  "transitions": [
+    {
+      "transition_id": "178",
+      "from_status": null,
+      "to_status": "queued",
+      "at": 1789409351.726085,
+      "reason": null
+    },
+    {
+      "transition_id": "179",
+      "from_status": "queued",
+      "to_status": "dispatched",
+      "at": 1789409351.7475026,
+      "reason": null
+    },
+    {
+      "transition_id": "180",
+      "from_status": "dispatched",
+      "to_status": "completed",
+      "at": 1789409355.802455,
+      "reason": "already_at_target"
+    }
+  ],
+  "deck_movement": {
+    "recovery_resolution": null,
+    "target": "LOC_BSC",
+    "target_label": "LOC_TC_COVER",
+    "source_branch": "ordinary",
+    "resolved_location_id": 5,
+    "destination_catalog_revision": "f7f4e88a9e5f358c01887dc5017a1b792cc85b7446643d4c7f11f77651ab5d39",
+    "position_table_revision": "cee27c5e30de6be84a689f1167165fd1bc915eb351c41487c5eb12227a5d3278",
+    "authority_snapshot_digest": "8bd54762f7b0abaa026c66004db6e2254fa2269b20383d43c7d3ad74f602acb7",
+    "complete_authority_digest": "8bd54762f7b0abaa026c66004db6e2254fa2269b20383d43c7d3ad74f602acb7",
+    "plan_digest": "f0d5d7b60fc9a9a9da10dd6247d11af7126f868047f9d9ed36ab86c865d9c9b5",
+    "source_anchors": [
+      "DefaultParameters.ForceToHighHome",
+      "ClassControlInterface.btnLOC1_Click:m_latchStatus",
+      "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed",
+      "ClassControlInterface.btnLOC1_Click:ordinary"
+    ],
+    "delivery_attempted": false,
+    "controller_command_acknowledged": false,
+    "controller_completion_verified": false,
+    "hardware_postcondition_verified": false,
+    "semantic_state_committed": true,
+    "physical_observation_verified": false,
+    "transition_revision": 39,
+    "ambiguity_state": "none",
+    "stages": [
+      {
+        "order": 0,
+        "operation": "ForceToHighHome",
+        "source_anchor": "DefaultParameters.ForceToHighHome",
+        "resources": [],
+        "arguments": {
+          "pseudo_z_home": 500
+        },
+        "dependencies": [],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "d3d374a2003e455579ab1fd944579229f1755775bdc2bd8fc7fb88d868717728",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": true,
+          "hardware_postcondition_verified": false,
+          "operation": "ForceToHighHome",
+          "provider_evidence": {
+            "command_id": "1b002843-ee8a-4297-8ee8-42fce209b5f3",
+            "ok": true,
+            "psudo_z_home_steps": 500,
+            "source_anchor": "DefaultParameters.ForceToHighHome:81-84"
+          },
+          "reason": "source_mutation_completed",
+          "source_anchor": "DefaultParameters.ForceToHighHome"
+        }
+      },
+      {
+        "order": 1,
+        "operation": "check_latch_status",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:m_latchStatus",
+        "resources": [],
+        "arguments": {},
+        "dependencies": [
+          0
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": false,
+          "hardware_postcondition_verified": false,
+          "operation": "check_latch_status",
+          "provider_evidence": {
+            "delivery_attempted": false,
+            "observation_id": "deck-latch:host=oem-m_latchStatus:0:1;sensor=type3:6267ea404b23bf3dae640a2c1124440ab04a8af9999d3b7d88935e41926f6842;compound=2fc2f0272b9c5439411837b973f545f56005052e7241a10789ee85f4817bfbbe",
+            "physical_motion_commanded": false,
+            "value": true
+          },
+          "reason": "source_predicate_satisfied",
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:m_latchStatus"
+        }
+      },
+      {
+        "order": 2,
+        "operation": "check_machine_latch_closed",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed",
+        "resources": [],
+        "arguments": {},
+        "dependencies": [
+          1
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": false,
+          "hardware_postcondition_verified": false,
+          "operation": "check_machine_latch_closed",
+          "provider_evidence": {
+            "delivery_attempted": false,
+            "observation_id": "deck-latch:host=oem-m_latchStatus:0:1;sensor=type3:6267ea404b23bf3dae640a2c1124440ab04a8af9999d3b7d88935e41926f6842;compound=2fc2f0272b9c5439411837b973f545f56005052e7241a10789ee85f4817bfbbe",
+            "physical_motion_commanded": false,
+            "value": true
+          },
+          "reason": "source_predicate_satisfied",
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed"
+        }
+      },
+      {
+        "order": 3,
+        "operation": "moveTo",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:ordinary",
+        "resources": [
+          "x",
+          "y",
+          "z"
+        ],
+        "arguments": {
+          "camera_offset": false,
+          "location_id": 5
+        },
+        "dependencies": [
+          2
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "a68d23a4249f21130b2282db5adc427eed37525ff3187acfc2ba35ece21f8311",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": true,
+          "delivery_attempted": false,
+          "hardware_postcondition_verified": false,
+          "operation": "moveTo",
+          "provider_evidence": {
+            "controller_command_acknowledged": false,
+            "controller_completion_verified": true,
+            "delivery_attempted": false,
+            "hardware_postcondition_verified": false,
+            "oem_effective_x_steps": 42518,
+            "oem_effective_y_steps": 8779,
+            "oem_requested_x_steps": 42518,
+            "oem_requested_y_steps": 8779,
+            "ok": true,
+            "primitive_result": {
+              "before": {
+                "x": 42518,
+                "y": 8779,
+                "z": 0
+              },
+              "branch": "confirmed_gripper_no_tip_moveXY",
+              "controller_child_evidence": [
+                {
+                  "acknowledged": false,
+                  "command_required": false,
+                  "terminal": true
+                }
+              ],
+              "controller_command_acknowledged": false,
+              "controller_completion_verified": true,
+              "controller_terminal_state_verified": true,
+              "effective_xy_target": {
+                "x": 42518,
+                "y": 8779
+              },
+              "ok": true,
+              "operations": [
+                {
+                  "after": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "before": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "board_present": {
+                    "x": true,
+                    "y": true
+                  },
+                  "branch": "source_noop",
+                  "command_issued": false,
+                  "controller_command_acknowledged": false,
+                  "controller_error_events": [],
+                  "controller_terminal_state_verified": false,
+                  "distances": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "failure": null,
+                  "ignored_compatibility_inputs": {
+                    "acc": null,
+                    "speed": null,
+                    "wait_timeout_s": 5.0
+                  },
+                  "motion_metadata_recorded": false,
+                  "noop_reason": "both_axes_already_at_target",
+                  "oem_wait_timeout_ms": 5000,
+                  "ok": true,
+                  "physical_effect_verified": false,
+                  "physical_motion_commanded": false,
+                  "reference_before": {
+                    "axes": [
+                      "x",
+                      "y"
+                    ],
+                    "durable_clean": true,
+                    "ok": true,
+                    "persisted": true,
+                    "rows": {
+                      "x": {
+                        "axis": "x",
+                        "last_motion_kind": "move_xy",
+                        "note": null,
+                        "origin_position_steps": 0,
+                        "source": "serial206.x.controller_verified_home",
+                        "state": "referenced",
+                        "state_version": 90,
+                        "updated_at": "2026-09-14T18:08:40.811681+00:00"
+                      },
+                      "y": {
+                        "axis": "y",
+                        "last_motion_kind": "move_xy",
+                        "note": null,
+                        "origin_position_steps": 0,
+                        "source": "serial206.y.controller_verified_home",
+                        "state": "referenced",
+                        "state_version": 36,
+                        "updated_at": "2026-09-14T18:08:40.811770+00:00"
+                      }
+                    },
+                    "verified": true
+                  },
+                  "requested": {
+                    "x": 42518,
+                    "y": 8779
+                  },
+                  "source_anchor": "ClassControlInterface.cs:4285-4367",
+                  "source_context": "ClassControlInterface.btnLOC1_Click",
+                  "source_context_sealed": true,
+                  "source_noop": true,
+                  "source_noop_verified": true,
+                  "source_operation": "ClassControlInterface.moveXY",
+                  "target_event_128_observed": false,
+                  "wait_schedule": "STA_WaitAny_X_then_Y",
+                  "y_authority": {
+                    "axis": "y",
+                    "command_id": "move-xy-1789409355151653026",
+                    "discrepancy_steps": 0,
+                    "observation": {
+                      "axis": {
+                        "axis": "y",
+                        "board_id": 4,
+                        "interrupt_epoch": 11,
+                        "last_command_id": null,
+                        "last_discrepancy_steps": 0,
+                        "last_receipt_id": "move-xy-1789409355151653026",
+                        "lifecycle_state": "referenced_ready",
+                        "motor_id": 0,
+                        "observed_position_steps": 8779,
+                        "origin_position_steps": 0,
+                        "ownership_generation": 1,
+                        "prepared_board_epoch": 59,
+                        "profile_fingerprint": "07dc18ca88abf829b7cb12f642ead6329b17cb04da7942d413da63d4ed4f1fe1",
+                        "reference_state": "referenced",
+                        "state_version": 128,
+                        "updated_at": 1789409355.1536794
+                      },
+                      "discrepancy_steps": 0,
+                      "ok": true,
+                      "reconciled_to_observed": true
+                    },
+                    "observed_position_steps": 8779,
+                    "ok": true,
+                    "reconciled_to_observed": true
+                  }
+                }
+              ],
+              "pseudo_z_home": 500,
+              "restore_acc": {
+                "x": {
+                  "ack": {
+                    "omitted": "item_limit"
+                  },
+                  "board": 5,
+                  "controller_command_acknowledged": true,
+                  "motor": 0,
+                  "ok": true,
+                  "param": 5,
+                  "readback": null,
+                  "set_value": 350,
+                  "source_call_completed": true,
+                  "source_return_code": {
+                    "omitted": "item_limit"
+                  }
+                },
+                "y": {
+                  "omitted": "item_limit"
+                }
+              },
+              "source_anchor": "ClassControlInterface.moveTo:4463-4620",
+              "source_noop": true,
+              "source_return_code": 0,
+              "target": {
+                "omitted": "item_limit"
+              }
+            },
+            "provider_command_id": null,
+            "raw_requested_x_steps": 42518,
+            "raw_requested_y_steps": 8779,
+            "source_anchor": "ClassControlInterface.btnLOC1_Click:1932-1959->moveTo:3691-3716",
+            "source_noop": true
+          },
+          "reason": null,
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:ordinary"
+        }
+      }
+    ]
+  }
+}

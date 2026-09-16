@@ -303,8 +303,6 @@
         ],
         "type": "object"
       },
-      "maxItems": 27,
-      "minItems": 27,
       "type": "array"
     },
     "schema": {

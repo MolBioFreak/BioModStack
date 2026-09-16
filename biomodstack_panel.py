@@ -22,6 +22,7 @@ import sqlite3
 import shutil
 import webbrowser
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,7 @@ API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
 from biomodstack_panel_compat import build_toggle_row  # noqa: E402
+from biomodstack_services import desktop_exec_arg
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
@@ -51,6 +53,9 @@ from biomodstack_services import (  # noqa: E402
     runtime_descriptor,
     runtime_port_settings,
     save_runtime_port_settings,
+    storage_compute_settings,
+    save_storage_compute_settings,
+    STORAGE_COMPUTE_APPLY_NOTICE,
 )
 
 # Service-control scripts must belong to the checkout that supplied this panel.
@@ -100,6 +105,146 @@ STOP_SCRIPT = PROJECT_ROOT / "stop_services.sh"
 SYNC_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
 SYNC_CONTROL_PATH = SYNC_STATE_DIR / "dev-sync-control.json"
 SYNC_SCRIPT = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
+
+SETUP_ACTIONS = {
+    "discover": "Check system",
+    "plan": "Preview Development setup",
+    "python-plan": "Preview Python installation",
+    "python-bootstrap": "Install Python dependencies",
+    "python-verify": "Check Python dependencies",
+    "frontend-plan": "Preview web interface installation",
+    "frontend-bootstrap": "Install web interface dependencies",
+    "frontend-verify": "Check web interface dependencies",
+    "configure-preview": "Preview settings",
+    "configure": "Apply settings",
+    "recover": "Resume settings update",
+    "provision-plan": "Preview model requirements",
+    "verify": "Check models",
+}
+SETUP_GROUPS = {
+    "System": ("discover", "plan"),
+    "Python": ("python-plan", "python-bootstrap", "python-verify"),
+    "Web interface": ("frontend-plan", "frontend-bootstrap", "frontend-verify"),
+    "Models": ("provision-plan", "verify"),
+    "Settings and recovery": ("configure-preview", "configure", "recover"),
+}
+
+
+def setup_result_summary(action: str, report: dict, returncode: int) -> tuple[str, str]:
+    """Human presentation only; the CLI owns success and admission."""
+    label = SETUP_ACTIONS.get(action, "Setup")
+    if returncode:
+        issues = list(report.get("blockers") or report.get("errors") or [])
+        for model in report.get("models", []):
+            issues.extend(dict(issue, model_id=model.get("model_id", "Model")) for issue in model.get("blockers", []))
+        messages = []
+        for issue in issues:
+            message = str(issue.get("message") or issue.get("code", "") if isinstance(issue, dict) else issue)
+            if isinstance(issue, dict) and issue.get("code") == "bootstrap_incomplete":
+                package = "Python" if action.startswith("python-") else "web interface"
+                message = f"The managed {package} dependencies are not installed for this checkout. Choose Install {package} dependencies."
+            elif isinstance(issue, dict) and issue.get("code") == "approved_acquisition_metadata_missing":
+                message = f"{issue.get('model_id', 'Model')}: download information is missing for {issue.get('relative_path', 'a required file')}. This model cannot be installed through Setup yet."
+            for command, title in SETUP_ACTIONS.items():
+                message = re.sub(r"(?<![\w-])" + re.escape(command) + r"(?![\w-])", title, message)
+            if message:
+                messages.append(message.replace("_", " "))
+        return label + " needs attention", "\n".join(dict.fromkeys(messages)) or "The action could not finish. Open Technical details for the error."
+    titles = {
+        "discover": "System check passed", "plan": "System overview ready",
+        "python-plan": "Python installation preview ready", "frontend-plan": "Web interface preview ready",
+        "python-verify": "Python dependencies checked", "frontend-verify": "Web interface dependencies checked",
+        "python-bootstrap": "Python dependencies installed", "frontend-bootstrap": "Web interface dependencies installed",
+        "configure-preview": "Settings preview ready", "configure": "Settings saved",
+        "recover": "Settings recovery completed", "provision-plan": "Model requirements ready",
+        "verify": "Model check completed",
+    }
+    lines = []
+    if action in {"discover", "plan"}:
+        observations = report.get("observations", {})
+        tools = observations.get("tools", [])
+        if tools:
+            lines.append("Tools found: " + ", ".join(tool["name"] for tool in tools))
+        capacity = observations.get("capacity", {})
+        if capacity.get("cpu_threads") and capacity.get("memory_bytes"):
+            lines.append(f"Hardware: {capacity['cpu_threads']} CPU threads · {capacity['memory_bytes'] / 1024**3:.1f} GiB RAM")
+        lines.append("No system changes made. Model readiness is checked separately.")
+    elif action.endswith("-plan"):
+        lines.append("Preview only. Nothing has been installed.")
+        if report.get("root"):
+            lines.append("Installation folder: " + str(report["root"]))
+        if action == "python-plan":
+            lines.append("Next: choose Install Python dependencies.")
+        elif action == "frontend-plan":
+            lines.append("Next: choose Install web interface dependencies.")
+    elif action == "configure-preview":
+        lines.append("No settings changed. Choose Apply settings to save this file.")
+    elif action in {"python-bootstrap", "frontend-bootstrap"}:
+        lines.append("Installation finished. No services were started.")
+    else:
+        lines.append("The requested action finished successfully.")
+    return titles.get(action, label + " completed"), "\n".join(lines)
+
+
+SETUP_HELP = {
+    "discover": "Check tools, storage and available hardware. No changes are made. Model IDs are optional.",
+    "plan": "Show what Development needs before setup. No packages are installed or services started. Model IDs are optional.",
+    "python-plan": "Show the Python version, package list and installation location. No changes are made.",
+    "python-bootstrap": "Install the locked Python packages in a separate environment for this checkout. Preview Python installation shows the location. No models or services are started.",
+    "python-verify": "Check the installed Python environment against the required packages. No changes are made.",
+    "frontend-plan": "Show the web interface's package manager, lockfile and installation location. No changes are made.",
+    "frontend-bootstrap": "Install the locked web interface packages in separate storage for this checkout. Preview web interface installation shows the location. This does not build or start the web interface.",
+    "frontend-verify": "Check the installed web interface packages against the lockfile. No changes are made.",
+    "configure-preview": "Read a settings JSON file and show proposed changes without saving. Enter its full path below.",
+    "configure": "Save first-install settings from a settings JSON file. Existing installations cannot be replaced here; use Storage and compute for supported edits. Preview settings first. No services start.",
+    "recover": "Finish an interrupted settings update using the recovery ID from its report. Do not use this for package installation.",
+    "provision-plan": "List the files and tools required by the selected models. Enter model IDs below. Nothing is downloaded.",
+    "verify": "Check an existing model installation. Enter its installation ID and model names. Requirements are refreshed automatically. Nothing is downloaded or started.",
+}
+SETUP_INPUTS = {
+    "discover": ("models",), "plan": ("models",),
+    "configure-preview": ("document",), "configure": ("document",),
+    "recover": ("operation",), "provision-plan": ("models",), "verify": ("models", "model_operation"),
+}
+SETUP_MUTATIONS = {
+    "python-bootstrap": "Install the required Python packages? An internet connection may be needed. This does not download models or start services.",
+    "frontend-bootstrap": "Install the packages needed for the web interface? An internet connection may be needed. This does not build or start the web interface.",
+    "configure": "Apply first-install settings from the selected file? Preview settings first. Existing installations cannot be replaced here. No services start now.",
+    "recover": "Resume the interrupted settings update? This may save installation settings. No services start now.",
+}
+
+
+def build_setup_command(action: str, *, document: str = "", operation: str = "", models: str = "", plan_digest: str = "") -> list[str]:
+    """Strict argv adapter; all validation and installation remain in the CLI."""
+    if action not in SETUP_ACTIONS:
+        raise ValueError("Choose an action from the Setup menu.")
+    command = ["bash", str(START_SCRIPT), action, "--json"]
+    if action in {"discover", "plan"}:
+        command += ["--runtime", "dev"]
+    if action in {"configure-preview", "configure"}:
+        if not document or not Path(document).is_absolute():
+            raise ValueError("Enter the full path to your settings JSON file under Options (starting with /).")
+        command += ["--document", document]
+    if action == "recover":
+        if not operation:
+            raise ValueError("Enter the recovery ID from the previous settings report.")
+        command += ["--operation-id", operation]
+    if action in {"discover", "plan", "provision-plan", "verify"}:
+        selected = list(dict.fromkeys(item.strip() for item in models.split(",") if item.strip()))
+        if action in {"provision-plan", "verify"} and not selected:
+            raise ValueError("Enter the model IDs to check under Options, separated by commas.")
+        for model in selected:
+            command += ["--model", model]
+    if action == "verify":
+        if plan_digest and (len(plan_digest) != 64 or any(c not in "0123456789abcdef" for c in plan_digest)):
+            raise ValueError("Run Preview model requirements first. It fills in the model check ID for the same model selection.")
+        if not operation:
+            raise ValueError("Enter the model installation ID (operation_id) from its installation report. If models have not been installed, use Preview model requirements instead.")
+        if plan_digest:
+            command += ["--expect-plan-sha256", plan_digest]
+        command += ["--operation-id", operation]
+    return command
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION MANAGEMENT
@@ -418,7 +563,6 @@ class BioModStackPanel(Adw.Application):
         self.window = None
         self.config = load_config()
         self.current_log = "api"
-        self.cached_sudo_password = ""
         
     def do_activate(self):
         if self.window:
@@ -464,7 +608,7 @@ class BioModStackPanel(Adw.Application):
         
         # Build UI sections
         content.append(self._build_status_section())
-        content.append(self._build_privilege_section())
+        content.append(self._build_setup_section())
         content.append(self._build_runtime_ports_section())
         content.append(self._build_bioxp_section())
         content.append(self._build_actions_section())
@@ -724,32 +868,134 @@ class BioModStackPanel(Adw.Application):
         
         return group
 
-    def _build_privilege_section(self) -> Gtk.Widget:
-        """Privileged-action credentials."""
-        group = Adw.PreferencesGroup()
-        group.set_title("Privileges")
+    def _build_setup_section(self) -> Gtk.Widget:
+        """Expose the supported installer, never a second installation authority."""
+        group = Adw.PreferencesGroup(title="Setup")
+        self.setup_group_combo = Gtk.ComboBoxText()
+        for title in SETUP_GROUPS:
+            self.setup_group_combo.append(title, title)
+        self.setup_group_combo.set_active_id("System")
+        category = Adw.ActionRow(title="Set up")
+        category.add_suffix(self.setup_group_combo)
+        group.add(category)
+        self.setup_action_combo = Gtk.ComboBoxText()
+        row = Adw.ActionRow(title="Action")
+        row.add_suffix(self.setup_action_combo)
+        run = Gtk.Button(label="Run")
+        self.setup_run_button = run
+        run.connect("clicked", self._on_setup_action)
+        row.add_suffix(run)
+        group.add(row)
+        self.setup_help = Gtk.Label(xalign=0, wrap=True)
+        group.add(self.setup_help)
 
-        password_row = Adw.ActionRow()
-        password_row.set_title("Admin Password")
-        password_row.set_subtitle("Used for privileged API restart/port-clear actions. Cached in memory only.")
+        options = Adw.ExpanderRow(title="Options")
+        self.setup_options = options
+        self.setup_entries = {}
+        self.setup_input_rows = {}
+        for key, title, hint in (
+            ("document", "Settings file (JSON)", "Full path to an existing settings file, starting with /"),
+            ("operation", "Recovery ID", "Copy operation_id from the interrupted settings report"),
+            ("models", "Model IDs (comma-separated)", "For example: protenix, boltz2"),
+            ("model_operation", "Model installation ID", "Copy operation_id from the model installation report, not a settings report"),
 
-        password_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.password_entry = Gtk.PasswordEntry()
-        self.password_entry.set_show_peek_icon(True)
-        self.password_entry.set_width_chars(20)
-        self.password_entry.set_hexpand(True)
-        self.password_entry.connect("changed", self._on_password_changed)
-        password_box.append(self.password_entry)
-
-        btn_clear_password = Gtk.Button(label="Clear")
-        btn_clear_password.connect("clicked", self._on_clear_password)
-        password_box.append(btn_clear_password)
-
-        password_row.add_suffix(password_box)
-        password_row.set_activatable_widget(self.password_entry)
-        group.add(password_row)
-
+        ):
+            entry = Gtk.Entry(hexpand=True)
+            entry.set_placeholder_text(hint)
+            entry.set_tooltip_text(hint)
+            option = Adw.ActionRow(title=title, subtitle=hint)
+            option.add_suffix(entry)
+            options.add_row(option)
+            self.setup_entries[key] = entry
+            self.setup_input_rows[key] = option
+        group.add(options)
+        self.setup_status_row = Adw.ActionRow(title="Setup result")
+        group.add(self.setup_status_row)
+        self.setup_summary = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self.setup_summary.set_margin_top(8)
+        self.setup_summary.set_margin_bottom(8)
+        group.add(self.setup_summary)
+        output_row = Adw.ExpanderRow(title="Technical details")
+        self.setup_details_row = output_row
+        output_row.set_expanded(False)
+        self.setup_output = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                         wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        output_scroll = Gtk.ScrolledWindow(min_content_height=180, max_content_height=300)
+        output_scroll.set_child(self.setup_output)
+        output_row.add_row(output_scroll)
+        group.add(output_row)
+        self.setup_action_combo.connect("changed", self._on_setup_selection)
+        self.setup_group_combo.connect("changed", self._on_setup_group)
+        self._on_setup_group(self.setup_group_combo)
         return group
+
+    def _on_setup_group(self, combo):
+        self.setup_action_combo.remove_all()
+        actions = SETUP_GROUPS[combo.get_active_id()]
+        for action in actions:
+            self.setup_action_combo.append(action, SETUP_ACTIONS[action])
+        self.setup_action_combo.set_active_id(actions[0])
+
+    def _setup_feedback(self, status: str, detail: str) -> None:
+        self.setup_status_row.set_subtitle(status)
+        self.setup_output.get_buffer().set_text(detail or "No diagnostic output was returned.")
+        self.setup_details_row.set_expanded(False)
+
+    def _on_setup_selection(self, combo):
+        action = combo.get_active_id()
+        if action is None:
+            return
+        help_text = SETUP_HELP[action]
+        self.setup_help.set_text(help_text)
+        inputs = SETUP_INPUTS.get(action, ())
+        for key, row in self.setup_input_rows.items():
+            row.set_visible(key in inputs)
+        self.setup_options.set_visible(bool(inputs))
+        required = action not in {"discover", "plan"}
+        self.setup_options.set_subtitle("Required for this action" if required else "Optional: limit the check to model IDs")
+        self.setup_options.set_expanded(bool(inputs) and required)
+        self.setup_run_button.set_label(SETUP_ACTIONS[action].split()[0])
+        self.setup_summary.set_text("")
+        self._setup_feedback("Ready", "No action has been run for this selection.")
+
+    def _on_setup_action(self, button):
+        action = self.setup_action_combo.get_active_id()
+        try:
+            values = {key: entry.get_text().strip() for key, entry in self.setup_entries.items()}
+            model_operation = values.pop("model_operation")
+            if action == "verify":
+                values["operation"] = model_operation
+                values["plan_digest"] = ""
+            command = build_setup_command(action, **values)
+        except ValueError as exc:
+            self._setup_feedback("Not started. Check the required input.", str(exc))
+            self.setup_summary.set_text(str(exc))
+            return
+        if getattr(self, "_service_action_active", False):
+            self.setup_status_row.set_subtitle("Wait for the current action to finish.")
+            return
+        if action in SETUP_MUTATIONS:
+            self._setup_feedback("Waiting for confirmation. Nothing changed yet.", SETUP_MUTATIONS[action])
+            self.setup_summary.set_text(SETUP_MUTATIONS[action])
+            dialog = Gtk.MessageDialog(transient_for=self.window, modal=True,
+                message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
+                text=SETUP_ACTIONS[action], secondary_text=SETUP_MUTATIONS[action])
+            dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dialog.add_button("Continue", Gtk.ResponseType.ACCEPT)
+            dialog.set_default_response(Gtk.ResponseType.CANCEL)
+
+            def respond(confirmation, response):
+                confirmation.destroy()
+                if response == Gtk.ResponseType.ACCEPT:
+                    self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
+                else:
+                    self._setup_feedback("Cancelled. Nothing changed.", SETUP_ACTIONS[action] + " was not run.")
+                    self.setup_summary.set_text("Nothing changed.")
+
+            dialog.connect("response", respond)
+            dialog.present()
+        else:
+            self._run_service_action("Setup: " + SETUP_ACTIONS[action], command)
 
     def _on_open_ui(self, button):
         show_notification("Opening UI", "Launching the BioModStack shell...")
@@ -842,21 +1088,47 @@ class BioModStackPanel(Adw.Application):
         self._update_dev_updates_control()
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(f"{label} in progress…")
-        show_notification(label, "BioModStack service action started.")
+        if label.startswith("Setup: "):
+            self._setup_feedback(f"{label} — Working…",
+                                 label + "\n\nWorking… The report will appear here when the command finishes. Package installation may take several minutes.")
+            self.setup_run_button.set_sensitive(False)
+            self.setup_action_combo.set_sensitive(False)
+            self.setup_group_combo.set_sensitive(False)
+            self.setup_summary.set_text("Please wait. The result will appear here.")
+            self.setup_options.set_sensitive(False)
+        show_notification(label, "BioModStack action started.")
 
         def worker() -> None:
             result = None
             error = None
             try:
+                if label == "Setup: " + SETUP_ACTIONS["verify"] and "--expect-plan-sha256" not in command:
+                    preview = ["bash", str(START_SCRIPT), "provision-plan", "--json"]
+                    for index, value in enumerate(command):
+                        if value == "--model":
+                            preview += [value, command[index + 1]]
+                    result = subprocess.run(preview, env=self._script_env(), capture_output=True,
+                                            text=True, errors="replace", stdin=subprocess.DEVNULL,
+                                            cwd=PROJECT_ROOT, check=False)
+                    if result.returncode:
+                        GLib.idle_add(self._finish_service_action, label, result, None)
+                        return
+                    digest = json.loads(result.stdout).get("plan_digest", "")
+                    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                        raise ValueError("Model requirements did not return a valid check identity.")
+                    command.extend(["--expect-plan-sha256", digest])
                 result = subprocess.run(
                     command,
                     env=self._script_env(),
                     capture_output=True,
                     text=True,
-                    timeout=360,
+                    errors="replace",
+                    timeout=None if label.startswith("Setup: ") else 360,
+                    stdin=subprocess.DEVNULL,
+                    cwd=PROJECT_ROOT,
                     check=False,
                 )
-            except (OSError, subprocess.SubprocessError) as exc:
+            except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError) as exc:
                 error = exc
             GLib.idle_add(self._finish_service_action, label, result, error)
 
@@ -881,6 +1153,31 @@ class BioModStackPanel(Adw.Application):
                 subtitle = f"{label} failed (exit {returncode}): {detail}"
                 notification_title = f"{label} Failed"
 
+        if label.startswith("Setup: "):
+            output = str(error) if error else "\n".join(
+                part for part in (result.stdout, result.stderr) if part
+            )
+            if error is None:
+                try:
+                    report = json.loads(result.stdout)
+                    if not isinstance(report, dict):
+                        raise ValueError("Setup response is not an object")
+                    action = report.get("action") or self.setup_action_combo.get_active_id()
+                    subtitle, detail = setup_result_summary(action, report, result.returncode)
+
+                except (ValueError, AttributeError):
+                    subtitle = "Setup response could not be read"
+                    detail = "Open Technical details for the command output."
+            else:
+                subtitle = "Setup could not start"
+                detail = str(error)
+            self.setup_summary.set_text(detail)
+            notification_title = subtitle
+            self._setup_feedback(subtitle, output)
+            self.setup_run_button.set_sensitive(True)
+            self.setup_action_combo.set_sensitive(True)
+            self.setup_group_combo.set_sensitive(True)
+            self.setup_options.set_sensitive(True)
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(subtitle)
         self._update_dev_updates_control()
@@ -893,8 +1190,6 @@ class BioModStackPanel(Adw.Application):
         for key in list(env):
             if key.startswith("BMS_") or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
-        if self.cached_sudo_password:
-            env["BMS_SUDO_PASSWORD"] = self.cached_sudo_password
         return env
     
     def _build_logs_section(self) -> Gtk.Widget:
@@ -1067,10 +1362,120 @@ class BioModStackPanel(Adw.Application):
         except Exception as e:
             show_notification("Backup Failed", str(e))
     
+    def _build_storage_compute_row(self) -> Gtk.Widget:
+        row = Adw.ExpanderRow()
+        row.set_title("Storage and compute")
+        row.set_subtitle("Installed roots and editable local CPU/RAM budgets")
+        self.storage_entries = {}
+        self.storage_initial = {}
+        self.storage_hardware_label = Gtk.Label(xalign=0, wrap=True)
+        self.storage_feedback = Gtk.Label(label=STORAGE_COMPUTE_APPLY_NOTICE, xalign=0, wrap=True)
+        for label in (self.storage_hardware_label, self.storage_feedback):
+            child = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            child.set_margin_start(12)
+            child.set_margin_end(12)
+            child.append(label)
+            row.add_row(child)
+        labels = {
+            "data_root": "Shared data root",
+            "dev_data_root": "Development data root",
+            "container_dir": "Workflow image root",
+            "weights_root": "Model weights root",
+            "inputs_dir": "Production inputs",
+            "results_dir": "Production results",
+            "db_path": "Production SQLite file",
+            "work_dir": "Production work directory",
+            "analysis_cache_dir": "Production analysis cache",
+            "colabfold_db": "Reference database root",
+            "msa_cache_dir": "MSA cache root",
+            "sabdab_cache_dir": "SAbDab cache root",
+            "dev_results_dir": "Development results",
+            "local_cpu_threads": "Local CPU budget (logical threads)",
+            "local_memory_gib": "Local RAM budget (GiB)",
+        }
+        try:
+            snapshot = storage_compute_settings(project_root=PROJECT_ROOT)
+            values = {**snapshot["roots"], "local_cpu_threads": snapshot["configured_cpu_threads"],
+                      "local_memory_gib": snapshot["configured_memory_gib"]}
+            self._show_storage_hardware(snapshot)
+            if snapshot.get("validation_error"):
+                self.storage_feedback.set_text("Saved budgets need correction: " + str(snapshot["validation_error"]) + ". Edit values or use detected defaults, then save. No limits applied.")
+        except Exception as exc:
+            values = {}
+            self.storage_feedback.set_text(f"Cannot read settings: {exc}. Nothing saved.")
+        advanced = Adw.ExpanderRow()
+        advanced.set_title("Independent storage paths")
+        advanced.set_subtitle("Existing effective paths; saving never moves files or creates directories")
+        row.add_row(advanced)
+        primary = {"data_root", "dev_data_root", "container_dir", "weights_root", "local_cpu_threads", "local_memory_gib"}
+        for key, title in labels.items():
+            field = Adw.ActionRow()
+            field.set_title(title)
+            entry = Gtk.Entry()
+            entry.set_hexpand(True)
+            entry.set_valign(Gtk.Align.CENTER)
+            entry.set_text(str(values.get(key, "")))
+            field.add_suffix(entry)
+            (row if key in primary else advanced).add_row(field)
+            self.storage_entries[key] = entry
+            self.storage_initial[key] = entry.get_text()
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for title, callback in (("Re-detect hardware", self._on_redetect_storage_compute),
+                                ("Use detected defaults", self._on_storage_compute_defaults),
+                                ("Save configuration", self._on_save_storage_compute)):
+            button = Gtk.Button(label=title)
+            button.connect("clicked", callback)
+            buttons.append(button)
+        row.add_row(buttons)
+        return row
+
+    def _show_storage_hardware(self, snapshot):
+        self.storage_detected_defaults = {
+            "local_cpu_threads": snapshot["default_cpu_threads"],
+            "local_memory_gib": snapshot["default_memory_gib"],
+        }
+        self.storage_hardware_label.set_text(
+            f"Detected: {snapshot['detected_cpu_threads']} logical threads, "
+            f"{snapshot['detected_memory_gib']:.2f} GiB total usable RAM. "
+            f"Suggested: {snapshot['default_cpu_threads']} threads (80%, rounded up), "
+            f"{snapshot['default_memory_gib']:.2f} GiB (75%).\n{snapshot['cuda_status']}\n"
+            f"{snapshot['applied_limits_status']}"
+        )
+
+    def _on_redetect_storage_compute(self, button):
+        try:
+            self._show_storage_hardware(storage_compute_settings(project_root=PROJECT_ROOT))
+            self.storage_feedback.set_text("Hardware refreshed. Manual entries unchanged; nothing saved.")
+        except Exception as exc:
+            self.storage_feedback.set_text(f"Detection unavailable: {exc}. Nothing saved.")
+
+    def _on_storage_compute_defaults(self, button):
+        for key, value in getattr(self, "storage_detected_defaults", {}).items():
+            self.storage_entries[key].set_text(str(value))
+        self.storage_feedback.set_text("Suggested budgets copied into entries. Review and Save configuration to persist.")
+
+    def _on_save_storage_compute(self, button):
+        try:
+            changes = {key: entry.get_text().strip() for key, entry in self.storage_entries.items()
+                       if entry.get_text() != self.storage_initial[key]}
+            if "local_cpu_threads" in changes:
+                changes["local_cpu_threads"] = int(changes["local_cpu_threads"])
+            if "local_memory_gib" in changes:
+                changes["local_memory_gib"] = float(changes["local_memory_gib"])
+            if not changes:
+                self.storage_feedback.set_text("No changes to save. " + STORAGE_COMPUTE_APPLY_NOTICE)
+                return
+            message = save_storage_compute_settings(changes, project_root=PROJECT_ROOT)
+            self.storage_initial = {key: entry.get_text() for key, entry in self.storage_entries.items()}
+            self.storage_feedback.set_text(message)
+        except Exception as exc:
+            self.storage_feedback.set_text(f"Not saved: {exc}")
+
     def _build_settings_section(self) -> Gtk.Widget:
         """Settings toggles."""
         group = Adw.PreferencesGroup()
         group.set_title("Settings")
+        group.add(self._build_storage_compute_row())
 
         autostart_row_widget, self.autostart_row = build_toggle_row(
             Adw,
@@ -1101,7 +1506,7 @@ class BioModStackPanel(Adw.Application):
 Type=Application
 Name=BioModStack Panel
 Comment=BioModStack Control Panel
-Exec=python3 {Path(__file__).resolve()}
+Exec=python3 {desktop_exec_arg(Path(__file__).resolve())}
 Icon={ICON_PATH}
 Terminal=false
 Categories=Science;System;
@@ -1117,12 +1522,6 @@ X-GNOME-Autostart-enabled=true
         self.config["notifications"] = row.get_active()
         save_config(self.config)
 
-    def _on_password_changed(self, entry):
-        self.cached_sudo_password = entry.get_text()
-
-    def _on_clear_password(self, button):
-        self.cached_sudo_password = ""
-        self.password_entry.set_text("")
     
     def _refresh_status(self):
         """Refresh all status displays."""

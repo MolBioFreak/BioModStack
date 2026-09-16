@@ -5,6 +5,14 @@ IFS=$'\n\t'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${HOME}/.biomodstack/env.sh"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/biomodstack"
+mkdir -p "$config_dir"
+exec {configuration_lock_fd}>"$config_dir/configuration.lock"
+flock -n "$configuration_lock_fd" || exit 78
+if [[ -d "$config_dir/configuration-v1" || -d "$config_dir/configuration-v1-preparing" ]]; then
+  printf "%s\n" "Managed configuration is immutable; migration is unsupported." >&2
+  exit 78
+fi
 CCTV_CONFIG_FILE="${HOME}/.config/coolercontrol/cctv.json"
 
 DAEMON_ADDRESS="${BMS_COOLERCONTROL_DAEMON_ADDRESS:-127.0.0.1}"

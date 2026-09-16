@@ -558,11 +558,11 @@ async def create_sample(
     )
     if replay_id is not None:
         sample = await session.get(MolBioNGSSample, replay_id)
-        if sample is None or sample.current_revision_id is None:
+        if sample is None:
             raise StateIntegrityError("idempotency claim references missing sample")
-        revision = await session.get(MolBioNGSSampleRevision, sample.current_revision_id)
-        if revision is None:
-            raise StateIntegrityError("sample head references missing revision")
+        claim = await session.get(MolBioNGSIdempotencyClaim, (scope, idempotency_key))
+        revision_id = json.loads(claim.response_json)["sample_revision_id"]
+        revision = await get_sample_revision(session, global_domain_experiment_id, sample.id, revision_id)
         return sample, revision
 
     now = _now()
@@ -1544,40 +1544,34 @@ async def _local_domain_counts(
     session: AsyncSession,
     domain_experiment_id: str,
 ) -> dict[str, int]:
-    sample_count = (
-        await session.execute(
-            select(func.count(MolBioNGSSample.id)).where(
-                MolBioNGSSample.global_domain_experiment_id == domain_experiment_id
+    return (await _batch_domain_counts(session, [domain_experiment_id]))[domain_experiment_id]
+
+
+async def _batch_domain_counts(
+    session: AsyncSession, domain_ids: list[str],
+) -> dict[str, dict[str, int]]:
+    counts = {identity: {"samples": 0, "references": 0, "evidence_assessments": 0}
+              for identity in domain_ids}
+    # Bounded IN clauses also work on SQLite builds with small parameter limits.
+    for start in range(0, len(domain_ids), 500):
+        batch = domain_ids[start:start + 500]
+        for label, model in (("samples", MolBioNGSSample),
+                             ("references", MolBioNGSReferenceResource),
+                             ("evidence_assessments", MolBioNGSEvidenceAssessment)):
+            domain = model.global_domain_experiment_id
+            rows = await session.execute(
+                select(domain, func.count()).where(domain.in_(batch)).group_by(domain)
             )
-        )
-    ).scalar_one()
-    reference_count = (
-        await session.execute(
-            select(func.count(MolBioNGSReferenceResource.id)).where(
-                MolBioNGSReferenceResource.global_domain_experiment_id
-                == domain_experiment_id
-            )
-        )
-    ).scalar_one()
-    evidence_count = (
-        await session.execute(
-            select(func.count(MolBioNGSEvidenceAssessment.evidence_id)).where(
-                MolBioNGSEvidenceAssessment.global_domain_experiment_id
-                == domain_experiment_id
-            )
-        )
-    ).scalar_one()
-    return {
-        "samples": int(sample_count),
-        "references": int(reference_count),
-        "evidence_assessments": int(evidence_count),
-    }
+            for identity, count in rows:
+                counts[identity][label] = int(count)
+    return counts
 
 
 async def _domain_experiment_view(
     session: AsyncSession,
     state: MolBioNGSDomainState,
     binding: MolBioNGSGlobalBinding,
+    counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     if (
         binding.global_domain_experiment_id != state.global_domain_experiment_id
@@ -1593,7 +1587,7 @@ async def _domain_experiment_view(
         ),
         "local_state_revision_id": state.current_state_revision_id,
         "local_state_head_generation": state.head_generation,
-        "local_counts": await _local_domain_counts(
+        "local_counts": counts if counts is not None else await _local_domain_counts(
             session, state.global_domain_experiment_id
         ),
         "availability": {
@@ -1666,8 +1660,9 @@ async def list_project_domain_experiments(
             )
         ).all()
     )
+    counts = await _batch_domain_counts(session, [state.global_domain_experiment_id for state, _ in rows])
     return [
-        await _domain_experiment_view(session, state, binding)
+        await _domain_experiment_view(session, state, binding, counts[state.global_domain_experiment_id])
         for state, binding in rows
     ]
 
@@ -1677,21 +1672,27 @@ async def get_project_domain_summary(
     project_id: str,
 ) -> dict[str, Any]:
     normalized_project_id = project_id.strip()
-    experiments = await list_project_domain_experiments(
-        session, normalized_project_id
+    if not normalized_project_id:
+        raise StateValidationError("project_id is required")
+    domains = (
+        select(MolBioNGSDomainState.global_domain_experiment_id)
+        .join(MolBioNGSGlobalBinding,
+              MolBioNGSGlobalBinding.binding_revision_id == MolBioNGSDomainState.current_binding_revision_id)
+        .where(MolBioNGSGlobalBinding.project_id == normalized_project_id,
+               MolBioNGSGlobalBinding.binding_state == "acknowledged")
     )
-    totals = {
-        "samples": sum(item["local_counts"]["samples"] for item in experiments),
-        "references": sum(
-            item["local_counts"]["references"] for item in experiments
-        ),
-        "evidence_assessments": sum(
-            item["local_counts"]["evidence_assessments"] for item in experiments
-        ),
-    }
+    domain_count = (await session.execute(select(func.count()).select_from(domains.subquery()))).scalar_one()
+    totals = {}
+    for label, model in (("samples", MolBioNGSSample),
+                         ("references", MolBioNGSReferenceResource),
+                         ("evidence_assessments", MolBioNGSEvidenceAssessment)):
+        totals[label] = int((await session.execute(
+            select(func.count()).select_from(model)
+            .where(model.global_domain_experiment_id.in_(domains))
+        )).scalar_one())
     return {
         "project_id": normalized_project_id,
-        "domain_experiment_count": len(experiments),
+        "domain_experiment_count": int(domain_count),
         "local_totals": totals,
         "availability": {
             "persisted_global_bindings": "acknowledged_only",

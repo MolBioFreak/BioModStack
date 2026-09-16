@@ -65,7 +65,7 @@ export default function FrustraMpnnCrossDatasetExplorer({ currentDatasetId }: Pr
         const url = URL.createObjectURL(new Blob([JSON.stringify(page, null, 2)], { type: 'application/json' }));
         const anchor = document.createElement('a');
         anchor.href = url;
-        anchor.download = `frustrampnn-${scope}-multidimensional-v1.json`;
+        anchor.download = `frustrampnn-${scope}-multidimensional.json`;
         anchor.click();
         URL.revokeObjectURL(url);
     };

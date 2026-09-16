@@ -1,4 +1,9 @@
 import axios from 'axios';
+import type { CmSubmitRequest } from '../components/conformationalMapping/conformationalMappingApi';
+import type { MolecularDynamicsLaunchIntent } from '../components/molecularDynamicsUiState';
+import { parseMetricPoints, validateScientificEnvelope } from './scientificAnalytics';
+import type { ScientificPoint, ScientificCohort } from './scientificAnalytics';
+type ScientificPointFields = Partial<Omit<ScientificPoint, 'id' | 'name' | 'metrics' | 'contract_revision'>> & { contract_revision?: 1 | null };
 import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
 import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
@@ -26,7 +31,26 @@ api.interceptors.request.use((config) => {
 });
 
 // Types
+export interface CandidateResultSummary {
+    stage_id: string | null;
+    state: string;
+    partial: boolean;
+    requested_count: number | null;
+    generated_count: number | null;
+    rejected_count: number | null;
+    failed_count: number | null;
+    unevaluable_count: number | null;
+    expected_publication_count: number | null;
+    persisted_count: number | null;
+    dispositions?: Array<{ candidate_id: string; disposition: 'selected' | 'rejected' | 'failed' | 'unevaluable'; criterion: string | null; reason_code: string | null }> | null;
+    reason: { code: string; message: string } | null;
+}
+
 export interface Job {
+    execution_plan_approval?: string | null;
+    execution_policy?: ExecutionPolicy;
+    result_summary?: CandidateResultSummary;
+    fampnn_analysis_overrides?: import('../components/FampnnAnalysisControls').FampnnAnalysisOverrides;
     id: string;
     name: string;
     status: 'queued' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled';
@@ -44,6 +68,7 @@ export interface Job {
     batch_name?: string | null;
     // Parent-child relationship for exploration mode
     parent_job_id?: string | null;
+    child_stage?: string | null;
     lineage_root_job_id?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
@@ -268,7 +293,7 @@ export interface MDSummary {
     replica_count: number;
     artifact_count: number;
     replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
-    analysis_status: 'absent' | 'partial' | 'completed';
+    // Analysis availability is owned by the independent analysis endpoint.
     trajectory_playback: { supported: false; reason: string } | {
         supported: true;
         replicas: Array<{
@@ -332,7 +357,7 @@ export interface MDAnalysisReportSet {
 }
 
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
-export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
+export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; analysis_error?: { code: string; message: string } | null; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
 export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
 export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 
@@ -367,7 +392,9 @@ export interface JobLogs {
     nextflow_log: string | null;
     exit_code: number | null;
     parsed_error: string | null;
-    nextflow_log_source?: 'job_output' | 'legacy_global' | 'remote_pending' | 'remote_returned' | null;
+    nextflow_log_source?: 'job_output' | 'legacy_global' | 'remote_pending' | 'remote_returned' | 'remote_diagnostics' | 'remote_live' | null;
+    remote_result_identity?: { attempt_id: string; generation: number; result_manifest_sha256: string; kind: 'current' | 'diagnostics' };
+    remote_read_error?: string;
 }
 
 export interface GPUProcess {
@@ -398,12 +425,105 @@ export interface GPUStatus {
     processes: GPUProcess[];
 }
 
+export interface CatalogProvisionSelection {
+    kind: 'model' | 'image';
+    model_id: string;
+}
+export interface MdLaunchPreviewRequest {
+    schema_version: 'bms.md.launch-preview-request.v1';
+    intent: MolecularDynamicsLaunchIntent;
+}
+// Reuse native scientific contracts, never translate them into synthetic Jobs.
+export type NativeWorkflowProvisionRequest =
+    | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
+    | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
+export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
+export type ProvisionSelection = CatalogProvisionSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
+export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
+export const provisionSelectionLabel = (selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection): string =>
+    'workflow_request' in selection
+        ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
+            : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
+        : selection.model_id;
+
+export interface CachedArtifactReceipt {
+    name: string;
+    sha256: string;
+    size_bytes: number;
+}
+
+export interface ProvisionPreview {
+    dependencies?: Array<{ name: string; kind: string; sha256: string | null; size_bytes: number | null }>;
+    estimates_complete?: boolean;
+    destination?: { target_id: string; remote_root: string } | null;
+    effective_params?: Record<string, unknown> | null;
+    plan_sha256?: string | null;
+    asset_states?: Array<CachedArtifactReceipt & { state: 'verified' | 'missing' | 'corrupt' | 'incompatible' | 'unknown' }>;
+    transfer_bytes?: number;
+    storage_bytes?: number;
+    inventory_state?: 'current' | 'stale' | 'unobserved';
+    blockers?: string[];
+    selection: ProvisionSelection;
+    preview_sha256: string;
+    artifacts: CachedArtifactReceipt[];
+    total_bytes: number;
+    scientific_ready: false;
+    scope: 'managed_asset_activation';
+}
+
+export type ProvisionRequest = ProvisionSelection & {
+    preview_sha256: string;
+};
+
+export interface ObservedArtifactInventory {
+    operation_id: string;
+    selection: ProvisionSelection;
+    observed_at: string;
+    artifacts: CachedArtifactReceipt[];
+    scope: 'last_independent_provision';
+    state: 'download_verified' | 'stale';
+    scientific_ready: false;
+}
+
+export interface RemotePreloadProgress {
+    artifact_progress?: Array<CachedArtifactReceipt & { state: 'pending' | 'transferring' | 'verifying' | 'verified' | 'interrupted' }>;
+    sequence?: number;
+    cancel_requested?: boolean;
+    recovery_required?: boolean;
+    operation_id: string;
+    job_id?: string | null;
+    selection?: ProvisionSelection | null;
+    artifacts?: CachedArtifactReceipt[];
+    source_revision: string;
+    source_tree: string;
+    request_sha256: string;
+    phase: 'checking' | 'transferring' | 'verifying' | 'source_download_ready' | 'failed' | 'cancelling' | 'recovery_blocked' | 'cancelled';
+    artifact: string | null;
+    message: string;
+    started_at: string;
+    updated_at: string;
+}
+
+export interface RemoteArtifactProgress {
+    operation_id: string;
+    job_id: string;
+    phase: 'checking' | 'transferring' | 'verifying' | 'running' | 'completed' | 'failed';
+    artifact: string | null;
+    message: string;
+    updated_at: string;
+    activity?: { stage: string; state: 'started' | 'completed' | 'failed'; updated_at: string } | null;
+}
+
 export interface ExecutionTarget {
+    artifact_inventory?: ObservedArtifactInventory | null;
+    preload?: RemotePreloadProgress | null;
+    progress?: RemoteArtifactProgress | null;
     id: string;
     provider: 'vast';
     provider_instance_id: string;
     name: string | null;
     state: 'discovered' | 'probing' | 'ready' | 'inactive' | 'unavailable';
+    setup?: { phase: string; message: string; started_at?: string; updated_at?: string } | null;
     active: boolean;
     host: string | null;
     port: number | null;
@@ -432,7 +552,20 @@ export interface DiscoveredExecutionTarget {
     started_at: string | null;
 }
 
-export interface RemoteGpuTelemetry {
+export interface RemoteTelemetrySample {
+    sequence?: number;
+    observed_at?: string;
+    available: boolean;
+    gpus: RemoteGpuTelemetry['gpus'];
+    cpu?: { scope?: string; allocated_cores?: number; utilization?: number | null };
+    ram?: { scope?: string; used_bytes?: number | null; limit_bytes?: number | null };
+    disk?: { path?: string; free_bytes?: number | null; total_bytes?: number | null };
+    network?: Array<{ interface: string; rx_bytes_per_second: number | null; tx_bytes_per_second: number | null }>;
+}
+export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> {
+    cursor?: string;
+    reset?: boolean;
+    history?: RemoteTelemetrySample[];
     source: 'active_vast';
     available: boolean;
     target: ExecutionTarget | null;
@@ -442,9 +575,9 @@ export interface RemoteGpuTelemetry {
         index: number;
         uuid: string;
         name: string;
-        utilization: number;
-        memory_used_mb: number;
-        memory_total_mb: number;
+        utilization: number | null;
+        memory_used_mb: number | null;
+        memory_total_mb: number | null;
         temperature: number | null;
         power_draw_w: number | null;
         controls: { fan: false; power: false };
@@ -454,7 +587,6 @@ export interface RemoteGpuTelemetry {
 }
 
 export const EXECUTION_TARGET_STORAGE_KEY = 'bms.jobLauncher.executionTargetId';
-export const VAST_DISCOVERY_QUERY_KEY = ['execution-targets', 'providers', 'vast', 'inventory'] as const;
 
 const selectedExecutionTargetForSubmission = (): string | null => (
     typeof window !== 'undefined' && window.location.pathname === '/submit'
@@ -468,6 +600,87 @@ export const assertLocalOnlySubmission = (launcher: string): void => {
     }
 };
 
+export const preloadExecutionTarget = async (targetId: string, jobId: string): Promise<ExecutionTarget> => {
+    const response = await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/preload`, { job_id: jobId });
+    return response.data;
+};
+
+export const fetchProvisionCatalog = async (): Promise<CatalogProvisionSelection[]> =>
+    (await api.get<CatalogProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
+
+export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
+    (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;
+
+export const provisionExecutionTarget = async (targetId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision`, request)).data;
+
+export const cancelExecutionTargetProvision = async (targetId: string, operationId: string): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/${encodeURIComponent(operationId)}/cancel`)).data;
+export const retryExecutionTargetProvision = async (targetId: string, operationId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/${encodeURIComponent(operationId)}/retry`, request)).data;
+
+export interface ManagedRuntimeArtifact extends CachedArtifactReceipt {
+    state: 'verified' | 'missing' | 'corrupt' | 'incompatible';
+}
+export interface CriticalRuntimeSelection {
+    kind: 'critical_runtime';
+    model_id: 'worker';
+}
+export interface CriticalRuntimeCompatibility {
+    requirements: Record<string, string>;
+    observed: Record<string, string>;
+    compatible: boolean;
+}
+export interface NativeRuntimeReadiness {
+    state: 'blocked' | 'unverified' | 'stale' | 'not_applicable';
+    scope: 'native_runtime_preflight_only';
+    authority: string;
+    missing_authorities: string[];
+    blockers: string[];
+    probe?: {
+        authority: string;
+        outcome: 'passed' | 'failed';
+        gpu_id?: number | null;
+        gpu_uuid?: string | null;
+        observed_at?: string | null;
+        release_sha256: string;
+        image_sha256: string;
+        script_sha256: string;
+        source_revision: string;
+        source_tree: string;
+        boot_id: string;
+    } | null;
+}
+export interface ManagedRuntimeRelease {
+    native_readiness?: NativeRuntimeReadiness | null;
+    bounded_readiness?: 'verified_assets_and_critical_runtime' | 'blocked' | 'stale';
+    readiness_scope?: 'asset_integrity_and_critical_compatibility_only';
+    selection: CatalogProvisionSelection | WorkflowRuntimeSelection | CriticalRuntimeSelection;
+    critical?: CriticalRuntimeCompatibility | null;
+    release_sha256: string;
+    source_revision: string;
+    source_tree: string;
+    state: ManagedRuntimeArtifact['state'] | 'partial' | 'unverified';
+    artifacts: ManagedRuntimeArtifact[];
+}
+export interface ManagedRuntimeInventory {
+    observed_at: string;
+    boot_id: string;
+    state: 'current' | 'stale';
+    scope: 'managed_independent_asset_releases';
+    releases: ManagedRuntimeRelease[];
+    scientific_ready: false;
+    critical_runtime_ready: boolean;
+    blockers: Array<'critical_release_not_verified' | 'scientific_readiness_not_checked'>;
+}
+export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory | null> =>
+    (await api.get<ManagedRuntimeInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory`)).data;
+export const refreshExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory> =>
+    (await api.post<ManagedRuntimeInventory>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`)).data;
+
+export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
+    (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
+
 export const fetchExecutionTargets = () =>
     api.get<ExecutionTarget[]>('/api/execution-targets');
 
@@ -476,10 +689,11 @@ export const refreshVastExecutionTargets = () =>
         '/api/execution-targets/providers/vast/refresh',
     );
 
-export const activateExecutionTarget = (providerInstanceId: string) =>
+export const activateExecutionTarget = (providerInstanceId: string, endpoint?: { username?: string; remote_root: string }) =>
     api.post<ExecutionTarget>('/api/execution-targets/activate', {
         provider: 'vast',
         provider_instance_id: providerInstanceId,
+        ...endpoint,
     });
 
 export const deactivateExecutionTarget = (executionTargetId: string) =>
@@ -487,8 +701,8 @@ export const deactivateExecutionTarget = (executionTargetId: string) =>
         `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
     );
 
-export const fetchActiveRemoteGpuTelemetry = () =>
-    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry');
+export const fetchActiveRemoteGpuTelemetry = (since?: string, executionTargetId?: string) =>
+    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry', { params: { since, execution_target_id: executionTargetId } });
 
 export interface CPUPowerTelemetry {
     source: 'rapl' | string;
@@ -605,7 +819,7 @@ export interface HardwareDiscoveryResponse {
 
 // API functions
 // API functions
-export const fetchJobs = (params?: {
+export const fetchJobs = async (params?: {
     status?: string;
     q?: string;
     model_id?: string;
@@ -614,13 +828,22 @@ export const fetchJobs = (params?: {
     offset?: number;
     include_children?: boolean;
     summary?: boolean;
-}) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
-    params: {
-        ...params,
-        limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
-        summary: params?.summary ?? true,
-    },
-});
+}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }) => {
+    const etag = previous?.headers.etag;
+    const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
+        params: {
+            ...params,
+            limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
+            summary: params?.summary ?? true,
+        },
+        headers: typeof etag === 'string' ? { 'If-None-Match': etag } : undefined,
+        validateStatus: status => (status >= 200 && status < 300) || (status === 304 && !!previous),
+    });
+    // The validator and payload belong to the caller's exact query entry.
+    // Keep ordinary auth/network failures rejected, never serve stale-on-error.
+    if (response.status === 304 && previous) return { ...response, data: previous.data };
+    return response;
+};
 // Bound live telemetry requests so a half-open connection cannot permanently
 // occupy the shared collector and suppress its recovery/backoff loop.
 export interface TelemetryHistoryPoint {
@@ -663,7 +886,7 @@ export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
-export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
+export const fetchDesignById = (id: string, jobId?: string) => api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId } });
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
     dataset_name: string;
@@ -770,6 +993,30 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
     });
 };
 
+/** Materialize a selected structure through the existing upload authority. */
+export const materializeStructureTarget = async (
+    target: { path?: string; file?: File; url?: string; name: string },
+    destination: string,
+): Promise<string> => {
+    if (target.path && !target.file) return target.path;
+    let file = target.file;
+    if (!file && target.url) {
+        const response = await fetch(target.url);
+        if (!response.ok) throw new Error(`Failed to load selected structure (${response.status})`);
+        const name = target.name.replace(/[^\w.-]+/g, '_') || 'structure';
+        file = new File([await response.blob()], /\.(pdb|cif|mmcif)$/i.test(name) ? name : `${name}.pdb`);
+    }
+    if (!file) throw new Error('The selected structure has no available file or canonical path.');
+    // Generic upload is exclusive-create; keep the selected bytes and format,
+    // but use a fresh basename rather than a shared/guessed destination file.
+    const basename = file.name.replace(/[^A-Za-z0-9_.-]/g, '_');
+    const dot = basename.lastIndexOf('.');
+    const stem = dot > 0 ? basename.slice(0, dot) : basename;
+    const suffix = dot > 0 ? basename.slice(dot) : '.pdb';
+    const upload = new File([file], `${stem}-${crypto.randomUUID()}${suffix}`, { type: file.type });
+    return (await uploadFile(destination, upload)).data.path;
+};
+
 // Extract a single chain from a multi-chain PDB
 export interface ExtractChainResult {
     success: boolean;
@@ -802,20 +1049,49 @@ export const extractChain = async (
     });
 };
 
+import { submissionExecutionPolicy, type ExecutionPolicy } from './executionPolicy';
+
+export interface ExecutionPlacement {
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+}
+
+/** Snapshot placement once; explicit Local and saved policy always win. */
+export const prepareExecutionPlacement = <T extends object>(request: T & ExecutionPlacement): T & Required<ExecutionPlacement> => ({
+    ...request,
+    execution_target_id: request.execution_target_id === undefined
+        ? selectedExecutionTargetForSubmission() : request.execution_target_id,
+    execution_policy: request.execution_policy ?? submissionExecutionPolicy(),
+});
+
 // Start a job
-export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+export const prepareJobSubmission = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}): Partial<Job> => {
     const useLaunchContext = options.launchContext !== false;
     const launchContextId = typeof window !== 'undefined' && useLaunchContext
         ? new URLSearchParams(window.location.search).get('launch_context_id')
         : null;
-    const selectedExecutionTarget = selectedExecutionTargetForSubmission();
-    const targetedJobData = selectedExecutionTarget && !jobData.execution_target_id
-        ? { ...jobData, execution_target_id: selectedExecutionTarget }
-        : jobData;
+    const targetedJobData = prepareExecutionPlacement(jobData);
     const payload = launchContextId && !targetedJobData.launch_context_id
         ? { ...targetedJobData, launch_context_id: launchContextId }
         : targetedJobData;
-    return api.post('/api/jobs', payload, useLaunchContext
+    return payload;
+};
+
+export const previewJobExecutionPlan = (jobData: Partial<Job>) =>
+    api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
+        '/api/jobs/execution-plan/preview', jobData);
+
+export const submitJob = async (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
+    // Freeze the reviewed science and placement even if a form changes while the
+    // operator reads the preview. All existing browser launchers share this path.
+    const payload = structuredClone(prepareJobSubmission(jobData, options));
+    if (payload.execution_target_id && !payload.execution_plan_approval) {
+        const preview = (await previewJobExecutionPlan(payload)).data;
+        const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
+        if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
+        payload.execution_plan_approval = preview.approval_digest;
+    }
+    return api.post('/api/jobs', payload, options.launchContext !== false
         ? undefined
         : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
 };
@@ -878,9 +1154,30 @@ export interface ShapeLengthPolicy {
     mode: 'fixed' | 'uniform_integer_range' | 'deterministic_range';
     min: number;
     max: number;
+    allocation_policy_id?: 'fixed_length_v1' | 'balanced_bucket_v1' | null;
+    allocation_policy_sha256?: string | null;
 }
 
-export interface ShapeLaunchRequest {
+export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn';
+export type ShapeSequenceSettings = Record<string, number | string | boolean>;
+
+// Wire projection of global registry metadata, not a separate settings schema.
+export interface ShapeSequenceSettingsDefinition {
+    engine: ShapeSequenceEngine;
+    model_version: string;
+    schema_sha256: string;
+    params: Array<{ name: string; type: string; default: number | string | boolean; [metadata: string]: unknown }>;
+    initial_values: ShapeSequenceSettings;
+    contextual_defaults: ShapeSequenceSettings;
+    contextual_default_reason: string;
+}
+
+export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequenceCount: number) =>
+    api.get<ShapeSequenceSettingsDefinition>(`/api/shape-blueprint/sequence-settings/${engine}`, {
+        params: { sequence_count: sequenceCount },
+    });
+
+export interface ShapeLaunchRequest extends ExecutionPlacement {
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -893,7 +1190,8 @@ export interface ShapeLaunchRequest {
     sequences_per_backbone: number;
     seed: number;
     sequence_policy?: 'auto' | 'skip' | 'external';
-    sequence_engine?: 'proteinmpnn' | 'fampnn';
+    sequence_engine?: ShapeSequenceEngine;
+    sequence_settings?: ShapeSequenceSettings;
     validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
     guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
@@ -909,10 +1207,9 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    assertLocalOnlySubmission('Shape Blueprint');
-    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
+    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>>(
         '/api/shape-blueprint/requests',
-        request,
+        prepareExecutionPlacement(request),
     );
 };
 
@@ -1013,7 +1310,7 @@ export interface OntManagedReferenceRequest {
     ngs_reference_revision_id: string;
 }
 
-export interface OntNgsSubmitRequest {
+export interface OntNgsSubmitRequest extends ExecutionPlacement {
     name?: string;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
@@ -1022,8 +1319,11 @@ export interface OntNgsSubmitRequest {
 }
 
 export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
-    assertLocalOnlySubmission('ONT/NGS');
-    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+    const payload = prepareExecutionPlacement(request);
+    if (payload.execution_target_id && payload.pinned_gpu != null) {
+        throw new Error('Controller GPU pins cannot be used on a worker. Choose worker scheduler assignment explicitly.');
+    }
+    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload);
 };
 
 export interface MolBioNgsReceiptRequest {
@@ -1232,7 +1532,7 @@ export interface AntibodyCdrIndelConfig {
     allowed_aas?: string[];
     blocked_aas?: string[];
     predictor: 'boltz2' | 'protenix';
-    msa_provider: 'local' | 'colabfold_api';
+    msa_provider: 'local' | 'colabfold_api' | 'neurosnap_api';
 }
 
 export interface LaunchAntibodyIterationRequest {
@@ -1259,14 +1559,33 @@ export interface LaunchAntibodyIterationResponse {
     fanout_id?: string | null;
 }
 
+/** Prepared selections are an operator action, not execution approval. */
+async function submitPreparedJobAction<T>(action: () => Promise<import('axios').AxiosResponse<T>>) {
+    try {
+        return await action();
+    } catch (error) {
+        if (!axios.isAxiosError(error) || error.response?.status !== 409) throw error;
+        const detail = error.response.data?.detail;
+        if (detail?.code !== 'remote_prepared_job_review_required'
+                || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
+        // Never repeat the mutation endpoint: review and submit the exact
+        // once-prepared request through the ordinary shared canonical path.
+        const submitted = await submitJob(detail.job_request, { launchContext: false });
+        return { ...submitted, data: { ...detail.response_context,
+            launched_job: submitted.data, launched_jobs: [submitted.data],
+            new_job_id: submitted.data.id, new_job_name: submitted.data.name,
+        } as T };
+    }
+}
+
 export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
-    api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request);
+    submitPreparedJobAction(() => api.post<LaunchAntibodyIterationResponse>('/api/jobs/antibody-iteration/from-designs', request));
 
 export interface ManualMutagenesisConfig {
     chain_id?: string;
     mutation_sets: string[];
     predictor: 'boltz2' | 'protenix';
-    msa_provider: 'local' | 'colabfold_api';
+    msa_provider: 'local' | 'colabfold_api' | 'neurosnap_api';
 }
 
 export interface LaunchManualMutagenesisRequest {
@@ -1287,7 +1606,7 @@ export interface LaunchManualMutagenesisResponse {
 }
 
 export const launchManualMutagenesis = (request: LaunchManualMutagenesisRequest) =>
-    api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request);
+    submitPreparedJobAction(() => api.post<LaunchManualMutagenesisResponse>('/api/jobs/mutagenesis/from-designs', request));
 
 export interface SavedReviewFilterSet {
     id: string;
@@ -1504,18 +1823,20 @@ export const resumeJob = (
     jobId: string,
     fromStage?: string,
     paramOverrides?: Record<string, unknown>,
-    nameSuffix?: string
+    nameSuffix?: string,
+    executionTargetId?: string | null,
 ) => {
     const hasOverrides = !!paramOverrides && Object.keys(paramOverrides).length > 0;
     const hasNameSuffix = !!nameSuffix && nameSuffix.trim().length > 0;
-    const requestBody = (hasOverrides || hasNameSuffix)
+    const requestBody = (hasOverrides || hasNameSuffix || executionTargetId !== undefined)
         ? {
+            ...(executionTargetId !== undefined ? { execution_target_id: executionTargetId } : {}),
             ...(hasOverrides ? { param_overrides: paramOverrides } : {}),
             ...(hasNameSuffix ? { name_suffix: nameSuffix } : {}),
         }
         : null;
 
-    return api.post<{
+    return submitPreparedJobAction(() => api.post<{
         message: string;
         original_job_id: string;
         new_job_id: string;
@@ -1525,7 +1846,7 @@ export const resumeJob = (
         resume_stage_note?: string;
         preserved_stages: string[];
         applied_overrides?: string[];
-    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } });
+    }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } }));
 };
 
 export const continueProteinLocalReview = (
@@ -1701,6 +2022,8 @@ export interface DesignFrustraMPNNProjection {
 }
 
 export interface Design {
+    core_protein_scientific_contract?: 1 | null;
+    scientific_structure_document?: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef | null;
     id: string;
     job_id: string;
     name: string;
@@ -1925,6 +2248,7 @@ export interface DesignAggregateSummary {
 }
 
 export interface DesignListResponse {
+    model_counts?: Record<string, number>;
     designs: Design[];
     total: number;
     summary?: DesignAggregateSummary | null;
@@ -1932,6 +2256,7 @@ export interface DesignListResponse {
 
 export interface DesignFilters {
     job_id?: string;
+    model_id?: string;
     include_children?: boolean;
     design_ids?: string[];
     q?: string;
@@ -2132,14 +2457,17 @@ export interface FampnnPsceProfile {
     design_name: string;
     metric_kind: 'fampnn_psce';
     direction: 'lower_is_better';
-    scope: 'all_chains';
-    ignore_cbeta: boolean;
+    status?: 'ok' | 'unavailable';
+    reason?: string;
+    policy?: { version: number; chain_id: string; ignore_cbeta: boolean } | null;
+    scope: string | null;
+    ignore_cbeta: boolean | null;
     chains: Record<string, FampnnPsceChainMetric>;
 }
 
 // Fetch per-chain metrics for a design
 export const fetchChainMetrics = (designId: string) =>
-    api.get<Record<string, ChainMetric>>(`/api/designs/${designId}/chain-metrics`);
+    api.get<unknown>(`/api/designs/${designId}/chain-metrics`);
 
 // Power control (eco mode + manual)
 export const fetchPowerProfile = () =>
@@ -2191,6 +2519,7 @@ export interface MetricDistribution {
 }
 
 export interface JobAnalytics {
+    scientific_cohorts?: ScientificCohort[];
     job_id: string;
     design_count: number;
     metrics: Record<string, MetricDistribution | null>;
@@ -2198,26 +2527,27 @@ export interface JobAnalytics {
     pipeline_summary: Record<string, UntypedApiValue>;
 }
 
-export interface DesignMetricPoint {
+export interface DesignMetricPoint extends ScientificPointFields {
     id: string;
     name: string;
     metrics: Record<string, number>;
 }
 
 export interface BatchAnalytics {
+    scientific_cohorts?: ScientificCohort[];
     job_ids: string[];
     metrics_summary: Record<string, Record<string, number>>; // metric -> {job_id -> avg}
     common_metrics: string[];
 }
 
 export const fetchJobAnalytics = (jobId: string) =>
-    api.get<JobAnalytics>(`/api/analytics/job/${jobId}`);
+    api.get<JobAnalytics>(`/api/analytics/job/${jobId}`).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 export const fetchJobDesignMetrics = (jobId: string) =>
-    api.get<DesignMetricPoint[]>(`/api/analytics/job/${jobId}/designs`);
+    api.get<unknown>(`/api/analytics/job/${jobId}/designs`).then(response => ({...response, data: parseMetricPoints(response.data)}));
 
 export const fetchBatchAnalytics = (jobIds: string[]) =>
-    api.post<BatchAnalytics>('/api/analytics/batch', { job_ids: jobIds });
+    api.post<BatchAnalytics>('/api/analytics/batch', jobIds).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 // Structure Analysis (Biotite-powered)
 export interface StructureAnalysis {
@@ -2540,7 +2870,12 @@ export interface QueuedJob {
     name: string;
     model_id: string;
     mode: string;
-    queue_status: 'queued' | 'running' | 'paused' | 'pending_msa';
+    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa' | 'awaiting_input' | 'completed';
+    status?: Job['status'];
+    awaiting_input?: boolean | null;
+    awaiting_stage?: string | null;
+    awaiting_payload?: Record<string, UntypedApiValue> | null;
+    error_message?: string | null;
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;
@@ -2548,6 +2883,7 @@ export interface QueuedJob {
     execution_target_id?: string | null;
     remote_state?: string | null;
     remote_waiting_reason?: string | null;
+    provenance?: Record<string, unknown> | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;
@@ -2572,6 +2908,29 @@ export interface QueueStats {
     paused: number;
     total: number;
 }
+
+// The server binds this explicit request to the persisted worker attempt.
+// Refresh authoritative queries rather than assuming the POST completed ingestion.
+export const pullRemoteJobResults = (jobId: string) =>
+    api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-results/pull`);
+
+export interface RemoteDiagnosticsRecord {
+    state: 'returning' | 'returned' | 'failed';
+    identity: {
+        schema: 'bms.remote-result-pull.v1';
+        attempt_id: string;
+        execution_target_id: string;
+        source_revision: string;
+        source_tree: string;
+        execution_envelope_sha256: string;
+    };
+    result_manifest_sha256: string;
+    error: string | null;
+    output_dir: string | null; // Controller-local path, never a browser URL.
+}
+
+export const pullRemoteJobDiagnostics = (jobId: string) =>
+    api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-diagnostics/pull`);
 
 export const fetchQueue = (status?: string) =>
     api.get<QueuedJob[]>('/api/queue', { params: { status } });
@@ -2866,6 +3225,7 @@ export interface DnaWeaverPlanRequest {
 }
 
 export interface DnaWeaverPlanSaveRequest extends DnaWeaverPlanRequest {
+    computation_id?: string | null;
     selected_plan_checksum: string;
     new_name?: string;
     save_description?: string;
@@ -2879,6 +3239,7 @@ export interface DnaWeaverQualityCheck {
 }
 
 export interface DnaWeaverPlanResponse {
+    computation_id?: string | null;
     planner_engine: string;
     planner_version: string;
     validator_engine: string;
@@ -2907,6 +3268,7 @@ export interface GibsonDesignFragmentInput extends AssemblyFragmentInput {
 }
 
 export interface GibsonDesignRequest {
+    computation_id?: string | null;
     fragments: GibsonDesignFragmentInput[];
     circular?: boolean;
     overlap?: number;
@@ -2945,6 +3307,7 @@ export interface GibsonDesignCandidate {
 }
 
 export interface GibsonDesignResponse {
+    computation_id?: string | null;
     engine: string;
     engine_version: string;
     circular: boolean;
@@ -3063,6 +3426,9 @@ export interface MolBioSequenceImportCommitResponse {
         sequence_id: string;
         name: string;
         revision_id?: string;
+        revision_number?: number;
+        topology?: 'linear' | 'circular';
+        content_sha256?: string;
         reused_existing_revision?: boolean;
     }>;
 }
@@ -3538,7 +3904,7 @@ export interface ChainPairIptmData {
     size: number;
 }
 
-export interface PlotlyMetricPoint {
+export interface PlotlyMetricPoint extends ScientificPointFields {
     id: string;
     name: string;
     metrics: Record<string, number>;
@@ -3566,6 +3932,7 @@ export interface PlotlyChartSuggestion {
 }
 
 export interface PlotlyMetricsResponse {
+    scientific_cohorts?: ScientificCohort[];
     job_id: string;
     metric_keys: string[];
     points: PlotlyMetricPoint[];
@@ -3584,7 +3951,7 @@ export const fetchDesignPlotlyMetrics = (
     jobId: string,
     params?: { include_children?: boolean; limit?: number; offset?: number; design_ids?: string[] }
 ) =>
-    params?.design_ids?.length
+    (params?.design_ids?.length
         ? api.post<PlotlyMetricsResponse>(`/api/designs/by-job/${jobId}/plotly-metrics`, {
             include_children: params.include_children ?? true,
             limit: params.limit,
@@ -3597,7 +3964,7 @@ export const fetchDesignPlotlyMetrics = (
                 limit: params?.limit,
                 offset: params?.offset,
             },
-        });
+        })).then(response => ({...response, data: validateScientificEnvelope(response.data)}));
 
 // PAE (Predicted Aligned Error) data
 export interface PAEData {
@@ -3610,7 +3977,7 @@ export interface PAEData {
 }
 
 export const fetchPAEData = (designId: string) =>
-    api.get<PAEData>(`/api/designs/${designId}/pae`);
+    api.get<unknown>(`/api/designs/${designId}/pae`);
 
 // ============================================================
 // DEBUG ORCHESTRATOR OVERRIDES
@@ -3965,7 +4332,9 @@ export const fetchPrimers = (params?: {
     primer_type?: string;
     favorites_only?: boolean;
     target_sequence_id?: string;
-}) => api.get<Primer[]>('/api/molbio/primers', { params });
+    limit?: number;
+    offset?: number;
+}, signal?: AbortSignal) => api.get<Primer[]>('/api/molbio/primers', { params, signal });
 
 export const fetchPrimer = (id: string) =>
     api.get<Primer>(`/api/molbio/primers/${id}`);
@@ -4249,6 +4618,38 @@ export const fetchMolBioNgsDomainExperiment = (domainExperimentId: string) =>
         `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}`,
     ));
 
+export type MolBioNgsSummaryCollection = 'state' | 'sample' | 'reference' | 'evidence' | 'samples' | 'references';
+export interface MolBioNgsSummaryItem {
+    id: string;
+    created_at: string;
+    revision_number?: number | null;
+    reference_id?: string | null;
+    sample_id?: string | null;
+    canonical_fasta_sha256?: string | null;
+    archived_at?: string | null;
+    payload_sha256?: string | null;
+    membership_graph_sha256?: string | null;
+    wrapper_sha256?: string | null;
+    current_revision_id?: string | null;
+    head_generation?: number | null;
+    name?: string | null;
+}
+export interface MolBioNgsSummaryPage {
+    items: MolBioNgsSummaryItem[];
+    next_cursor: string | null;
+    total: number;
+}
+/** Navigation metadata only; use the existing exact-detail endpoint for science. */
+export const fetchMolBioNgsSummaries = (
+    domainExperimentId: string,
+    collection: MolBioNgsSummaryCollection,
+    params?: { limit?: number; cursor?: string; resource_id?: string },
+    signal?: AbortSignal,
+) => apiData(api.get<MolBioNgsSummaryPage>(
+    `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/summaries/${collection}`,
+    { params, signal },
+));
+
 export interface DomainState {
     global_domain_experiment_id: string;
     current_state_revision_id: string | null;
@@ -4514,69 +4915,16 @@ export interface DomainReferenceRevision {
     };
 }
 
-export interface CreateDomainReferenceRequest {
-    global_domain_experiment_id: string;
-    name: string;
-    fasta: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    source_provenance: Record<string, unknown>;
-    idempotency_key: string;
-}
 
-export interface CreateDomainReferenceRevisionRequest {
-    fasta: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    source_provenance: Record<string, unknown>;
-    expected_head_generation: number;
-    parent_revision_id: string;
-    idempotency_key: string;
-}
 
-export interface ImportMolBioReferenceRequest {
-    global_domain_experiment_id: string;
-    sequence_id: string;
-    molecular_revision_id: string;
-    name: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    idempotency_key: string;
-}
 
-export interface ImportBrowserReferenceRequest {
-    global_domain_experiment_id: string;
-    entry: {
-        id: string;
-        name: string;
-        source: 'fasta' | 'path';
-        fasta?: string | null;
-        path?: string | null;
-        createdAt: string;
-        updatedAt: string;
-    };
-    name: string;
-    molecule_type: ReferenceMoleculeType;
-    topology: ReferenceTopology;
-    coordinate_contract: string;
-    idempotency_key: string;
-}
 
-export const createMolBioNgsReference = (payload: CreateDomainReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references', payload));
 export const fetchMolBioNgsReferences = (domainExperimentId: string) =>
     apiData(api.get<DomainReference[]>('/api/molbio-ngs/references', {
         params: { global_domain_experiment_id: domainExperimentId },
     }));
 export const fetchMolBioNgsReference = (referenceId: string) =>
     apiData(api.get<DomainReference>(`/api/molbio-ngs/references/${encodeURIComponent(referenceId)}`));
-export const createMolBioNgsReferenceRevision = (referenceId: string, payload: CreateDomainReferenceRevisionRequest) =>
-    apiData(api.post<DomainReferenceRevision>(
-        `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`, payload,
-    ));
 export const fetchMolBioNgsReferenceRevisions = (referenceId: string) =>
     apiData(api.get<DomainReferenceRevision[]>(
         `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions`,
@@ -4585,10 +4933,6 @@ export const fetchMolBioNgsReferenceRevision = (referenceId: string, revisionId:
     apiData(api.get<DomainReferenceRevision>(
         `/api/molbio-ngs/references/${encodeURIComponent(referenceId)}/revisions/${encodeURIComponent(revisionId)}`,
     ));
-export const importMolBioNgsReferenceRevision = (payload: ImportMolBioReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/from-molbio-revision', payload));
-export const importMolBioNgsBrowserReference = (payload: ImportBrowserReferenceRequest) =>
-    apiData(api.post<DomainReferenceRevision>('/api/molbio-ngs/references/import-browser-entry', payload));
 export const archiveMolBioNgsReference = (
     referenceId: string,
     payload: { expected_head_generation: number; idempotency_key: string },
@@ -4735,9 +5079,28 @@ export interface MolecularRevision {
     };
 }
 
-export const fetchMolecularRevisions = (sequenceId: string, limit = 100) =>
+export interface MolecularRevisionSummary {
+    id: string;
+    revision_id: string;
+    sequence_id: string;
+    revision_number: number;
+    change_kind: string;
+    content_sha256: string;
+    content_length: number;
+    topology: 'circular' | 'linear';
+    created_at: string;
+    created_by: string | null;
+    is_current: boolean;
+}
+
+export const fetchMolecularRevisionSummaries = (sequenceId: string, limit = 50, offset = 0, signal?: AbortSignal) =>
+    apiData(api.get<MolecularRevisionSummary[]>(
+        `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
+    ));
+
+export const fetchMolecularRevisions = (sequenceId: string, limit = 100, offset = 0, signal?: AbortSignal) =>
     apiData(api.get<MolecularRevision[]>(
-        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit } },
+        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
     ));
 export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =>
     apiData(api.get<MolecularRevision>(
@@ -4826,6 +5189,30 @@ export const fetchPcrExperiments = (limit = 100) =>
     apiData(api.get<{ items: PcrExperimentListItem[]; count: number; limit: number }>(
         '/api/molbio/pcr-experiments', { params: { limit } },
     ));
+
+export type PcrExperimentRevisionSummary = Pick<PcrExperimentRevision,
+    'id' | 'experiment_id' | 'revision_number' | 'operation_id' | 'template_document_id'
+    | 'template_revision_id' | 'template_sha256' | 'product_document_id' | 'product_revision_id'
+    | 'review_state' | 'created_by' | 'created_at'>;
+
+export interface PcrExperimentSummaryPage {
+    id: string;
+    name: string;
+    current_revision_id: string | null;
+    revisions: PcrExperimentRevisionSummary[];
+    limit: number;
+    offset: number;
+    has_more: boolean;
+    next_offset: number | null;
+    summary: true;
+}
+
+export const fetchPcrExperimentSummaryPage = (experimentId: string, limit = 50, offset = 0, signal?: AbortSignal) =>
+    apiData(api.get<PcrExperimentSummaryPage>(
+        `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}`,
+        { params: { summary: true, limit, offset }, signal },
+    ));
+
 export const fetchPcrExperimentRevisions = (experimentId: string, limit = 100) =>
     apiData(api.get<PcrExperimentRevision[]>(
         `/api/molbio/pcr-experiments/${encodeURIComponent(experimentId)}/revisions`, { params: { limit } },
@@ -5763,12 +6150,14 @@ export interface ProjectHubDNASequenceSummary {
     neor_kanr: boolean | null;
     replication_origin_count: number | null;
     saved_experiment_count: number;
+    saved_experiment_count_complete?: boolean;
     molecule_type?: string;
     topology?: string;
     organism_host_context: string | null;
     project_tags: string[];
     project_notes: string;
     reopen_href: string;
+    attached_revision_href?: string;
     map_segments: ProjectHubMapSegment[];
 }
 
@@ -5822,6 +6211,18 @@ export interface ProjectHubActivitySummary {
 
 export type ProjectHubPlasmidSummary = ProjectHubDNASequenceSummary;
 
+export interface ProjectHubPageInfo {
+    next_cursor: string | null;
+    has_more: boolean;
+    total_count: number;
+}
+export interface ProjectHubPaging {
+    members_cursor?: string;
+    operations_cursor?: string;
+    evidence_cursor?: string;
+    activity_cursor?: string;
+}
+
 export interface ProjectHubReadModel {
     schema: 'bms.project-hub.v1';
     project: {
@@ -5856,6 +6257,12 @@ export interface ProjectHubReadModel {
     experiments: ProjectHubExperimentSummary[];
     results: ProjectHubResultSummary[];
     activity: ProjectHubActivitySummary[];
+    pages?: {
+        members: ProjectHubPageInfo;
+        operations: ProjectHubPageInfo;
+        evidence: ProjectHubPageInfo;
+        activity: ProjectHubPageInfo;
+    };
 }
 
 export interface ProjectHubPlasmidInfoDraft {
@@ -5886,8 +6293,9 @@ export const fetchProjectHub = (
     domainId: string,
     stateRevisionId: string,
     signal?: AbortSignal,
+    paging?: ProjectHubPaging,
 ) => apiData(api.get<ProjectHubReadModel>(projectHubRoot(projectId, experimentId, domainId), {
-    params: { state_revision_id: stateRevisionId },
+    params: { state_revision_id: stateRevisionId, ...paging },
     signal,
 }));
 

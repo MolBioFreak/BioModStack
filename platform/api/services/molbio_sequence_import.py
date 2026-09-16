@@ -10,10 +10,12 @@ from typing import Any, Literal, Mapping
 
 from Bio import SeqIO
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from molbio_models import (
+    MolecularDocument,
     MolecularImportBatch,
     MolecularOperation,
     MolecularRevision,
@@ -171,6 +173,7 @@ class SequenceImportInputError(ValueError):
         super().__init__(message)
         self.record_ordinal = record_ordinal
         self.code = code
+        self.preview: dict[str, Any] | None = None
 
 
 def normalize_source_format(source_format: str) -> str:
@@ -304,6 +307,11 @@ def _canonicalize_feature(
 def _features_from_seqrecord(record: Any, *, ordinal: int, sequence_length: int) -> list[dict[str, Any]]:
     features: list[dict[str, Any]] = []
     for index, source_feature in enumerate(getattr(record, "features", []) or [], start=1):
+        if index > MAX_IMPORT_FEATURES_PER_RECORD:
+            raise SequenceImportInputError(
+                "record exceeds the maximum feature count",
+                record_ordinal=ordinal, code="too_many_features",
+            )
         location = getattr(source_feature, "location", None)
         if location is None:
             raise SequenceImportInputError(
@@ -414,11 +422,20 @@ def _parse_text_source(
         return []
     parsed: list[_ParsedRecord] = []
     ordinal = 0
+    total_bases = 0
     try:
         records = SeqIO.parse(StringIO(source_text), "fasta" if source_format == "fasta" else "genbank")
         for ordinal, record in enumerate(records, start=1):
+            if ordinal > MAX_IMPORT_RECORDS:
+                errors.append(_error("source exceeds the maximum record count", code="too_many_records"))
+                break
             try:
-                parsed.append(_seqrecord_to_parsed(record, ordinal=ordinal))
+                item = _seqrecord_to_parsed(record, ordinal=ordinal)
+                total_bases += len(item.sequence)
+                if total_bases > MAX_IMPORT_TOTAL_BASES:
+                    errors.append(_error("import exceeds the maximum total sequence length", code="batch_too_large"))
+                    break
+                parsed.append(item)
             except SequenceImportInputError as exc:
                 errors.append(
                     _error(
@@ -571,7 +588,9 @@ def _record_report(record: _ParsedRecord) -> dict[str, Any]:
     }
 
 
-def build_sequence_import_preview(request: SequenceImportRequest) -> dict[str, Any]:
+def build_sequence_import_preview(
+    request: SequenceImportRequest, *, request_fingerprint: str | None = None,
+) -> dict[str, Any]:
     """Parse and validate one request without opening or mutating a database."""
 
     source_format = normalize_source_format(request.source_format)
@@ -612,7 +631,7 @@ def build_sequence_import_preview(request: SequenceImportRequest) -> dict[str, A
         "valid": not errors and bool(reports),
         "source_format": source_format,
         "source_digest": source_digest(request),
-        "request_fingerprint": import_request_fingerprint(request),
+        "request_fingerprint": request_fingerprint or import_request_fingerprint(request),
         "topology_default": request.topology_default,
         "topology_overrides": _normalized_topology_overrides(request.topology_overrides),
         "record_count": len(reports),
@@ -670,7 +689,8 @@ async def _commit_sequence_import_transaction(
     key = _require_idempotency_key(request, idempotency_key)
     fingerprint = import_request_fingerprint(request)
 
-    await begin_immediate_molbio_write(session)
+    # Replay before parsing, without reserving the SQLite writer. The claim is
+    # checked again under BEGIN IMMEDIATE after request-local preparation.
     existing = (
         await session.execute(
             select(MolecularImportBatch).where(MolecularImportBatch.idempotency_key == key)
@@ -696,13 +716,33 @@ async def _commit_sequence_import_transaction(
             "idempotency key is already bound to another MolBio operation"
         )
 
-    preview = build_sequence_import_preview(request)
+    await session.rollback()
+    preview = await run_in_threadpool(
+        build_sequence_import_preview, request, request_fingerprint=fingerprint,
+    )
     if not preview["valid"]:
-        await session.rollback()
-        raise SequenceImportInputError(
+        error = SequenceImportInputError(
             "sequence import preview is invalid; no records were written",
             code="invalid_batch",
         )
+        error.preview = preview
+        raise error
+
+    await begin_immediate_molbio_write(session)
+    existing = (await session.execute(
+        select(MolecularImportBatch).where(MolecularImportBatch.idempotency_key == key)
+    )).scalar_one_or_none()
+    if existing is not None:
+        if existing.request_fingerprint != fingerprint:
+            raise IdempotencyConflictError("idempotency key is already bound to a different sequence import request")
+        result = json.loads(_canonical_json(existing.result))
+        await session.commit()
+        return result
+
+    if (await session.execute(select(MolecularOperation.id).where(
+        MolecularOperation.idempotency_key == key,
+    ))).scalar_one_or_none() is not None:
+        raise IdempotencyConflictError("idempotency key is already bound to another MolBio operation")
 
     operation = await create_operation(
         session,
@@ -733,20 +773,35 @@ async def _commit_sequence_import_transaction(
 
     persisted_records: list[dict[str, Any]] = []
     output_edges: list[tuple[MolecularRevision, str, dict[str, Any]]] = []
+    # One digest lookup for the batch; hydrate only the earliest immutable match.
+    ranked = select(
+        MolecularRevision.id,
+        func.row_number().over(
+            partition_by=MolecularRevision.content_sha256,
+            order_by=(MolecularRevision.created_at.asc(), MolecularRevision.id.asc()),
+        ).label("rank"),
+    ).join(MolecularDocument, MolecularDocument.id == MolecularRevision.document_id).where(
+        MolecularRevision.content_sha256.in_(
+            {report["canonical_digest"] for report in preview["records"]}
+        ),
+        MolecularDocument.document_kind.in_(("dna", "rna", "inline_sequence_input")),
+        MolecularRevision.snapshot["sequence_type"].as_string() == "dna",
+    ).subquery()
+    matches = (await session.execute(
+        select(MolecularRevision).join(ranked, ranked.c.id == MolecularRevision.id)
+        .where(ranked.c.rank == 1)
+    )).scalars().all()
+    revisions_by_digest = {revision.content_sha256: revision for revision in matches}
     for report in preview["records"]:
-        existing_revision = (
-            await session.execute(
-                select(MolecularRevision)
-                .where(MolecularRevision.content_sha256 == report["canonical_digest"])
-                .order_by(MolecularRevision.created_at.asc(), MolecularRevision.id.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        existing_revision = revisions_by_digest.get(report["canonical_digest"])
         if existing_revision is not None:
-            existing_sequence = await session.get(NucleotideSequence, existing_revision.document_id)
-            if existing_sequence is None:
+            snapshot = existing_revision.snapshot
+            sequence_bytes = snapshot.get("sequence")
+            if (not isinstance(sequence_bytes, str)
+                or len(sequence_bytes) != existing_revision.content_length
+                or hashlib.sha256(sequence_bytes.encode("utf-8")).hexdigest() != existing_revision.content_sha256):
                 raise SequenceImportInputError(
-                    "existing molecular revision has no source sequence",
+                    "existing molecular revision content does not match its immutable identity",
                     code="invalid_existing_revision",
                 )
             output_edges.append((
@@ -763,21 +818,21 @@ async def _commit_sequence_import_transaction(
             persisted_records.append({
                 "record_ordinal": report["record_ordinal"],
                 "source_name": report["source_name"],
-                "name": existing_sequence.name,
-                "description": existing_sequence.description,
-                "sequence": existing_sequence.sequence,
-                "sequence_type": existing_sequence.sequence_type,
-                "accession": existing_sequence.accession,
-                "organism": existing_sequence.organism,
-                "sequence_id": existing_sequence.id,
-                "document_id": existing_sequence.id,
+                "name": snapshot["name"],
+                "description": snapshot.get("description"),
+                "sequence": sequence_bytes,
+                "sequence_type": snapshot["sequence_type"],
+                "accession": snapshot.get("accession"),
+                "organism": snapshot.get("organism"),
+                "sequence_id": existing_revision.document_id,
+                "document_id": existing_revision.document_id,
                 "revision_id": existing_revision.id,
                 "revision_number": existing_revision.revision_number,
                 "canonical_digest": existing_revision.content_sha256,
                 "content_sha256": existing_revision.content_sha256,
-                "topology": "circular" if existing_sequence.is_circular else "linear",
+                "topology": "circular" if snapshot["is_circular"] else "linear",
                 "length": existing_revision.content_length,
-                "features": existing_sequence.features or [],
+                "features": snapshot.get("features") or [],
                 "exact_duplicate_of": report["exact_duplicate_of"],
                 "reused_existing_revision": True,
             })
@@ -820,6 +875,7 @@ async def _commit_sequence_import_transaction(
             operation_id=operation.id,
             created_by=created_by,
         )
+        revisions_by_digest[revision.content_sha256] = revision
         output_edges.append(
             (
                 revision,

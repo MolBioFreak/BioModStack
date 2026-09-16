@@ -127,9 +127,12 @@ async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session
     await session.commit()
 
     payload = await jobs.get_job_logs(remote.id, session=session)
-    assert payload["nextflow_log_source"] == "remote_returned"
-    assert payload["nextflow_log"] == "remote-nextflow-log"
-    assert payload["command_log"] == "remote-supervisor-log"
+    # Unbound legacy files are not a verified remote archive. Positive sealed
+    # diagnostics/current-generation reads live in test_remote_rectify_return.
+    assert payload["nextflow_log_source"] == "remote_pending"
+    assert payload["nextflow_log"] is None
+    assert payload["command_log"] is None
+    assert payload['remote_read_error']
     assert "host-global-sentinel" not in str(payload)
     assert "host-task-sentinel" not in str(payload)
     pending_payload = await jobs.get_job_logs(pending.id, session=session)
@@ -171,7 +174,8 @@ async def test_reorchestrate_is_versioned_idempotent_and_preserves_lineage(sessi
     )
     parent.lineage_root_job_id = "lineage-root"; parent.stage_family = "md"; parent.stage_mode = "simulate"
     captured = {}
-    async def fake_create_job(job_data, _background, db, *, _preallocated_job_id, _commit, _md_output_creation, _md_input_resolver):
+    async def fake_create_job(job_data, _background, db, *, _preallocated_job_id, _commit, _md_output_creation, _md_input_resolver, _approved_execution_plan):
+        assert _approved_execution_plan is None  # Local producer has no remote handoff.
         captured["params"] = job_data.params
         assert _md_input_resolver(str(snapshot)) == str(snapshot.resolve())
         output = tmp_path / _preallocated_job_id; output.mkdir()

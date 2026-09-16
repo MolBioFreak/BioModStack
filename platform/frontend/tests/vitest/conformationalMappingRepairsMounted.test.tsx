@@ -828,7 +828,9 @@ test('mounted RCSB source path supports keyword search, entry metadata, and expl
 
 test('mounted RCSB search rejects incomplete server entries without rendering fabricated selectors', async () => {
     const originalAdapter = api.defaults.adapter;
-    api.defaults.adapter = async (config) => ({
+    api.defaults.adapter = async (config) => {
+        if (config.url !== '/api/conformational-mapping/sources/rcsb/search') throw new Error(`TEST ancillary unavailable: ${config.url}`);
+        return {
         data: {
             query: '4HHB', cached: false,
             entries: [{
@@ -837,7 +839,8 @@ test('mounted RCSB search rejects incomplete server entries without rendering fa
             }],
         },
         status: 200, statusText: 'OK', headers: {}, config,
-    });
+        };
+    };
     const mounted = await mountLauncher({ listSources: async () => [] }, { backend: 'external_import', name: 'Reject incomplete RCSB' });
     try {
         await clickButton(mounted.renderer, /^RCSB$/i);
@@ -997,7 +1000,7 @@ test('mounted /jobs/:id routes a CM job to the canonical viewer without generic 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith('/api/jobs/cm-route')) {
             return new Response(JSON.stringify({
-                id: 'cm-route', name: 'Canonical routed CM', model_id: 'conformational_mapping', mode: 'map',
+                id: 'cm-route', conformational_mapping_request_id: 'cm-route', name: 'Canonical routed CM', model_id: 'conformational_mapping', mode: 'map',
                 status: 'running', created_at: '2026-08-09T00:00:00Z', output_dir: '/unused',
             }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
@@ -1024,6 +1027,7 @@ test('mounted /designs/:id dispatches a CM job to the existing canonical viewer'
     const originalAdapter = api.defaults.adapter;
     const job = {
         id: 'cm-results-route',
+        conformational_mapping_request_id: 'cm-results-route',
         name: 'Canonical CM results',
         model_id: 'conformational_mapping',
         mode: 'map',
@@ -1147,4 +1151,43 @@ test('typed RCSB search rejects missing, reduced, and internally inconsistent se
     } finally {
         api.defaults.adapter = originalAdapter;
     }
+});
+
+
+test('PLR context composes the existing Design workbench instead of a second model viewer', async () => {
+    const originalAdapter = api.defaults.adapter;
+    const job = { id: 'plr-results', name: 'TEST local redesign', model_id: 'protein_modification_experimental', mode: 'region_redesign', status: 'completed', created_at: '2026-08-09T00:00:00Z', params: {}, design_count: 1 };
+    const design = { id: 'plr-fampnn-design', job_id: job.id, name: 'TEST FAMPNN candidate', provenance: { model_id: 'fampnn' }, model_id: 'fampnn', stage_family: 'fampnn', source: 'fampnn', sequence: 'ACD', metrics: { pSCE: 0.75 }, created_at: job.created_at };
+    const requested: string[] = [];
+    api.defaults.adapter = async (config) => {
+        const url = String(config.url || ''); requested.push(url);
+        let data: unknown;
+        if (url === '/api/jobs') data = { jobs: [job], total: 1 };
+        else if (url === `/api/jobs/${job.id}`) data = job;
+        // Model tabs now come from the server's complete Job/model scope, not
+        // inference from this single page of transport rows.
+        else if (url === '/api/designs') data = { designs: [design], total: 1, model_counts: { fampnn: 1 } };
+        else if (url === `/api/jobs/${job.id}/workflow-results`) data = {
+            job, composition: { sha256: 'a'.repeat(64) }, tabs: [{ id: 'fampnn', label: 'FA-MPNN', role: 'sequence design', status: 'complete', count: 1, candidate_count: 1, items: [] }],
+            source: { artifacts: [] }, counts: { persisted_design_rows: 1 }, receipt: { test_fixture: true }, artifacts: [],
+        };
+        else throw new Error(`TEST ancillary unavailable: ${url}`);
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    const queryClient = client(); let renderer: ReactTestRenderer | undefined;
+    try {
+        await act(async () => { renderer = create(<MemoryRouter initialEntries={[`/designs/${job.id}`]}><QueryClientProvider client={queryClient}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></QueryClientProvider></MemoryRouter>); });
+        await flush(30);
+        assert.equal(requested.includes(`/api/jobs/${job.id}/workflow-results`), false);
+        assert.ok(requested.includes('/api/designs'));
+        const inventory = renderer!.root.findAllByType('summary').find((node) => text(node) === 'Protein Local Redesign files');
+        assert.ok(inventory);
+        await act(async () => inventory.parent!.props.onToggle({ currentTarget: { open: true } }));
+        await flush(30);
+        assert.ok(requested.includes(`/api/jobs/${job.id}/workflow-results`));
+        assert.match(text(renderer!.root), /Source files/);
+        assert.match(text(renderer!.root), /TEST FAMPNN candidate/);
+        assert.equal(renderer!.root.findAllByProps({ 'aria-label': 'Model-native Protein Local Redesign results' }).length, 0);
+        assert.equal(renderer!.root.findAllByProps({ 'aria-label': 'Workflow model results' }).length, 1);
+    } finally { await act(async () => renderer?.unmount()); queryClient.clear(); api.defaults.adapter = originalAdapter; }
 });

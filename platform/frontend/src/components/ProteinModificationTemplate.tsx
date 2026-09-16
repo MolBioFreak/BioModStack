@@ -1,3 +1,4 @@
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -117,7 +118,7 @@ export function ProteinModificationTemplate({
         return (
             <div className="space-y-3">
                 <button onClick={() => setMode(null)} className="ml-4 mt-3 rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 sm:ml-6">Back to modification modes</button>
-                <ShapeBlueprintTemplate />
+                <ShapeBlueprintTemplate initialValues={initialValues} />
             </div>
         );
     }
@@ -156,38 +157,7 @@ export function ProteinModificationTemplate({
         );
     }
 
-    const submitBackup = async () => {
-        setError(null);
-        if (!jobName.trim()) {
-            setError('Job name is required.');
-            return;
-        }
-        if (numDesigns < 1 || !targetLengths.trim()) {
-            setError('Provide at least one design and one target length.');
-            return;
-        }
-        if (!DE_NOVO_TASK_OPTIONS[backend].some((option) => option.value === designTask)) {
-            setError(`The ${backend === 'disco' ? 'DISCO' : 'La-Proteina'} backend does not support the selected design task.`);
-            return;
-        }
-        if (backend === 'laproteina' && designTask === 'motif_scaffolding' && !(motifTaskName.trim() || (motifPdb.trim() && motifContig.trim()))) {
-            setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string.');
-            return;
-        }
-        if (backend === 'disco' && designTask === 'custom_json' && !discoInputJson.trim()) {
-            setError('DISCO custom native JSON design requires an input JSON file.');
-            return;
-        }
-        if (backend === 'disco' && designTask === 'ligand_conditioned' && !ligandSdf.trim()) {
-            setError('DISCO ligand-conditioned design requires a ligand SDF.');
-            return;
-        }
-        if (backend === 'disco' && (designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && !nucleicSequence.trim()) {
-            setError('DISCO DNA/RNA-conditioned design requires a nucleic-acid sequence.');
-            return;
-        }
-
-        await submitMutation.mutateAsync({
+    const buildBackupWorkflowRequest = () => ({
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -221,7 +191,55 @@ export function ProteinModificationTemplate({
                 }),
             },
         });
+
+    const submitBackup = async () => {
+        setError(null);
+        if (!jobName.trim()) {
+            setError('Job name is required.');
+            return;
+        }
+        if (numDesigns < 1 || !targetLengths.trim()) {
+            setError('Provide at least one design and one target length.');
+            return;
+        }
+        if (!DE_NOVO_TASK_OPTIONS[backend].some((option) => option.value === designTask)) {
+            setError(`The ${backend === 'disco' ? 'DISCO' : 'La-Proteina'} backend does not support the selected design task.`);
+            return;
+        }
+        if (backend === 'laproteina' && designTask === 'motif_scaffolding' && !(motifTaskName.trim() || (motifPdb.trim() && motifContig.trim()))) {
+            setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string.');
+            return;
+        }
+        if (backend === 'disco' && designTask === 'custom_json' && !discoInputJson.trim()) {
+            setError('DISCO custom native JSON design requires an input JSON file.');
+            return;
+        }
+        if (backend === 'disco' && designTask === 'ligand_conditioned' && !ligandSdf.trim()) {
+            setError('DISCO ligand-conditioned design requires a ligand SDF.');
+            return;
+        }
+        if (backend === 'disco' && (designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && !nucleicSequence.trim()) {
+            setError('DISCO DNA/RNA-conditioned design requires a nucleic-acid sequence.');
+            return;
+        }
+
+        await submitMutation.mutateAsync(buildBackupWorkflowRequest());
     };
+
+    const buildDeNovoWorkflowRequest = () => ({
+            name: jobName.trim(),
+            model_id: 'protein_modification_experimental',
+            mode: 'de_novo_design',
+            params: {
+                generator: 'rfd3',
+                generation_mode: 'unconditional_monomer',
+                min_length: minLength,
+                max_length: maxLength,
+                num_designs: numDesigns,
+                seed,
+                dump_trajectories: dumpTrajectories,
+            },
+        });
 
     const submitDeNovo = async () => {
         setError(null);
@@ -242,24 +260,12 @@ export function ProteinModificationTemplate({
             return;
         }
 
-        await submitMutation.mutateAsync({
-            name: jobName.trim(),
-            model_id: 'protein_modification_experimental',
-            mode: 'de_novo_design',
-            params: {
-                generator: 'rfd3',
-                generation_mode: 'unconditional_monomer',
-                min_length: minLength,
-                max_length: maxLength,
-                num_designs: numDesigns,
-                seed,
-                dump_trajectories: dumpTrajectories,
-            },
-        });
+        await submitMutation.mutateAsync(buildDeNovoWorkflowRequest());
     };
 
     return (
         <div className="space-y-6 text-slate-100" data-bms-de-novo-form="complete">
+            <ExecutionTargetPicker workflowRequest={jobName.trim() && minLength >= 40 && maxLength <= 600 && minLength <= maxLength && Number.isInteger(numDesigns) && numDesigns >= 1 && Number.isInteger(seed) && seed >= 0 ? buildDeNovoWorkflowRequest() : null} />
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
                     <button onClick={() => setMode(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300">Modes</button>
@@ -297,6 +303,7 @@ export function ProteinModificationTemplate({
 
             <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
                 <summary className="cursor-pointer font-semibold text-amber-200">Experimental backup methods</summary>
+                <ExecutionTargetPicker workflowRequest={jobName.trim() && numDesigns >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildBackupWorkflowRequest() : null} />
                 <p className="mt-2 text-sm text-slate-400">DISCO and La-Proteina remain available as non-preferred experimental backups.</p>
             <div className="grid gap-4 rounded-xl border border-slate-800 bg-slate-900/50 p-5 md:grid-cols-2 xl:grid-cols-3">
                 <label className={labelClass}>Job name

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     attachExistingEntity,
     archiveDomainDataset,
@@ -106,9 +106,11 @@ export default function DomainDatasetOperator({
         queryFn: ({ signal }) => listDomainDatasetKinds(...scope, signal),
         retry: false,
     });
-    const datasetsQuery = useQuery({
+    const datasetsQuery = useInfiniteQuery<Awaited<ReturnType<typeof listDomainDatasets>>>({
         queryKey: ['domain-datasets', ...scope],
-        queryFn: ({ signal }) => listDomainDatasets(...scope, signal),
+        initialPageParam: null as string | null,
+        getNextPageParam: (page) => page.next_cursor ?? undefined,
+        queryFn: ({ signal, pageParam }) => listDomainDatasets(...scope, signal, pageParam as string | null),
         retry: false,
     });
     const datasetQuery = useQuery({
@@ -117,9 +119,11 @@ export default function DomainDatasetOperator({
         enabled: Boolean(selectedDatasetId),
         retry: false,
     });
-    const revisionsQuery = useQuery({
+    const revisionsQuery = useInfiniteQuery<Awaited<ReturnType<typeof listDomainDatasetRevisions>>>({
         queryKey: ['domain-dataset-revisions', ...scope, selectedDatasetId],
-        queryFn: ({ signal }) => listDomainDatasetRevisions(...scope, selectedDatasetId, signal),
+        initialPageParam: null as string | null,
+        getNextPageParam: (page) => page.next_cursor ?? undefined,
+        queryFn: ({ signal, pageParam }) => listDomainDatasetRevisions(...scope, selectedDatasetId, signal, pageParam as string | null),
         enabled: Boolean(selectedDatasetId),
         retry: false,
     });
@@ -129,9 +133,11 @@ export default function DomainDatasetOperator({
         enabled: Boolean(selectedDatasetId && selectedRevisionId),
         retry: false,
     });
-    const pagedMembersQuery = useQuery({
+    const pagedMembersQuery = useInfiniteQuery<Awaited<ReturnType<typeof listDomainDatasetRevisionMembers>>>({
         queryKey: ['domain-dataset-revision-members', ...scope, selectedDatasetId, selectedRevisionId],
-        queryFn: ({ signal }) => listDomainDatasetRevisionMembers(...scope, selectedDatasetId, selectedRevisionId, signal),
+        initialPageParam: null as string | null,
+        getNextPageParam: (page) => page.next_cursor ?? undefined,
+        queryFn: ({ signal, pageParam }) => listDomainDatasetRevisionMembers(...scope, selectedDatasetId, selectedRevisionId, signal, pageParam as string | null),
         enabled: Boolean(selectedDatasetId && selectedRevisionId && revisionQuery.data?.members_uri),
         retry: false,
     });
@@ -143,7 +149,7 @@ export default function DomainDatasetOperator({
     });
 
     useEffect(() => {
-        const datasets = datasetsQuery.data?.items ?? [];
+        const datasets = datasetsQuery.data?.pages.flatMap((page) => page.items) ?? [];
         if (!datasets.length) {
             setSelectedDatasetId('');
             return;
@@ -151,7 +157,7 @@ export default function DomainDatasetOperator({
         if (!datasets.some((dataset) => dataset.dataset_id === selectedDatasetId)) {
             setSelectedDatasetId(datasets[0].dataset_id);
         }
-    }, [datasetsQuery.data?.items, selectedDatasetId]);
+    }, [datasetsQuery.data?.pages, selectedDatasetId]);
 
     useEffect(() => {
         const kinds = kindsQuery.data?.items ?? [];
@@ -159,7 +165,7 @@ export default function DomainDatasetOperator({
     }, [datasetKind, kindsQuery.data?.items]);
 
     useEffect(() => {
-        const revisions = revisionsQuery.data?.items ?? [];
+        const revisions = revisionsQuery.data?.pages.flatMap((page) => page.items) ?? [];
         if (!revisions.length) {
             setSelectedRevisionId('');
             return;
@@ -170,7 +176,7 @@ export default function DomainDatasetOperator({
                 ? current
                 : revisions[0].revision_id);
         }
-    }, [datasetQuery.data?.current_revision_id, revisionsQuery.data?.items, selectedRevisionId]);
+    }, [datasetQuery.data?.current_revision_id, revisionsQuery.data?.pages, selectedRevisionId]);
 
     useEffect(() => {
         setSelectedDatasetId('');
@@ -187,7 +193,9 @@ export default function DomainDatasetOperator({
             contract.allowed_roles.map((role) => ({ role, receiptKind: contract.receipt_kind })));
         return Array.from(new Map(options.map((option) => [option.role, option])).values());
     }, [selectedKind]);
-    const exactMembers = revisionQuery.data?.members ?? pagedMembersQuery.data?.items ?? [];
+    const exactMembers = revisionQuery.data?.members ?? pagedMembersQuery.data?.pages.flatMap((page) => page.items) ?? [];
+    const membershipComplete = Boolean(revisionQuery.data && exactMembers.length === revisionQuery.data.member_count
+        && (!revisionQuery.data.members_uri || (!pagedMembersQuery.hasNextPage && !pagedMembersQuery.isFetching)));
     const attachedReferenceMembers = (stateRevisionQuery.data?.members ?? []).filter(
         (member: DomainStateMember) => member.entity_kind === 'molecular_revision',
     );
@@ -293,6 +301,9 @@ export default function DomainDatasetOperator({
     return (
         <div className="space-y-4">
             <ErrorBanner error={activeError} />
+            {pagedMembersQuery.hasNextPage && <button type="button" className={BUTTON_CLASS} disabled={pagedMembersQuery.isFetchingNextPage} onClick={() => void pagedMembersQuery.fetchNextPage()}>Load more members</button>}
+            {revisionsQuery.hasNextPage && <button type="button" className={BUTTON_CLASS} disabled={revisionsQuery.isFetchingNextPage} onClick={() => void revisionsQuery.fetchNextPage()}>Load more revisions</button>}
+            {datasetsQuery.hasNextPage && <button type="button" className={BUTTON_CLASS} disabled={datasetsQuery.isFetchingNextPage} onClick={() => void datasetsQuery.fetchNextPage()}>Load more Datasets</button>}
             <section className="rounded-lg border border-border-primary bg-surface-secondary p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -338,7 +349,7 @@ export default function DomainDatasetOperator({
                             setMembers([]);
                         }}>
                             <option value="">Select a Dataset</option>
-                            {(datasetsQuery.data?.items ?? []).map((dataset) => (
+                            {(datasetsQuery.data?.pages.flatMap((page) => page.items) ?? []).map((dataset) => (
                                 <option key={dataset.dataset_id} value={dataset.dataset_id}>{dataset.name} · {dataset.dataset_kind} · {dataset.lifecycle_state}</option>
                             ))}
                         </select>
@@ -360,7 +371,7 @@ export default function DomainDatasetOperator({
                         ) : null}
                     </div>
                 </div>
-                {datasetsQuery.data?.has_more && <p className="mt-2 text-xs text-warning">The bounded Dataset page has additional server rows not shown in this selector.</p>}
+                {datasetsQuery.hasNextPage && <p className="mt-2 text-xs text-warning">The bounded Dataset page has additional server rows not shown in this selector.</p>}
                 {datasetQuery.data && (
                     <dl className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                         <KeyValue label="Dataset ID" value={datasetQuery.data.dataset_id} />
@@ -436,7 +447,7 @@ export default function DomainDatasetOperator({
                         <label className="text-xs text-content-secondary">Exact immutable revision
                             <select className={`${INPUT_CLASS} mt-1`} value={selectedRevisionId} onChange={(event) => setSelectedRevisionId(event.target.value)}>
                                 <option value="">Select an immutable revision</option>
-                                {(revisionsQuery.data?.items ?? []).map((revision) => (
+                                {(revisionsQuery.data?.pages.flatMap((page) => page.items) ?? []).map((revision) => (
                                     <option key={revision.revision_id} value={revision.revision_id}>Revision {revision.revision_number} · {revision.revision_id}</option>
                                 ))}
                             </select>
@@ -450,7 +461,7 @@ export default function DomainDatasetOperator({
                                     ? selectedRevisionIds.filter((revisionId) => revisionId !== selectedRevisionId)
                                     : [...selectedRevisionIds, selectedRevisionId])}
                             >{revisionSelectedForPreparation ? 'Selected for preparation' : 'Use for preparation'}</button>
-                            <button type="button" className={BUTTON_CLASS} disabled={!exactMembers.length} onClick={() => setMembers(exactMembers.map(editableMember))}>Copy members into new draft</button>
+                            <button type="button" className={BUTTON_CLASS} disabled={!exactMembers.length || !membershipComplete} onClick={() => setMembers(exactMembers.map(editableMember))}>Copy members into new draft</button>
                         </div>
                     </div>
                     {revisionQuery.data && (
@@ -472,8 +483,8 @@ export default function DomainDatasetOperator({
                                     </div>
                                 ))}
                             </div>
-                            {(revisionQuery.data.members_uri && pagedMembersQuery.data?.has_more) && (
-                                <p className="mt-2 text-xs text-warning">Only the first bounded member page is displayed; the immutable revision contains additional members.</p>
+                            {(revisionQuery.data.members_uri && pagedMembersQuery.hasNextPage) && (
+                                <p className="mt-2 text-xs text-warning">Additional immutable members remain. Load more members to enable complete-copy drafting.</p>
                             )}
                         </>
                     )}

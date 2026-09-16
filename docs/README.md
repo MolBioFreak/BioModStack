@@ -25,8 +25,11 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Electron shell README](../platform/desktop-electron/README.md)
 - [Model Integrations](ai_guidance/Model_Integrations.md)
 - [FrustraMPNN global configuration and analysis workbench specification](specs/frustrampnn-global-configuration-analysis-workbench.md)
+- [Remote worker execution, cache, and explicit result retrieval](Remote_Worker_Execution_and_Cache.md) — revision contract; see its explicit software/live acceptance boundaries.
 
 ## Active plans
+
+- [Remote Bridge 1.0 specification](specs/remote-bridge-1.0.md) — approved design baseline, not a claim of deployed capability; Neurosnap integration deferred.
 
 - [Global FrustraMPNN 100% implementation plan](plans/2026-08-08-frustrampnn-global-100-implementation.md)
 

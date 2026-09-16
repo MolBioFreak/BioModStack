@@ -61,6 +61,7 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (43, "add_ont_signal_comparisons"),
         (44, "seal_ont_read_metric_receipt_immutability"),
         (45, "add_remote_execution"),
+        (46, "enable_multiple_execution_targets"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 

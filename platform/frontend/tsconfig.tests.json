@@ -12,6 +12,7 @@
   },
   "include": [
     "src/components/designOutputSource.ts",
+    "src/components/remoteResultsState.ts",
     "src/components/gpuToggleState.ts",
     "src/components/infraTelemetryScaling.ts",
     "src/components/structureViewerLayout.ts",

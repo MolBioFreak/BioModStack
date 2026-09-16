@@ -292,7 +292,7 @@ def _structure_prediction_schemas() -> dict[str, dict[str, Any]]:
     protenix.update({
         "protenix_model_weights": _field(title="Model weights", kind="string", description="Installed Protenix V2 checkpoint.", default="protenix-v2", const="protenix-v2", control="read_only", group="Model authority", order=2),
         "protenix_use_msa": _field(title="Use MSA", kind="boolean", description="Use Protenix MSA features.", default=True, control="checkbox", group="Features", order=30),
-        "protenix_msa_backend": _field(title="MSA backend", kind="string", description="Protenix V2 MSA feature source.", default="auto", enum=["auto", "local", "esm", "none"], control="select", group="Features", order=40),
+        "protenix_msa_backend": _field(title="MSA backend", kind="string", description="ColabFold API — external service; auto resolves to API. Third-party sequence disclosure and rate limits apply; local search disabled.", default="auto", enum=["auto", "colabfold_api", "esm", "none"], control="select", group="Features", order=40),
         "protenix_use_template": _field(title="Use templates", kind="boolean", description="Enable template features when available.", default=False, control="checkbox", group="Features", order=50),
         "protenix_seeds": _field(title="Model seeds", kind="string", description="Comma-separated signed model seeds.", default="42", pattern="^-?[0-9]+(?:,-?[0-9]+)*$", control="seed_list", group="Sampling", order=60),
         "protenix_n_sample": _field(title="Samples per seed", kind="integer", description="Diffusion samples generated per seed.", default=1, minimum=1, maximum=16, control="integer", group="Sampling", order=70),

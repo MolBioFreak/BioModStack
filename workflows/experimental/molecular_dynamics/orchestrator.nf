@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 include { MD_PREPARE_CONFIG } from '../../../modules/experimental/molecular_dynamics/prepare'
 
 params.md_job_config = null
+params.md_retry_spawn_receipt = null
 params.md_input_root = null
 params.api_url = System.getenv('API_BASE_URL') ?: 'http://127.0.0.1:8000'
 params.job_id = null
@@ -73,6 +74,7 @@ process MD_COLLECT_REPLICAS {
 
     input:
     path child_status
+    path spawn_receipt
 
     output:
     path 'replica_collection.done', emit: collection_marker
@@ -82,6 +84,7 @@ process MD_COLLECT_REPLICAS {
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
     python3 -m scripts.bms_md.aggregate_children \
       --child-status ${child_status} \
+      --spawn-receipt ${spawn_receipt} \
       --output-dir "${params.out_dir}"
     printf 'completed\n' > replica_collection.done
     """
@@ -175,6 +178,7 @@ process MD_COLLECT_ANALYSIS {
     input:
     path child_status
     val aggregate_manifest
+    path spawn_receipt
 
     output:
     path 'analysis_collection.done', emit: collection_marker
@@ -184,6 +188,7 @@ process MD_COLLECT_ANALYSIS {
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
     python3 -m scripts.bms_md.collect_analysis \
       --child-status ${child_status} \
+      --spawn-receipt ${spawn_receipt} \
       --aggregate-manifest "${aggregate_manifest}" \
       --output-dir "${params.out_dir}"
     printf 'completed\n' > analysis_collection.done
@@ -245,6 +250,10 @@ if replica.get('status') != 'completed' or analysis.get('status') != 'completed'
     raise SystemExit('MD completion barrier reached before durable collection completed')
 if analysis.get('aggregate_manifest_sha256') != replica_sha:
     raise SystemExit('MD analysis was not collected against the immutable replica aggregate')
+if analysis.get('job_id') != replica.get('job_id'):
+    raise SystemExit('MD completion barrier requires matching native parent identity')
+if analysis.get('completed_analysis_children') != analysis.get('required_analysis_children'):
+    raise SystemExit('MD completion barrier requires every mandatory analysis')
 if len(replica.get('replicas') or []) != analysis.get('completed_analysis_children'):
     raise SystemExit('MD completion barrier requires one collected analysis per replica')
 Path('md_completion_barrier.json').write_text(json.dumps({
@@ -265,26 +274,32 @@ workflow {
 
     aggregate_manifest = "${params.out_dir}/manifest.json"
     analysis_manifest = "${params.out_dir}/analysis/manifest.json"
-    config_ch = Channel.fromPath(params.md_job_config, checkIfExists: true)
-    base_dir = params.md_input_root ?: file(params.md_job_config).parent.toString()
-    MD_PREPARE_CONFIG(config_ch, base_dir)
-
-    MD_SPAWN_REPLICAS(
-        MD_PREPARE_CONFIG.out.normalized_config,
-        MD_PREPARE_CONFIG.out.metadata,
-        MD_PREPARE_CONFIG.out.preparation_bundle,
-        params.job_id.toString(),
-        params.job_name.toString(),
-        params.api_url.toString(),
-    )
+    if (params.md_retry_spawn_receipt) {
+        // The shared attempt owner has already authorized the replacement and
+        // sealed this exact native roster. Never repeat preparation or siblings.
+        spawn_ch = Channel.fromPath(params.md_retry_spawn_receipt, checkIfExists: true)
+    } else {
+        config_ch = Channel.fromPath(params.md_job_config, checkIfExists: true)
+        base_dir = params.md_input_root ?: file(params.md_job_config).parent.toString()
+        MD_PREPARE_CONFIG(config_ch, base_dir)
+        MD_SPAWN_REPLICAS(
+            MD_PREPARE_CONFIG.out.normalized_config,
+            MD_PREPARE_CONFIG.out.metadata,
+            MD_PREPARE_CONFIG.out.preparation_bundle,
+            params.job_id.toString(),
+            params.job_name.toString(),
+            params.api_url.toString(),
+        )
+        spawn_ch = MD_SPAWN_REPLICAS.out.spawn_result
+    }
     MD_WAIT_FOR_REPLICAS(
-        MD_SPAWN_REPLICAS.out.spawn_result,
+        spawn_ch,
         params.job_id.toString(),
         params.job_name.toString(),
         params.api_url.toString(),
         params.md_child_poll_seconds as int,
     )
-    MD_COLLECT_REPLICAS(MD_WAIT_FOR_REPLICAS.out.child_status)
+    MD_COLLECT_REPLICAS(MD_WAIT_FOR_REPLICAS.out.child_status, spawn_ch)
     MD_ASSERT_REPLICA_OUTCOME(MD_COLLECT_REPLICAS.out.collection_marker, aggregate_manifest)
     MD_SPAWN_ANALYSIS(
         MD_ASSERT_REPLICA_OUTCOME.out.verified,
@@ -301,7 +316,7 @@ workflow {
         params.api_url.toString(),
         params.md_child_poll_seconds as int,
     )
-    MD_COLLECT_ANALYSIS(MD_WAIT_FOR_ANALYSIS.out.child_status, aggregate_manifest)
+    MD_COLLECT_ANALYSIS(MD_WAIT_FOR_ANALYSIS.out.child_status, aggregate_manifest, MD_SPAWN_ANALYSIS.out.spawn_result)
     MD_ASSERT_ANALYSIS_OUTCOME(MD_COLLECT_ANALYSIS.out.collection_marker, analysis_manifest)
     MD_COMPLETION_BARRIER(
         MD_ASSERT_REPLICA_OUTCOME.out.verified,

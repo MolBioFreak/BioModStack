@@ -363,6 +363,10 @@ def _extract_tar_archive_safely(archive_path: Path, work_dir: Path) -> None:
         tar.extractall(path=work_dir, members=safe_members)
 
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+
 def _run_colabfold_api_search(
     sequence: str,
     work_dir: Path,
@@ -388,6 +392,8 @@ def _run_colabfold_api_search(
         "a3m_content": str,
       }
     """
+    from biomodstack_msa_controller import require_controller_submission
+    require_controller_submission(host_url)
     host = _normalize_colabfold_host(host_url)
     api_mode = _resolve_colabfold_api_mode(use_env=use_env, use_filter=use_filter)
     query = f">101\n{sequence}\n"
@@ -408,7 +414,13 @@ def _run_colabfold_api_search(
         candidate_id = submit_payload.get("id")
         if isinstance(candidate_id, str) and candidate_id.strip():
             ticket_id = candidate_id.strip()
+            from biomodstack_msa_controller import record_ticket
+            record_ticket(ticket_id, api_mode)
 
+        # A provider-issued ticket is authoritative even on an ambiguous status.
+        # Never submit a second request for a ticket that can still be polled.
+        if ticket_id and submit_status in {"RATELIMIT", "UNKNOWN"}:
+            break
         if submit_status in {"RATELIMIT", "UNKNOWN"}:
             backoff = min(60.0, 5.0 + (attempt * 2.0))
             print(
@@ -430,7 +442,10 @@ def _run_colabfold_api_search(
     print(f"ColabFold API ticket: {ticket_id} (mode={api_mode})", flush=True)
 
     final_status = submit_status if submit_status else "UNKNOWN"
+    poll_deadline = time.monotonic() + 1800.0
     while True:
+        if time.monotonic() >= poll_deadline:
+            raise TimeoutError(f"ColabFold polling timed out for ticket {ticket_id}; reconcile before retry")
         status_payload = _http_get_json(
             url=f"{host}/ticket/{ticket_id}",
             timeout_seconds=status_timeout_seconds,

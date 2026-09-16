@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 api_root="$repo_root/platform/api"
+source "$repo_root/scripts/configuration_read_guard.sh"
 python_bin="${BMS_API_PYTHON:-$api_root/.venv/bin/python}"
 if [[ ! -x "$python_bin" ]]; then
   python_bin="python"
@@ -41,6 +42,7 @@ elif [[ -f "$legacy_env_file" ]]; then
   load_env_file_overrides "$legacy_env_file"
 fi
 
+bms_configuration_read_finish
 export BMS_DOCKER_COMPOSE_PROJECT="${BMS_DOCKER_COMPOSE_PROJECT:-${COMPOSE_PROJECT_NAME:-biomodstack-core-runtime}}"
 
 tool="${1:-}"

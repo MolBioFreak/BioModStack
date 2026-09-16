@@ -16,6 +16,9 @@ MD_JOB_SCHEMA = "bms.md.job.v1"
 MD_JOB_SCHEMA_V2 = "bms.md.job.v2"
 SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2}
 MD_RUN_SCHEMA = "bms.md.run.v1"
+RETRYABLE_INFRASTRUCTURE_FAILURES = frozenset({
+    "spawn_rejected", "worker_lost", "scheduler_transient", "runtime_transient",
+})
 SUPPORTED_ENGINES = {"gromacs", "openmm"}
 MAX_INPUT_SNAPSHOT_BYTES = 100 * 1024 * 1024
 
@@ -192,6 +195,8 @@ def _expected_snapshot_metadata(input_config: Mapping[str, Any], field: str) -> 
 
 
 def _verify_open_snapshot(source: Path, expected_digest: str, expected_bytes: int) -> None:
+    from lib.portable_inputs import resolve_input_path
+    source = resolve_input_path(source)
     digest = hashlib.sha256()
     consumed = 0
     try:
@@ -283,6 +288,8 @@ def _copy_verified_snapshot(
     expected_digest: str,
     expected_bytes: int,
 ) -> None:
+    from lib.portable_inputs import resolve_input_path
+    source = resolve_input_path(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".verified.", suffix=".tmp", dir=destination.parent)
     temporary = Path(temporary_name)

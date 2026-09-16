@@ -1,0 +1,726 @@
+{
+  "schema_version": "bioxp.operator_action_receipt.v2",
+  "command_id": "aec3f573-8547-43c6-87c1-9c860688b3dc",
+  "action_id": "oem.deck.move_to_location",
+  "status": "completed",
+  "terminal": true,
+  "sequence": 104,
+  "method_id": null,
+  "ownership_generation": 1,
+  "expected_board_epoch_by_board": {
+    "4": 64,
+    "5": 1
+  },
+  "state_version": 3,
+  "status_path": "/operator/v2/actions/receipts/aec3f573-8547-43c6-87c1-9c860688b3dc",
+  "accepted_at": 1789449018.5742445,
+  "queued_at": 1789449018.5742445,
+  "dispatched_at": 1789449018.7960763,
+  "finished_at": 1789449031.9136736,
+  "terminal_receipt_id": null,
+  "completion_class": "deck_terminal",
+  "physical_effect_verified": false,
+  "error": null,
+  "transport_exchanges": [],
+  "transport_retention_errors": [],
+  "interrupt_evidence": null,
+  "z_move": null,
+  "xy_failure": null,
+  "source_receipt": {
+    "schema_version": "bioxp.operator_command_receipt.v1",
+    "source": "legacy_operator_plane",
+    "command_id": "aec3f573-8547-43c6-87c1-9c860688b3dc",
+    "method_id": null,
+    "method_sequence": null,
+    "stream_sequence": 66,
+    "action_id": "oem.deck.move_to_location",
+    "status": "completed",
+    "stored_status": "completed",
+    "recovery_required": false,
+    "automatic_retry": false,
+    "physical_outcome": null,
+    "ownership_generation": 1,
+    "requested_inputs": {
+      "camera_offset": false,
+      "target": "LOC_PARK"
+    },
+    "effective_inputs": {
+      "camera_offset": false,
+      "target": "LOC_PARK"
+    },
+    "accepted_at": 1789449018.5742445,
+    "queued_at": 1789449018.5742445,
+    "dispatched_at": 1789449018.7960763,
+    "finished_at": 1789449031.9136736,
+    "source_noop": false,
+    "source_noop_reason": null,
+    "remote_acknowledged": true,
+    "controller_acknowledged": true,
+    "physical_effect_verified": false,
+    "terminal_evidence": {
+      "completion_class": "deck_terminal",
+      "delivery_attempted": true,
+      "response": {
+        "admitted": true,
+        "authority_snapshot_digest": "60f24a6668af56f73fecc56f14a9f8219b41612a6bfacee4a0a47ec680a946cf",
+        "controller_command_acknowledged": true,
+        "controller_completion_verified": true,
+        "deck_movement": {
+          "controller_completion_verified": true,
+          "physical_observation_verified": false,
+          "semantic_state_committed": true,
+          "source_branch": "park",
+          "target": "LOC_PARK",
+          "target_label": "Park"
+        },
+        "delivery_attempted": true,
+        "hardware_postcondition_verified": false,
+        "ok": true,
+        "physical_effect_verified": false,
+        "plan_digest": "624ff3b0ac050013874efc3506ddbc8c8dd5aecb93c86cf4d4648caf81acbb8a",
+        "provider_results": [
+          {
+            "controller_command_acknowledged": true,
+            "controller_completion_verified": true,
+            "hardware_postcondition_verified": false,
+            "ok": true,
+            "provider_command_id": null,
+            "source_anchor": "ControlLib.parkGantry:7071-7122; MethodDef=0x06000351",
+            "source_children": [
+              {
+                "discarded_return": true,
+                "operation": "scriptmoveTo(current,well,28,0,0,2,true)",
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_completion_verified": true,
+                  "execution": {
+                    "execution_results": [
+                      {
+                        "ok": true,
+                        "op": "moveTo",
+                        "path": "0",
+                        "results": [
+                          {
+                            "command": "moveTo",
+                            "result": {
+                              "before": {
+                                "x": 0,
+                                "y": 0,
+                                "z": 500
+                              },
+                              "branch": "confirmed_gripper_no_tip_moveXY",
+                              "controller_child_evidence": [
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              ],
+                              "controller_command_acknowledged": true,
+                              "controller_completion_verified": true,
+                              "controller_terminal_state_verified": true,
+                              "effective_xy_target": {
+                                "x": 1506,
+                                "y": 71
+                              },
+                              "ok": true,
+                              "operations": [
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              ],
+                              "pseudo_z_home": 500,
+                              "restore_acc": {
+                                "x": {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                "y": {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              },
+                              "source_anchor": "ClassControlInterface.moveTo:4463-4620",
+                              "source_noop": false,
+                              "source_return_code": 0,
+                              "target": {
+                                "x": 1506,
+                                "y": 71,
+                                "z": 114092
+                              }
+                            }
+                          }
+                        ],
+                        "source_step": {
+                          "motion_commanded": false,
+                          "move_to_authority": {
+                            "gripper_confirmed": true,
+                            "location19_y": 44972,
+                            "plate_on_gantry": null,
+                            "tip_loaded": false
+                          },
+                          "op": "moveTo",
+                          "opened_usb": false,
+                          "physical_motion": false,
+                          "run_in_parallel": true,
+                          "source_lines": "ClassControlInterface.cs:3858-3860",
+                          "x": 1506,
+                          "y": 71,
+                          "z": 114092
+                        }
+                      }
+                    ],
+                    "executor_status": "live_step_execution_complete",
+                    "motion_commanded": true,
+                    "ok": true
+                  },
+                  "hardware_postcondition_verified": false,
+                  "machine_state": {
+                    "axis_confirmed": {
+                      "gripper": true
+                    },
+                    "clean_path": false,
+                    "current_location_id": "6",
+                    "current_position": {
+                      "x": 0,
+                      "y": 0,
+                      "z": 500
+                    },
+                    "current_well_id": "0",
+                    "default_parameters": {
+                      "fast_acc_min_steps": 10000,
+                      "gripper_safe_move_height": 18000,
+                      "overpress": 4030,
+                      "pseudo_z_home": 500,
+                      "pseudo_z_home_high": 500,
+                      "pseudo_z_home_low": 65000,
+                      "schema_version": "bioxp.oem_default_parameters.v1",
+                      "source_anchor": "DefaultParameters.cs:47-84"
+                    },
+                    "device_type": "BIOXP",
+                    "gripper_confirmed": true,
+                    "location19_y": 44972,
+                    "plate_on_gantry": null,
+                    "schema_version": "bioxp.oem_machine_state.v1",
+                    "source_anchors": [
+                      "DefaultParameters.cs:47-84",
+                      "ClassControlInterface.cs:3734-4014"
+                    ],
+                    "tip_dirty": false,
+                    "tip_loaded": false,
+                    "tip_location": -1
+                  },
+                  "ok": true,
+                  "plan": {
+                    "branch": "gripper_confirmed_no_tip_direct_moveTo",
+                    "column": 0,
+                    "controller_command_planned": false,
+                    "current_location_id": "WASTE_BIN",
+                    "midpoint_source_formula": "ClassControlInterface.cs:5254-5366",
+                    "motion_commanded": false,
+                    "ok": true,
+                    "opened_usb": false,
+                    "physical_motion": false,
+                    "positionflag": 2,
+                    "row": 0,
+                    "schema_version": "bioxp.oem_scriptmove_path_plan.v1",
+                    "semantic_action": "scriptmoveTo",
+                    "show_gantry": {
+                      "source_lines": "ClassControlInterface.cs:4013",
+                      "x_mm": 6.356039503671815,
+                      "y_mm": 0.29965392082383724
+                    },
+                    "source_formula": "ClassControlInterface.cs:3734-4014",
+                    "source_hazards": [],
+                    "source_il_sha256": "3e94ea68ac09edbbeb021907285e9e47206c07d118e5f3a9f5611cd03c491ce3",
+                    "source_method_token": "0x06000120",
+                    "state": {
+                      "axis_confirmed": {
+                        "omitted": "item_limit"
+                      },
+                      "clean_path": false,
+                      "current_location_id": "6",
+                      "current_position": {
+                        "omitted": "item_limit"
+                      },
+                      "current_well_id": "0",
+                      "default_parameters": {
+                        "omitted": "item_limit"
+                      },
+                      "device_type": "BIOXP",
+                      "gripper_confirmed": true,
+                      "location19_y": 44972,
+                      "plate_on_gantry": null,
+                      "schema_version": {
+                        "omitted": "item_limit"
+                      },
+                      "source_anchors": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_dirty": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_loaded": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_location": {
+                        "omitted": "item_limit"
+                      }
+                    },
+                    "step_count": 1,
+                    "steps": {
+                      "omitted": "item_limit"
+                    },
+                    "target": {
+                      "omitted": "item_limit"
+                    },
+                    "target_coordinates": {
+                      "omitted": "item_limit"
+                    },
+                    "target_location_id": "LOC_PARK",
+                    "well_overload": null
+                  },
+                  "position_table_source": "immutable_oem_machine_snapshot.PositionTable",
+                  "required_executed_child_count": 1,
+                  "source_anchor": "ClassControlInterface.scriptmoveTo:3734-4014; ControlLib.initializeMotion:8812"
+                }
+              }
+            ],
+            "source_location_update": {
+              "current_location": 28,
+              "current_well": 0
+            },
+            "source_noop": false
+          }
+        ],
+        "semantic_state_committed": true,
+        "source_branch": "park"
+      },
+      "response_evidence": {
+        "content_sha256": "342c7aa0d6f42553f5d0aec56c817123c822e99a8fd60ba973cd5d6337f84980",
+        "evidence_id": "aec3f573-8547-43c6-87c1-9c860688b3dc:provider_response:342c7aa0d6f42553f5d0aec56c817123c822e99a8fd60ba973cd5d6337f84980",
+        "evidence_kind": "provider_response",
+        "payload_bytes": 4706
+      }
+    },
+    "sequence": 104,
+    "state_version": 3,
+    "expected_board_epoch_by_board": {
+      "4": 64,
+      "5": 1
+    },
+    "terminal_receipt_id": null,
+    "completion_class": "deck_terminal",
+    "transition_sequence": 312
+  },
+  "canonical_inputs": {
+    "camera_offset": false,
+    "target": "LOC_PARK"
+  },
+  "requested_values": {
+    "camera_offset": false,
+    "target": "LOC_PARK"
+  },
+  "effective_values": {
+    "camera_offset": false,
+    "target": "LOC_PARK"
+  },
+  "observed_values": {},
+  "raw_return_layers": {
+    "source_identity": null,
+    "completion_ambiguous": false,
+    "retry_forbidden": false
+  },
+  "controller_evidence": {
+    "controller_completion_verified": true
+  },
+  "transport_artifacts": [],
+  "child_receipts": [],
+  "transitions": [
+    {
+      "transition_id": "310",
+      "from_status": null,
+      "to_status": "queued",
+      "at": 1789449018.578514,
+      "reason": null
+    },
+    {
+      "transition_id": "311",
+      "from_status": "queued",
+      "to_status": "dispatched",
+      "at": 1789449018.8307424,
+      "reason": null
+    },
+    {
+      "transition_id": "312",
+      "from_status": "dispatched",
+      "to_status": "completed",
+      "at": 1789449031.9668913,
+      "reason": null
+    }
+  ],
+  "deck_movement": {
+    "recovery_resolution": null,
+    "target": "LOC_PARK",
+    "target_label": "Park",
+    "source_branch": "park",
+    "resolved_location_id": 28,
+    "destination_catalog_revision": "f7f4e88a9e5f358c01887dc5017a1b792cc85b7446643d4c7f11f77651ab5d39",
+    "position_table_revision": "cee27c5e30de6be84a689f1167165fd1bc915eb351c41487c5eb12227a5d3278",
+    "authority_snapshot_digest": "81c2232fbf3c96df8fea9d133efc3b4190a8298894c0c04c5d0e0a5ec624ceae",
+    "complete_authority_digest": "81c2232fbf3c96df8fea9d133efc3b4190a8298894c0c04c5d0e0a5ec624ceae",
+    "plan_digest": "624ff3b0ac050013874efc3506ddbc8c8dd5aecb93c86cf4d4648caf81acbb8a",
+    "source_anchors": [
+      "DefaultParameters.ForceToHighHome",
+      "ClassControlInterface.btnLOC1_Click:m_latchStatus",
+      "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed",
+      "ClassControlInterface.btnLOC1_Click:Park"
+    ],
+    "delivery_attempted": true,
+    "controller_command_acknowledged": true,
+    "controller_completion_verified": true,
+    "hardware_postcondition_verified": false,
+    "semantic_state_committed": true,
+    "physical_observation_verified": false,
+    "transition_revision": 125,
+    "ambiguity_state": "none",
+    "stages": [
+      {
+        "order": 0,
+        "operation": "ForceToHighHome",
+        "source_anchor": "DefaultParameters.ForceToHighHome",
+        "resources": [],
+        "arguments": {
+          "pseudo_z_home": 500
+        },
+        "dependencies": [],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "d3d374a2003e455579ab1fd944579229f1755775bdc2bd8fc7fb88d868717728",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": true,
+          "hardware_postcondition_verified": false,
+          "operation": "ForceToHighHome",
+          "provider_evidence": {
+            "command_id": "aec3f573-8547-43c6-87c1-9c860688b3dc",
+            "ok": true,
+            "psudo_z_home_steps": 500,
+            "source_anchor": "DefaultParameters.ForceToHighHome:81-84"
+          },
+          "reason": "source_mutation_completed",
+          "source_anchor": "DefaultParameters.ForceToHighHome"
+        }
+      },
+      {
+        "order": 1,
+        "operation": "check_latch_status",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:m_latchStatus",
+        "resources": [],
+        "arguments": {},
+        "dependencies": [
+          0
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": false,
+          "hardware_postcondition_verified": false,
+          "operation": "check_latch_status",
+          "provider_evidence": {
+            "delivery_attempted": false,
+            "observation_id": "deck-latch:host=oem-m_latchStatus:0:1;sensor=type3:f36941c2e8986c276cfa68e4674939d66a78046483419f5353b6a62be81038b8;compound=fc9bea528098a5297cf56bced726c74b8f2bac9478bcbd9ded7c149d84180551",
+            "physical_motion_commanded": false,
+            "value": true
+          },
+          "reason": "source_predicate_satisfied",
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:m_latchStatus"
+        }
+      },
+      {
+        "order": 2,
+        "operation": "check_machine_latch_closed",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed",
+        "resources": [],
+        "arguments": {},
+        "dependencies": [
+          1
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "controller_command_acknowledged": false,
+          "controller_completion_verified": false,
+          "delivery_attempted": false,
+          "hardware_postcondition_verified": false,
+          "operation": "check_machine_latch_closed",
+          "provider_evidence": {
+            "delivery_attempted": false,
+            "observation_id": "deck-latch:host=oem-m_latchStatus:0:1;sensor=type3:f36941c2e8986c276cfa68e4674939d66a78046483419f5353b6a62be81038b8;compound=fc9bea528098a5297cf56bced726c74b8f2bac9478bcbd9ded7c149d84180551",
+            "physical_motion_commanded": false,
+            "value": true
+          },
+          "reason": "source_predicate_satisfied",
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:MachineStatus.LatchClosed"
+        }
+      },
+      {
+        "order": 3,
+        "operation": "parkGantry",
+        "source_anchor": "ClassControlInterface.btnLOC1_Click:Park",
+        "resources": [
+          "x",
+          "y",
+          "z",
+          "g"
+        ],
+        "arguments": {},
+        "dependencies": [
+          2
+        ],
+        "terminal_state": "completed",
+        "terminal_evidence": {
+          "arguments_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "controller_command_acknowledged": true,
+          "controller_completion_verified": true,
+          "delivery_attempted": true,
+          "hardware_postcondition_verified": false,
+          "operation": "parkGantry",
+          "provider_evidence": {
+            "controller_command_acknowledged": true,
+            "controller_completion_verified": true,
+            "hardware_postcondition_verified": false,
+            "ok": true,
+            "provider_command_id": null,
+            "source_anchor": "ControlLib.parkGantry:7071-7122; MethodDef=0x06000351",
+            "source_children": [
+              {
+                "discarded_return": true,
+                "operation": "scriptmoveTo(current,well,28,0,0,2,true)",
+                "result": {
+                  "controller_command_acknowledged": true,
+                  "controller_completion_verified": true,
+                  "execution": {
+                    "execution_results": [
+                      {
+                        "ok": true,
+                        "op": "moveTo",
+                        "path": "0",
+                        "results": [
+                          {
+                            "command": "moveTo",
+                            "result": {
+                              "before": {
+                                "x": 0,
+                                "y": 0,
+                                "z": 500
+                              },
+                              "branch": "confirmed_gripper_no_tip_moveXY",
+                              "controller_child_evidence": [
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              ],
+                              "controller_command_acknowledged": true,
+                              "controller_completion_verified": true,
+                              "controller_terminal_state_verified": true,
+                              "effective_xy_target": {
+                                "x": 1506,
+                                "y": 71
+                              },
+                              "ok": true,
+                              "operations": [
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              ],
+                              "pseudo_z_home": 500,
+                              "restore_acc": {
+                                "x": {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                },
+                                "y": {
+                                  "omitted": "depth_limit",
+                                  "type": "dict"
+                                }
+                              },
+                              "source_anchor": "ClassControlInterface.moveTo:4463-4620",
+                              "source_noop": false,
+                              "source_return_code": 0,
+                              "target": {
+                                "x": 1506,
+                                "y": 71,
+                                "z": 114092
+                              }
+                            }
+                          }
+                        ],
+                        "source_step": {
+                          "motion_commanded": false,
+                          "move_to_authority": {
+                            "gripper_confirmed": true,
+                            "location19_y": 44972,
+                            "plate_on_gantry": null,
+                            "tip_loaded": false
+                          },
+                          "op": "moveTo",
+                          "opened_usb": false,
+                          "physical_motion": false,
+                          "run_in_parallel": true,
+                          "source_lines": "ClassControlInterface.cs:3858-3860",
+                          "x": 1506,
+                          "y": 71,
+                          "z": 114092
+                        }
+                      }
+                    ],
+                    "executor_status": "live_step_execution_complete",
+                    "motion_commanded": true,
+                    "ok": true
+                  },
+                  "hardware_postcondition_verified": false,
+                  "machine_state": {
+                    "axis_confirmed": {
+                      "gripper": true
+                    },
+                    "clean_path": false,
+                    "current_location_id": "6",
+                    "current_position": {
+                      "x": 0,
+                      "y": 0,
+                      "z": 500
+                    },
+                    "current_well_id": "0",
+                    "default_parameters": {
+                      "fast_acc_min_steps": 10000,
+                      "gripper_safe_move_height": 18000,
+                      "overpress": 4030,
+                      "pseudo_z_home": 500,
+                      "pseudo_z_home_high": 500,
+                      "pseudo_z_home_low": 65000,
+                      "schema_version": "bioxp.oem_default_parameters.v1",
+                      "source_anchor": "DefaultParameters.cs:47-84"
+                    },
+                    "device_type": "BIOXP",
+                    "gripper_confirmed": true,
+                    "location19_y": 44972,
+                    "plate_on_gantry": null,
+                    "schema_version": "bioxp.oem_machine_state.v1",
+                    "source_anchors": [
+                      "DefaultParameters.cs:47-84",
+                      "ClassControlInterface.cs:3734-4014"
+                    ],
+                    "tip_dirty": false,
+                    "tip_loaded": false,
+                    "tip_location": -1
+                  },
+                  "ok": true,
+                  "plan": {
+                    "branch": "gripper_confirmed_no_tip_direct_moveTo",
+                    "column": 0,
+                    "controller_command_planned": false,
+                    "current_location_id": "WASTE_BIN",
+                    "midpoint_source_formula": "ClassControlInterface.cs:5254-5366",
+                    "motion_commanded": false,
+                    "ok": true,
+                    "opened_usb": false,
+                    "physical_motion": false,
+                    "positionflag": 2,
+                    "row": 0,
+                    "schema_version": "bioxp.oem_scriptmove_path_plan.v1",
+                    "semantic_action": "scriptmoveTo",
+                    "show_gantry": {
+                      "source_lines": "ClassControlInterface.cs:4013",
+                      "x_mm": 6.356039503671815,
+                      "y_mm": 0.29965392082383724
+                    },
+                    "source_formula": "ClassControlInterface.cs:3734-4014",
+                    "source_hazards": [],
+                    "source_il_sha256": "3e94ea68ac09edbbeb021907285e9e47206c07d118e5f3a9f5611cd03c491ce3",
+                    "source_method_token": "0x06000120",
+                    "state": {
+                      "axis_confirmed": {
+                        "omitted": "item_limit"
+                      },
+                      "clean_path": false,
+                      "current_location_id": "6",
+                      "current_position": {
+                        "omitted": "item_limit"
+                      },
+                      "current_well_id": "0",
+                      "default_parameters": {
+                        "omitted": "item_limit"
+                      },
+                      "device_type": "BIOXP",
+                      "gripper_confirmed": true,
+                      "location19_y": 44972,
+                      "plate_on_gantry": null,
+                      "schema_version": {
+                        "omitted": "item_limit"
+                      },
+                      "source_anchors": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_dirty": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_loaded": {
+                        "omitted": "item_limit"
+                      },
+                      "tip_location": {
+                        "omitted": "item_limit"
+                      }
+                    },
+                    "step_count": 1,
+                    "steps": {
+                      "omitted": "item_limit"
+                    },
+                    "target": {
+                      "omitted": "item_limit"
+                    },
+                    "target_coordinates": {
+                      "omitted": "item_limit"
+                    },
+                    "target_location_id": "LOC_PARK",
+                    "well_overload": null
+                  },
+                  "position_table_source": "immutable_oem_machine_snapshot.PositionTable",
+                  "required_executed_child_count": 1,
+                  "source_anchor": "ClassControlInterface.scriptmoveTo:3734-4014; ControlLib.initializeMotion:8812"
+                }
+              }
+            ],
+            "source_location_update": {
+              "current_location": 28,
+              "current_well": 0
+            },
+            "source_noop": false
+          },
+          "reason": null,
+          "source_anchor": "ClassControlInterface.btnLOC1_Click:Park"
+        }
+      }
+    ]
+  }
+}

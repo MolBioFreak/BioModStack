@@ -4,7 +4,7 @@ prep_boltz_with_msa.py - Generate Boltz YAML configs with MSA paths
 
 This script:
 1. Extracts sequences from PDB files
-2. Generates MSAs using GPU MMseqs2 (via run_local_msa.py)  
+2. Reuses sequence-verified cached alignments; cache misses fail closed.
 3. Creates Boltz-2 YAML config files with MSA paths
 
 Used by PrepBoltzWithMSA Nextflow process for antibody structure validation.
@@ -14,7 +14,6 @@ import os
 import sys
 import argparse
 import yaml
-import subprocess
 import hashlib
 from collections import defaultdict
 from pathlib import Path
@@ -74,48 +73,19 @@ def extract_chain_groups(pdb_path):
 
 
 def get_msa_for_sequence(sequence, name, args):
-    """Generate or retrieve cached MSA for a sequence"""
+    """Reuse identity-verified input only; cache miss requires controller preparation."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_handoff import validate_a3m
+    from biomodstack_msa_controller import BLOCKED
     seq_hash = hashlib.md5(sequence.encode()).hexdigest()[:12]
     cache_file = Path(args.cache_dir) / f"{seq_hash}.a3m"
     local_file = Path(args.msa_output) / f"{name}.a3m"
-    
-    # Check cache first
-    if cache_file.exists():
-        print(f"  Using cached MSA: {cache_file}")
-        import shutil
-        shutil.copy(cache_file, local_file)
-        return str(local_file.resolve())
-    
-    # Generate MSA using run_local_msa.py
-    msa_script = Path(args.msa_script)
-    if msa_script.exists():
-        cmd = [
-            "python3", str(msa_script),
-            "--sequence", sequence,
-            "--name", name,
-            "--out_dir", args.msa_output,
-            "--db_path", args.db_path,
-            "--cache_dir", args.cache_dir,
-            "--threads", str(args.threads)
-        ]
-        print(f"  Generating MSA for {name} ({len(sequence)} aa)...")
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if result.returncode == 0 and local_file.exists():
-                print(f"  Generated MSA: {local_file}")
-                return str(local_file.resolve())
-            else:
-                stderr_snippet = result.stderr[:300] if result.stderr else "No stderr"
-                print(f"  MSA generation failed: {stderr_snippet}")
-        except subprocess.TimeoutExpired:
-            print(f"  MSA generation timed out for {name}")
-        except Exception as e:
-            print(f"  MSA generation error: {e}")
-    else:
-        print(f"  Warning: run_local_msa.py not found at {msa_script}")
-    
-    return None
-
+    if not cache_file.is_file():
+        raise RuntimeError(BLOCKED)
+    data = validate_a3m(cache_file, sequence)
+    local_file.parent.mkdir(parents=True, exist_ok=True)
+    local_file.write_bytes(data)
+    return str(local_file.resolve())
 
 def is_nucleic_acid_sequence(sequence):
     """Check if a sequence is DNA/RNA based on content"""
@@ -165,7 +135,7 @@ def generate_yaml_with_msa(pdb_filename, chain_groups, msa_paths):
             if chain_key in msa_paths and msa_paths[chain_key]:
                 entry['protein']['msa'] = msa_paths[chain_key]
             else:
-                entry['protein']['msa'] = 'empty'
+                raise ValueError('Missing prepared protein alignment; no implicit no-MSA fallback')
         sequences.append(entry)
     return {'sequences': sequences}
 
@@ -177,10 +147,10 @@ def main():
     parser.add_argument('-i', '--input', required=True, help='Input PDB directory')
     parser.add_argument('-o', '--output', required=True, help='Output YAML directory')
     parser.add_argument('--msa_output', required=True, help='Output MSA directory')
-    parser.add_argument('--db_path', required=True, help='MMseqs2 database path')
+    parser.add_argument('--db_path', help='Legacy ignored argument; local search disabled')
     parser.add_argument('--cache_dir', required=True, help='MSA cache directory')
     parser.add_argument('--threads', type=int, default=32, help='MSA threads')
-    parser.add_argument('--msa_script', required=True, help='Path to run_local_msa.py')
+    parser.add_argument('--msa_script', help='Legacy ignored argument; only verified alignments are consumed')
     
     args = parser.parse_args()
     
@@ -201,6 +171,8 @@ def main():
         for sequence, chain_ids in chain_groups.items():
             chain_id = chain_ids[0]
             msa_name = f"{base_name}_{chain_id}"
+            if is_nucleic_acid_sequence(sequence):
+                continue
             msa_path = get_msa_for_sequence(sequence, msa_name, args)
             all_msa_paths[f"{pdb_file}_{chain_id}"] = msa_path
         

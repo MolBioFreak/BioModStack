@@ -12,9 +12,22 @@ from .contracts import (
     require_artifact_reference,
     require_row_reference,
 )
-from .persistence import publish_json_payload, publish_table_rows
-from .query import count_rows, query_rows, query_rows_by_values
-from .resolve import query_json_envelope_page, resolve_json_envelope_fields, resolve_json_value
+def __getattr__(name):
+    # Descriptor-only readers (NGS/MD) must not load Parquet/SQL dependencies.
+    from importlib import import_module
+
+    if name in {"publish_json_payload", "publish_table_rows"}:
+        module = "persistence"
+    elif name in {"count_rows", "query_rows", "query_rows_by_values"}:
+        module = "query"
+    elif name in {"query_json_envelope_page", "resolve_json_envelope_fields", "resolve_json_value"}:
+        module = "resolve"
+    else:
+        raise AttributeError(name)
+    value = getattr(import_module(f"{__name__}.{module}"), name)
+    globals()[name] = value
+    return value
+
 from .writer import (
     InstalledArtifact,
     ScientificArtifactError,

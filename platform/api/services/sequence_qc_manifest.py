@@ -195,12 +195,16 @@ def _resolve_manifest_relative_path(manifest_dir: Path, raw_path: object) -> Pat
     artifact_path = Path(raw_path)
     if artifact_path.is_absolute():
         raise SequenceQcManifestError(f"artifact path must be relative to manifest: {raw_path}")
-    candidate = (manifest_dir / artifact_path).resolve()
     manifest_root = manifest_dir.resolve()
+    candidate = Path(os.path.abspath(manifest_root / artifact_path))
     try:
         candidate.relative_to(manifest_root)
     except ValueError as exc:
         raise SequenceQcManifestError(f"artifact path escapes manifest directory: {raw_path}") from exc
+    try:
+        _reject_symlink_components(manifest_root, candidate)
+    except SequenceQcManifestError as exc:
+        raise SequenceQcManifestError(f"artifact path escapes safe manifest directory or traverses a symlink: {raw_path}") from exc
     return candidate
 
 
@@ -245,15 +249,12 @@ def _descriptor_bound_digest(manifest_dir: Path, raw_path: str | Path) -> tuple[
         details = os.fstat(file_fd)
         if not stat.S_ISREG(details.st_mode):
             raise SequenceQcManifestError("artifact is not a regular file")
-        digest = hashlib.sha256()
-        size = 0
-        while True:
-            chunk = os.read(file_fd, 1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            digest.update(chunk)
-        return size, digest.hexdigest()
+        from services.scientific_artifacts.writer import descriptor_content_digest, ScientificArtifactError
+
+        try:
+            return descriptor_content_digest(file_fd, scope=str(root))
+        except ScientificArtifactError as exc:
+            raise SequenceQcManifestError(str(exc)) from exc
     except (FileNotFoundError, NotADirectoryError, OSError) as exc:
         raise SequenceQcManifestError("artifact is unavailable or unsafe") from exc
     finally:

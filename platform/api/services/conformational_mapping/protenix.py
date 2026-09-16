@@ -324,13 +324,13 @@ def _read_ledger(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _atomic_json(path: Path, payload: Mapping[str, Any] | list[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(canonical_json_bytes(dict(payload)))
+            handle.write(canonical_json_bytes(dict(payload) if isinstance(payload, Mapping) else payload))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -851,6 +851,7 @@ def finalize_protenix(
         shutil.copytree(root, temporary / "native", copy_function=shutil.copy2)
         _atomic_json(temporary / "cm_native_artifacts_v1.json", native)
         _atomic_json(temporary / "cm_ensemble_v1.json", ensemble)
+        _atomic_json(temporary / "cm_complex_snapshots_v1.json", list(snapshots))
         os.replace(temporary, output)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

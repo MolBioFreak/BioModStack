@@ -83,8 +83,8 @@ def test_checked_in_lock_authorizes_selected_runtime_sif() -> None:
 
 def test_dorado_gpu_executes_the_selected_runtime_sif() -> None:
     config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
-    block = config.split("withLabel: dorado_gpu {", 1)[1].split("}", 1)[0]
-    assert "container = params.dorado_runtime_sif" in block
+    block = config.split("withLabel: dorado_gpu {", 1)[1].split("withLabel:", 1)[0]
+    assert "container = { params.dorado_runtime_sif }" in block
     assert '${params.container_dir}/dorado.sif' not in block
 
 

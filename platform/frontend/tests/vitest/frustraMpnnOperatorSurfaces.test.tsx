@@ -84,7 +84,7 @@ const baseDetail = {
             missing_slot_count: 3,
         },
     }),
-} as unknown as FrustraMpnnResultDetail;
+} as unknown as FrustraMpnnResultDetail & { statistics_json: ReturnType<typeof parseFrustraMpnnStatistics> };
 
 const analysis = (state: FrustraMpnnStatisticsAnalysis['state'], diagnostic: string | null = null): FrustraMpnnStatisticsAnalysis => ({
     analysis_id: '11111111-1111-4111-8111-111111111111',
@@ -116,11 +116,13 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         await act(async () => root.unmount());
     });
 
-    it('renders v2 authority, effective settings, canonical statistics, and statistical missingness', async () => {
-        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} />);
-        expect(container.textContent).toContain('Result authority: v2');
-        expect(container.textContent).toContain('Requested: all_protein_entities');
-        expect(container.textContent).toContain('Resolved chains: 1');
+    it('renders settings and explicitly supplied statistics without version labels', async () => {
+        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} statisticsOverride={baseDetail.statistics_json} />);
+        expect(container.textContent).not.toContain('Result authority:');
+        expect(container.querySelector('details')?.open).toBe(false);
+        expect(container.textContent).toContain('Requested selection: all_protein_entities');
+        const resolvedChains = Array.from(container.querySelectorAll('div')).find((node) => node.textContent === 'Resolved chains');
+        expect(resolvedChains?.parentElement?.querySelector('.font-mono')?.textContent).toBe('1');
         expect(container.textContent).toContain('Requested model');
         expect(container.textContent).toContain('Effective model');
         expect(container.textContent).toContain('Requested altloc');
@@ -129,9 +131,17 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         expect(container.textContent).toContain('Minimally frustrated ≥');
         expect(container.textContent).toContain('Field-level value origins');
         expect(container.textContent).toContain('selected model number');
-        expect(container.textContent).toContain('Canonical statistics');
-        expect(container.textContent).toContain('Historical/statistical missingness: 1 residues and 3 slots');
+        expect(container.textContent).toContain('Statistics');
+        expect(container.textContent).toContain('Missing scores: 1 residues and 3 slots');
         expect(container.textContent).not.toContain('/private/');
+        await act(async () => root.unmount());
+    });
+
+    it('does not use inline statistics when the dedicated response is absent', async () => {
+        const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={baseDetail} />);
+        expect(container.textContent).toContain('Statistics unavailable');
+        expect(container.textContent).not.toContain('Scores available');
+        expect(container.textContent).toContain('Settings used');
         await act(async () => root.unmount());
     });
 
@@ -262,7 +272,7 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         await act(async () => failed.root.unmount());
     });
 
-    it('renders historical authority and missingness without reconstructing absent settings or statistics', async () => {
+    it('renders absent settings and independent statistics availability without version labels', async () => {
         const historical = {
             ...baseDetail,
             authority_version: 'historical_v1',
@@ -273,11 +283,52 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
             execution_receipt: null,
         } as unknown as FrustraMpnnResultDetail;
         const { container, root } = await mount(<FrustraMpnnResultAuthoritySurface detail={historical} />);
-        expect(container.textContent).toContain('Result authority: historical_v1');
-        expect(container.textContent).toContain('Missing authority: effective_settings_json, statistics_json');
+        expect(container.textContent).not.toContain('historical_v1');
+        expect(container.textContent).not.toContain('Missing authority:');
         expect(container.textContent).toContain('Effective settings were not recorded');
-        expect(container.textContent).toContain('predates persisted statistics authority');
-        expect(container.textContent).toContain('not reconstructed');
+        expect(container.textContent).toContain('Statistics unavailable');
+        expect(container.textContent).toContain('saved structure and residue scores remain available');
         await act(async () => root.unmount());
     });
+});
+
+
+describe('full Frustra workbench retrieval truth', () => {
+    it.each(['error', 'empty', 'exact-detail-error', 'list-detail-error'] as const)('distinguishes %s from confirmed absence', async (mode) => {
+        const { default: Viewer } = await import('../../src/components/FrustraMpnnResultsViewer');
+        const { api } = await import('../../src/lib/api');
+        const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+        const { MemoryRouter } = await import('react-router-dom');
+        const original = api.defaults.adapter;
+        const calls: string[] = [];
+        const failedItem = {
+            invocation_id: 'exact', parent_job_id: 'parent', parent_workflow_id: 'conformational_mapping', candidate_id: 'candidate', operator_label: 'TEST persisted invocation',
+            source_identity: { design_id: null, artifact_id: null, artifact_sha256: 'a'.repeat(64), candidate_id: 'candidate' }, design_id: null,
+            requiredness: 'required', source_artifact_id: null, source_artifact_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), manifest_sha256: 'c'.repeat(64), summary_sha256: 'd'.repeat(64), created_at: '2026-08-09T00:00:00Z',
+            authority_version: 'historical_v1', availability: false, statistics_available: false, missing_fields: [], settings_sha256: null, effective_settings_sha256: null, effective_settings_json: null, capability_inventory_sha256: null, statistics_sha256: null, statistics_json: null, comparison_compatibility_id: null,
+            status: 'failed', component_contract_version: '1.0', runtime_identity: {}, runtime_identity_sha256: null, gpu_provenance: null, failure_class: 'inference_failure', reopen_destination: { surface: 'frustrampnn-workbench', params: { job_id: 'parent', invocation_id: 'exact' } },
+        };
+        api.defaults.adapter = async (config) => {
+            const url = String(config.url); calls.push(url);
+            if (mode !== 'error' && url.endsWith('/jobs/parent/results')) return { data: { items: mode === 'list-detail-error' ? [failedItem] : [], total: mode === 'list-detail-error' ? 1 : 0, limit: 50, offset: 0 }, status: 200, statusText: 'OK', headers: {}, config };
+            throw new Error('TEST retrieval failure');
+        };
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const node = await mount(<MemoryRouter initialEntries={[mode === 'exact-detail-error' ? '/designs/parent?frustrampnn_invocation_id=exact' : '/designs/parent']}><QueryClientProvider client={client}><Viewer job={{ id: 'parent', name: 'Parent', model_id: 'conformational_mapping', status: 'completed', params: {}, created_at: '', design_count: 0 } as never} onBack={() => {}} onOpenJob={() => {}} /></QueryClientProvider></MemoryRouter>);
+        try {
+            for (let i = 0; i < 15; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+            expect(calls.some(url => url.endsWith('/jobs/parent/results'))).toBe(true);
+            if (mode === 'list-detail-error') expect(calls).toContain('/api/frustrampnn/results/exact');
+            if (mode === 'empty') {
+                expect(node.container.textContent).toContain('No persisted FrustraMPNN invocation was returned for this workflow parent');
+            } else {
+                expect(node.container.textContent).toContain('TEST retrieval failure');
+                expect(node.container.textContent).toContain('Retry result retrieval');
+                expect(node.container.textContent).not.toContain('No persisted FrustraMPNN invocation');
+                expect(node.container.textContent).not.toContain('no canonical FrustraMPNN result exists');
+            }
+        } finally {
+            await act(async () => node.root.unmount()); client.clear(); api.defaults.adapter = original;
+        }
+    }, 30000);
 });

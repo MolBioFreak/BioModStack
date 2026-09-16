@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -196,7 +197,7 @@ async def fold_rna(
     """Fold an RNA sequence and optionally compute ensemble statistics."""
     source_sequence_id, name, sequence, circular = await _resolve_rna_request(data, session)
     settings = _schema_to_settings(data.settings, circular)
-    return _run_structure_analysis(name, source_sequence_id, sequence, settings, data.include_partition)
+    return await run_in_threadpool(_run_structure_analysis, name, source_sequence_id, sequence, settings, data.include_partition)
 
 
 @router.post("/partition", response_model=RnaStructureResponse)
@@ -207,4 +208,4 @@ async def partition_rna(
     """Compute RNA partition-function ensemble statistics and pair probabilities."""
     source_sequence_id, name, sequence, circular = await _resolve_rna_request(data, session)
     settings = _schema_to_settings(data.settings, circular)
-    return _run_structure_analysis(name, source_sequence_id, sequence, settings, True)
+    return await run_in_threadpool(_run_structure_analysis, name, source_sequence_id, sequence, settings, True)

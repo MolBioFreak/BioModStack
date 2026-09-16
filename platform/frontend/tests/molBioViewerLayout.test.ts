@@ -62,7 +62,7 @@ test('fullscreen viewer layout collapses side menus while preserving tuned width
     assert.equal(normal.showLibraryResizeHandle, true);
     assert.equal(normal.showToolResizeHandle, true);
     assert.equal(normal.leftPanelWidth, 480);
-    assert.equal(normal.rightPanelWidth, 640);
+    assert.equal(normal.rightPanelWidth, 628);
 });
 
 test('manual panel collapse can hide either side while keeping the central viewer open', () => {
@@ -107,9 +107,9 @@ test('narrow viewports keep a minimum center viewer width when both side panels 
         isToolPanelCollapsed: false,
     });
 
-    assert.equal(layout.leftPanelWidth, 384);
+    assert.equal(layout.leftPanelWidth, 372);
     assert.equal(layout.rightPanelWidth, 256);
-    assert.equal(960 - layout.leftPanelWidth - layout.rightPanelWidth, MOLBIO_VIEWER_MIN_WIDTH);
+    assert.equal(960 - layout.leftPanelWidth - layout.rightPanelWidth - 12, MOLBIO_VIEWER_MIN_WIDTH);
 });
 
 test('phone-sized viewports start with both side panels collapsed', () => {
@@ -140,7 +140,7 @@ test('mol bio toolkit source wires fullscreen and side-panel collapse controls',
 test('construct shelf scrolls inside a bounded normal-mode viewer frame', () => {
     const source = readFileSync(TOOLKIT_PATH, 'utf8');
 
-    assert.match(source, /height: 'clamp\(32rem, calc\(100vh - 12rem\), 48rem\)'/);
+    assert.match(source, /height: 'clamp\(36rem, calc\(100vh - 8rem\), 96rem\)'/);
     assert.match(source, /data-molbio-scroll-region="construct-shelf"/);
     assert.match(source, /flex-1 min-h-0 overflow-y-auto overscroll-contain/);
     assert.match(source, /fixed inset-0 z-\[70\] h-full/);
@@ -179,7 +179,7 @@ test('SeqViz pointer drags publish one committed selection after pointer-up', ()
 
     assert.match(source, /pendingPointerSelectionRef/);
     assert.match(source, /flushPendingPointerSelection/);
-    assert.match(source, /window\.requestAnimationFrame\(flushPendingPointerSelection\)/);
+    assert.match(source, /window\.requestAnimationFrame\(\(\) => \{\s*flushPendingPointerSelection\(\)/);
     assert.doesNotMatch(source, /if \(sourceSelection\) \{\s*onSelection\(sourceSelection\);\s*\}/);
 });
 
@@ -213,24 +213,48 @@ test('sequence header exposes focus and panel collapse actions', () => {
     assert.match(source, /Hide Tools|Show Tools/);
 });
 
-test('sequence header source keeps the plasmid toolbar horizontally scrollable on narrow screens', () => {
+test('sequence header reflows common controls without a scroll rail or pointer interception', () => {
     const source = readFileSync(HEADER_PATH, 'utf8');
-
-    assert.match(source, /data-sequence-header-scroll/);
-    assert.match(source, /overflow-x-auto/);
-    assert.match(source, /min-w-max/);
+    assert.match(source, /data-sequence-primary-actions className="[^"]*flex-wrap/);
+    assert.match(source, /data-sequence-secondary-actions/);
+    assert.doesNotMatch(source, /overflow-x-auto|min-w-max|setPointerCapture|onClickCapture/);
 });
 
-test('sequence header drag scrolling never captures pointers that begin on interactive controls', () => {
-    const source = readFileSync(HEADER_PATH, 'utf8');
+test('desktop-to-narrow resize retains a usable viewer and permits explicit overlay tools', () => {
+    for (const width of [390, 640, 800]) {
+        const layout = resolveMolBioViewerLayout({
+            activePanel: 'features', viewportWidth: width, leftPanelWidth: 256,
+            rightPanelWidth: 288, isViewerFullscreen: false,
+            isLibraryPanelCollapsed: false, isToolPanelCollapsed: false,
+        });
+        assert.equal(layout.overlayPanels, true);
+        assert.equal(layout.showLibraryResizeHandle, false);
+        assert.equal(layout.showToolResizeHandle, false);
+        assert.equal(layout.showToolPanel, true, 'explicitly opened tools remain available as an overlay');
+    }
+    const source = readFileSync(TOOLKIT_PATH, 'utf8');
+    assert.match(source, /shouldCollapseMolBioPanelsForViewport\(window.innerWidth\)[\s\S]*setIsLibraryPanelCollapsed\(true\)/);
+    assert.match(source, /Close Shelf/);
+    assert.match(source, /Close Tools/);
+});
 
-    assert.match(source, /event\.target as HTMLElement/);
-    assert.match(source, /closest\(['"]button, a, input, select, textarea, \[role="button"\], \[data-sequence-header-drag-ignore="true"\]['"]\)/);
-    assert.match(source, /if \(interactiveTarget\) \{\s*return;\s*\}/);
-    assert.ok(
-        source.indexOf('if (interactiveTarget)') < source.indexOf('setPointerCapture(event.pointerId)'),
-        'interactive controls must be rejected before the scroll rail captures the pointer',
-    );
+test('wide layouts budget both resize handles and preserve manual panel visibility', () => {
+    for (const width of [832, 960, 1024, 1440]) {
+        for (const leftCollapsed of [false, true]) {
+            for (const rightCollapsed of [false, true]) {
+                const layout = resolveMolBioViewerLayout({
+                    activePanel: 'assembly', viewportWidth: width, leftPanelWidth: 480,
+                    rightPanelWidth: 640, isViewerFullscreen: false,
+                    isLibraryPanelCollapsed: leftCollapsed, isToolPanelCollapsed: rightCollapsed,
+                });
+                const consumed = (layout.showLibraryPanel ? layout.leftPanelWidth + 6 : 0)
+                    + (layout.showToolPanel ? layout.rightPanelWidth + 6 : 0);
+                assert.ok(width - consumed >= MOLBIO_VIEWER_MIN_WIDTH);
+                assert.equal(layout.showLibraryPanel, !leftCollapsed);
+                assert.equal(layout.showToolPanel, !rightCollapsed);
+            }
+        }
+    }
 });
 
 test('mol bio toolkit source gives mobile resize handles touch-safe hit targets', () => {

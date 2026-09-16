@@ -1,0 +1,187 @@
+{
+  "provenance": {
+    "kind": "actual isolated producer reader with fake process and synthetic JPEG inputs, not hardware evidence",
+    "sha256": {
+      "src/bioxp/api.py": "5f841476546474953d6fef60aeb294c218d1c352e3206a5d075d553dacb89ae6",
+      "src/bioxp/camera_provider.py": "56b47b0c0cdc914d497dfdcdb9bd14534c820658c76c9eb28c0edcdf152b0917",
+      "tests/test_camera_stream_producer.py": "5ecd027a8d34ffc4c8a043060df50183ac52e5489b742798af0a662bc55be25e"
+    },
+    "projection": "Exact source-extracted strict BMS models and status/stream projection bodies; injected lease only, no live runtime",
+    "bms_sha256": {
+      "services/bioxp/robot_client.py": "b37334460be91494294ea2e0fdb9505fcca18cc42b954973147fa90b117d14ca",
+      "routers/bioxp/camera.py": "e18626576a2cead26b119756f7d10ead91958e82b1b1d35d097fb58045b6f657"
+    }
+  },
+  "rows": [
+    {
+      "label": "starting",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "state": "unavailable",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable",
+        "connection_generation": 1
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "edbaf0f7b5f94fb6becc6193c1e3653c",
+        "camera_ownership_epoch": 1,
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 0,
+        "dropped_frames": 0,
+        "latest_frame_at": null,
+        "last_error": null,
+        "idempotent": false,
+        "connection_generation": 1
+      }
+    },
+    {
+      "label": "first",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "state": "live",
+        "available": true,
+        "frame_sequence": 1,
+        "frame_captured_at": "2026-09-07T18:26:03.173673Z",
+        "frame_age_seconds": 0.021,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": "4ea47e1662ffd7167e4f94ccd81f1429d3d5e6ae37fbde65e7b419b4dd280625",
+        "detail": "latest_frame_available",
+        "connection_generation": 1
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "edbaf0f7b5f94fb6becc6193c1e3653c",
+        "camera_ownership_epoch": 1,
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 1,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T18:26:03.173673Z",
+        "last_error": null,
+        "idempotent": false,
+        "connection_generation": 1
+      }
+    },
+    {
+      "label": "advancing",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "state": "live",
+        "available": true,
+        "frame_sequence": 2,
+        "frame_captured_at": "2026-09-07T18:26:03.195837Z",
+        "frame_age_seconds": 0.021,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 0,
+        "content_sha256": "687cb36571d0e1c0f18c3ac90295fe8c0de93daa2468ba1961f72e279e996676",
+        "detail": "latest_frame_available",
+        "connection_generation": 1
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "live",
+        "active": true,
+        "stream_id": "edbaf0f7b5f94fb6becc6193c1e3653c",
+        "camera_ownership_epoch": 1,
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T18:26:03.195837Z",
+        "last_error": null,
+        "idempotent": false,
+        "connection_generation": 1
+      }
+    },
+    {
+      "label": "invalid",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "state": "unavailable",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 18,
+        "dropped_frames": 1,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable",
+        "connection_generation": 1
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "starting",
+        "active": true,
+        "stream_id": "edbaf0f7b5f94fb6becc6193c1e3653c",
+        "camera_ownership_epoch": 1,
+        "fps": 8,
+        "quality": 7,
+        "width": 640,
+        "height": 480,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-09-07T18:26:03.195837Z",
+        "last_error": null,
+        "idempotent": false,
+        "connection_generation": 1
+      }
+    },
+    {
+      "label": "stopped",
+      "status": {
+        "schema_version": "bioxp.camera_status.v1",
+        "state": "unavailable",
+        "available": false,
+        "frame_sequence": null,
+        "frame_captured_at": null,
+        "frame_age_seconds": null,
+        "freshness_budget_seconds": 30.0,
+        "provider_generation": 19,
+        "dropped_frames": 1,
+        "content_sha256": null,
+        "detail": "latest_frame_unavailable",
+        "connection_generation": 1
+      },
+      "stream": {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": "off",
+        "active": false,
+        "stream_id": null,
+        "camera_ownership_epoch": 2,
+        "fps": null,
+        "quality": null,
+        "width": null,
+        "height": null,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": null,
+        "last_error": "fixture cleanup",
+        "idempotent": false,
+        "connection_generation": 1
+      }
+    }
+  ]
+}

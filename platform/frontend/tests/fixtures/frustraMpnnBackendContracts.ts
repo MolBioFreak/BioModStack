@@ -322,3 +322,36 @@ export const backendGuidance = {
     persisted: true,
     created_at: '2026-08-09T00:00:00Z',
 };
+
+// Hand-built compact fixture checked against the canonical statistics schema.
+// Not a captured scientific run; full real payload replay is external test evidence.
+export const backendDerivedStatistics = {
+    ...structuredClone(backendStatistics),
+    schema_version: 2,
+    output_contract_version: '3.0',
+    comparison_compatibility_basis: {
+        ...structuredClone(backendStatistics.comparison_compatibility_basis),
+        raw_score_semantics: {
+            ...structuredClone(backendStatistics.comparison_compatibility_basis.raw_score_semantics),
+            output_schema: {
+                ...backendStatistics.comparison_compatibility_basis.raw_score_semantics.output_schema,
+                component_contract_version: '3.0',
+                landscape_schema_version: 3,
+            },
+        },
+    },
+    analysis_receipt: {
+        schema_name: 'frustrampnn_statistics_analysis_receipt',
+        schema_version: 1,
+        analysis_id: '11111111-1111-4111-8111-111111111111',
+        core_artifact_id: 'core-artifact-1',
+        core_bundle_relative_path: 'results/core-artifact-1',
+        core_landscape_sha256: backendHashes.c,
+        core_manifest_sha256: backendHashes.d,
+        formula_version: 'frustrampnn_statistics_formula_v1',
+        policy_version: 'frustrampnn_statistics_policy_v1',
+        package_version: 'biomodstack_frustrampnn_statistics_v1',
+        statistics_schema_version: 2,
+        attempt_count: 1,
+    },
+};

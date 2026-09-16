@@ -26,8 +26,10 @@ export interface HistoryState {
     journal: HistoryEntry[];
 }
 
+export type SequenceUpdate = SequenceData | ((current: SequenceData) => SequenceData);
+
 type HistoryAction =
-    | { type: 'SET'; payload: SequenceData; label?: string }
+    | { type: 'SET'; payload: SequenceUpdate; label?: string }
     | { type: 'UNDO' }
     | { type: 'REDO' }
     | { type: 'RESET'; payload: SequenceData; label?: string }
@@ -54,6 +56,11 @@ function nextHistoryEntry(
     };
 }
 
+/** Apply saved metadata without replacing edits that followed submission. */
+export function reconcileSavedHistory(submitted: HistoryState, current: HistoryState, saved: SequenceData): HistoryState {
+    return { ...current, present: current === submitted ? saved : { ...current.present, version: saved.version } };
+}
+
 export function createHistoryState(present: SequenceData, label = 'Load sequence'): HistoryState {
     return {
         past: [],
@@ -67,20 +74,22 @@ export function createHistoryState(present: SequenceData, label = 'Load sequence
 // REDUCER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
+export function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
     switch (action.type) {
-        case 'SET':
+        case 'SET': {
+            const payload = typeof action.payload === 'function' ? action.payload(state.present) : action.payload;
             // Don't add to history if identical to present
-            if (sequenceDataEquals(action.payload, state.present)) {
+            if (sequenceDataEquals(payload, state.present)) {
                 return state;
             }
             return {
                 past: [...state.past, state.present].slice(-50), // Keep last 50 states
-                present: action.payload,
+                present: payload,
                 future: [],
-                journal: [...state.journal, nextHistoryEntry('set', action.label || 'Edit sequence', action.payload)].slice(-200),
+                journal: [...state.journal, nextHistoryEntry('set', action.label || 'Edit sequence', payload)].slice(-200),
             };
 
+        }
         case 'UNDO':
             if (state.past.length === 0) return state;
             {
@@ -262,7 +271,7 @@ function sequenceDataEquals(a: SequenceData, b: SequenceData): boolean {
 export function useSequenceHistory(initialState: SequenceData) {
     const [state, dispatch] = useReducer(historyReducer, createHistoryState(initialState, 'Initialize workspace'));
 
-    const set = useCallback((value: SequenceData, label?: string) => {
+    const set = useCallback((value: SequenceUpdate, label?: string) => {
         dispatch({ type: 'SET', payload: value, label });
     }, []);
 

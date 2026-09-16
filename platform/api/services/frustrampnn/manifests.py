@@ -506,12 +506,41 @@ def _observed_cardinality(relative: str, payload: bytes, instance: Any | None) -
     return None
 
 
+def _retained_v1_request_for_validation(
+    request: Mapping[str, Any], receipt: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Validate a relocated v1 configuration without rewriting retained bytes.
+
+    Only the historical host location may differ. Reconstruct its complete
+    configuration digest from today's scientific authority and the validated
+    receipt, then adapt a detached schema-validation view. Inventory and closure
+    hashes continue to consume the original request, receipt and manifest bytes.
+    """
+    from .configuration import configuration_sha256, global_configuration
+
+    current = global_configuration()
+    parameters = request.get("parameters", {})
+    recorded_digest = parameters.get("configuration_sha256")
+    if recorded_digest is None or recorded_digest == current["configuration_sha256"]:
+        return request
+    validate_schema("frustrampnn_execution_receipt_v1", receipt)
+    _validate_receipt_argv(receipt)
+    historical = global_configuration()
+    historical["runtime"]["configured_sif_path"] = receipt["configured_sif_path"]
+    if recorded_digest != configuration_sha256(historical):
+        raise ManifestValidationError("retained request configuration hash mismatch")
+    return {**request, "parameters": {
+        **parameters, "configuration_sha256": current["configuration_sha256"],
+    }}
+
+
 def _record(
     relative: str,
     payload: bytes,
     declared_cardinality: Mapping[str, Any] | None,
     *,
     allow_legacy_external_authority: bool = False,
+    retained_v1_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema_name: str | None = None
     schema_version: int | None = None
@@ -547,6 +576,12 @@ def _record(
             raise ManifestValidationError(f"schema identity mismatch for {relative}")
         try:
             schema_instance = instance
+            if (
+                schema_key == "workflow_component_request_v1"
+                and retained_v1_receipt is not None
+                and isinstance(instance, Mapping)
+            ):
+                schema_instance = _retained_v1_request_for_validation(instance, retained_v1_receipt)
             if (
                 allow_legacy_external_authority
                 and schema_key == "workflow_component_request_v2"
@@ -600,7 +635,9 @@ def _build_result_manifest_v1(root: Path | str) -> dict[str, Any]:
         _, _, instances[relative] = _json_identity(payloads[relative], relative)
     request = instances["workflow_component_request_v1.json"]
     try:
-        validate_schema("workflow_component_request_v1", request)
+        validate_schema("workflow_component_request_v1", _retained_v1_request_for_validation(
+            request, instances["frustrampnn_execution_receipt_v1.json"],
+        ))
     except Exception as exc:
         raise ManifestValidationError(f"request schema validation failed: {exc}") from exc
     external_authority = request["identity_authority"] in {
@@ -639,6 +676,7 @@ def _build_result_manifest_v1(root: Path | str) -> dict[str, Any]:
             relative,
             payloads[relative],
             cardinalities[relative],
+            retained_v1_receipt=instances["frustrampnn_execution_receipt_v1.json"],
         )
         for relative in artifact_paths
     ]
@@ -933,13 +971,21 @@ def _argv_artifact(value: str, expected_name: str) -> None:
         raise ManifestValidationError(f"receipt argv artifact must name {expected_name} lexically")
 
 
+def _receipt_namespace_flags(argv: list[str]) -> list[str]:
+    """Recognize retained Apptainer receipts without claiming userspace isolation."""
+    launcher = argv[0] if argv else ""
+    name = launcher.split("/")[-1]
+    if name not in {"apptainer", "bms-container"} or (name == "bms-container" and not launcher.startswith("/")):
+        raise ManifestValidationError("receipt launcher executable is not a supported scientific runtime")
+    return ["--containall"] if name == "apptainer" and argv[2:3] == ["--containall"] else []
+
+
 def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
     argv = receipt["argv"]
-    if len(argv) != 24:
+    namespace_flags = _receipt_namespace_flags(argv)
+    if len(argv) != 23 + len(namespace_flags):
         raise ManifestValidationError("receipt launcher argv has an unexpected token count")
     launcher = argv[0]
-    if not launcher or launcher.split("/")[-1] != "apptainer":
-        raise ManifestValidationError("receipt launcher executable must be Apptainer")
     sif_path = receipt["sif_path"]
     if (
         not sif_path.startswith("/proc/self/fd/")
@@ -948,7 +994,7 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
         raise ManifestValidationError("receipt SIF path is not a pinned proc-fd path")
     expected = [
         launcher,
-        "exec", "--containall", "--writable-tmpfs", "--nv",
+        "exec", *namespace_flags, "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
         "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
         "--bind", receipt["bind_policy"][0] if len(receipt["bind_policy"]) == 2 else "",
@@ -982,7 +1028,8 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
         raise ManifestValidationError("receipt read-only input collides with writable output bind")
 
     identity = _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
-    if receipt["working_directory_policy"] != "apptainer_containall_v1":
+    policy = "apptainer_containall_v1" if namespace_flags else "explicit_input_output_binds_v1"
+    if receipt["working_directory_policy"] != policy:
         raise ManifestValidationError("receipt working-directory policy is not canonical")
     if receipt["task_visible_device_index"] != 0:
         raise ManifestValidationError("receipt task-visible GPU index must be zero")
@@ -992,8 +1039,15 @@ def _validate_receipt_argv(receipt: Mapping[str, Any]) -> None:
     ):
         raise ManifestValidationError("receipt stdout/stderr artifact references are not canonical")
     if (
-        receipt["sif_sha256"] != identity.sif_sha256
-        or receipt["configured_sif_path"] != identity.configured_sif_path
+        # Compare image authority while lexically validating both locations.
+        # A retained v1 location is hash-bound provenance, not an execution
+        # selector: it need not exist or share the current installation root.
+        # Executions still validate and pin the current configured CAS object.
+        not _runtime.compatible_runtime_identity(
+            {key: receipt[key] for key in ("configured_sif_path", "sif_sha256")},
+            {"configured_sif_path": identity.configured_sif_path,
+             "sif_sha256": identity.sif_sha256},
+        )
         or receipt["executable_path"] != identity.executable_path
         or receipt["executable_sha256"] != identity.executable_sha256
         or receipt["checkpoint_path"] != identity.checkpoint_path
@@ -1205,11 +1259,16 @@ def _validate_result_manifest_v1(
     )
     if paths != list(expected_paths):
         raise ManifestValidationError("manifest path order/set is not canonical")
+    _, _, retained_receipt = _json_identity(
+        payloads["frustrampnn_execution_receipt_v1.json"],
+        "frustrampnn_execution_receipt_v1.json",
+    )
     for declared in records:
         observed_record = _record(
             declared["relative_path"],
             payloads[declared["relative_path"]],
             declared["cardinality"],
+            retained_v1_receipt=retained_receipt,
         )
         if dict(declared) != observed_record:
             raise ManifestValidationError(
@@ -1902,15 +1961,15 @@ def summarize_landscape_v3(landscape: Mapping[str, Any], effective: Any) -> dict
 def _validate_receipt_argv_predict_batch(receipt: Mapping[str, Any]) -> None:
     command = receipt["commands"][0]
     argv = command["argv"]
-    if len(argv) < 26 or argv[:9] != [
-        argv[0], "exec", "--containall", "--writable-tmpfs", "--nv",
+    namespace_flags = _receipt_namespace_flags(argv)
+    prefix_length = 8 + len(namespace_flags)
+    if len(argv) < 25 + len(namespace_flags) or argv[:prefix_length] != [
+        argv[0], "exec", *namespace_flags, "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
         "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
     ]:
         raise ManifestValidationError("v3 predict_batch launcher prefix is invalid")
-    if not argv[0] or argv[0].split("/")[-1] != "apptainer":
-        raise ManifestValidationError("v3 predict_batch launcher executable must be Apptainer")
-    cursor = 9
+    cursor = prefix_length
     binds: list[str] = []
     while cursor + 1 < len(argv) and argv[cursor] == "--bind":
         binds.append(argv[cursor + 1])
@@ -1948,20 +2007,19 @@ def _validate_receipt_argv_v2(receipt: Mapping[str, Any], configuration: Any) ->
             tail.extend(["--chains", ",".join(command["chains"])])
         if command["positions"] is not None:
             tail.extend(["--positions", ",".join(map(str, command["positions"]))])
-        base_length = 24
+        namespace_flags = _receipt_namespace_flags(argv)
+        base_length = 23 + len(namespace_flags)
         if len(argv) != base_length + len(tail):
             raise ManifestValidationError("v2 receipt launcher argv has an unexpected token count")
         launcher = argv[0]
-        if not launcher or launcher.split("/")[-1] != "apptainer":
-            raise ManifestValidationError("v2 receipt launcher executable must be Apptainer")
-        sif_path = argv[13]
+        sif_path = argv[12 + len(namespace_flags)]
         if not sif_path.startswith("/proc/self/fd/") or not sif_path[14:].isdigit():
             raise ManifestValidationError("v2 receipt SIF path is not descriptor pinned")
         binds = [argv[index + 1] for index, token in enumerate(argv) if token == "--bind"]
         if len(binds) != 2:
             raise ManifestValidationError("v2 receipt bind policy is not exact")
         expected = [
-            launcher, "exec", "--containall", "--writable-tmpfs", "--nv",
+            launcher, "exec", *namespace_flags, "--writable-tmpfs", "--nv",
             "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
             "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
             "--bind", binds[0], "--bind", binds[1], sif_path,

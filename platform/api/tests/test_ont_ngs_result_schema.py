@@ -147,6 +147,20 @@ def test_retry3_fixture_exposes_historical_resource_evidence_as_a_discriminated_
     assert resources["receipt_sha256"] is None
 
 
+@pytest.mark.parametrize("state", ["not_produced", "missing_required"])
+def test_schema_accepts_unavailable_artifact_type_hints_without_download(state: str) -> None:
+    value = _fixture()
+    artifact = next(item for item in value["artifacts"] if item["state"] != "present")
+    artifact.update(state=state, content_disposition="attachment", filename_extension="fasta")
+    service.validate_ont_fastq_qc_result_contract(value)
+    assert artifact["url"] is None
+    assert artifact["artifact_id"] is None
+    assert artifact["range_capable"] is False
+    artifact["url"] = "/api/jobs/foreign/ngs-artifacts/" + "a" * 64
+    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
+        service.validate_ont_fastq_qc_result_contract(value)
+
+
 def test_schema_rejects_timezone_free_lifecycle_timestamp() -> None:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     value = _fixture()
@@ -296,3 +310,27 @@ def test_ngs_result_openapi_publishes_the_normative_closed_contract() -> None:
         "coverage", "verification", "stages", "execution_resources", "artifacts", "alignment_sessions",
     }
     assert "$defs" in component
+
+
+@pytest.mark.parametrize("status", ["unavailable", "historical_unavailable"])
+def test_optional_resource_absence_preserves_scientific_verdict(status):
+    value = _fixture()
+    value["execution_resources"]["evidence_status"] = status
+    service.validate_ont_fastq_qc_result_contract(value)
+    assert value["verification"]["verdict"] == "REVIEW"
+    value["execution_resources"]["observed_memory_peak_bytes"] = 1
+    with pytest.raises(service.OntNgsResultError):
+        service.validate_ont_fastq_qc_result_contract(value)
+
+
+def test_paginated_summary_preserves_full_science_with_variable_inventory():
+    value = _fixture()
+    count = len(value["verification"]["variants"])
+    value["authority"].update(declared_artifact_count=300, present_artifact_count=298, unavailable_artifact_count=2)
+    value["artifacts"] = []
+    value["verification"]["variants"] = []
+    value["pagination"] = {"artifacts": {"offset": 0, "count": 0, "total": 300, "next_offset": 0}, "variants": {"offset": 0, "count": 0, "total": count, "next_offset": 0}}
+    service.validate_ont_fastq_qc_result_contract(value)
+    value["pagination"]["artifacts"]["count"] = 1
+    with pytest.raises(service.OntNgsResultError, match="pagination"):
+        service.validate_ont_fastq_qc_result_contract(value)

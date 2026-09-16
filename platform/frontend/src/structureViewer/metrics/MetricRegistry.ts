@@ -1,6 +1,7 @@
 import {
     assessResidueRef,
     canonicalResidueRefKey,
+    canonicalSpatialRefKey,
     type AtomRef,
     type ResidueRef,
 } from '../contracts/structureIdentity.js';
@@ -68,7 +69,7 @@ const validateAtomValues = (values: readonly MetricValue<AtomRef>[]): ViewerResu
         if (identity.status !== 'ok') return identity;
         const atom = point.identity.labelAtomId ?? point.identity.authAtomId;
         if (!atom?.trim()) return viewerUnsupported('Atom metric identity requires labelAtomId or authAtomId', 'metric-identity');
-        const key = `${canonicalResidueRefKey(point.identity)}|atom=${encodeURIComponent(atom)}`;
+        const key = canonicalSpatialRefKey(point.identity);
         if (seen.has(key)) return viewerUnsupported(`Duplicate atom metric identity: ${key}`, 'metric-identity');
         seen.add(key);
     }
@@ -84,7 +85,7 @@ const validatePairValues = (values: readonly MetricValue<ResiduePairIdentity>[])
         if (first.status !== 'ok') return first;
         const second = validateResidue(point.identity.second);
         if (second.status !== 'ok') return second;
-        const key = `${canonicalResidueRefKey(point.identity.first)}::${canonicalResidueRefKey(point.identity.second)}`;
+        const key = `${canonicalSpatialRefKey(point.identity.first)}::${canonicalSpatialRefKey(point.identity.second)}`;
         if (seen.has(key)) return viewerUnsupported(`Duplicate residue-pair metric identity: ${key}`, 'metric-identity');
         seen.add(key);
     }
@@ -148,7 +149,21 @@ export const validateMetricLayer = (layer: MetricLayer): ViewerResult<MetricLaye
     if (layer.values.length > limits[layer.descriptor.dimension]) {
         return viewerUnsupported(`Metric layer exceeds the ${limits[layer.descriptor.dimension].toLocaleString()}-value ${layer.descriptor.dimension} admission limit`, 'metric-admission');
     }
-    const estimatedBytes = JSON.stringify(layer.values).length * 2;
+    if ('dataset' in layer && layer.dataset?.matrix) {
+        const d = layer.dataset, matrix = d.matrix!;
+        const rows = d.rowAxis ?? [], columns = d.columnAxis ?? [];
+        if (d.matrixDirection !== 'directed' || layer.values.length || !rows.length || !columns.length
+            || rows.length > 1024 || columns.length > 1024 || d.shape?.[0] !== rows.length || d.shape?.[1] !== columns.length
+            || d.documentIds.length !== 1 || d.descriptorId !== layer.descriptor.id
+            || matrix.length !== rows.length || matrix.some(row => row.length !== columns.length || row.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0))) {
+            return viewerUnsupported('Invalid dense directed matrix dimensions or values', 'metric-identity');
+        }
+        for (const axis of [rows, columns]) {
+            if (axis.some(ref => ref.documentId !== d.documentIds[0] || assessResidueRef(ref).status !== 'ok')
+                || new Set(axis.map(canonicalSpatialRefKey)).size !== axis.length) return viewerUnsupported('Invalid dense matrix axis identity', 'metric-identity');
+        }
+    }
+    const estimatedBytes = JSON.stringify('dataset' in layer && layer.dataset?.matrix ? layer.dataset : layer.values).length * 2;
     if (estimatedBytes > 64 * 1024 * 1024) {
         return viewerUnsupported('Metric layer exceeds the 64 MiB serialized admission budget', 'metric-admission');
     }

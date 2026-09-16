@@ -32,6 +32,7 @@ export interface ResolvedMolBioViewerLayout {
     rightPanelWidth: number;
     leftPanelBounds: MolBioPanelWidthBounds;
     rightPanelBounds: MolBioPanelWidthBounds;
+    overlayPanels: boolean;
     showLibraryPanel: boolean;
     showToolPanel: boolean;
     showLibraryResizeHandle: boolean;
@@ -40,7 +41,7 @@ export interface ResolvedMolBioViewerLayout {
 
 export const MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH = 256;
 export const MOLBIO_VIEWER_MIN_WIDTH = 320;
-export const MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS = MOLBIO_VIEWER_MIN_WIDTH + 224 + 256;
+export const MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS = MOLBIO_VIEWER_MIN_WIDTH + 224 + 256 + 32;
 
 export function shouldCollapseMolBioPanelsForViewport(viewportWidth: number): boolean {
     if (!Number.isFinite(viewportWidth)) {
@@ -104,30 +105,37 @@ export function resolveMolBioViewerLayout({
         ? clampMolBioPanelWidth(defaultRightPanelWidth, rightPanelBounds)
         : clampMolBioPanelWidth(rightPanelWidth, rightPanelBounds);
 
-    if (showLibraryPanel && showToolPanel) {
-        const panelBudget = safeViewportWidth - MOLBIO_VIEWER_MIN_WIDTH;
-        let overflow = resolvedLeftPanelWidth + resolvedRightPanelWidth - panelBudget;
+    // Narrow fine-pointer layouts use dismissible overlays, never subtracting
+    // sidebars from the sequence viewer. Touch layouts retain their own shell.
+    const overlayPanels = shouldCollapseMolBioPanelsForViewport(safeViewportWidth);
+    const handleWidth = safeViewportWidth < 768 ? 16 : 6;
+    if (!overlayPanels) {
+        const panelBudget = safeViewportWidth - MOLBIO_VIEWER_MIN_WIDTH
+            - (Number(showLibraryPanel) + Number(showToolPanel)) * handleWidth;
+        let overflow = (showLibraryPanel ? resolvedLeftPanelWidth : 0)
+            + (showToolPanel ? resolvedRightPanelWidth : 0) - panelBudget;
 
-        if (overflow > 0) {
+        if (overflow > 0 && showToolPanel) {
             const shrinkRight = Math.min(overflow, resolvedRightPanelWidth - rightPanelBounds.min);
             resolvedRightPanelWidth -= shrinkRight;
             overflow -= shrinkRight;
         }
 
-        if (overflow > 0) {
+        if (overflow > 0 && showLibraryPanel) {
             const shrinkLeft = Math.min(overflow, resolvedLeftPanelWidth - leftPanelBounds.min);
             resolvedLeftPanelWidth -= shrinkLeft;
         }
     }
 
     return {
+        overlayPanels,
         leftPanelBounds,
         rightPanelBounds,
         leftPanelWidth: resolvedLeftPanelWidth,
         rightPanelWidth: resolvedRightPanelWidth,
         showLibraryPanel,
         showToolPanel,
-        showLibraryResizeHandle: showLibraryPanel,
-        showToolResizeHandle: showToolPanel,
+        showLibraryResizeHandle: showLibraryPanel && !overlayPanels,
+        showToolResizeHandle: showToolPanel && !overlayPanels,
     };
 }

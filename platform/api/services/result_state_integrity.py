@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     Design,
+    ExecutionTarget,
     Job,
     RFD3LocalRedesignArtifact,
     RFD3LocalRedesignCandidate,
@@ -82,6 +83,9 @@ def _integrity_provenance(job: Job, payload: dict[str, Any]) -> dict[str, Any]:
 def job_expects_design_results(job: Job) -> bool:
     """Return whether a successful workflow is expected to publish Design rows."""
     params = job.params if isinstance(job.params, dict) else {}
+    if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
+            and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
+        return True
     explicit = params.get("result_integrity_requires_designs")
     if isinstance(explicit, bool):
         return explicit
@@ -340,6 +344,79 @@ async def _binder_design_rows_are_authoritative(
     return True
 
 
+def _component_publication_is_usable(job: Job) -> bool:
+    """Artifact-native projected children need their own retained custody, not
+    duplicate parent Design rows. Recheck their sealed refs during state repair.
+    """
+    from component_runtime import ResultReference
+
+    provenance = job.provenance or {}
+    projection = provenance.get('component_projection') or {}
+    publication = provenance.get('component_native_publication') or {}
+    if not isinstance(projection, dict) or not isinstance(publication, dict):
+        return False
+    if (projection.get('state') != 'completed'
+            or publication.get('state') != 'parent_native_import_validated'
+            or publication.get('parent_job_id') != projection.get('root_job_id')
+            or publication.get('projection_sha256') != projection.get('projection_sha256')
+            or not job.aggregated_by_parent):
+        return False
+    try:
+        root = Path(projection['artifact_root']).resolve(strict=True)
+        references = projection['result']['references']
+        if not references:
+            return False
+        for value in references:
+            reference = ResultReference(**value)
+            if reference.component_id != str(job.id):
+                return False
+            reference.resolve(root)
+    except (ValueError, OSError, KeyError, TypeError):
+        return False
+    return True
+
+
+async def finalize_component_projection(job: Job, session: AsyncSession) -> None:
+    """Publish native-validated child control states after parent native import.
+
+    A zero exit (execution_finished) never qualifies. Only the runtime's sealed
+    native collector completion plus the parent's accepted result transaction can
+    close a pending host projection. Native scientific rows stay with their
+    existing parent/component importer; this does not fabricate Design rows.
+    """
+    identities = session.info.setdefault('component_projection_verified', {}).pop(str(job.id), [])
+    if not identities:
+        return
+    if job.status != 'completed' or job.queue_status != 'completed' or job.awaiting_input:
+        raise ValueError('native parent completion must precede component publication')
+    children = list((await session.scalars(select(Job).where(
+        Job.id.in_(identities),
+        Job.lineage_root_job_id == (job.lineage_root_job_id or str(job.id)),
+        Job.status == 'paused', Job.queue_status == 'paused', Job.paused.is_(True),
+    ))).all())
+    for child in children:
+        projection = (child.provenance or {}).get('component_projection')
+        if (not isinstance(projection, dict) or projection.get('root_job_id') != str(job.id)
+                or projection.get('state') != 'completed'
+                or not (projection.get('result') or {}).get('references')):
+            continue
+        # These exact native references were checked by the projection importer
+        # before this transaction's parent native validation. Retained historical
+        # projections are not promoted by another attempt's successful return.
+        if job.execution_target_id and projection.get('attempt_id') != job.remote_attempt_id:
+            continue
+        child.status = child.queue_status = 'completed'
+        child.paused = False
+        child.current_stage = 'Complete'
+        child.completed_at = datetime.utcnow()
+        child.aggregated_by_parent = True
+        child.provenance = {**dict(child.provenance or {}), 'component_native_publication': {
+            'parent_job_id': str(job.id), 'projection_sha256': projection['projection_sha256'],
+            'state': 'parent_native_import_validated',
+        }}
+    await session.flush()
+
+
 async def finalize_successful_job(
     job: Job,
     output_dir: str,
@@ -350,6 +427,21 @@ async def finalize_successful_job(
 ) -> FinalizationResult:
     """Ingest, validate, and commit results before exposing terminal completion."""
     job_id = str(job.id)
+    manual_remote_pull = bool(job.execution_target_id and job.remote_state == "returning")
+    remote_authority = (
+        [Job.execution_target_id == job.execution_target_id,
+         Job.remote_attempt_id == job.remote_attempt_id,
+         Job.nextflow_run_id == job.nextflow_run_id,
+         Job.remote_state == job.remote_state,
+         Job.execution_source_revision == job.execution_source_revision,
+         Job.execution_source_tree == job.execution_source_tree,
+         Job.execution_bundle_sha256 == job.execution_bundle_sha256,
+         *([] if job.remote_state == "returning" else [select(ExecutionTarget.id).where(
+             ExecutionTarget.id == job.execution_target_id,
+             ExecutionTarget.leased_job_id == job_id,
+         ).exists()])]
+        if job.execution_target_id else []
+    )
     if ingest_fn is None:
         from services.result_ingester import ingest_job_results
 
@@ -366,6 +458,7 @@ async def finalize_successful_job(
         update(Job)
         .where(
             Job.id == job_id,
+            *remote_authority,
             Job.status == "running",
             Job.queue_status == "running",
             Job.awaiting_input.is_(False),
@@ -379,7 +472,27 @@ async def finalize_successful_job(
         return FinalizationResult(False, await _authoritative_result_count(session, job), state)
     await session.refresh(job)
 
+    from services.core_protein_scientific_contract import revision_for_job
+
+    strict_revision = None
     try:
+        strict_revision = revision_for_job(job)
+        # Interactive gates returned above. A terminal full antibody root must
+        # carry its own native aggregate, never merely an arbitrary child PDB.
+        from services.result_contracts import antibody_pipeline_closeout
+        from paths import resolve_runtime_data_path, get_data_root
+        native_root = Path(output_dir)
+        native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
+                       else get_data_root() / output_dir)
+        antibody_closeout = antibody_pipeline_closeout(job, native_root, required=True)
+        if (not job.execution_target_id
+                and job_id not in session.info.get('component_projection_verified', {})):
+            # Shared local execution publishes the same child envelope as remote
+            # return. Join this finalizer's transaction before any native result
+            # owner runs; an ingestion failure rolls the child projection back too.
+            from services.result_ingester import ingest_component_projection
+            await ingest_component_projection(job, output_dir, session)
+        session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
         ingested_count = await ingest_fn(
             job_id,
             output_dir,
@@ -387,6 +500,14 @@ async def finalize_successful_job(
             epitope_residues=epitope_residues,
             commit=False,
         )
+        from services.core_protein_execution_settings import persist_openmm_receipts
+        await persist_openmm_receipts(job, output_dir, session)
+        if antibody_closeout is not None:
+            expected_count = antibody_closeout['candidate_count']
+            direct_count = int(await session.scalar(select(func.count(Design.id)).where(
+                Design.job_id == job_id, Design.source_stage.is_(None))) or 0)
+            if expected_count <= 0 or direct_count < expected_count:
+                raise RuntimeError('Antibody root native closeout lacks its declared parent candidate rows')
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"
@@ -398,6 +519,28 @@ async def finalize_successful_job(
                 raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
             idempotent_prior_results = int(ingested_count or 0) <= 0
         elif job_expects_design_results(job):
+            from services.core_protein_result_contract import validate_persisted_publication
+
+            # Native/canonical owners prevalidate their own stronger contracts.
+            native_owner = False
+            if strict_revision == 1:
+                from services.result_ingester import _parse_job_params
+
+                native_owner = str(job.model_id or "").strip().lower() in {
+                    "protein_local_redesign", "conformational_mapping",
+                } or (
+                    str(job.model_id or "").strip().lower() == "protein_modification_experimental"
+                    and (str(job.mode or "").strip().lower() == "shape_blueprint" or (
+                        str(job.mode or "").strip().lower() == "de_novo_design"
+                        and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
+                    ))
+                )
+            primary_prevalidated = job_id in session.info.get("protein_design_primary_prevalidated", set())
+            if strict_revision == 1 and not native_owner and not primary_prevalidated:
+                rows = list((await session.execute(select(Design).where(
+                    Design.job_id == job_id, Design.source_stage.is_(None),
+                ))).scalars())
+                validate_persisted_publication(job, rows, output_dir)
             if count == 0:
                 raise RuntimeError("workflow completed but result ingestion produced no designs")
             usable_results = await _existing_designs_are_usable(session, job_id, output_dir)
@@ -411,7 +554,21 @@ async def finalize_successful_job(
                     )
             idempotent_prior_results = int(ingested_count or 0) <= 0
     except Exception as exc:
-        await session.rollback()
+        session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
+        from services.result_ingester import ShapeNoCandidates
+
+        native_no_yield = (
+            isinstance(exc, ShapeNoCandidates)
+            and isinstance(exc.shape_publication, dict)
+            and await _authoritative_result_count(session, job) == 0
+        )
+        if not native_no_yield:
+            await session.rollback()
+            if manual_remote_pull:
+                # Import failure remains received-but-unimported, never science completion.
+                raise
+        # Only validated zero-yield native publication preserves the caller's
+        # generation transaction; its science disposition remains failed.
         job = await session.get(Job, job_id)
         if job is None:
             raise RuntimeError(f"job disappeared during result finalization: {job_id}") from exc
@@ -419,6 +576,13 @@ async def finalize_successful_job(
             return FinalizationResult(False, await _authoritative_result_count(session, job), "cancelled")
         count = await _authoritative_result_count(session, job)
         partial = count > 0
+        from services.core_protein_result_contract import retained_usable_candidate_count
+
+        if strict_revision == 1 and job_expects_design_results(job):
+            retained_rows = list((await session.execute(select(Design).where(
+                Design.job_id == job_id, Design.source_stage.is_(None),
+            ))).scalars())
+            partial = retained_usable_candidate_count(retained_rows, output_dir) > 0
         message = str(exc) or exc.__class__.__name__
         integrity_state = str(getattr(exc, "integrity_state", "ingestion_failed"))
         no_candidates = integrity_state == "no_candidates" and count == 0
@@ -434,16 +598,34 @@ async def finalize_successful_job(
             ),
             "error": message,
         }
+        if getattr(exc, "reason", None) is not None:
+            details["reason"] = getattr(exc, "reason")
         if no_candidates:
             details["reason"] = getattr(exc, "reason", {"code": "no_candidates", "message": message})
+        # A terminal result failure must not erase separately verified upstream
+        # filter dispositions. Re-read after rollback; never retain failed reads.
+        from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
+        try:
+            from paths import get_data_root, resolve_runtime_data_path
+            filter_root = Path(output_dir)
+            filter_root = resolve_runtime_data_path(filter_root) if filter_root.is_absolute() else get_data_root() / filter_root
+            retain_filter_stages(job, prepare_filter_stages(job, filter_root))
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError):
+            pass
         failure_provenance = _integrity_provenance(
             job,
             details,
         )
+        # A native no-yield result is not an accepted Design, but its validated
+        # rejection/evidence custody survives the existing scientific disposition.
+        shape_publication = getattr(exc, "shape_publication", None)
+        if no_candidates and isinstance(shape_publication, dict):
+            failure_provenance["shape_result_publication"] = shape_publication
         failure = await session.execute(
             update(Job)
             .where(
                 Job.id == job_id,
+                *remote_authority,
                 Job.status == "running",
                 Job.queue_status == "running",
                 Job.awaiting_input.is_(False),
@@ -458,6 +640,8 @@ async def finalize_successful_job(
                 completed_at=datetime.utcnow(),
                 error_message=(f"No candidates: {message}" if no_candidates else f"Result ingestion failed: {message}"),
                 provenance=failure_provenance,
+                **({"remote_state": "ingested" if native_no_yield else "returned_ingestion_failed"}
+                   if remote_authority else {}),
             )
         )
         if failure.rowcount != 1:
@@ -472,6 +656,10 @@ async def finalize_successful_job(
 
         await terminalize_failed_request_for_job(session, job_id=job_id)
         await terminalize_failed_cm_request(session, job_id=job_id)
+        if job.execution_target_id:
+            from services.remote_execution.executor import _release_remote_target_lease
+
+            await _release_remote_target_lease(session, job)
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
@@ -494,6 +682,7 @@ async def finalize_successful_job(
         update(Job)
         .where(
             Job.id == job_id,
+            *remote_authority,
             Job.status == "running",
             Job.queue_status == "running",
             Job.awaiting_input.is_(False),
@@ -508,6 +697,7 @@ async def finalize_successful_job(
             error_message=None,
             completed_at=datetime.utcnow(),
             provenance=provenance,
+            **({"remote_state": "ingested"} if remote_authority else {}),
         )
     )
     if completion.rowcount != 1:
@@ -515,12 +705,17 @@ async def finalize_successful_job(
         job = await session.get(Job, job_id)
         state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
         return FinalizationResult(False, count, state)
+    await finalize_component_projection(job, session)
     if job_expects_rfd3_local_redesign_candidates(job):
         from services.rfd3_local_redesign import terminalize_completed_request_for_job
 
         if not await terminalize_completed_request_for_job(session, job_id=job_id):
             await session.rollback()
             raise RuntimeError("validated RFD3 completion has no generated native request projection")
+    if job.execution_target_id:
+        from services.remote_execution.executor import _release_remote_target_lease
+
+        await _release_remote_target_lease(session, job)
     await session.commit()
     await session.refresh(job)
     return FinalizationResult(True, count, "validated")
@@ -772,7 +967,13 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
         elif job.status == "completed":
             count = design_counts.get(str(job.id), 0)
             result_invalid = False
-            if job_expects_rfd3_local_redesign_candidates(job):
+            if isinstance(job.provenance, dict) and job.provenance.get('component_projection'):
+                if not _component_publication_is_usable(job):
+                    result_invalid = True
+                    code = 'completed_without_usable_component_results'
+                    detail = 'projected child lacks native parent acceptance or hash-valid retained artifacts'
+                    _set_integrity_failure(after, job, error=detail, partial=False, design_count=0)
+            elif job_expects_rfd3_local_redesign_candidates(job):
                 rfd3_count = await _rfd3_candidate_count(session, str(job.id))
                 rfd3_output_dir = str(job.child_output_dir or job.output_dir or "")
                 rfd3_usable = bool(rfd3_output_dir) and await _rfd3_candidates_are_usable(

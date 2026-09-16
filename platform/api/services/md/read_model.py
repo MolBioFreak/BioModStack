@@ -11,6 +11,7 @@ from services.md.artifacts import (
     MdArtifactProvenanceError, project_durable_md_artifacts, resolve_resume_checkpoint_artifacts,
 )
 from services.md.pause_actuator import _checkpoint_roots
+from schemas import ExecutionPolicy
 
 
 def _actions(phase: str, has_checkpoint: bool, retryable: bool, *, pre_replica_terminal: bool = False, pause_ready: bool = False) -> list[str]:
@@ -86,22 +87,34 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
     job_ids = [run.job_id for run, _job in rows]
 
     replica_summary: dict[str, Counter[str]] = defaultdict(Counter)
-    active_replica_counts: dict[str, int] = defaultdict(int)
+    latest_replica_counts: dict[str, int] = defaultdict(int)
     simulated_time_ps: dict[str, float] = {}
     retryable_jobs: set[str] = set()
     pause_ready_jobs: set[str] = set()
     if job_ids:
+        latest_attempts = (select(
+            MdReplicaRun.md_job_id, MdReplicaRun.replica_index,
+            func.max(MdReplicaRun.attempt).label('attempt'),
+        ).where(MdReplicaRun.md_job_id.in_(job_ids)).group_by(
+            MdReplicaRun.md_job_id, MdReplicaRun.replica_index,
+        )).subquery()
+        latest_identity = (
+            (MdReplicaRun.md_job_id == latest_attempts.c.md_job_id)
+            & (MdReplicaRun.replica_index == latest_attempts.c.replica_index)
+            & (MdReplicaRun.attempt == latest_attempts.c.attempt)
+        )
         summary_rows = (await session.execute(
             select(MdReplicaRun.md_job_id, MdReplicaRun.state, func.count(MdReplicaRun.id))
-            .where(MdReplicaRun.md_job_id.in_(job_ids), MdReplicaRun.active.is_(True))
+            .join(latest_attempts, latest_identity)
             .group_by(MdReplicaRun.md_job_id, MdReplicaRun.state)
         )).all()
         for job_id, state, count in summary_rows:
             replica_summary[job_id][state] = int(count)
-            active_replica_counts[job_id] += int(count)
+            latest_replica_counts[job_id] += int(count)
 
         time_rows = (await session.execute(
             select(MdReplicaRun.md_job_id, func.max(MdAttemptSegment.end_time_ps))
+            .join(latest_attempts, latest_identity)
             .join(MdAttemptSegment, MdAttemptSegment.replica_run_id == MdReplicaRun.id)
             .where(MdReplicaRun.md_job_id.in_(job_ids))
             .group_by(MdReplicaRun.md_job_id)
@@ -111,6 +124,7 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
 
         retryable_rows = list((await session.scalars(
             select(MdReplicaRun)
+            .join(latest_attempts, latest_identity)
             .where(
                 MdReplicaRun.md_job_id.in_(job_ids),
                 MdReplicaRun.active.is_(False),
@@ -179,19 +193,22 @@ async def md_queue_snapshot(session: AsyncSession, *, limit: int) -> dict:
             "name": job.name,
             "job_status": job.status,
             "queue_status": job.queue_status,
+            "execution_target_id": job.execution_target_id,
+            "execution_policy": ExecutionPolicy.from_params(job.params).model_dump(mode="json"),
             "phase": run.phase,
             "state_version": run.state_version,
             "engine": run.normalized_request.get("engine"),
             "replica_count": _replica_count(
-                run.normalized_request, active_replica_counts[run.job_id]
+                run.normalized_request, latest_replica_counts[run.job_id]
             ),
             "replica_summary": dict(replica_summary[run.job_id]),
             "simulated_time_ps": simulated_time_ps.get(run.job_id, 0.0),
             "requested_time_ps": _requested_time_ps(run.normalized_request),
             "checkpoint_available": has_checkpoint,
             "allowed_actions": _actions(
-                run.phase, has_checkpoint, run.job_id in retryable_jobs,
-                pause_ready=run.job_id in pause_ready_jobs,
+                run.phase, has_checkpoint and not run.controls_blocked,
+                run.job_id in retryable_jobs and not run.controls_blocked,
+                pause_ready=run.job_id in pause_ready_jobs and not run.controls_blocked,
             ),
             "chemistry": {
                 "profile_id": run.chemistry_profile_id,
@@ -257,12 +274,19 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
     events = list((await session.scalars(select(MdEvent).where(
         MdEvent.md_job_id == job_id
     ).order_by(MdEvent.created_at.desc()).limit(100))).all())
-    summary = Counter(item.state for item in replicas if item.active)
+    pending_retry = next((dict(operation_id=item.idempotency_key,
+        expected_state_version=item.expected_state_version,
+        replica_index=(item.payload or {}).get("replica_index"))
+        for item in events if item.event_type == "retry_requested"
+        and (item.payload or {}).get("source_child_job_id")
+        and not (item.payload or {}).get("shared_retry_receipt")), None)
+    latest_by_index = {item.replica_index: item for item in replicas}
+    summary = Counter(item.state for item in latest_by_index.values())
     retryable = any(
         not item.active
         and item.state in {"failed", "orphaned"}
         and str((item.failure or {}).get("code") or "") in RETRYABLE_INFRASTRUCTURE_FAILURES
-        for item in replicas
+        for item in latest_by_index.values()
     )
     running_replicas = [item for item in active_replicas if item.state == "running"]
     pause_ready = bool(running_replicas) and all(
@@ -276,10 +300,14 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
                 break
     chemistry = run.normalized_request.get("chemistry", {})
     requested_ps = _requested_time_ps(run.normalized_request)
-    completed_ps = max((float(item.end_time_ps or 0.0) for item in segments), default=0.0)
+    latest_replica_ids = {item.id for item in latest_by_index.values()}
+    completed_ps = max((float(item.end_time_ps or 0.0) for item in segments
+                        if item.replica_run_id in latest_replica_ids), default=0.0)
     return {
         "schema": "bms.md.run-detail.v1",
         "job_id": job_id,
+        "execution_target_id": job.execution_target_id,
+        "execution_policy": ExecutionPolicy.from_params(job.params).model_dump(mode="json"),
         "job_status": job.status,
         "queue_status": job.queue_status,
         "phase": run.phase,
@@ -297,10 +325,13 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
         "simulated_time_ps": completed_ps,
         "requested_time_ps": requested_ps,
         "checkpoint_available": checkpoint_available,
+        "pending_retry": pending_retry,
+        "controls_blocked": run.controls_blocked,
         "allowed_actions": _actions(
-            run.phase, checkpoint_available, retryable,
+            run.phase, checkpoint_available and not run.controls_blocked,
+            retryable and not run.controls_blocked,
             pre_replica_terminal=run.phase in {"failed", "cancelled"} and not replicas and not segments and not checkpoints and not artifact_count and not child_count,
-            pause_ready=pause_ready,
+            pause_ready=pause_ready and not run.controls_blocked,
         ),
         "action_explanations": {
             "resume_dynamics": "Unavailable: this failed launch has no accepted checkpoint.",
@@ -311,7 +342,8 @@ async def md_run_snapshot(session: AsyncSession, job_id: str) -> dict | None:
             "state": item.state, "active": item.active, "engine": item.engine,
             "failure": item.failure,
             "retry_eligible": (
-                not item.active
+                not run.controls_blocked and item.id in latest_replica_ids
+                and not item.active
                 and item.state in {"failed", "orphaned"}
                 and str((item.failure or {}).get("code") or "") in RETRYABLE_INFRASTRUCTURE_FAILURES
             ),

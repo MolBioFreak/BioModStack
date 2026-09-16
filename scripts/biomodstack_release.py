@@ -34,6 +34,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import biomodstack_services as services
+from biomodstack_runtime_profile import _consistent_configuration_read
 
 
 FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -70,6 +71,7 @@ MANAGED_UNIT_NAMES = (
 )
 
 
+@_consistent_configuration_read
 def _read_runtime_env(path: Path) -> dict[str, str]:
     """Read literal KEY=VALUE assignments with the runtime launcher's semantics."""
     if not path.is_file():
@@ -154,6 +156,15 @@ def _snapshot_has_restorable_runtime(snapshot: Mapping[str, Any]) -> bool:
 
 
 def execute_release(backend: ReleaseBackend, identity: BuildIdentity) -> None:
+    if getattr(backend, "managed_base", None) is not None:
+        from biomodstack_configuration import configuration_lock
+        with configuration_lock(name="managed-release.lock"):
+            _execute_release_locked(backend, identity)
+    else:
+        _execute_release_locked(backend, identity)
+
+
+def _execute_release_locked(backend: ReleaseBackend, identity: BuildIdentity) -> None:
     snapshot = backend.snapshot_known_good()
     candidate_touched = False
     try:
@@ -165,7 +176,12 @@ def execute_release(backend: ReleaseBackend, identity: BuildIdentity) -> None:
         backend.install_units(identity)
         backend.start_candidate()
         backend.validate_candidate_release(identity)
+        if getattr(backend, "managed_base", None) is not None:
+            backend.commit_known_good(snapshot, identity)
     except BaseException as release_error:
+        from biomodstack_configuration import ManagedReleaseRecoveryRequired
+        if isinstance(release_error, ManagedReleaseRecoveryRequired):
+            raise
         try:
             if candidate_touched:
                 backend.stop_candidate()
@@ -181,7 +197,11 @@ def execute_release(backend: ReleaseBackend, identity: BuildIdentity) -> None:
                 f"release failed ({release_error}); rollback also failed ({rollback_error})"
             ) from rollback_error
         raise
-    backend.commit_known_good(snapshot, identity)
+    # Legacy receipt publication is not transactionally rolled back. Preserve
+    # its existing post-validation failure semantics rather than restart an old
+    # runtime behind a newly published candidate receipt.
+    if getattr(backend, "managed_base", None) is None:
+        backend.commit_known_good(snapshot, identity)
 
 
 def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
@@ -193,6 +213,13 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _atomic_text_write(path: Path, content: str) -> None:
+    from biomodstack_configuration import configuration_lock, reject_managed_write
+    with configuration_lock():
+        reject_managed_write()
+        _atomic_text_write_unlocked(path, content)
+
+
+def _atomic_text_write_unlocked(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     temporary.write_text(content, encoding="utf-8")
@@ -247,8 +274,32 @@ class ProductionReleaseBackend:
                 / "biomodstack"
                 / "core-runtime.env",
             )
-        ).expanduser().resolve()
+        ).expanduser().absolute()
+        from biomodstack_configuration import (reject_managed_write, transaction_dir,
+                                               managed_release_base, ConfigurationBlocked)
+        self.managed_base = None
+        if transaction_dir().exists() and allow_first_install:
+            if "BMS_CORE_RUNTIME_ENV_FILE" in os.environ:
+                raise ConfigurationBlocked("managed_release_env_override_unsupported")
+            self.managed_base = managed_release_base(self.repo_root)
+            canonical_state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")).resolve() / "biomodstack/releases"
+            if self.state_dir != canonical_state:
+                raise ConfigurationBlocked("managed_release_state_override_unsupported")
+        else:
+            reject_managed_write()
+            self.runtime_env_file = self.runtime_env_file.resolve()
         runtime_env = _read_runtime_env(self.runtime_env_file)
+        self.managed_runtime_env = runtime_env if self.managed_base is not None else None
+        if self.managed_base is not None:
+            from biomodstack_configuration import RECEIPT_KEYS
+            for key, value in runtime_env.items():
+                if key not in RECEIPT_KEYS and key in os.environ and os.environ[key] != value:
+                    raise ConfigurationBlocked(f"managed_release_environment_override: {key}")
+            self.api_url = api_url or os.environ.get("BMS_RELEASE_API_URL") or f"http://127.0.0.1:{runtime_env['BMS_API_HOST_PORT']}/api/health"
+            self.browser_url = browser_url or os.environ.get("BMS_RELEASE_BROWSER_URL") or f"http://127.0.0.1:{runtime_env['BMS_WEB_HOST_PORT']}/bms/"
+            self.operator_url = operator_url or os.environ.get("BMS_RELEASE_OPERATOR_URL") or f"http://127.0.0.1:{runtime_env['BMS_DEV_WEB_HOST_PORT']}/"
+            self.operator_api_url = self.operator_url.rstrip("/") + "/api/health"
+            self.operator_identity_url = self.operator_url.rstrip("/") + "/src/lib/buildIdentity.ts"
         self.image_refs = {
             service: runtime_env.get(
                 IMAGE_REFS[service],
@@ -274,6 +325,8 @@ class ProductionReleaseBackend:
         capture_output: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         merged_env = os.environ.copy()
+        if self.managed_runtime_env is not None:
+            merged_env.update(self.managed_runtime_env)
         if env:
             merged_env.update(env)
         return subprocess.run(
@@ -408,6 +461,9 @@ class ProductionReleaseBackend:
         }
 
     def snapshot_known_good(self) -> Mapping[str, Any]:
+        from biomodstack_configuration import transaction_dir, ConfigurationBlocked
+        if self.managed_base is not None and (transaction_dir() / "release.json").exists():
+            raise ConfigurationBlocked("managed_release_already_recorded: use recover-managed; migration unsupported")
         units = self._unit_snapshot()
         validation = self._snapshot_known_good_validation(units)
         containers = {
@@ -604,6 +660,8 @@ class ProductionReleaseBackend:
     def render_operator_frontend_unit(self, identity: BuildIdentity) -> str:
         frontend_root = self.repo_root / "platform" / "frontend"
         vite = frontend_root / "node_modules" / ".bin" / "vite"
+        api_port = (self.managed_runtime_env or {}).get("BMS_API_HOST_PORT", "18000")
+        operator_port = (self.managed_runtime_env or {}).get("BMS_DEV_WEB_HOST_PORT", "18082")
         log_rotator = self.repo_root / "scripts" / "rotate_biomodstack_logs.py"
         limits = services.render_systemd_resource_boundaries(
             services.FRONTEND_SERVICE
@@ -622,13 +680,13 @@ class ProductionReleaseBackend:
             Type=simple
             Environment=BMS_HOME={self.repo_root}
             Environment=BMS_RUNTIME_MODE={services.CONTAINER_RUNTIME_MODE}
-            Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18000
+            Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{api_port}
             Environment=VITE_BMS_BUILD_SHA={identity.revision}
             Environment=VITE_BMS_BUILD_ID={identity.build_id}
             Environment=VITE_BMS_BUILD_TIME={identity.build_time}
             WorkingDirectory={frontend_root}
             ExecStartPre=/usr/bin/env python3 {log_rotator}
-            ExecStart={vite} --host 127.0.0.1 --port 18082 --strictPort
+            ExecStart={vite} --host 127.0.0.1 --port {operator_port} --strictPort
             Restart=on-failure
             RestartSec=10
             TimeoutStopSec=20
@@ -1189,6 +1247,26 @@ class ProductionReleaseBackend:
             # over the restored unit snapshot).
             self._stop_managed_units()
 
+    def recover_managed_known_good(self, release_id: str) -> None:
+        from biomodstack_configuration import configuration_lock
+        with configuration_lock(name="managed-release.lock"):
+            self._recover_managed_known_good_locked(release_id)
+
+    def _recover_managed_known_good_locked(self, release_id: str) -> None:
+        from biomodstack_configuration import (transaction_dir, _regular_text,
+                                               recover_managed_release, ConfigurationBlocked)
+        record = json.loads(_regular_text(transaction_dir() / "release.json"))
+        if record["manifest"]["release_id"] != release_id:
+            raise ConfigurationBlocked("release_id_mismatch")
+        receipt = record["manifest"]["receipt"]
+        identity = BuildIdentity(receipt["BMS_BUILD_SHA"], receipt["BMS_BUILD_ID"], receipt["BMS_BUILD_TIME"])
+        self.identity = identity
+        self.candidate_image_ids = record["known_good"]["images"]
+        self.validate_candidate_release(identity)
+        if self._candidate_running_image_ids() != self.candidate_image_ids:
+            raise ReleaseValidationError("recovery candidate image mismatch")
+        recover_managed_release(self.repo_root, release_id)
+
     def commit_known_good(
         self, snapshot: Mapping[str, Any], identity: BuildIdentity
     ) -> None:
@@ -1198,6 +1276,17 @@ class ProductionReleaseBackend:
             "BMS_MANAGED_API_IMAGE_ID": current_images["bms-api"],
             "BMS_MANAGED_WEB_IMAGE_ID": current_images["bms-web"],
         }
+        payload = {
+            "accepted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "build": identity.as_environment(), "images": current_images,
+            "image_refs": self.image_refs, "previous": snapshot,
+        }
+        if self.managed_base is not None:
+            from biomodstack_configuration import commit_managed_release
+            commit_managed_release(self.repo_root, self.managed_base, identity.build_id,
+                                   runtime_receipt, known_good_path=self.state_dir / "known-good.json",
+                                   known_good=payload)
+            return
         existing_lines = (
             self.runtime_env_file.read_text(encoding="utf-8").splitlines()
             if self.runtime_env_file.is_file()
@@ -1341,6 +1430,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("plan", help="print the side-effect-free release stages")
+    recovery = subparsers.add_parser("recover-managed", help="revalidate and finish recorded managed acceptance")
+    recovery.add_argument("--confirm-runtime-activation", action="store_true")
+    recovery.add_argument("--release-id", required=True)
     deploy = subparsers.add_parser("deploy", help="run the transactional production release")
     deploy.add_argument("--confirm-runtime-activation", action="store_true")
     deploy.add_argument("--allow-first-install", action="store_true")
@@ -1356,6 +1448,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.confirm_runtime_activation:
         raise SystemExit("deploy requires exact --confirm-runtime-activation")
+    if args.command == "recover-managed":
+        backend = ProductionReleaseBackend(allow_first_install=True)
+        backend.recover_managed_known_good(args.release_id)
+        print(json.dumps({"status": "accepted", "release_id": args.release_id}))
+        return 0
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     revision = _validated_source_revision(REPO_ROOT, args.revision)
     identity = BuildIdentity(

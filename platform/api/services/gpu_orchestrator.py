@@ -229,6 +229,8 @@ class JobInfo:
     batch_id: Optional[str] = None  # For GPU locking - all jobs in a batch share exclusive GPU access
     pinned_gpus: Optional[List[int]] = None  # Multi-GPU allowlist for parallel distribution
     scheduler_reservation_mb: Optional[int] = None
+    minimum_gpu_memory_mb: int = 0
+    gpu_memory_mb: int = 0  # Native minimum reservation, not physical capacity.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1100,6 +1102,8 @@ def _pending_job_reservation_mb(job: "JobInfo", observed_live_by_model: Dict[str
     """
     profile = _scheduler_profile(job.model_type)
     peak_estimate = max(1, int(job.vram_estimate_mb or 1))
+    if job.gpu_memory_mb:
+        return max(job.gpu_memory_mb, _profile_startup_reserve(profile, peak_estimate))
     startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     observed = observed_live_by_model.get(job.model_type, [])
@@ -1120,6 +1124,14 @@ def _running_job_reservation_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     """
     peak_estimate = max(1, int(getattr(job, "vram_estimate_mb", 0) or 1))
     profile = _scheduler_profile(_effective_job_model_type(job))
+    from native_components import job_gpu_capacity_requirements
+    try:
+        declared = job_gpu_capacity_requirements(getattr(job, "model_id", None), _normalize_job_params(getattr(job, "params", None)))
+    except (ValueError, OSError):
+        # An unavailable authority cannot release an already-running reservation.
+        return peak_estimate
+    if declared.get("gpu_memory_mb"):
+        return max(peak_estimate, declared["gpu_memory_mb"])
     startup_reserve = _profile_startup_reserve(profile, peak_estimate)
     live_surge = int(profile.get("live_surge_mb", 0))
     startup_grace = int(profile.get("startup_grace_seconds", 30))
@@ -1152,7 +1164,8 @@ def collect_live_vram_by_job(running_jobs: List[Any], gpu_stats: List[Any]) -> D
     """
     runnable = [
         job for job in running_jobs
-        if getattr(job, "queue_status", None) == "running" and job_uses_assigned_gpu(job)
+        if getattr(job, "queue_status", None) == "running"
+        and not getattr(job, "execution_target_id", None) and job_uses_assigned_gpu(job)
     ]
     if not runnable:
         return {}
@@ -1357,9 +1370,17 @@ async def _claim_job_for_gpu(
     except (ExecutionOwnershipError, ResourceUsageEvidenceError) as exc:
         logger.warning("[CLAIM SKIPPED] %s: %s", getattr(job, "id", ""), exc)
         return None
+    provenance = dict(getattr(job, 'provenance', None) or {})
+    pending = provenance.get('component_checkpoint_resume')
+    checkpoint_values = {}
+    if pending:
+        import uuid
+        checkpoint_values['provenance'] = {**provenance, 'component_checkpoint_resume': {
+            **pending, 'continuation_lease_id': uuid.uuid4().hex}}
     transition = await session.execute(
         update(Job)
         .where(
+            *([Job.provenance == provenance] if pending else []),
             Job.id == str(job.id),
             Job.status == "queued",
             Job.queue_status == "queued",
@@ -1377,6 +1398,7 @@ async def _claim_job_for_gpu(
             assigned_gpu=int(gpu_id),
             vram_estimate_mb=int(vram_estimate_mb),
             params=scheduler_params,
+            **checkpoint_values,
         )
         .execution_options(synchronize_session=False)
     )
@@ -1384,6 +1406,8 @@ async def _claim_job_for_gpu(
         await session.rollback()
         await session.refresh(job)
         return None
+    if checkpoint_values:
+        job.provenance = checkpoint_values['provenance']
     job.params = scheduler_params
     job.assigned_gpu = int(gpu_id)
     job.vram_estimate_mb = int(vram_estimate_mb)
@@ -1410,77 +1434,107 @@ async def _claim_remote_job(
     target_id = str(getattr(job, "execution_target_id", "") or "").strip()
     if not target_id:
         return None
-    lease_transition = await session.execute(
-        update(ExecutionTarget)
-        .where(
-            ExecutionTarget.id == target_id,
-            ExecutionTarget.active.is_(True),
-            ExecutionTarget.state == "ready",
-            ExecutionTarget.leased_job_id.is_(None),
-        )
-        .values(
-            leased_job_id=str(job.id),
-            lease_acquired_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if int(lease_transition.rowcount or 0) != 1:
-        await session.rollback()
+    from services.remote_execution.targets import ExecutionTargetError, get_ready_target
+    try:
+        target = await get_ready_target(session, target_id)
+    except ExecutionTargetError:
         return None
-    original = _normalize_job_params(getattr(job, "params", None))
-    scheduler_params = (
-        attach_scheduler_gpu_assignment(original, int(gpu_id))
-        if gpu_id is not None
-        else original
-    )
-    provenance = dict(getattr(job, "provenance", None) or {})
-    provenance["remote_execution_assignment"] = {
-        "schema": "bms.remote-execution-assignment.v1",
-        "execution_target_id": target_id,
-        "gpu_index": gpu_id,
-        "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
-        "admission_snapshot": dict(admission_snapshot or {}),
-        "claimed_at": datetime.utcnow().isoformat() + "Z",
-    }
-    transition = await session.execute(
-        update(Job)
-        .where(
-            Job.id == str(job.id),
-            Job.status == "queued",
-            Job.queue_status == "queued",
-            Job.paused.is_(False),
-            Job.assigned_gpu.is_(None),
-            Job.execution_target_id == target_id,
-            Job.params == original,
-            Job.started_at.is_(None),
-            Job.nextflow_run_id.is_(None),
-        )
-        .values(
-            status="running",
-            queue_status="running",
-            started_at=datetime.utcnow(),
-            assigned_gpu=gpu_id,
-            vram_estimate_mb=int(vram_estimate_mb),
-            params=scheduler_params,
-            provenance=provenance,
-            remote_state="staging",
-            error_message=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
+    from datetime import timedelta
+    from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
+    from services.remote_execution.progress import preload_idle_clause
+    import uuid
+    identity_fields = ("host", "port", "username", "remote_root", "host_key_sha256")
+    target_identity = {key: getattr(target, key) for key in identity_fields}
+    observed_identity = (admission_snapshot or {}).get("target_identity")
+    if observed_identity is not None and observed_identity != target_identity:
         return None
-    job.status = "running"
-    job.queue_status = "running"
-    job.started_at = job.started_at or datetime.utcnow()
+    claim_now = datetime.utcnow()
+    # A losing claim must not expire other workers' pending ORM rows. Keep
+    # target + job ownership atomic inside a savepoint, not a session rollback.
+    async with session.begin_nested() as claim:
+        lease_transition = await session.execute(
+            update(ExecutionTarget)
+            .where(
+                ExecutionTarget.id == target_id,
+                *(getattr(ExecutionTarget, key) == value for key, value in target_identity.items()),
+                ExecutionTarget.active.is_(True),
+                ExecutionTarget.state == "ready",
+                ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
+                ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+                ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
+                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
+                    (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
+                preload_idle_clause(),
+                ExecutionTarget.leased_job_id.is_(None),
+            )
+            .values(
+                leased_job_id=str(job.id),
+                lease_acquired_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(lease_transition.rowcount or 0) != 1:
+            await claim.rollback()
+            return None
+        original = _normalize_job_params(getattr(job, "params", None))
+        scheduler_params = (
+            attach_scheduler_gpu_assignment(original, int(gpu_id))
+            if gpu_id is not None
+            else original
+        )
+        provenance = dict(getattr(job, "provenance", None) or {})
+        provenance["remote_execution_assignment"] = {
+            "schema": "bms.remote-execution-assignment.v1",
+            "execution_target_id": target_id,
+            "root_job_id": str(job.id),
+            "lease_id": uuid.uuid4().hex,
+            "target_identity": target_identity,
+            "boot_id": (target.provider_metadata or {}).get("managed_boot_id"),
+            "policy": "exclusive_target",
+            "gpu_index": gpu_id,
+            "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
+            "admission_snapshot": dict(admission_snapshot or {}),
+            "claimed_at": datetime.utcnow().isoformat() + "Z",
+        }
+        transition = await session.execute(
+            update(Job)
+            .where(
+                Job.id == str(job.id),
+                Job.status == "queued",
+                Job.queue_status == "queued",
+                Job.paused.is_(False),
+                Job.assigned_gpu.is_(None),
+                Job.execution_target_id == target_id,
+                Job.params == original,
+                Job.started_at.is_(None),
+                Job.nextflow_run_id.is_(None),
+            )
+            .values(
+                status="queued",
+                queue_status="preparing",
+                started_at=None,
+                assigned_gpu=gpu_id,
+                vram_estimate_mb=int(vram_estimate_mb),
+                params=scheduler_params,
+                provenance=provenance,
+                remote_state="preparing",
+                error_message=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if int(transition.rowcount or 0) != 1:
+            await claim.rollback()
+            return None
+    job.status = "queued"
+    job.queue_status = "preparing"
+    job.started_at = None
     job.assigned_gpu = gpu_id
     job.vram_estimate_mb = int(vram_estimate_mb)
     job.params = scheduler_params
     job.provenance = provenance
-    job.remote_state = "staging"
+    job.remote_state = "preparing"
     job.error_message = None
     await session.commit()
     return scheduler_params
@@ -2005,6 +2059,8 @@ def pack_jobs_to_gpus(
                     continue
         
         for gpu in active_gpus:
+            if gpu.memory_total_mb < job.minimum_gpu_memory_mb:
+                continue
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
             force_available = _gpu_force_available(gpu.index, config)
             quick_available = quick_enable_tokens.get(gpu.index, 0) > 0
@@ -2167,13 +2223,23 @@ def build_queue_scheduler_diagnostics(
     - scheduler_blockers
     """
     diagnostics: Dict[str, Dict[str, Any]] = {}
+    queued_jobs = [job for job in queued_jobs if not getattr(job, "execution_target_id", None)]
+    running_jobs = [job for job in running_jobs if not getattr(job, "execution_target_id", None)]
     if not queued_jobs or not gpu_stats:
         return diagnostics
 
     job_infos: List[JobInfo] = []
     for job in queued_jobs:
         job_params = _normalize_job_params(getattr(job, "params", None))
-        vram = getattr(job, "vram_estimate_mb", None)
+        from native_components import job_gpu_capacity_requirements
+        try:
+            capacity_requirements = job_gpu_capacity_requirements(job.model_id, job_params)
+        except (ValueError, OSError) as exc:
+            diagnostics[job.id] = {"scheduler_required_mb": None, "scheduler_candidate_gpus": [],
+                "scheduler_ready": False, "scheduler_blockers": [f"Native GPU requirements unavailable: {exc}"]}
+            continue
+        vram = (max(job.vram_estimate_mb, capacity_requirements.get("gpu_memory_mb", 0))
+                if getattr(job, "vram_estimate_mb", None) is not None else capacity_requirements.get("gpu_memory_mb") or None)
         if vram is None:
             seq_len = getattr(job, "sequence_length", None) or 300
             vram = estimate_vram(getattr(job, "model_id", None) or "default", seq_len, job_params)
@@ -2190,6 +2256,8 @@ def build_queue_scheduler_diagnostics(
                 batch_id=getattr(job, "batch_id", None),
                 pinned_gpus=_normalize_pinned_gpus(job_params.get("pinned_gpus")),
                 scheduler_reservation_mb=vram,
+                minimum_gpu_memory_mb=capacity_requirements["minimum_gpu_memory_mb"],
+                gpu_memory_mb=capacity_requirements.get("gpu_memory_mb", 0),
             )
         )
 
@@ -2359,6 +2427,9 @@ def build_queue_scheduler_diagnostics(
                     continue
 
         for gpu in active_gpus:
+            if gpu.memory_total_mb < job.minimum_gpu_memory_mb:
+                reason_buckets.setdefault(f"requires {job.minimum_gpu_memory_mb} MB physical GPU capacity", []).append(gpu.index)
+                continue
             gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True, 'supports_protenix': True})
             force_available = _gpu_force_available(gpu.index, config)
             quick_available = quick_enable_tokens.get(gpu.index, 0) > 0
@@ -2491,6 +2562,7 @@ class GPUOrchestrator:
         self.poll_interval = poll_interval
         self._running = False
         self._task = None
+        self._remote_reconciliation_tasks: dict[str, asyncio.Task] = {}
     
     async def start(self):
         """Start the orchestrator loop."""
@@ -2511,6 +2583,11 @@ class GPUOrchestrator:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        tasks = list(self._remote_reconciliation_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._remote_reconciliation_tasks.clear()
         logger.info("[ORCHESTRATOR] Stopped")
     
     async def _run_loop(self):
@@ -2698,11 +2775,22 @@ class GPUOrchestrator:
                         active
                         for active in active_remote_jobs
                         if active.execution_target_id == job.execution_target_id
+                        and active.remote_state != "returning"
                     ]
-                    if target_active:
+                    if target_active or target.leased_job_id:
                         job.remote_state = "waiting_remote_worker"
+                        job.error_message = "Target exclusively reserved by an existing attempt; descendants share its worker runtime"
                         continue
-                    vram = job.vram_estimate_mb
+                    from native_components import job_gpu_capacity_requirements
+                    try:
+                        capacity_requirements = job_gpu_capacity_requirements(job.model_id, _normalize_job_params(job.params))
+                    except (ValueError, OSError) as exc:
+                        job.remote_state = "waiting_remote_capacity"
+                        job.error_message = f"Native GPU requirements unavailable: {exc}"[:1500]
+                        continue
+                    minimum_gpu_memory_mb = capacity_requirements["minimum_gpu_memory_mb"]
+                    vram = (max(job.vram_estimate_mb, capacity_requirements.get("gpu_memory_mb", 0))
+                            if job.vram_estimate_mb is not None else capacity_requirements.get("gpu_memory_mb") or None)
                     if vram is None:
                         vram = estimate_vram(
                             job.model_id or "default",
@@ -2712,22 +2800,12 @@ class GPUOrchestrator:
                     gpu_consuming = int(vram) != 0
                     capabilities = target.capabilities if isinstance(target.capabilities, dict) else {}
                     gpu_count = int(capabilities.get("gpu_count") or 0)
-                    gpu_vram_mb = int(capabilities.get("gpu_vram_mb") or 0)
-                    if gpu_consuming and gpu_vram_mb > 0 and int(vram) > gpu_vram_mb:
-                        job.remote_state = "waiting_remote_capacity"
-                        job.error_message = (
-                            f"Remote GPU capacity {gpu_vram_mb} MB is below the "
-                            f"{int(vram)} MB scheduler estimate"
-                        )
-                        continue
                     job_params = _normalize_job_params(job.params)
                     requested_remote_gpus = _normalize_pinned_gpus(
                         job_params.get("pinned_gpus") or job_params.get("bcp_gpu_ids")
                     )
-                    if gpu_consuming and not requested_remote_gpus:
-                        requested_remote_gpus = [
-                            int(job.pinned_gpu) if isinstance(job.pinned_gpu, int) else 0
-                        ]
+                    if gpu_consuming and not requested_remote_gpus and isinstance(job.pinned_gpu, int):
+                        requested_remote_gpus = [int(job.pinned_gpu)]
                     requested_remote_gpus = sorted(set(requested_remote_gpus or []))
                     remote_gpu = requested_remote_gpus[0] if requested_remote_gpus else None
                     if any(gpu_id < 0 or gpu_id >= gpu_count for gpu_id in requested_remote_gpus):
@@ -2751,6 +2829,34 @@ class GPUOrchestrator:
                             for row in telemetry.get("gpus", [])
                             if isinstance(row, dict) and isinstance(row.get("index"), int)
                         }
+                        try:
+                            fill = max(
+                                0.05,
+                                min(0.99, float(config.get("global", {}).get("target_vram_fill", 0.75))),
+                            )
+                        except (TypeError, ValueError):
+                            fill = 0.75
+                        try:
+                            margin_mb = max(
+                                0,
+                                int(config.get("global", {}).get("vram_safety_margin_mb", 2048)),
+                            )
+                        except (TypeError, ValueError):
+                            margin_mb = 2048
+                        if not requested_remote_gpus:
+                            eligible = [index for index, row in telemetry_by_index.items()
+                                if 0 <= index < gpu_count and row.get("uuid")
+                                and int(row.get("memory_total_mb") or 0) >= minimum_gpu_memory_mb
+                                and max(0, int(int(row.get("memory_total_mb") or 0) * fill)
+                                        - int(row.get("memory_used_mb") or 0) - margin_mb) >= int(vram)]
+                            if not eligible:
+                                job.remote_state = "waiting_remote_capacity"
+                                job.error_message = f"No target GPU satisfies {minimum_gpu_memory_mb} MB physical capacity and {int(vram)} MB reservation"
+                                continue
+                            # Deterministic fit within this target's physical namespace.
+                            requested_remote_gpus = [min(eligible, key=lambda index: (
+                                int(telemetry_by_index[index]["memory_total_mb"]), index))]
+                            remote_gpu = requested_remote_gpus[0]
                         insufficient = []
                         admitted_devices = []
                         for gpu_id in requested_remote_gpus:
@@ -2760,20 +2866,6 @@ class GPUOrchestrator:
                                 continue
                             total_mb = int(row.get("memory_total_mb") or 0)
                             used_mb = int(row.get("memory_used_mb") or 0)
-                            try:
-                                fill = max(
-                                    0.05,
-                                    min(0.99, float(config.get("global", {}).get("target_vram_fill", 0.75))),
-                                )
-                            except (TypeError, ValueError):
-                                fill = 0.75
-                            try:
-                                margin_mb = max(
-                                    0,
-                                    int(config.get("global", {}).get("vram_safety_margin_mb", 2048)),
-                                )
-                            except (TypeError, ValueError):
-                                margin_mb = 2048
                             available_mb = max(0, int(total_mb * fill) - used_mb - margin_mb)
                             admitted_devices.append(
                                 {
@@ -2786,6 +2878,8 @@ class GPUOrchestrator:
                                     "available_mb": available_mb,
                                 }
                             )
+                            if total_mb < minimum_gpu_memory_mb:
+                                insufficient.append(f"GPU {gpu_id} has {total_mb} MB physical capacity; {minimum_gpu_memory_mb} MB is required")
                             if available_mb < int(vram):
                                 insufficient.append(
                                     f"GPU {gpu_id} has {available_mb} MB admissible; "
@@ -2799,8 +2893,13 @@ class GPUOrchestrator:
                             "schema": "bms.remote-gpu-admission.v1",
                             "observed_at": telemetry.get("observed_at"),
                             "required_per_gpu_mb": int(vram),
+                            "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
                             "devices": admitted_devices,
                         }
+                    admission_snapshot["target_identity"] = {
+                        key: getattr(target, key)
+                        for key in ("host", "port", "username", "remote_root", "host_key_sha256")
+                    }
                     claimed_params = await _claim_remote_job(
                         session,
                         job,
@@ -2845,6 +2944,23 @@ class GPUOrchestrator:
             
             for job in cpu_only_jobs:
                 try:
+                    provenance = dict(job.provenance or {})
+                    pending = provenance.get('component_checkpoint_resume')
+                    if pending:
+                        from sqlalchemy import update
+                        import uuid
+                        claimed_provenance = {**provenance, 'component_checkpoint_resume': {
+                            **pending, 'continuation_lease_id': uuid.uuid4().hex}}
+                        claim = await session.execute(update(Job).where(Job.id == job.id,
+                            Job.status == 'queued', Job.queue_status == 'queued',
+                            Job.provenance == provenance, Job.paused.is_(False),
+                            Job.assigned_gpu.is_(None), Job.nextflow_run_id.is_(None)
+                        ).values(provenance=claimed_provenance, queue_status='running').execution_options(synchronize_session=False))
+                        if claim.rowcount != 1:
+                            await session.rollback()
+                            continue
+                        job.provenance = claimed_provenance
+                        await session.commit()
                     await self.launch_nextflow_job(
                         job_id=job.id,
                         model_id=job.model_id,
@@ -2852,9 +2968,12 @@ class GPUOrchestrator:
                         params={**job.params},  # No gpu_id injected
                         output_dir=job.child_output_dir or job.output_dir
                     )
-                    job.queue_status = "running"
-                    job.assigned_gpu = None
-                    job.started_at = datetime.utcnow()
+                    if pending:
+                        await session.refresh(job)
+                    if not pending or job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}:
+                        job.queue_status = "running"
+                        job.assigned_gpu = None
+                        job.started_at = datetime.utcnow()
                     logger.info(f"[LAUNCH CPU] {job.name} (no GPU, vram_estimate=0)")
                 except Exception as e:
                     logger.error(f"[LAUNCH CPU FAILED] {job.name}: {e}")
@@ -2875,8 +2994,15 @@ class GPUOrchestrator:
             for job in pending_jobs:
                 job_params = _normalize_job_params(job.params)
 
-                # Estimate VRAM if not set
-                vram = job.vram_estimate_mb
+                from native_components import job_gpu_capacity_requirements
+                try:
+                    capacity_requirements = job_gpu_capacity_requirements(job.model_id, job_params)
+                except (ValueError, OSError) as exc:
+                    job.error_message = f"Native GPU requirements unavailable: {exc}"[:1500]
+                    continue
+                # Physical capacity and reservation are distinct requirements.
+                vram = (max(job.vram_estimate_mb, capacity_requirements.get("gpu_memory_mb", 0))
+                            if job.vram_estimate_mb is not None else capacity_requirements.get("gpu_memory_mb") or None)
                 if vram is None:
                     seq_len = job.sequence_length or 300
                     model = job.model_id or 'default'
@@ -2899,6 +3025,8 @@ class GPUOrchestrator:
                     batch_id=getattr(job, 'batch_id', None),  # For GPU locking
                     pinned_gpus=pinned_gpus,  # Multi-GPU allowlist
                     scheduler_reservation_mb=vram,
+                    minimum_gpu_memory_mb=capacity_requirements["minimum_gpu_memory_mb"],
+                    gpu_memory_mb=capacity_requirements.get("gpu_memory_mb", 0),
                 ))
             
             # 3. Get GPU state
@@ -2913,6 +3041,7 @@ class GPUOrchestrator:
             running_jobs_result = await session.execute(
                 select(Job).where(
                     Job.queue_status == 'running',
+                    Job.execution_target_id.is_(None),
                     Job.assigned_gpu.isnot(None),
                     Job.vram_estimate_mb.isnot(None)
                 )
@@ -3138,6 +3267,19 @@ class GPUOrchestrator:
             
             await session.commit()
     
+    async def _reconcile_remote_target(self, remote_ids: list[str]) -> None:
+        """One control task per target; a slow SSH/pull cannot block the fleet."""
+        from services.remote_execution.executor import reconcile_remote_job
+        from database import Job
+        for remote_id in remote_ids:
+            try:
+                async with self.db_session_factory() as session:
+                    job = await session.get(Job, remote_id)
+                    if job is not None:
+                        await reconcile_remote_job(session, job)
+            except Exception as exc:
+                logger.warning("[REMOTE COMPLETION] Job %s remains pending reconciliation: %s", remote_id, exc)
+
     async def check_job_completions(self):
         """
         Check running jobs for completion or failure.
@@ -3150,32 +3292,72 @@ class GPUOrchestrator:
         import subprocess
         
         try:
+            from sqlalchemy import select, func
+            from database import Job, Design
+            from services.nextflow import maybe_trigger_mutation_seed_refinement
+
+            # Native follow-ons remain pending after remote import releases its
+            # lease. Recover only explicitly requested, unconsumed MSA batches;
+            # completed historical jobs do not enter generic running finalization.
+            async with self.db_session_factory() as recovery_session:
+                pending_batches = select(Job.batch_id).where(
+                    (Job.job_phase == 'msa_generation') |
+                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
+                    Job.batch_id.is_not(None),
+                    Job.params["mutation_seed_refinement_trigger"].as_string().is_not(None),
+                    func.coalesce(Job.params["_mutation_seed_refinement_triggered"].as_boolean(), False).is_(False),
+                )
+                representatives = await recovery_session.execute(select(func.min(Job.id)).where(
+                    Job.batch_id.in_(pending_batches),
+                    Job.job_phase == "inference", Job.status == "completed",
+                ).group_by(Job.batch_id))
+                pending_follow_ons = list(representatives.scalars())
+            for representative_id in pending_follow_ons:
+                async with self.db_session_factory() as recovery_session:
+                    representative = await recovery_session.get(Job, representative_id)
+                    if representative is not None:
+                        await maybe_trigger_mutation_seed_refinement(representative, recovery_session)
+
             async with self.db_session_factory() as session:
-                from sqlalchemy import select, func
-                from database import Job, Design
-                
-                # Get jobs that are currently running
+                # Terminal host rows are not proof that remote writers stopped.
+                # Existing-attempt reconciliation alone may release these leases.
+                from database import ExecutionTarget
+                leased_owner = select(ExecutionTarget.id).where(
+                    ExecutionTarget.leased_job_id == Job.id,
+                    ExecutionTarget.id == Job.execution_target_id,
+                ).exists()
+                # Preparing claims are durable work, not scheduler-claimable jobs.
                 result = await session.execute(
                     select(Job).where(
-                        Job.queue_status.in_(("running", "cancelling"))
+                        Job.queue_status.in_(("running", "cancelling", "preparing"))
+                        | leased_owner
+                        | (
+                            Job.execution_target_id.is_not(None)
+                            & (
+                                (Job.remote_state == "results_available")
+                                | (
+                                    Job.status.in_(("failed", "cancelled"))
+                                    & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
+                                )
+                            )
+                        )
                     )
                 )
                 running_jobs = result.scalars().all()
 
-                remote_jobs = [job for job in running_jobs if job.execution_target_id]
-                if remote_jobs:
-                    from services.remote_execution.executor import reconcile_remote_job
-
-                    for remote_job in remote_jobs:
-                        try:
-                            await reconcile_remote_job(session, remote_job)
-                        except Exception as remote_error:
-                            logger.warning(
-                                "[REMOTE COMPLETION] Job %s remains pending reconciliation: %s",
-                                remote_job.id,
-                                remote_error,
-                            )
-                    running_jobs = [job for job in running_jobs if not job.execution_target_id]
+                remote_by_target: dict[str, list[str]] = {}
+                for job in running_jobs:
+                    if job.execution_target_id:
+                        remote_by_target.setdefault(str(job.execution_target_id), []).append(str(job.id))
+                running_jobs = [job for job in running_jobs if not job.execution_target_id]
+                for target_id, remote_ids in remote_by_target.items():
+                    task = self._remote_reconciliation_tasks.get(target_id)
+                    if task is None or task.done():
+                        self._remote_reconciliation_tasks[target_id] = asyncio.create_task(
+                            self._reconcile_remote_target(remote_ids))
+                for target_id, task in list(self._remote_reconciliation_tasks.items()):
+                    if task.done():
+                        del self._remote_reconciliation_tasks[target_id]
 
                 if not running_jobs:
                     return
@@ -3389,20 +3571,36 @@ class GPUOrchestrator:
                                     and getattr(job, "parent_job_id", None) is None
                                 )
                                 if is_md_parent:
-                                    from services.md.results import MDResultError, apply_completion_barrier
+                                    from services.nextflow import _finalize_local_md_job
 
                                     try:
-                                        apply_completion_barrier(job)
+                                        await _finalize_local_md_job(job, session, result_output_dir)
                                         job.completed_at = datetime.utcnow()
-                                    except MDResultError as exc:
+                                    except Exception as exc:
                                         job.status = "failed"
                                         job.queue_status = "failed"
                                         job.current_stage = "MD Completion Blocked"
                                         job.stage_progress = None
-                                        job.error_message = f"{exc.code}: {exc}"
+                                        job.error_message = f"{getattr(exc, 'code', 'md_completion_invalid')}: {exc}"
                                         job.completed_at = datetime.utcnow()
                                         await _commit_reconciled_job_mutations(session)
                                         logger.warning("[COMPLETION] MD barrier rejected %s: %s", job.name, exc)
+                                        reconciled += 1
+                                        continue
+                                elif (str(getattr(job, 'model_id', '')).lower() == 'molecular_dynamics'
+                                      and str(getattr(job, 'mode', '')).lower() in {'simulate', 'analyze'}
+                                      and result_output_dir):
+                                    from services.nextflow import _finalize_local_md_job
+                                    try:
+                                        await _finalize_local_md_job(job, session, result_output_dir)
+                                    except Exception as exc:
+                                        job.status = 'failed'
+                                        job.queue_status = 'failed'
+                                        job.current_stage = 'MD Result Validation Failed'
+                                        job.stage_progress = None
+                                        job.error_message = f'MD history completion validation failed: {exc}'
+                                        job.completed_at = datetime.utcnow()
+                                        await _commit_reconciled_job_mutations(session)
                                         reconciled += 1
                                         continue
                                 elif result_output_dir:
@@ -3558,9 +3756,9 @@ class GPUOrchestrator:
                                     and result_output_dir
                                 ):
                                     if job.model_id == "molecular_dynamics" and job.mode == "simulate":
-                                        from services.md.completion import validate_and_finalize_md_job
+                                        from services.nextflow import _finalize_local_md_job
 
-                                        await validate_and_finalize_md_job(job, session)
+                                        await _finalize_local_md_job(job, session, result_output_dir)
                                     else:
                                         from services.result_state_integrity import finalize_successful_job
 

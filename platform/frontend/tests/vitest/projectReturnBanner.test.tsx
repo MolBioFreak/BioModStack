@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProjectReturnBanner } from '../../src/components/project-manager/ProjectReturnBanner';
 import { getLaunchContext } from '../../src/lib/projectManager';
+import { api } from '../../src/lib/api';
 
-vi.mock('../../src/lib/projectManager', () => ({
+vi.mock('../../src/lib/projectManager', async original => ({
+    ...await original<typeof import('../../src/lib/projectManager')>(),
     getLaunchContext: vi.fn(),
 }));
 
@@ -91,5 +93,30 @@ describe('ProjectReturnBanner', () => {
             );
         });
         expect(rendered.querySelector('a')).toBeNull();
+    });
+    it.each([
+        ['/projects/p/experiments/g/domains/d?workspace=protein&section=results', 'gr', true],
+        ['https://evil.test/projects/p', 'gr', false],
+        ['/projects/foreign/experiments/g/domains/d?workspace=protein&section=results', 'gr', false],
+        ['/projects/p/experiments/g/domains/d?workspace=protein&section=results', 'stale', false],
+        ['/projects/p/experiments/g/domains/d?workspace=protein&section=unknown', 'gr', false],
+    ])('read-validates hierarchy and safe return %s at revision %s', async (returnUri, globalRevision, allowed) => {
+        const original = api.defaults.adapter;
+        let reads = 0;
+        api.defaults.adapter = async config => {
+            expect(config.method).toBe('get'); reads++;
+            const data = config.url?.endsWith('/domains/d')
+                ? { id: 'd', parent_id: 'g', current_revision_id: 'dr' }
+                : config.url?.endsWith('/experiments/g')
+                    ? { id: 'g', parent_id: 'p', current_revision_id: 'gr' } : { id: 'p' };
+            return { data, status: 200, statusText: 'OK', headers: {}, config };
+        };
+        try {
+            const params = new URLSearchParams({ workspace_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', global_experiment_revision_id: globalRevision, domain_revision_id: 'dr', return_uri: returnUri });
+            const rendered = await renderAt(`/designs/job?${params}`);
+            await vi.waitFor(() => expect(reads).toBe(3));
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+            expect(Boolean(rendered.querySelector('a[aria-label="Return to Project context"]'))).toBe(allowed);
+        } finally { api.defaults.adapter = original; }
     });
 });

@@ -322,10 +322,12 @@ def _render_options(command: list[str], *, orientation: str, molecule_type: str,
         if not point_size.is_integer():
             raise ValueError("Squigualiser accepts only 0.5 or integer point size")
         command.extend(["--point_size", str(int(point_size))])
+    # Both comparison tracks invoke plot_pileup (pinned Squigualiser 0.7.0),
+    # which is always fixed-width and uses positive sample-count annotation.
     if params.get("fixed_width"):
-        command.extend(["--fixed_width", "--base_width", str(params["base_width"])])
-    if not params.get("show_samples", True):
-        command.append("--no_samples")
+        command.extend(["--base_width", str(params["base_width"])])
+    if params.get("show_samples", True):
+        command.append("--plot_num_samples")
     if not params.get("show_base_colours", True):
         command.append("--no_colours")
     if params.get("remove_signal_outliers"):

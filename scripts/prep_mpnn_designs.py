@@ -126,7 +126,27 @@ def modify_pdb_file(input_pdb, output_pdb, fixed_residues):
     
     logger.info(f"Added {len(fixed_residues)} FIXED remarks to {os.path.basename(output_pdb)}")
 
-def process_files(input_dir, out_dir):
+def validate_generic_input(pdb_path):
+    """The same native input rule is used at admission and preparation."""
+    if __package__:
+        from .prep_fampnn_constraints_generic import pdb_domain
+    else:
+        from prep_fampnn_constraints_generic import pdb_domain
+    pdb_path = Path(pdb_path)
+    domain = pdb_domain(pdb_path)
+    if len({chain for chain, _ in domain}) != 1:
+        raise ValueError('generic ProteinMPNN multi-chain design requires an explicit native role contract; binder runner fixes the last chain')
+    numbers = {n for _, n in domain}
+    for line in pdb_path.read_text().splitlines():
+        if 'PDBinfo-LABEL:' not in line or 'FIXED' not in line:
+            continue
+        match = re.fullmatch(r'REMARK\s+PDBinfo-LABEL:\s*(\d+)\s+FIXED\s*', line)
+        if not match or int(match.group(1)) not in numbers:
+            raise ValueError('absent or ambiguous native FIXED residue label')
+    return domain
+
+
+def process_files(input_dir, out_dir, generic=False):
     """Process all PDB files in the input directory"""
     logger = logging.getLogger()
     
@@ -139,6 +159,12 @@ def process_files(input_dir, out_dir):
     
     total_fixed = 0
     for pdb_path in pdb_files:
+        if generic:
+            # Native FIXED labels are the authority, not experimental B-factors
+            # or synthetic RFD inpaint metadata. Do not rewrite their dialect.
+            validate_generic_input(pdb_path)
+            (Path(out_dir) / pdb_path.name).write_bytes(pdb_path.read_bytes())
+            continue
         # Look for corresponding JSON file
         json_path = pdb_path.with_suffix('.json')
         if not json_path.exists():
@@ -155,11 +181,45 @@ def process_files(input_dir, out_dir):
     
     logger.info(f"Processing complete. Added FIXED remarks for {total_fixed} residues across {len(pdb_files)} files.")
 
+def canonical_results(input_dir, out_dir):
+    """Bind native metrics by exact payload.design, retaining their bytes.
+
+    Existing consumers disagree about JSON filename prefixes. Never guess
+    identity from a prefix or a substring. The caller
+    retains the entire original output directory separately, including JSON
+    that is not per-candidate sequence metadata.
+    """
+    import shutil
+    source, output = Path(input_dir), Path(out_dir)
+    pdbs = {p.stem: p for p in source.glob('*.pdb')}
+    if not pdbs:
+        raise ValueError('native ProteinMPNN produced no structures')
+    metadata = {}
+    for path in source.glob('*.json'):
+        payload = json.loads(path.read_text())
+        if not isinstance(payload, dict) or not {'design', 'sequence', 'score'} <= payload.keys():
+            continue
+        name = payload['design']
+        if not isinstance(name, str) or name not in pdbs:
+            raise ValueError('native ProteinMPNN metadata names an absent structure')
+        if name in metadata:
+            raise ValueError('ambiguous native ProteinMPNN candidate metadata')
+        metadata[name] = path
+    if metadata.keys() != pdbs.keys():
+        raise ValueError('native ProteinMPNN structure/metadata membership mismatch')
+    output.mkdir(parents=True, exist_ok=True)
+    for name, pdb in pdbs.items():
+        shutil.copyfile(pdb, output / pdb.name)
+        shutil.copyfile(metadata[name], output / (name + '.json'))
+
+
 def main():
     logger = setup_logging()
     
     parser = argparse.ArgumentParser(description='Prepare PDB files for ProteinMPNN by adding FIXED remarks')
     parser.add_argument('--input_dir', required=True, help='Directory containing PDB and JSON files')
+    parser.add_argument('--canonical_results', action='store_true', help='Copy exact payload-bound native PDB/JSON candidate pairs')
+    parser.add_argument('--generic', action='store_true', help='Preserve only explicit native FIXED authority and all input bytes')
     parser.add_argument('--out_dir', default='mpnn_input', help='Output directory for modified PDB files')
     
     args = parser.parse_args()
@@ -168,7 +228,10 @@ def main():
     logger.info(f"Input directory: {args.input_dir}")
     logger.info(f"Output directory: {args.out_dir}")
     
-    process_files(args.input_dir, args.out_dir)
+    if args.canonical_results:
+        canonical_results(args.input_dir, args.out_dir)
+    else:
+        process_files(args.input_dir, args.out_dir, generic=args.generic)
     
     logger.info("Script completed successfully")
 

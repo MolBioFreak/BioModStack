@@ -6,7 +6,7 @@ const source = (path: string) => readFileSync(path, 'utf8');
 
 test('RFD3 generation result surface is routed before generic design results', () => {
     const viewer = source('src/components/ResultsViewer.tsx');
-    const pane = source('src/components/RFD3GenerationResultsPane.tsx');
+    const pane = source('src/components/rfd3GenerationResultsView.ts');
     assert.match(pane, /job\?\.model_id === 'protein_modification_experimental'/);
     assert.match(pane, /job\?\.mode === 'de_novo_design'/);
     assert.match(viewer, /isRFD3GenerationResultJob\(activeJob\)/);

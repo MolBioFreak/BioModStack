@@ -163,7 +163,7 @@ def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority(
     assert validated == [reconciliation]
 
 
-def test_result_reopen_rejects_fresh_resource_receipt_without_persisted_bytes() -> None:
+def test_result_reopen_does_not_require_resource_observations() -> None:
     from services import ont_ngs_results as service
 
     require = cast(Any, getattr(service, "_require_persisted_package_authority", None))
@@ -175,15 +175,15 @@ def test_result_reopen_rejects_fresh_resource_receipt_without_persisted_bytes() 
         provenance={"result_integrity": _persisted_authority_record()},
         params=params,
     )
-    with pytest.raises(service.OntNgsResultError, match="resource receipt"):
-        require(
-            job,
-            _observed_package_authority(),
-            sequence_qc_manifest_sha256="d" * 64,
-            construct_verification_manifest_sha256="e" * 64,
-            reference_sequence_sha256="b" * 64,
-            source_fastq_sha256="c" * 64,
-        )
+    authority = require(
+        job,
+        _observed_package_authority(),
+        sequence_qc_manifest_sha256="d" * 64,
+        construct_verification_manifest_sha256="e" * 64,
+        reference_sequence_sha256="b" * 64,
+        source_fastq_sha256="c" * 64,
+    )
+    assert authority == job.provenance["result_integrity"]
 
 
 def test_result_reopen_rejects_package_authority_mismatch() -> None:
@@ -286,14 +286,17 @@ def test_accepted_resource_projection_rejects_fully_rehashed_foreign_job_receipt
     receipt["receipt_sha256"] = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
     job = SimpleNamespace(id="job-1", status="completed", assigned_gpu=None, params=params)
 
+    authority = {
+        "resource_evidence_status": "accepted",
+        "resource_usage_receipt_sha256": receipt["receipt_sha256"],
+    }
     with pytest.raises(service.OntNgsResultError, match="receipt history is invalid"):
-        project(
-            job,
-            {
-                "resource_evidence_status": "accepted",
-                "resource_usage_receipt_sha256": receipt["receipt_sha256"],
-            },
-        )
+        service._accepted_execution_resources(cast(Any, job), authority)
+    # Invalid telemetry is not accepted, but it cannot hide scientific results.
+    result = cast(dict[str, Any], project(job, authority))
+    assert result["evidence_status"] == "unavailable"
+    assert result["receipt_sha256"] is None
+    assert result["observed_memory_peak_bytes"] is None
 
 
 def test_accepted_resource_projection_rejects_fully_rehashed_false_enforcement() -> None:
@@ -308,14 +311,17 @@ def test_accepted_resource_projection_rejects_fully_rehashed_false_enforcement()
     receipt["receipt_sha256"] = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
     job = SimpleNamespace(id="job-1", status="completed", assigned_gpu=None, params=params)
 
+    authority = {
+        "resource_evidence_status": "accepted",
+        "resource_usage_receipt_sha256": receipt["receipt_sha256"],
+    }
     with pytest.raises(service.OntNgsResultError, match="receipt history is invalid"):
-        project(
-            job,
-            {
-                "resource_evidence_status": "accepted",
-                "resource_usage_receipt_sha256": receipt["receipt_sha256"],
-            },
-        )
+        service._accepted_execution_resources(cast(Any, job), authority)
+    # Invalid telemetry is not accepted, but it cannot hide scientific results.
+    result = cast(dict[str, Any], project(job, authority))
+    assert result["evidence_status"] == "unavailable"
+    assert result["receipt_sha256"] is None
+    assert result["observed_memory_peak_bytes"] is None
 
 
 def test_verification_projection_contains_only_schema_owned_decision_fields() -> None:

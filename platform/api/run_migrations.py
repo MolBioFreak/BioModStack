@@ -1,5 +1,5 @@
-from migrations.runner import run_all
+from database_bootstrap import migrate_database
 
 
 if __name__ == "__main__":
-    run_all()
+    migrate_database()

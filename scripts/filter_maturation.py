@@ -5,7 +5,9 @@ Filter maturation designs by interface improvement thresholds or percentile.
 import argparse
 import json
 import shutil
+import hashlib
 from pathlib import Path
+from maturation_correspondence import finite_number, canonical_payload
 
 
 def load_scores(manifest_path, metric_key):
@@ -35,6 +37,7 @@ def percentile_threshold(scores, percentile):
 
 def main():
     parser = argparse.ArgumentParser(description="Filter PPIFlow maturation outputs")
+    parser.add_argument("--core-protein-scientific-contract", choices=["1"], default=None)
     parser.add_argument("--score_json", required=True, help="Score JSON file")
     parser.add_argument("--pdb_path", required=True, help="Matured PDB path")
     parser.add_argument("--output_dir", required=True, help="Output directory for passing PDBs")
@@ -53,6 +56,7 @@ def main():
     parser.add_argument("--objective_threshold", type=float, default=None,
                         help="Threshold for objective_score when objective_mode is not selected_interface (lower is better)")
     args = parser.parse_args()
+    strict = args.core_protein_scientific_contract == "1"
 
     with open(args.score_json, "r") as f:
         score_data = json.load(f)
@@ -82,7 +86,26 @@ def main():
         if percentile_val is not None:
             threshold = percentile_val
 
-    if args.disable_filter:
+    unavailable_reason = None
+    if strict:
+        candidate_bytes = Path(args.pdb_path).read_bytes()
+        if type(score_data.get("core_protein_scientific_contract")) is not int or score_data.get("core_protein_scientific_contract") != 1:
+            unavailable_reason = "scientific_contract_mismatch"
+        elif score_data.get("candidate_sha256") != hashlib.sha256(candidate_bytes).hexdigest():
+            unavailable_reason = "candidate_identity_mismatch"
+        elif score_data.get('selection_scope_reason'):
+            unavailable_reason = score_data['selection_scope_reason']
+        elif not finite_number(selection_value):
+            unavailable_reason = "required_selection_metric_unavailable"
+        elif objective_mode != "selected_interface":
+            loops = score_data.get("loop_metrics", {})
+            selected = [metric for metric in loops.values() if metric.get("selected")]
+            if (not finite_number(score_data.get("nonselected_rmsd_backbone")) or not selected
+                    or any(not finite_number(metric.get("rmsd_backbone")) or not finite_number(metric.get("objective_score")) for metric in selected)):
+                unavailable_reason = "required_rmsd_evidence_unavailable"
+    if unavailable_reason:
+        passed = False
+    elif args.disable_filter:
         passed = True
     elif threshold is None:
         passed = True
@@ -92,7 +115,10 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if passed:
-        shutil.copy2(args.pdb_path, output_dir / Path(args.pdb_path).name)
+        if strict:
+            (output_dir / Path(args.pdb_path).name).write_bytes(candidate_bytes)
+        else:
+            shutil.copy2(args.pdb_path, output_dir / Path(args.pdb_path).name)
 
     report = {
         "passed": passed,
@@ -110,7 +136,7 @@ def main():
         "percentile": args.percentile,
         "filter_disabled": args.disable_filter,
         "filter_reason": (
-            "filter_disabled"
+            unavailable_reason if unavailable_reason else "filter_disabled"
             if args.disable_filter
             else "no_threshold"
             if threshold is None
@@ -130,7 +156,11 @@ def main():
         "sequence_identity": score_data.get("sequence_identity"),
         "clash_count_ca": score_data.get("clash_count_ca"),
     }
-    Path(args.report_json).write_text(json.dumps(report, indent=2))
+    if strict:
+        report["core_protein_scientific_contract"] = 1
+        if unavailable_reason:
+            report["filter_reason"] = unavailable_reason
+    Path(args.report_json).write_text(json.dumps(canonical_payload(report) if strict else report, indent=2, allow_nan=not strict))
 
 
 if __name__ == "__main__":

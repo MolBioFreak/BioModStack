@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare Protenix-compatible MSA paths before inference.
+"""Consume controller-prepared, supplied, or existing cached Protenix MSAs.
 
-This script resolves MSA inputs up front so Protenix does not need to enter its
-internal web-service polling path during `protenix pred`.
-
-Backends:
-- auto: use ColabFold API-compatible Protenix conversion for small jobs,
-  otherwise use local BMS MSA generation per protein chain.
-- colabfold_api: use Protenix's built-in ColabFold-compatible request parser to
-  generate pairing/non_pairing A3Ms.
-- local: use BioModStack local MSA generation and attach per-chain unpaired
-  MSAs plus query-only pairing placeholders.
-
-Cache policy: every protein chain is checked against the shared MSA cache
-(sequence SHA-256 key) before backend selection. A full cache hit skips MSA
-generation entirely and makes the requested backend irrelevant (reported as
-backend "cache"). API-fetched MSAs are persisted into the shared cache so
-later identical runs short-circuit; existing cache entries are never
-overwritten.
+The CLI never starts a provider search. Both API providers are prepared on BMS
+through the shared controller service before inference. Missing inputs fail
+closed. Legacy conversion helpers remain importable for compatibility callers.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -55,6 +40,123 @@ DEFAULT_COLABFOLD_API_HOST = os.getenv("BMS_COLABFOLD_API_HOST") or "https://api
 DEFAULT_SMALL_MAX_TASKS = 1
 DEFAULT_SMALL_MAX_PROTEIN_CHAINS = 4
 DEFAULT_SMALL_MAX_TOTAL_RESIDUES = 1500
+
+
+type_map = {
+    'protein': 'proteinChain',
+    'peptide': 'proteinChain',
+    'dna': 'dnaSequence',
+    'rna': 'rnaSequence',
+}
+
+def _convert_complex_entry(bms, default_name, seeds):
+    sequences = []
+    for comp in bms.get('components', []):
+        t = comp.get('type', 'protein').lower()
+        seq = comp.get('sequence', '')
+        comp_id = str(comp.get('id') or '').strip()
+        count_raw = comp.get('count', 1)
+        try:
+            count = max(1, int(count_raw))
+        except Exception:
+            count = 1
+
+        if t in type_map:
+            if seq:
+                chain_entry = {"sequence": seq, "count": count}
+                if comp_id:
+                    chain_entry["id"] = [comp_id]
+                sequences.append({type_map[t]: chain_entry})
+        elif t == 'ligand':
+            ccd = comp.get('ccd', '')
+            smiles = comp.get('smiles', '')
+            entry = {}
+            if ccd:
+                ligand_id = str(ccd)
+                if not ligand_id.startswith("CCD_"):
+                    ligand_id = f"CCD_{ligand_id}"
+                ligand_entry = {"ligand": ligand_id, "count": count}
+                if comp_id:
+                    ligand_entry["id"] = [comp_id]
+                entry = {"ligand": ligand_entry}
+            elif smiles:
+                ligand_entry = {"ligand": str(smiles), "count": count}
+                if comp_id:
+                    ligand_entry["id"] = [comp_id]
+                entry = {"ligand": ligand_entry}
+            if entry:
+                sequences.append(entry)
+        elif t == 'ion':
+            entry = {}
+            ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
+            if ion:
+                ion_entry = {"ion": str(ion).upper(), "count": count}
+                if comp_id:
+                    ion_entry["id"] = [comp_id]
+                entry = {"ion": ion_entry}
+            if entry:
+                sequences.append(entry)
+
+    protenix_entry = {
+        "name": str(bms.get("name") or default_name),
+        "modelSeeds": list(seeds),
+        "sequences": sequences,
+    }
+    return protenix_entry
+
+def build_native_protenix_input(*, seeds, complexes=None, sequences=None, native_payload=None):
+    """The native format adapter shared by controller and Nextflow preparation.
+
+    Complex conversion is factored verbatim from PrepProtenixComplex. Callers
+    supply already compiled ordered tasks, never uncompiled batch requests.
+    Native generated-PDB rosters are copied, not reconstructed or renamed.
+    """
+    import copy
+    if sum(value is not None for value in (complexes, sequences, native_payload)) != 1:
+        raise ValueError("Exactly one compiled Protenix task roster is required")
+    if native_payload is not None:
+        payload = copy.deepcopy(native_payload)
+    elif complexes is not None:
+        payload = [_convert_complex_entry(bms, name, seeds) for name, bms in complexes]
+    else:
+        assert sequences is not None
+        payload = [{"name": name, "modelSeeds": list(seeds),
+                    "sequences": [{"proteinChain": {"sequence": sequence, "count": 1}}]}
+                   for name, sequence in sequences]
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Compiled Protenix task roster must be a nonempty list")
+    names = [task.get("name") for task in payload]
+    if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+        raise ValueError("Compiled Protenix task names must be nonempty and unique")
+    return payload
+
+
+def load_native_protenix_input(params):
+    """Read native compiler products without running the scientific compiler again.
+
+    Input files are read-only. Raw request components/batch entries must first
+    pass the existing compiler; no replacement-chain or name policy lives here.
+    """
+    seeds = [int(seed.strip()) for seed in str(params.get("protenix_seeds") or "42").split(",")]
+    complex_source = params.get("complex_batch_dir") or params.get("complex_json_path")
+    if complex_source:
+        source = Path(complex_source)
+        files = sorted(path for path in source.glob("*.json") if path.is_file()) if source.is_dir() else [source]
+        return build_native_protenix_input(seeds=seeds, complexes=[
+            (path.stem, json.loads(path.read_text(encoding="utf-8"))) for path in files])
+    if params.get("sequence_batch_json_path"):
+        entries = json.loads(Path(params["sequence_batch_json_path"]).read_text(encoding="utf-8"))
+        if any(entry.get("complex_json") for entry in entries):
+            raise ValueError("Compiled complex batch requires its complex_batch_dir")
+        return build_native_protenix_input(seeds=seeds, sequences=[
+            (entry["name"], entry["sequence"]) for entry in entries])
+    if params.get("sequence_batch_entries") or params.get("complex_components"):
+        raise ValueError("Controller MSA handoff requires compiled native complex/batch inputs")
+    sequence = str(params.get("sequence_input") or "")
+    if not sequence or not re.fullmatch(r"[A-Z]+", sequence):
+        raise ValueError("Controller MSA handoff requires a compiled literal protein sequence_input")
+    return build_native_protenix_input(seeds=seeds, sequences=[
+        (str(params.get("sequence_name") or "predicted"), sequence)])
 
 
 def load_json(path: Path) -> List[Dict[str, Any]]:
@@ -119,39 +221,35 @@ def _hydrate_old_precomputed_dir(chain: Dict[str, Any]) -> None:
     precomputed_path = Path(precomputed_dir)
     pairing = precomputed_path / "pairing.a3m"
     non_pairing = precomputed_path / "non_pairing.a3m"
-    if pairing.exists():
+    if pairing.exists() and not chain.get("pairedMsaPath"):
         chain["pairedMsaPath"] = str(pairing.resolve())
-    if non_pairing.exists():
+    if non_pairing.exists() and not chain.get("unpairedMsaPath"):
         chain["unpairedMsaPath"] = str(non_pairing.resolve())
 
 
 def all_protein_chains_have_msa(payload: List[Dict[str, Any]]) -> bool:
     saw_protein = False
+    complete = True
     for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
         saw_protein = True
         _hydrate_old_precomputed_dir(chain)
         paired_path, unpaired_path = _existing_msa_paths(chain)
-        if paired_path and paired_path.exists():
+        supplied = [path for path in (paired_path, unpaired_path) if path is not None]
+        if not supplied:
+            complete = False
             continue
-        if unpaired_path and unpaired_path.exists():
-            continue
-        return False
-    return saw_protein
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_msa_handoff import validate_a3m
+        for path in supplied:
+            validate_a3m(path, str(chain.get("sequence", "")))
+    return saw_protein and complete
 
 
 def choose_backend(requested: str, stats: Dict[str, int], max_tasks: int, max_chains: int, max_residues: int) -> str:
-    normalized = (requested or "auto").strip().lower()
-    if normalized in {"local", "colabfold_api"}:
-        return normalized
-    if normalized != "auto":
-        raise ValueError(f"Unsupported backend '{requested}'")
-    if (
-        stats["tasks"] <= max_tasks
-        and stats["protein_chains"] <= max_chains
-        and stats["total_residues"] <= max_residues
-    ):
-        return "colabfold_api"
-    return "local"
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_policy import resolve_search_backend
+    return resolve_search_backend(requested)
 
 
 def write_msa_report(
@@ -262,6 +360,9 @@ def hydrate_chains_from_shared_cache(
         cached = _cached_a3m_path(cache_root, sequence)
         if cached is None:
             continue
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_msa_handoff import validate_a3m
+        validate_a3m(cached, sequence)
         is_binder = bool(set(_chain_ids(chain)) & binder_chain_id_set)
         role_key = "binder" if is_binder else "default"
         profile_key = (sequence, role_key)
@@ -382,6 +483,9 @@ def _write_sanitized_a3m(
 
 
 def prepare_with_colabfold_api(input_json: Path, output_json: Path, work_dir: Path, host: str) -> Path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_controller import require_controller_submission
+    require_controller_submission(host or DEFAULT_COLABFOLD_API_HOST)
     os.environ["MMSEQS_SERVICE_HOST_URL"] = (host or DEFAULT_COLABFOLD_API_HOST).strip()
     try:
         from runner.msa_search import update_infer_json
@@ -685,10 +789,14 @@ def prepare_with_local_msa(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare Protenix-compatible MSA inputs")
+    parser.add_argument('--generated-service', default='', choices=['', 'protenix:generated_msa'],
+                        help='Await the selected controller service for this native generated roster')
+    parser.add_argument('--prepared-inputs', default='', help='Controller-owned portable MSA input directory')
+    parser.add_argument('--prepared-sha256', default='', help='Envelope-bound MSA manifest digest')
     parser.add_argument("--input_json", required=True, help="Input Protenix JSON")
     parser.add_argument("--output_json", required=True, help="Output JSON with MSA paths")
     parser.add_argument("--out_dir", required=True, help="Working directory for MSA artifacts")
-    parser.add_argument("--backend", default="auto", choices=["auto", "colabfold_api", "local"], help="MSA backend")
+    parser.add_argument("--backend", default="auto", choices=["auto", "colabfold_api", "neurosnap_api", "local"], help="MSA backend")
     parser.add_argument("--colabfold-api-host", default=DEFAULT_COLABFOLD_API_HOST, help="ColabFold API host")
     parser.add_argument("--db-path", default=os.getenv("BMS_COLABFOLD_DB") or "", help="Local ColabFold DB path")
     parser.add_argument("--cache-dir", default=os.getenv("BMS_MSA_CACHE") or "", help="MSA cache directory")
@@ -718,6 +826,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # Prepared artifacts are provider-independent data, not a worker search.
+    if not args.prepared_inputs:
+        choose_backend(args.backend, {}, 1, 1, 1)
     input_json = Path(args.input_json).expanduser().resolve()
     output_json = Path(args.output_json).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -741,6 +852,24 @@ def main() -> None:
         return
 
     hydrated_from_cache = 0
+    if getattr(args, 'generated_service', '') and os.environ.get('BMS_COMPONENT_CONTEXT'):
+        if args.prepared_inputs:
+            raise ValueError('Generated service and direct prepared inputs are distinct authorities')
+        from component_adapter import await_external_service, runtime_from_environment
+        from services.model_msa_handoff import generated_protenix_request
+        runtime = runtime_from_environment()
+        if runtime.target_id != 'local':
+            source, sha = await_external_service(args.generated_service, generated_protenix_request(payload))
+            args.prepared_inputs, args.prepared_sha256 = str(source), sha
+    if getattr(args, 'prepared_inputs', ''):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_msa_handoff import hydrate_prepared_protenix_task
+        payload = hydrate_prepared_protenix_task(payload, Path(args.prepared_inputs), args.prepared_sha256)
+        dump_json(output_json, payload)
+        if args.report_json:
+            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, 'controller_prepared', stats)
+        return
     if args.cache_dir:
         hydrated_from_cache = hydrate_chains_from_shared_cache(
             payload,
@@ -765,109 +894,10 @@ def main() -> None:
         print(str(output_json), flush=True)
         return
 
-    backend = choose_backend(
-        requested=args.backend,
-        stats=stats,
-        max_tasks=max(1, args.small_max_tasks),
-        max_chains=max(1, args.small_max_protein_chains),
-        max_residues=max(1, args.small_max_total_residues),
+    raise RuntimeError(
+        "Missing controller-prepared MSA inputs. Provider preparation must finish "
+        "on BMS before inference; worker search is forbidden."
     )
-    print(f"[prepare_protenix_msa] Selected backend: {backend}", flush=True)
-
-    local_msa_runtime_contract: Dict[str, Any] | None = None
-    if backend == "colabfold_api":
-        prepared = prepare_with_colabfold_api(
-            input_json=input_json,
-            output_json=output_json,
-            work_dir=out_dir,
-            host=args.colabfold_api_host,
-        )
-        if args.cache_dir:
-            persisted = cache_colabfold_results(load_json(Path(prepared)), args.cache_dir)
-            if persisted:
-                print(
-                    f"[prepare_protenix_msa] Persisted {persisted} API-fetched MSAs into shared cache",
-                    flush=True,
-                )
-    else:
-        if not args.db_path:
-            raise ValueError("Local Protenix MSA preparation requires --db-path")
-        if not args.cache_dir:
-            raise ValueError("Local Protenix MSA preparation requires --cache-dir")
-
-        local_msa_runtime_contract = resolve_protenix_local_gpu_server_mode(args.gpu_server_mode)
-        requested_gpu_server_mode = local_msa_runtime_contract["requested_gpu_server_mode"]
-        resolved_gpu_server_mode = local_msa_runtime_contract["effective_gpu_server_mode"]
-        if requested_gpu_server_mode != resolved_gpu_server_mode:
-            print(
-                "[prepare_protenix_msa] Forcing gpu-server-mode=off for local Protenix MSA to avoid persistent gpuserver handshake stalls.",
-                flush=True,
-            )
-
-        runtime = inspect_mmseqs_runtime(
-            db_path=args.db_path,
-            cache_dir=args.cache_dir,
-            cpu_only=bool(args.cpu_only),
-            gpu_mode=str(args.gpu_mode or "auto"),
-            gpu_threshold=int(args.gpu_threshold),
-            preferred_gpus=parse_gpu_csv(args.preferred_gpus),
-            excluded_gpus=parse_gpu_csv(args.excluded_gpus),
-            gpu_server_mode=resolved_gpu_server_mode,
-            gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
-            gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
-            gpu_server_startup_wait=float(args.gpu_server_startup_wait),
-            verbose=True,
-        )
-        if runtime.get("selected_gpu_id") is not None:
-            local_msa_runtime_contract["selected_gpu_id"] = runtime.get("selected_gpu_id")
-        if not bool(runtime.get("use_gpu_mmseqs")) and not bool(args.allow_cpu_fallback):
-            failure_message = str(
-                runtime.get("failure_message")
-                or runtime.get("summary_message")
-                or "GPU MMseqs unavailable"
-            )
-            raise RuntimeError(
-                f"{failure_message}. Local Protenix MSA will not continue on CPU without explicit approval."
-            )
-        prepared = prepare_with_local_msa(
-            payload=payload,
-            output_json=output_json,
-            work_dir=out_dir,
-            db_path=args.db_path,
-            cache_dir=args.cache_dir,
-            threads=args.threads,
-            preset=args.preset,
-            cpu_only=bool(args.cpu_only),
-            gpu_mode=str(args.gpu_mode or "auto"),
-            gpu_threshold=int(args.gpu_threshold),
-            preferred_gpus=args.preferred_gpus,
-            excluded_gpus=args.excluded_gpus,
-            gpu_server_mode=resolved_gpu_server_mode,
-            gpu_server_wait_timeout=int(args.gpu_server_wait_timeout),
-            gpu_server_db_load_mode=int(args.gpu_server_db_load_mode),
-            gpu_server_startup_wait=float(args.gpu_server_startup_wait),
-            allow_cpu_fallback=bool(args.allow_cpu_fallback),
-            local_msa_timeout_seconds=int(args.local_msa_timeout_seconds),
-            selected_gpu_id=runtime.get("selected_gpu_id"),
-            cache_only=bool(args.cache_only),
-            binder_chain_ids=[token.strip() for token in str(args.binder_chain_ids or "").split(",") if token.strip()],
-            binder_max_unpaired_rows=(int(args.binder_max_unpaired_msa_rows) if int(args.binder_max_unpaired_msa_rows) > 0 else None),
-            binder_min_residue_coverage_fraction=float(args.binder_min_residue_coverage),
-        )
-
-    if args.report_json:
-        prepared_payload = load_json(Path(prepared))
-        write_msa_report(
-            Path(args.report_json).expanduser().resolve(),
-            prepared_payload,
-            backend,
-            stats,
-            local_msa_runtime_contract=local_msa_runtime_contract if backend == "local" else None,
-        )
-
-    print(f"[prepare_protenix_msa] Prepared input JSON: {prepared}", flush=True)
-    print(str(prepared), flush=True)
-
 
 if __name__ == "__main__":
     main()

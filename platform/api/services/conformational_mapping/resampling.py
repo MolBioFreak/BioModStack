@@ -97,6 +97,11 @@ def materialize_resampling_pair(
     entity_index, source_entity = _entity_for_instance(snapshot, handoff["entity_instance_id"])
     if source_entity.get("entity_type") != "protein":
         raise ResamplingError("current resampling supports protein substitutions only")
+    if len(source_entity["ordered_instance_ids"]) != 1:
+        raise ResamplingError(
+            "copy-selective resampling of a shared entity requires an explicit "
+            "per-instance sequence and feature binding; mutating every copy is not supported"
+        )
     position = int(handoff["sequence_index"])
     sequence = source_entity["sequence"]
     wt = handoff["validated_wt"]

@@ -15,12 +15,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, MdAttemptSegment, MdReconcilerLease, MdReplicaRun, MdRun
+from database import Job, MdAttemptSegment, MdEvent, MdReconcilerLease, MdReplicaRun, MdRun
 from services.md.state import (
     RETRYABLE_INFRASTRUCTURE_FAILURES,
     TERMINAL_PHASES,
     MdStateError,
     append_event_cas,
+    bind_retry_child_projection,
     finalize_pause,
 )
 
@@ -69,6 +70,15 @@ def _completed_segment_bounds(parent: Job | None, replica: MdReplicaRun) -> tupl
 
 
 def _project_child(job: Job) -> str:
+    control = (job.provenance or {}).get('component_projection')
+    if isinstance(control, dict):
+        # Authenticated native collector evidence is a replica-level fact, not
+        # whole-parent completion; the aggregate/analysis barrier remains below.
+        state = control.get('state')
+        if state in {'completed', 'failed', 'cancelled'}:
+            return state
+        if state == 'execution_finished':
+            return 'running'
     status = str(job.status)
     if status in {"completed", "failed", "cancelled"}:
         return status
@@ -152,9 +162,27 @@ async def reconcile_md_state(
     planned: list[tuple[MdRun, Job | None, list[tuple[MdReplicaRun, MdAttemptSegment | None, str]], str]] = []
     for run in runs:
         parent = await session.get(Job, run.job_id)
+        retry_events = list((await session.scalars(select(MdEvent).where(
+            MdEvent.md_job_id == run.job_id, MdEvent.event_type == 'retry_requested',
+        ))).all())
+        pending_retry = False
+        for event in retry_events:
+            if ((event.payload or {}).get('source_child_job_id')
+                    and not (event.payload or {}).get('shared_retry_receipt')):
+                bound = parent is not None and await bind_retry_child_projection(
+                    session, parent=parent, event=event, apply=apply)
+                if bound:
+                    changes.append(dict(kind='retry_child_projection', job_id=run.job_id,
+                        operation_id=event.idempotency_key))
+                pending_retry = pending_retry or not bound or not apply
+        if pending_retry:
+            # The shared scheduler may legitimately still be reacquiring the
+            # original target. Native reconciliation cannot claim it is running.
+            continue
         replicas = list((await session.scalars(select(MdReplicaRun).where(
             MdReplicaRun.md_job_id == run.job_id
-        ))).all())
+        ).order_by(MdReplicaRun.replica_index, MdReplicaRun.attempt))).all())
+        latest_by_index = {replica.replica_index: replica.id for replica in replicas}
         projections: list[tuple[MdReplicaRun, MdAttemptSegment | None, str]] = []
         effective: list[str] = []
         for replica in replicas:
@@ -165,7 +193,8 @@ async def reconcile_md_state(
                 .where(MdAttemptSegment.replica_run_id == replica.id)
                 .order_by(MdAttemptSegment.segment_index.desc())
             )
-            effective.append(projected)
+            if latest_by_index[replica.replica_index] == replica.id:
+                effective.append(projected)
             segment_stale = (
                 projected in _TERMINAL_REPLICA_STATES
                 and segment is not None
@@ -205,6 +234,8 @@ async def reconcile_md_state(
                             "from": run.phase, "to": next_phase})
         if (
             parent is not None
+            and not parent.execution_target_id
+            and not (parent.provenance or {}).get("component_context_path")
             and next_phase in _ACTIVE_PARENT_PHASES
             and (parent.status != "running" or parent.queue_status != "running")
         ):
@@ -218,7 +249,9 @@ async def reconcile_md_state(
     if not apply:
         return receipt
     for run, parent, projections, next_phase in planned:
-        if parent is not None and next_phase in _ACTIVE_PARENT_PHASES:
+        if (parent is not None and next_phase in _ACTIVE_PARENT_PHASES
+                and not parent.execution_target_id
+                and not (parent.provenance or {}).get("component_context_path")):
             parent.status = "running"
             parent.queue_status = "running"
             parent.error_message = None

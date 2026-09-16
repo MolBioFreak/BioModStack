@@ -13,7 +13,8 @@ from services.restriction_analysis import (
     AnalysisOccurrence,
     CleavageContributor,
     ResourcePolicyReceipt,
-    analyze_sequence,
+    _analyze_normalized_sequence,
+    normalize_dna,
     reverse_complement,
 )
 from services.restriction_catalog import CatalogView, RestrictionRecord
@@ -514,6 +515,22 @@ def simulate_digest_canonical(
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
 ) -> tuple[DigestSimulation, bytes]:
+    normalized = normalize_dna(sequence)
+    return _simulate_normalized_digest_canonical(
+        sequence=normalized, source_sha=hashlib.sha256(normalized.encode("ascii")).hexdigest(),
+        topology=topology, catalog=catalog, records=records,
+        selected_enzyme_ids=selected_enzyme_ids, source_receipt=source_receipt,
+        catalog_receipt=catalog_receipt,
+    )
+
+
+def _simulate_normalized_digest_canonical(
+    *, sequence: str, source_sha: str, topology: Literal["linear", "circular"],
+    catalog: CatalogView, records: Sequence[RestrictionRecord],
+    selected_enzyme_ids: Sequence[str], source_receipt: dict[str, Any],
+    catalog_receipt: dict[str, Any],
+) -> tuple[DigestSimulation, bytes]:
+    """Internal pipeline using the source boundary's canonical DNA and digest."""
     selected_ids = tuple(selected_enzyme_ids)
     if not selected_ids or len(selected_ids) > MAX_SELECTED_ENZYMES or len(set(selected_ids)) != len(selected_ids):
         raise DigestLimitError("selected enzyme list is empty, duplicate, or oversized")
@@ -524,10 +541,15 @@ def simulate_digest_canonical(
             raise DigestGeometryError("enzyme_geometry_unavailable", "selected enzyme has no complete DSB geometry")
         if record.cleavage.status == "known_single_strand_nick":
             raise DigestGeometryError("nicking_enzyme_not_digestible", "selected nicking enzyme cannot produce digest fragments")
-    analysis = analyze_sequence(
-        sequence=sequence, topology=topology, catalog=catalog, records=selected,
+    analysis = _analyze_normalized_sequence(
+        sequence=sequence, source_sha=source_sha, topology=topology, catalog=catalog, records=selected,
         include_possible_sites=True,
     )
+    if analysis.limitations:
+        raise DigestGeometryError(
+            "recognition_motif_longer_than_molecule",
+            "selected recognition motif is longer than the molecule",
+        )
     if any(row.certainty == "possible" for row in analysis.occurrences):
         raise DigestGeometryError("possible_site_not_digestible", "selected enzyme has a possible-only recognition site")
     if topology == "linear" and any(

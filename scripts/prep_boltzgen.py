@@ -30,9 +30,10 @@ AA_3TO1 = {
 }
 
 
-def _read_protein_residues(pdb_path: str):
+def _read_protein_residues(pdb_path: str, *, input_text=None):
+    import io
     residues = {}
-    with open(pdb_path, 'r') as f:
+    with (io.StringIO(input_text) if input_text is not None else open(pdb_path, 'r')) as f:
         for line in f:
             if line.startswith('ATOM') or line.startswith('HETATM'):
                 resname = line[17:20].strip()
@@ -50,7 +51,7 @@ def _read_protein_residues(pdb_path: str):
     ]
 
 
-def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
+def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None, *, input_text=None) -> str:
     """Extract protein sequence from a PDB file.
     
     Args:
@@ -61,7 +62,7 @@ def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
         One-letter amino acid sequence string, or empty string on failure
     """
     try:
-        residues = _read_protein_residues(pdb_path)
+        residues = _read_protein_residues(pdb_path, input_text=input_text)
         if not residues:
             return ''
 
@@ -77,10 +78,10 @@ def extract_sequence_from_pdb(pdb_path: str, chain_id: str = None) -> str:
         return ''
 
 
-def extract_sequence_and_position_map_from_pdb(pdb_path: str, chain_id: str = None):
+def extract_sequence_and_position_map_from_pdb(pdb_path: str, chain_id: str = None, *, input_text=None):
     """Return sequence plus a PDB-residue-number -> 1-indexed-sequence-position map."""
     try:
-        residues = _read_protein_residues(pdb_path)
+        residues = _read_protein_residues(pdb_path, input_text=input_text)
         if not residues:
             return '', None, {}
 
@@ -178,7 +179,7 @@ def _load_nanobody_scaffold_specs(raw_value):
     return parsed
 
 
-def _write_scaffold_yaml_files(output_yaml_path: Path, scaffold_specs):
+def _write_scaffold_yaml_files(output_yaml_path: Path, scaffold_specs, *, preview=False):
     scaffold_yaml_names = []
     for index, scaffold in enumerate(scaffold_specs, start=1):
         spec_payload = scaffold.get("spec") if isinstance(scaffold, dict) else None
@@ -187,13 +188,15 @@ def _write_scaffold_yaml_files(output_yaml_path: Path, scaffold_specs):
         display_name = str(scaffold.get("name") or f"scaffold_{index}").strip() or f"scaffold_{index}"
         safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in display_name).strip("_") or f"scaffold_{index}"
         scaffold_yaml = output_yaml_path.with_name(f"{safe_name}_{index}.yaml")
-        with scaffold_yaml.open("w", encoding="utf-8") as handle:
-            yaml.safe_dump(spec_payload, handle, sort_keys=False)
+        if not preview:
+            with scaffold_yaml.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(spec_payload, handle, sort_keys=False)
         scaffold_yaml_names.append(scaffold_yaml.name)
     return scaffold_yaml_names
 
 
-def main():
+def preparation_parser():
+    """One argument/default authority for CLI preparation and metadata preview."""
     parser = argparse.ArgumentParser(description="Prepare BoltzGen YAML design spec")
     parser.add_argument("--ligand_smiles", type=str, help="Target ligand SMILES")
     parser.add_argument("--ntp_type", type=str, choices=list(NTP_TEMPLATES.keys()), help="NTP template type")
@@ -209,7 +212,7 @@ def main():
     parser.add_argument("--dna_structure", type=str, help="Pre-generated DNA structure PDB")
     parser.add_argument("--secondary_structure", type=str, help="Secondary structure constraints (e.g., 'helix:1-20,sheet:25-35,loop:40-45')")
     parser.add_argument("--protocol", type=str, default="protein-anything", 
-                        choices=["protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything", "antibody-anything"],
+                        choices=["auto", "protein-anything", "peptide-anything", "protein-small_molecule", "nanobody-anything", "antibody-anything"],
                         help="BoltzGen protocol to use")
     parser.add_argument("--covalent_bonds", type=str, help="JSON array of covalent bond constraints")
     
@@ -223,11 +226,34 @@ def main():
     
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
-    args = parser.parse_args()
-    
+    return parser
+
+
+class UnresolvedPreparationInput(ValueError):
+    def __init__(self, inputs):
+        self.inputs = inputs
+        super().__init__('Generated boltzgen_input.yaml requires native input: ' + ', '.join(inputs))
+
+
+def build_design_config(args, *, preview=False, input_texts=None):
+    """One native producer; preview uses bounded, contained input snapshots.
+
+    Scaffold filenames use the original decisions without writes. File contents
+    come from the trusted preview caller, not SDK execution or staging.
+    """
+    import builtins
+    print = (lambda *args, **kwargs: None) if preview else builtins.print
+    input_texts = input_texts or {}
+    if preview:
+        inputs = [name for name in ('input_pdb', 'ligand_pdb', 'dna_structure', 'target_pdb')
+                  if getattr(args, name) and str(getattr(args, name)) not in input_texts]
+        if inputs:
+            raise UnresolvedPreparationInput(inputs)
+    def exists(path):
+        return str(path) in input_texts if preview else Path(path).exists()
     # Auto-extract DNA sequences from oligo filename if not provided
     # Supports naming patterns: ssDNA_CCCC.pdb, dsDNA_ATCG_CGAT.pdb
-    if args.dna_structure and Path(args.dna_structure).exists():
+    if args.dna_structure and exists(args.dna_structure):
         oligo_stem = Path(args.dna_structure).stem  # e.g., "ssDNA_CCCC"
         
         if not args.dna_template_seq:
@@ -283,7 +309,7 @@ def main():
         })
         # DNA Template Entity
         dna_template = {'id': 'B'}
-        if args.dna_structure and Path(args.dna_structure).exists():
+        if args.dna_structure and exists(args.dna_structure):
              # If PDB provided, maybe use it? But Boltz usually takes seqs for co-folding
              # For now, just use sequence. If structure is meant to be a constraint/template,
              # BoltzGen schema might differ. We will stick to sequence-based co-folding.
@@ -301,10 +327,10 @@ def main():
             })
             
     # Mode 1: Backbone docking - use existing protein structure
-    elif args.input_pdb and Path(args.input_pdb).exists():
+    elif args.input_pdb and exists(args.input_pdb):
         print(f"Mode: Backbone docking with existing structure: {args.input_pdb}")
         # BoltzGen requires BOTH path AND sequence for PDB-loaded entities
-        input_seq = extract_sequence_from_pdb(args.input_pdb)
+        input_seq = extract_sequence_from_pdb(args.input_pdb, input_text=input_texts.get(str(args.input_pdb)))
         if input_seq:
             entities.append({
                 'protein': {
@@ -323,7 +349,7 @@ def main():
                 }
             })
     # Mode 2: Scaffold around ligand - fixed ligand pose
-    elif args.ligand_pdb and Path(args.ligand_pdb).exists():
+    elif args.ligand_pdb and exists(args.ligand_pdb):
         print(f"Mode: Scaffold around fixed ligand: {args.ligand_pdb}")
         entities.append({
             'protein': {
@@ -342,12 +368,13 @@ def main():
         print(f"Mode: Nanobody (VHH) design")
         
         # Target antigen entity (if provided)
-        if args.target_pdb and Path(args.target_pdb).exists():
+        if args.target_pdb and exists(args.target_pdb):
             print(f"  Target antigen: {args.target_pdb}")
             target_chain_hint = unique_binding_site_chains[0] if len(unique_binding_site_chains) == 1 else None
             target_seq, target_position_chain, target_position_map = extract_sequence_and_position_map_from_pdb(
                 args.target_pdb,
                 target_chain_hint,
+                input_text=input_texts.get(str(args.target_pdb)),
             )
 
             if nanobody_scaffold_specs:
@@ -400,7 +427,7 @@ def main():
             })
 
         if nanobody_scaffold_specs:
-            scaffold_yaml_names = _write_scaffold_yaml_files(Path(args.output_yaml), nanobody_scaffold_specs)
+            scaffold_yaml_names = _write_scaffold_yaml_files(Path(args.output_yaml), nanobody_scaffold_specs, preview=preview)
             if scaffold_yaml_names:
                 scaffold_paths = scaffold_yaml_names if len(scaffold_yaml_names) > 1 else scaffold_yaml_names[0]
                 entities.append({'file': {'path': scaffold_paths}})
@@ -572,14 +599,20 @@ def main():
                     break
             print(f"Secondary structure constraints: {secondary_structure}")
     
+    return config
+
+
+def main():
+    args = preparation_parser().parse_args()
+    config = build_design_config(args)
     with open(args.output_yaml, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
-    
+
     print(f"Generated BoltzGen design spec: {args.output_yaml}")
-    print(f"  Entities: {len(entities)}")
+    print(f"  Entities: {len(config['entities'])}")
     print(f"  Protocol: {args.protocol}")
-    if constraints:
-        print(f"  Constraints: {len(constraints)}")
+    if config.get('constraints'):
+        print(f"  Constraints: {len(config['constraints'])}")
 
 if __name__ == "__main__":
     main()

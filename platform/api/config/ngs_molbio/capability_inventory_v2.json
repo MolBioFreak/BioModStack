@@ -2908,7 +2908,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "6ade70b8bafb6905cab443a4705103d8a773ad5c97bb6eba81c2369ddcaa4fb0",
+  "content_sha256": "a0ddc84655af2eea15bf828ef251274451c3de8df88103d4c61d1b430cadec86",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2934,7 +2934,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "d6d22268a675a979a6537efb820dd404fa02d10cb7241a5d4a02d24c49fc7c0a",
+  "schema_registry_sha256": "4c6a3a75b9e8e02bfd5ada0763792cb2c2934b8fd86c329b1fd5c31578167c8f",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

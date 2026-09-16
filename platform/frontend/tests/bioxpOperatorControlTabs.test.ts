@@ -11,7 +11,7 @@ const pipettePanel = readFileSync(resolve('src/components/BioXpPipetteControlPan
 
 test('catalog-driven control plane renders every action, critical groups, meta actions, and logs as separate panes', () => {
     for (const label of [
-        'OEM Route Control Plane', 'Individual Controls', 'Critical Controls', 'All Individual Controls',
+        'Advanced Controls', 'Individual Controls', 'Critical Controls', 'All Individual Controls',
         'Motion Power', 'Transport / Evidence', 'Safety / Recovery', 'Initialization',
         'Meta Actions', 'Logs', 'role="tablist"', 'role="tab"', 'role="tabpanel"',
         'Run exactly this action', 'Search individual controls',
@@ -42,11 +42,23 @@ test('action forms and route provenance come only from the robot catalog and adm
     assert.match(source, /selected\.requires_confirmation && !confirmationMatchesCurrentAction/);
     assert.match(source, /confirmation\?\.fingerprint !== runFingerprint/);
     assert.match(source, /I confirm this exact governed action and its published machine scope/);
-    assert.match(cockpit, /!configured \|\| !linkConnected \|\| updateFreshness\.isPending/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && invokeOperatorAction\.data/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && emergencyAction\.data/);
-    assert.match(cockpit, /linkConnected && catalog && !historyQuery\.isError && recoverMotion\.data/);
-    assert.match(client, /\[\.\.\.operatorHistoryKey, variables\.connectionGeneration, true\]/);
+    // R5: no retired freshness mutation; one upstream-aged V2 snapshot and
+    // a generation-reset receipt union preserve ordinary, interrupt and lifecycle evidence.
+    assert.doesNotMatch(cockpit, /updateFreshness|useBioXpFreshness/);
+    assert.match(cockpit, /localAgeMs < 15_000 && upstreamAgeMs < 15_000/);
+    // Current command evidence survives an unrelated history read failure.
+    assert.match(cockpit, /const displayedLatestReceipt = latestReceiptQuery\.data\?\.command_id === latestOperatorReceipt\?\.command_id/);
+    assert.match(cockpit, /\? latestReceiptQuery\.data : latestOperatorReceipt/);
+    assert.match(cockpit, /const latestOperatorReceipt = interruptAggregateAbort\.data \?\? interruptZStop\.data \?\? interruptYStop\.data \?\? interruptXStop\.data \?\? invokeDeckAction\.data \?\? invokeLifecycleActionMutation\.data \?\? invokeYAction\.data \?\? xyReceipt \?\? invokeOperatorAction\.data/);
+    assert.match(cockpit, /resetInterruptAggregateAbort\(\)/);
+    assert.match(cockpit, /resetInvokeLifecycleAction\(\)/);
+    // Current history is canonical cursor pagination, not a synthesized local
+    // receipt union. Generation/limit/cursor retain each page's identity; a
+    // settled command invalidates its generation for authoritative re-reading.
+    assert.match(client, /queryKey: \[\.\.\.operatorHistoryKey, connectionGeneration, limit, cursor\]/);
+    assert.match(client, /params: cursor === null \? undefined : \{ cursor \}/);
+    assert.match(client, /invalidateQueries\(\{ queryKey: \[\.\.\.operatorHistoryKey, variables\.request\.expected_connection_generation\] \}\)/);
+    assert.doesNotMatch(client, /updateBioXpHistoryCaches/);
 });
 
 test('main tab has a compact live status dashboard for motion axes temperatures and pipettes', () => {
@@ -63,7 +75,15 @@ test('main tab has a compact live status dashboard for motion axes temperatures 
     assert.match(dashboard, /sensor\.unit/);
     assert.match(dashboard, /error !== null && error !== undefined/);
     assert.doesNotMatch(dashboard, /useBioXpOperatorDashboard\(/);
-    assert.match(cockpit, /useBioXpOperatorDashboard\(generation, linkConnected\)/);
+    // R5: current embedded telemetry, not an extra retired dashboard poll.
+    // Same-generation read-only catalog polling recovers status observation loss;
+    // fresh currentCatalogV2 still owns physical admission below.
+    assert.match(cockpit, /useBioXpOperatorControlCatalogV2\(generation, active\)/);
+    assert.match(cockpit, /const currentDashboardV2 = currentCatalogV2\?\.dashboard/);
+    assert.match(cockpit, /const currentTelemetry = currentDashboardV2\?\.telemetry \?\? undefined/);
+    assert.match(cockpit, /data=\{displayTelemetry\}/);
+    assert.match(cockpit, /stale=\{showingLastKnown\}/);
+    assert.doesNotMatch(cockpit, /useBioXpOperatorDashboard(?:V2)?\(/);
     assert.doesNotMatch(`${dashboard}\n${cockpit}`, /type="password"|Login required|Authentication required/i);
 });
 
@@ -82,7 +102,7 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
     assert.doesNotMatch(client, /informationalPath|robotPath|targetPath/);
 });
 
-test('dedicated four-channel pipette surface stays plan-only and renders evidence phases', () => {
+test('four-channel pipette surface separates physical admission from no-motion planning', () => {
     assert.match(cockpit, /BioXpPipetteControlPanel/);
     assert.ok(
         cockpit.lastIndexOf('BioXpPipetteControlPanel') > cockpit.indexOf('Thermal Door'),
@@ -91,14 +111,15 @@ test('dedicated four-channel pipette surface stays plan-only and renders evidenc
     assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
     for (const label of [
         'Four-channel pipette controls', 'Channel', 'Hardware tip readback', 'Hardware pressure',
-        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Plunger up physically', 'Plunger down physically',
-        'Build no-motion plan', 'Robot-owned blocker', 'Active hardware readback', 'Read live hardware',
-    ]) assert.match(pipettePanel, new RegExp(label, 'i'));
+        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
+        'Build no-motion plan', 'No-motion application planner', 'Active hardware readback', 'Read live hardware',
+    ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
     for (const token of [
         'controller_acknowledged', 'completion_verified', 'physical_effect_verified',
         'motion_commanded', 'truth_source', 'live_query_performed',
     ]) assert.ok(pipettePanel.includes(token), `missing pipette evidence token: ${token}`);
     assert.doesNotMatch(pipettePanel, /execute pipette|run physical/i);
+    assert.doesNotMatch(pipettePanel, /Robot-owned blocker|physical_pipette_execution_not_authorized/);
 });
 
 test('receipts expose machine assessment and require explicit human PASS or FAIL observations', () => {

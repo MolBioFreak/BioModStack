@@ -126,11 +126,15 @@ process FilterRFD3 {
     label 'Foundry'
     publishDir "${params.out_dir}/run/filter_rfd3", mode: 'copy', pattern: "*.log"
 
+    publishDir "${params.out_dir}/run/filter_rfd3", mode: 'copy', pattern: "rfd3_data_*.jsonl", enabled: params.get('core_protein_scientific_contract') == 1
+    publishDir "${params.out_dir}/run/filter_rfd3", mode: 'copy', pattern: "rfd3_filter_*", enabled: params.get('core_protein_scientific_contract') == 1
+
     input:
     tuple path(cif_files), path(json_files)
 
     output:
     tuple path("filtered_output/*.pdb"), path("filtered_output/*.json"), emit: structures_metadata, optional: true
+    path "rfd3_filter_*", emit: stage_receipt, optional: true
     path ("rfd3_data_*.jsonl"), topic: metadata_ch_fold
     path "filter_rfd3_*.log"
 
@@ -155,6 +159,7 @@ process FilterRFD3 {
 
     """
     python3 /scripts/filter_structures.py backbone \\
+        ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1 --stage-receipt-dir rfd3_filter_${task.index} --stage-id rfd3_backbone_filter --job-id '${params.job_id}' --task-id ${task.index}" : ''} \\
         --input-dir . \\
         --output-dir "filtered_output" \\
         --convert-to-pdb \\

@@ -71,7 +71,8 @@ test('the generic Results structure surface passes all governed identities to St
     assert.match(pane, /resolveGovernedStructureWorkbenchContext/);
     assert.match(pane, /jobId=\{shapeMetrics \? undefined : governedWorkbenchContext\?\.jobId \?\? activeJob\?\.id\}/);
     assert.match(pane, /artifactJobId=\{shapeMetrics \? undefined : governedWorkbenchContext\?\.artifactJobId \?\? activeJob\?\.id\}/);
-    assert.match(pane, /structureDocumentId=\{governedWorkbenchContext\?\.structureDocumentId\}/);
+    assert.match(pane, /structureDocumentId=\{nativeDocument\?\.documentId \?\? governedWorkbenchContext\?\.structureDocumentId\}/);
+    assert.match(pane, /structureContentSha256=\{nativeDocument\?\.contentSha256\}/);
     assert.match(host, /artifactJobId: requestedArtifactJobId/);
     assert.match(host, /const artifactJobId = requestedArtifactJobId \?\? jobId;/);
 });

@@ -7,8 +7,10 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from paths import get_container_path
+
 from .contracts import canonical_sha256
-from .runtime import FRUSTRAMPNN_RUNTIME_IDENTITY, runtime_identity_dict
+from .runtime import FRUSTRAMPNN_RUNTIME_IDENTITY, runtime_identity_dict, compatible_runtime_identity
 from .settings import (
     FrustraMPNNEffectiveSettings,
     compatible_effective_settings_payload,
@@ -80,9 +82,10 @@ class _FrustraMPNNExecutionConfigurationBase(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _validate_cross_bindings(self) -> _FrustraMPNNExecutionConfigurationBase:
-        if self.runtime.model_dump(mode="json") != _RUNTIME:
+        recorded_runtime = self.runtime.model_dump(mode="json")
+        if not compatible_runtime_identity(recorded_runtime, _RUNTIME):
             raise ValueError("runtime identity does not match the immutable runtime registry")
-        if self.runtime_identity_sha256 != runtime_identity_sha256():
+        if self.runtime_identity_sha256 != canonical_sha256(recorded_runtime):
             raise ValueError("runtime identity SHA-256 does not match immutable runtime")
         if self.settings_value_origin != self.effective_settings.settings_value_origin:
             raise ValueError("settings value origin is not cross-bound")
@@ -160,7 +163,10 @@ _LEGACY_BASE_CONFIGURATION: dict[str, Any] = {
     "schema_version": 1,
     "tool_id": "frustrampnn",
     "tool_version": "MegaScale",
-    "runtime": copy.deepcopy(_RUNTIME),
+    # Historical v1 configuration hashes must not change when only physical
+    # image placement changes. The current selector belongs to new execution.
+    "runtime": {**copy.deepcopy(_RUNTIME), "configured_sif_path":
+                str(get_container_path(FRUSTRAMPNN_RUNTIME_IDENTITY.sif_name))},
     "threshold_policy": {
         "policy_id": "frustrampnn_class_v1",
         "high_max": _DEFAULT_SETTINGS.classification_policy.high_max,

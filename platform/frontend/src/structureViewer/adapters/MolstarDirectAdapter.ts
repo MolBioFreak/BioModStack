@@ -1,3 +1,4 @@
+import { sha256Hex } from '../contracts/m6Reproducibility';
 import type { Loci } from 'molstar/lib/mol-model/loci';
 import {
     Queries,
@@ -12,10 +13,12 @@ import { StructureQuery } from 'molstar/lib/mol-model/structure/query/query';
 import { getElementMoleculeType } from 'molstar/lib/mol-model/structure/util';
 import {
     clearStructureOverpaint,
-    setStructureOverpaint,
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
 import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
+import { StateSelection } from 'molstar/lib/mol-state';
+import { Overpaint } from 'molstar/lib/mol-theme/overpaint';
+import { Transparency } from 'molstar/lib/mol-theme/transparency';
 import { createVolumeRepresentationParams } from 'molstar/lib/mol-plugin-state/helpers/volume-representation-params';
 import type { LociLabelProvider } from 'molstar/lib/mol-plugin-state/manager/loci-label';
 import { Asset } from 'molstar/lib/mol-util/assets';
@@ -54,6 +57,7 @@ export interface MolstarDirectDocument {
     readonly url: string;
     readonly format: MolstarDirectDocumentFormat;
     readonly isBinary?: boolean;
+    readonly expectedSha256?: string;
     readonly assemblyId?: string;
 }
 
@@ -300,6 +304,8 @@ export class MolstarDirectAdapter {
     private hasOverpaint = false;
     private hasTransparency = false;
     private hasTooltips = false;
+    private tooltipSignature: string | undefined;
+    private paintCache = new WeakMap<Structure, { signature: string; loci: StructureElement.Loci[]; bundles: StructureElement.Bundle[] }>();
     private tooltipProvider: LociLabelProvider | undefined;
     private residueClickHandler: ((residue: MolstarDirectResidueClick) => void) | undefined;
     private clickSubscription: { unsubscribe(): void } | undefined;
@@ -387,6 +393,8 @@ export class MolstarDirectAdapter {
         this.hasOverpaint = false;
         this.hasTransparency = false;
         this.hasTooltips = false;
+        this.tooltipSignature = undefined;
+        this.paintCache = new WeakMap();
 
         const task = this.sceneQueue.then(async () => {
             if (!this.isSceneCurrent(generation)) throw new MolstarDirectAdapterCancelledError();
@@ -407,10 +415,25 @@ export class MolstarDirectAdapter {
                         plugin.managers.structure.hierarchy.current.structures
                             .flatMap((entry) => entry.cell.obj?.data ? [entry.cell.obj.data] : []),
                     );
-                    const data = await plugin.builders.data.download({
-                        url: Asset.Url(document.url),
-                        isBinary: document.isBinary ?? false,
-                    }, { state: { isGhost: true } });
+                    // Scientific layers are authorized by the bytes parsed below,
+                    // not by headers, a prior GET, or cached document metadata.
+                    let data;
+                    if (document.expectedSha256 !== undefined) {
+                        const response = await fetch(document.url, { credentials: 'same-origin', cache: 'no-store' });
+                        if (!response.ok) throw new Error(`Scientific structure unavailable (${response.status})`);
+                        const bytes = new Uint8Array(await response.arrayBuffer());
+                        if (await sha256Hex(bytes) !== document.expectedSha256) {
+                            throw new Error('Scientific structure content hash mismatch');
+                        }
+                        this.assertSceneCurrent(generation);
+                        data = await plugin.builders.data.rawData({
+                            data: document.isBinary ? bytes : new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                        }, { state: { isGhost: true } });
+                    } else {
+                        data = await plugin.builders.data.download({
+                            url: Asset.Url(document.url), isBinary: document.isBinary ?? false,
+                        }, { state: { isGhost: true } });
+                    }
                     this.assertSceneCurrent(generation);
 
                     const trajectory = await plugin.builders.structure.parseTrajectory(data, document.format);
@@ -730,13 +753,15 @@ export class MolstarDirectAdapter {
             }
             if (!this.isPresentationCurrent(generation)) return;
 
-            if (tooltips.length > 0) {
+            const tooltipSignature = JSON.stringify(tooltips);
+            if (tooltips.length > 0 && tooltipSignature !== this.tooltipSignature) {
                 await this.applyTooltips(plugin, tooltips);
                 this.hasTooltips = true;
-            } else if (this.hasTooltips) {
+            } else if (tooltips.length === 0 && this.hasTooltips) {
                 await this.applyTooltips(plugin, []);
                 this.hasTooltips = false;
             }
+            this.tooltipSignature = tooltipSignature;
         }).catch((error) => {
             if (!this.isPresentationCurrent(generation)) return;
             throw error;
@@ -1053,6 +1078,7 @@ export class MolstarDirectAdapter {
     }
 
     private async clearColorSelections(plugin: PluginUIContext): Promise<void> {
+        this.paintCache = new WeakMap();
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             if (this.hasOverpaint) await clearStructureOverpaint(plugin, structureRef.components);
             if (this.hasTransparency) await clearStructureTransparency(plugin, structureRef.components);
@@ -1066,45 +1092,57 @@ export class MolstarDirectAdapter {
         selections: readonly MolstarDirectQuery[],
         nonSelectedColor: MolstarDirectPresentation['nonSelectedColor'],
     ): Promise<void> {
-        await this.clearColorSelections(plugin);
+        // Batch ordered layers in one transaction instead of one transaction per
+        // atom. Opacity-only edits reuse exact loci and leave overpaint untouched.
+        const update = plugin.state.data.build();
         const focusLoci: StructureElement.Loci[] = [];
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
             const documentId = this.documentStructures.get(structure);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
-            if (documentSelections.length === 0) continue;
-            if (nonSelectedColor !== undefined) {
-                await setStructureOverpaint(
-                    plugin,
-                    structureRef.components,
-                    normalizeColor(nonSelectedColor),
-                    async (root) => queryLoci([{}], root),
-                );
-                this.hasOverpaint = true;
+            const signature = JSON.stringify([nonSelectedColor, documentSelections.map(({opacity: _opacity, ...selection}) => selection)]);
+            let cached = this.paintCache.get(structure);
+            const colorsChanged = cached?.signature !== signature;
+            if (!cached || colorsChanged) {
+                const loci = documentSelections.map(selection => queryLoci([selection], structure.root));
+                cached = {signature, loci, bundles: loci.map(locus => StructureElement.Bundle.fromLoci(locus))};
+                this.paintCache.set(structure, cached);
+                documentSelections.forEach((selection, index) => { if (selection.focus) focusLoci.push(loci[index]!); });
             }
-            for (const selection of documentSelections) {
-                if (selection.color !== null) {
-                    await setStructureOverpaint(
-                        plugin,
-                        structureRef.components,
-                        normalizeColor(selection.color),
-                        async (root) => queryLoci([selection], root),
-                    );
-                    this.hasOverpaint = true;
+            const colorLayers = documentSelections.flatMap((selection, index) => selection.color !== null
+                ? [{bundle: cached!.bundles[index]!, color: normalizeColor(selection.color), clear: false}] : []);
+            if (nonSelectedColor !== undefined && documentSelections.length > 0) {
+                colorLayers.unshift({bundle: StructureElement.Bundle.fromLoci(queryLoci([{}], structure.root)), color: normalizeColor(nonSelectedColor), clear: false});
+            }
+            const transparencyLayers = documentSelections.flatMap((selection, index) => selection.opacity !== undefined && selection.opacity < 1
+                ? [{bundle: cached!.bundles[index]!, value: Math.max(0, Math.min(1, 1 - selection.opacity))}] : []);
+            for (const component of structureRef.components) for (const representation of component.representations) {
+                const repr = representation.cell;
+                const reprStructure = repr.obj?.data.sourceData;
+                if (!reprStructure) continue;
+                const overpaint = plugin.state.data.select(StateSelection.Generators.ofTransformer(StateTransforms.Representation.OverpaintStructureRepresentation3DFromBundle, repr.transform.ref).withTag('overpaint-controls'))[0];
+                if (colorsChanged || !overpaint) {
+                    const params = Overpaint.toBundle(Overpaint.filter(Overpaint.merge(Overpaint.ofBundle(colorLayers, structure.root)), reprStructure) as Overpaint<StructureElement.Loci>);
+                    if (overpaint) update.to(overpaint).update(params);
+                    else if (colorLayers.length) update.to(repr.transform.ref).apply(StateTransforms.Representation.OverpaintStructureRepresentation3DFromBundle, params, {tags: 'overpaint-controls'});
                 }
-                if (selection.opacity !== undefined && selection.opacity < 1) {
-                    await setStructureTransparency(
-                        plugin,
-                        structureRef.components,
-                        Math.max(0, Math.min(1, 1 - selection.opacity)),
-                        async (root) => queryLoci([selection], root),
-                    );
-                    this.hasTransparency = true;
-                }
-                if (selection.focus) focusLoci.push(queryLoci([selection], structure));
+                const transparency = plugin.state.data.select(StateSelection.Generators.ofTransformer(StateTransforms.Representation.TransparencyStructureRepresentation3DFromBundle, repr.transform.ref).withTag('transparency-controls'))[0];
+                if (transparencyLayers.length) {
+                    const params = Transparency.toBundle(Transparency.filter(Transparency.merge(Transparency.ofBundle(transparencyLayers, structure.root)), reprStructure) as Transparency<StructureElement.Loci>);
+                    if (transparency) update.to(transparency).update(params);
+                    else update.to(repr.transform.ref).apply(StateTransforms.Representation.TransparencyStructureRepresentation3DFromBundle, params, {tags: 'transparency-controls'});
+                } else if (transparency) update.delete(transparency.transform.ref);
             }
         }
+        try {
+            await update.commit({doNotUpdateCurrent: true});
+        } catch (error) {
+            this.paintCache = new WeakMap();
+            throw error;
+        }
+        this.hasOverpaint = true;
+        this.hasTransparency = true;
         if (focusLoci.length > 0) plugin.managers.camera.focusLoci(focusLoci);
     }
 

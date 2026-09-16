@@ -110,6 +110,70 @@ Downstream docs and tooling should refer to jobs, designs, analyses, effective
 model settings, configuration identities, and stage outputs together. A loose
 output folder is not an authoritative result.
 
+## FA-MPNN pSCE policy and historical results
+
+`fampnn_avg_psce` is a residue-weighted sidechain error in Å (lower is better),
+not a binding score or pLDDT. The producer and global profile share the numerical
+owner in `scripts/analyse_fampnn.py`. New sidecars persist `psce_policy` with the
+exact chain scope, Cβ inclusion, original all-model/all-residue/all-alternate-atom rules,
+aggregation and policy version. Workflow chain selection and Cβ exclusion remain
+explicit; sequence probability and mutation scores retain their separate native
+contracts. Sidecar scalars use two-decimal rounding; profiles retain precision.
+
+A default global profile request uses that persisted policy. Explicit analysis
+parameters `chain_id` and boolean `ignore_cbeta` request a different policy without
+changing the Design's retained/filter-facing scalar. Both the effective policy
+and request participate in cache identity, and the policy-aware analysis has a
+new code version. Queued analyses reject changed input signatures before execution.
+
+An older scalar without a recorded policy is preserved, but its chain/atom scope
+is **unknown**. Its default profile is explicitly unavailable rather than guessing
+chain A or all chains. Explicit reanalysis of such a structure requires both policy
+parameters and creates a separate analysis. Old cache entries are not reused as
+policy-aware results. A chain-mean-only sidecar cannot reconstruct a residue-weighted
+overall score. Sidecar-free imports still compute their historical all-chain,
+Cβ-included fallback, now labelling the newly derived policy.
+
+## Model scope and exact result selection
+
+`GET /api/designs` accepts a server-side `model_id` filter. Its `model_counts`
+summary describes the full selected Job lineage before display filters and
+pagination, so a model is not lost because it is absent from the current page.
+Job result counts come from persisted Designs, not recursive file discovery.
+
+A canonical Design reopen uses `/designs/:jobId?design_id=:designId`. The detail
+API checks the requested Job lineage; a missing or foreign exact Design is
+unavailable, not replaced by the first row. Explicit candidate/model/Job choices
+update or release the old exact selection while preserving the Project-return
+context. Automatic lineage redirects preserve exact selection and context.
+PLR workflow context composes the shared Design workbench. CM and Frustra use the
+shared model/candidate/invocation/experiment selection mechanisms rather than a
+second local model store. A retrieval error is not evidence that a result is absent.
+
+## Native read boundaries
+
+Publication admits the complete native scientific contract. Reading one admitted
+candidate verifies the native artifacts required for that candidate; unrelated
+siblings are not an additional selected-read obligation. Native model applicability,
+not a revision number alone, determines whether spatial metrics have valid axes.
+Unsupported spatial evidence remains explicit rather than borrowing Boltz axes
+or positional historical arrays. Whole-Job Project receipts retain their declared
+result scope and immutable identity; historical receipt scopes are not silently
+reinterpreted.
+
+CM/Frustra pages, MD ranges and NGS readers share bounded descriptor-based digest
+reuse. The first verification remains complete; changed descriptor identity or
+metadata invalidates reuse. Owned paths, no-follow opens, expected hashes and
+pinned descriptors remain authority boundaries, not optional performance flags.
+Retained MD analysis records its generating implementation, rather than requiring
+its source hash to match today's code. Analysis failure does not suppress valid
+independent dynamics, and chart/frame/playback selection uses one active intent.
+
+Docking rows expose an exact Job-relative `artifact_path` and native `format`.
+The read route preserves engine and complex identity and forwards SDF as SDF.
+A legacy basename is accepted only when unique; ambiguity returns 409 rather than
+selecting a different complex's first match.
+
 ## Practical Reading Order
 
 For operator use:

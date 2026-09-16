@@ -55,8 +55,11 @@ describe('workflow-only capability boundaries', () => {
         assert.equal(structureState.includes("export type LegacyStructurePredictorFamily = 'rf3'"), true);
         assert.equal(structureState.includes("StructureLaunchVariant = 'default' | 'boltz_cp_experimental' | 'esmfold2'"), false);
         assert.equal(structureTemplate.includes("predictorFamilies.includes('esmfold2')"), true);
+        assert.equal(mutagenesisTemplate.includes("setPredictor('boltz')"), true);
         assert.equal(mutagenesisTemplate.includes("setPredictor('esmfold2')"), true);
-        assert.equal(jobSubmission.includes("? 'esmfold2'"), true);
+        assert.equal(mutagenesisTemplate.includes("setPredictor('rf3')"), false);
+        assert.equal(mutagenesisTemplate.includes("setPredictor('both')"), false);
+        assert.equal(jobSubmission.includes('buildMutagenesisWorkflowRequest(jobNamePrefix, variants, predictorConfig)'), true);
     });
 
     it('keeps ESMFold2 documented on structure prediction without a standalone card', () => {

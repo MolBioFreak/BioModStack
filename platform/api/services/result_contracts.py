@@ -50,6 +50,17 @@ _CM_VIEWER_CAPABILITIES = [
 
 _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ResultContractDefinition(
+        contract_id="antibody_pipeline_v1",
+        # Aggregate root, never a substitute for a candidate's stage-specific
+        # profile. Exact model+mode resolution below prevents mode-only grants.
+        viewer_capabilities=["result_filter"],
+        required_fields=["status"],
+        required_artifacts=["antibody_closeout_report"],
+        notes="Native antibody root closeout: aggregation_report.json from validation, or "
+              "terminal_closeout_report.json when validation is not selected. Candidate "
+              "structures retain their own ingested review profiles.",
+    ),
+    ResultContractDefinition(
         contract_id="shape_blueprint",
         # This product model owns multiple modes.  Model identity alone must
         # never grant Shape review authority; persisted stage/mode identity or
@@ -239,6 +250,20 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         notes="Structure prediction/validation outputs. Binder semantics require a separate explicit role contract.",
     ),
     ResultContractDefinition(
+        contract_id="conformational_mapping_ensemble_v1",
+        # Root aggregate only. Candidate/analysis profiles remain independently
+        # resolved and validated by the canonical CM bundle ingester/readers.
+        supported_analyzers=list(_CM_ANALYZERS),
+        viewer_capabilities=list(_CM_VIEWER_CAPABILITIES),
+        required_fields=["request_id", "request_sha256", "source_snapshot_sha256",
+                         "backend", "expected_coordinates", "candidates",
+                         "native_manifest_sha256", "terminal_status"],
+        required_artifacts=["ensemble_manifest", "native_manifest"],
+        notes="Native cm_ensemble_v1 aggregate and cm_native_artifacts_v1; "
+              "services.conformational_mapping.persistence.ingest_result_bundle "
+              "validates request, coordinate and content identities. Not a Design result.",
+    ),
+    ResultContractDefinition(
         contract_id="conformational_mapping_protenix_v1",
         model_ids=["conformational_mapping"],
         artifact_classes=["monomer_conformation"],
@@ -390,6 +415,17 @@ def resolve_result_contract(
 
     family = _token(stage_family)
     model_id = _token(model_type) or _token((provenance or {}).get("model_id"))
+    if (model_id == "conformational_mapping" and _token(stage_mode) == "map"
+            and not family and not _token(artifact_class)):
+        definition = _definition_by_id("conformational_mapping_ensemble_v1")
+        assert definition is not None
+        return _contract_from_definition(definition)
+    if (model_id in {"antibody_denovo", "template_antibody_denovo"}
+            and _token(stage_mode) in {"antibody_denovo_pipeline", "antibody_refinement_pipeline"}
+            and not family and not _token(artifact_class)):
+        definition = _definition_by_id("antibody_pipeline_v1")
+        assert definition is not None
+        return _contract_from_definition(definition)
     family_matches = [
         definition
         for definition in _RESULT_CONTRACT_DEFINITIONS
@@ -415,6 +451,44 @@ def resolve_result_contract(
     if mode_definition:
         return _contract_from_definition(mode_definition, source="legacy_mode")
     return ResultContract()
+
+
+def antibody_pipeline_closeout(
+    job: Any, output_root: Path, *, required: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Read native aggregate evidence, without granting any child review profile.
+
+    Missing evidence is normal at interactive gates. A present selected closeout
+    must be well formed and bound to this root job; remote paths in its payload
+    are informational, never used as host filesystem authority.
+    """
+    import hashlib
+    import json
+
+    contract = resolve_result_contract(model_type=job.model_id, stage_mode=job.mode)
+    if contract.analysis_contract_id != "antibody_pipeline_v1":
+        return None
+    params = job.params if isinstance(job.params, dict) else json.loads(job.params or "{}")
+    terminal = params.get("run_structure_validation") is False
+    filename = "terminal_closeout_report.json" if terminal else "aggregation_report.json"
+    report_path = output_root / filename
+    if not report_path.exists() and not report_path.is_symlink():
+        if required:
+            raise ValueError("Antibody root completed without its selected native closeout artifact")
+        return None
+    if report_path.is_symlink() or not report_path.is_file():
+        raise ValueError("Antibody root closeout is not a regular native artifact")
+    raw = report_path.read_bytes()
+    report = json.loads(raw)
+    owner_key = "job_id" if terminal else "parent_job_id"
+    count_key = "total_terminal_designs" if terminal else "total_validated_designs"
+    if (not isinstance(report, dict) or report.get(owner_key) != str(job.id)
+            or report.get("status") != "complete"
+            or type(report.get(count_key)) is not int or report[count_key] < 0):
+        raise ValueError("Antibody root closeout identity/status/count mismatch")
+    return {"contract_id": contract.analysis_contract_id, "artifact": filename,
+            "candidate_count": report[count_key],
+            "sha256": hashlib.sha256(raw).hexdigest(), "native_report": report}
 
 
 def _role_values(role_map: Dict[str, Any]) -> List[str]:
@@ -470,6 +544,9 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
     if profile_id == "shape_blueprint":
         supplied = getattr(design, "review_artifact_manifest", None)
         supplied = supplied if isinstance(supplied, dict) else {}
+        # ORM/replay callers may already carry the normalized envelope.
+        supplied = supplied.get("artifacts", supplied)
+        supplied = supplied if isinstance(supplied, dict) else {}
         structure_raw = supplied.get("structure")
         source_raw = supplied.get("source_backbone")
         metrics_raw = supplied.get("metrics")
@@ -487,9 +564,26 @@ def build_review_artifact_manifest(design: Any) -> Dict[str, Any]:
             for key in ("sha256", "bytes", "format", "relative_path"):
                 if key in source:
                     target[key] = source[key]
+        artifacts = {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact}
+        provenance = getattr(design, "provenance", None)
+        provenance = provenance if isinstance(provenance, dict) else {}
+        evidence = provenance.get("shape_validator_evidence")
+        native = provenance.get("shape_validator_artifacts")
+        descriptors = {"validator_evidence": evidence} if isinstance(evidence, dict) else {}
+        if isinstance(native, list):
+            descriptors.update({f"validator_artifact_{index:04d}": descriptor
+                                for index, descriptor in enumerate(native) if isinstance(descriptor, dict)})
+        for role, descriptor in descriptors.items():
+            projected = artifact(descriptor.get("path"), kind=role, metadata_ready=bool(
+                descriptor.get("sha256") and type(descriptor.get("bytes")) is int
+            ))
+            projected.update({key: descriptor[key] for key in (
+                "sha256", "bytes", "format", "relative_path", "validator", "native_path",
+            ) if key in descriptor})
+            artifacts[role] = projected
         return {
             "schema": REVIEW_ARTIFACT_SCHEMA,
-            "artifacts": {"structure": structure_artifact, "source_backbone": source_artifact, "metrics": metrics_artifact},
+            "artifacts": artifacts,
             "roles": {**role_map, "has_binder": False},
         }
 

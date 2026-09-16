@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 import yaml
+import pytest
+import shlex
+import hashlib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -14,6 +17,91 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 PREP_BOLTZGEN = SCRIPTS_DIR / "prep_boltzgen.py"
 FILTER_BOLTZGEN = SCRIPTS_DIR / "filter_boltzgen.py"
 RUN_BOLTZGEN_WRAPPER = SCRIPTS_DIR / "run_boltzgen_wrapper.py"
+
+
+@pytest.mark.parametrize('kind,expected', [
+    ('input_pdb', 'protein-anything'), ('ligand_pdb', 'protein-small_molecule'),
+    ('dna_structure', 'protein-anything'), ('target_pdb', 'protein-anything'),
+    ('scaffold', 'protein-anything'),
+])
+def test_auto_preview_matches_real_native_preparation(tmp_path, kind, expected):
+    from scripts.lib.boltzgen_native import preview_protocol_metadata
+    path = tmp_path / ('ssDNA_ATCG.pdb' if kind == 'dna_structure' else 'input.pdb')
+    _write_pdb(path, 'T', [10, 11, 13])
+    inputs = {'protocol': 'auto'}
+    if kind == 'scaffold':
+        inputs.update(nanobody_framework='AXXX', target_pdb=str(path),
+            nanobody_scaffold_specs=json.dumps([{'name': 'vhh', 'spec': {'path': str(path)}}]))
+    else:
+        inputs[kind] = str(path)
+    if kind == 'dna_structure':
+        inputs.update(protein_sequence='AAA', catalytic_site=True)
+    if kind == 'target_pdb':
+        inputs.update(nanobody_framework='AXXX', binding_site_residues='T10,T13')
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    metadata = preview_protocol_metadata({'boltzgen_protocol': 'auto'},
+        preparation_inputs=inputs, allowed_input_roots=[tmp_path])
+    assert metadata['state'] == 'ok', metadata
+    assert metadata['effective_protocol'] == expected
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+    output = tmp_path / 'boltzgen_input.yaml'
+    argv = []
+    for key, value in inputs.items():
+        argv += ['--' + key] if value is True else ['--' + key, str(value)]
+    _run_python(PREP_BOLTZGEN, *argv, '--output_yaml', str(output))
+    assert metadata['config_identity']['yaml_sha256'] == hashlib.sha256(output.read_bytes()).hexdigest()
+    wrapper = _load_run_boltzgen_wrapper_module()
+    assert wrapper.auto_detect_protocol(str(output)) == expected
+
+
+@pytest.mark.parametrize('designs', [['/weights/diverse.ckpt'], ['/weights/adherence.ckpt'], ['/weights/diverse.ckpt', '/weights/adherence.ckpt']])
+@pytest.mark.parametrize('ligand,skip', [(False, False), (True, False), (False, True), (True, True)])
+def test_wrapper_consumes_selected_runtime_paths(tmp_path, monkeypatch, ligand, skip, designs):
+    module = _load_run_boltzgen_wrapper_module()
+    config = tmp_path / 'config.yaml'
+    config.write_text(yaml.safe_dump({'entities': [{'ligand' if ligand else 'protein': {'id': 'A'}}]}))
+    commands = []
+    monkeypatch.setattr(module, 'report_stage', lambda *a, **k: None)
+    monkeypatch.setattr(module.os, 'system', lambda command: commands.append(shlex.split(command)) or 0)
+    argv = ['wrapper', '--config', str(config), '--out_dir', str(tmp_path / 'out'),
+        '--design_checkpoints', *designs,
+        '--inverse_fold_checkpoint', '/weights/ifold.ckpt', '--folding_checkpoint', '/weights/fold.ckpt',
+        '--affinity_checkpoint', '/weights/aff.ckpt', '--moldir', '/weights/mols.zip']
+    if skip:
+        argv += ['--skip_inverse_folding']
+    monkeypatch.setattr(sys, 'argv', argv)
+    module.main()
+    cmd = commands[0]
+    i = cmd.index('--design_checkpoints')
+    assert cmd[i + 1:i + 1 + len(designs)] == designs
+    assert cmd.count('--design_checkpoints') == 1
+    assert ('--affinity_checkpoint' in cmd) is ligand
+    assert ('--inverse_fold_checkpoint' in cmd) is not skip
+    assert cmd[cmd.index('--folding_checkpoint') + 1] == '/weights/fold.ckpt'
+    assert cmd[cmd.index('--moldir') + 1] == '/weights/mols.zip'
+    assert '--design_checkpoint_fractions' not in cmd
+
+
+@pytest.mark.parametrize('unsafe', ['symlink', 'outside', 'missing', 'directory'])
+def test_auto_preview_rejects_unsafe_declared_input(tmp_path, unsafe):
+    from scripts.lib.boltzgen_native import preview_protocol_metadata
+    root = tmp_path / 'managed'
+    root.mkdir()
+    path = root / 'input.pdb'
+    if unsafe == 'symlink':
+        target = root / 'target.pdb'
+        _write_pdb(target, 'A', [1])
+        path.symlink_to(target)
+    elif unsafe == 'outside':
+        path = tmp_path / 'outside.pdb'
+        _write_pdb(path, 'A', [1])
+    elif unsafe == 'directory':
+        path.mkdir()
+    metadata = preview_protocol_metadata({'boltzgen_protocol': 'auto', 'boltzgen_input_pdb': str(path)},
+        allowed_input_roots=[root])
+    assert metadata['state'] == 'unresolved'
+    assert metadata['unresolved_inputs'] == ['input_pdb']
+    assert metadata['effective_protocol'] is None
 
 
 def test_filter_boltzgen_defers_annotations_for_python39() -> None:

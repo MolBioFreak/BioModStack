@@ -100,7 +100,7 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
 
     assert "withLabel: fastq_qc_cpu" in config
-    assert "container = params.dorado_runtime_sif" in config
+    assert "container = { params.dorado_runtime_sif }" in config
     assert "apptainer" not in module
     assert "mpileup" not in module
     assert "fallback" not in module.lower()

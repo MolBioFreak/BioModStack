@@ -163,18 +163,8 @@ def _container_to_host_path(value: str) -> str:
         return value
 
     resolved = resolve_runtime_paths()
-    host_state_dir = str(os.getenv("BMS_STATE_DIR") or resolved.get("data_root") or "")
-    container_state_path = str(os.getenv("BMS_CONTAINER_STATE_PATH") or resolved.get("container_state_path") or "")
-    inputs_container_path = str(os.getenv("BMS_INPUTS_CONTAINER_PATH") or resolved.get("inputs_container_path") or "")
-    db_container_path = str(os.getenv("BMS_DB_CONTAINER_PATH") or resolved.get("db_container_path") or "")
-
-    mappings = [
-        (db_container_path.rstrip("/"), str(Path(host_state_dir) / "biomodstack.db") if host_state_dir else ""),
-        (inputs_container_path.rstrip("/"), str(Path(host_state_dir) / "inputs") if host_state_dir else ""),
-        (container_state_path.rstrip("/"), host_state_dir),
-    ]
-    mappings = [(container_root, host_root) for container_root, host_root in mappings if container_root and host_root]
-    mappings.sort(key=lambda pair: len(pair[0]), reverse=True)
+    from biomodstack_runtime_profile import core_runtime_path_mappings
+    mappings = core_runtime_path_mappings(resolved, os.environ)
 
     for container_root, host_root in mappings:
         if value == container_root:

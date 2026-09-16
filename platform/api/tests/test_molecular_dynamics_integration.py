@@ -54,20 +54,24 @@ def test_registry_exposes_engine_neutral_molecular_dynamics_job(monkeypatch: pyt
     assert params["md_analysis_work_item"].file_type == "json"
 
 
-def test_api_routes_md_job_to_bounded_experimental_workflow() -> None:
+def test_api_routes_md_job_to_bounded_experimental_workflow(tmp_path, monkeypatch) -> None:
+    import paths
+    monkeypatch.setattr(paths, "get_inputs_dir", lambda: tmp_path)
+    config = tmp_path / "md-job.json"
+    config.write_text(json.dumps({"engine": "gromacs", "replicas": 1}))
     entrypoint = "workflows/experimental/molecular_dynamics/orchestrator.nf"
     assert resolve_nextflow_entrypoint(
         effective_profile="molecular_dynamics", model_id="molecular_dynamics", mode="simulate", params={}
     ) == entrypoint
     command = build_nextflow_command(
         model_id="molecular_dynamics", mode="simulate",
-        params={"md_job_config": "/tmp/md-job.json", "gpu_id": 2},
+        params={"md_job_config": str(config), "gpu_id": 2},
         output_dir="/tmp/md-results", job_id="job-md-1",
     )
     assert command[command.index("run") + 1] == entrypoint
     assert _flag_value(command, "-profile") == "molecular_dynamics_coordinator,workstation_ryzen7960x"
-    assert _flag_value(command, "--md_job_config") == "/tmp/md-job.json"
-    assert _flag_value(command, "--md_input_root") == "/tmp"
+    assert _flag_value(command, "--md_job_config") == str(config)
+    assert _flag_value(command, "--md_input_root") == str(tmp_path)
     assert _flag_value(command, "--gpu_id") == "2"
     assert _flag_value(command, "--job_id") == "job-md-1"
 
@@ -158,7 +162,7 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
         assert '--scheduler-gpu-id "${params.gpu_id}"' in replica_module
         assert "--config runtime_config.json" in replica_module
     assert "preparation_manifest.json" in gromacs_module
-    assert '["preparation"]["gromacs_gpu_offload"]' in gromacs_module
+    assert "manifest['preparation']['gromacs_gpu_offload']" in gromacs_module
     assert '--gpu-offload "\\${runtime_gpu_offload}"' in gromacs_module
 
 

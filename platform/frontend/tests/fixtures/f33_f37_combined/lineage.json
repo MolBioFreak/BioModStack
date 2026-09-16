@@ -1,0 +1,17 @@
+{
+  "fixture_scope": "OFFLINE SYNTHETIC ONLY. Actual ASGI handlers/SQLite/FourPipetteTransport/planner, fake driver. Real release/evidence builders over local hashed synthetic authority packets; mocked privilege/service/process/image authority. No production, deployment, container, hardware or physical attestation.",
+  "warning": "OFFLINE SYNTHETIC release/authority only; never use these packets for release admission or authorization. No deployed attestation or hardware proof. Production-shaped required schema claims are synthetic. Existing older fixtures retain their separate generation.",
+  "exporter_HEAD": "5196a69a739d104471d57ecf865b61240c8404ee",
+  "exporter_tree": "07b54d946854216e25ed2e7a3bf81b74c7824f6f",
+  "exporter_seal_sha256": "8bb2fb5e890387af2a65aef24b18a92ba503969c38b1ad141f0a6ca186339b31",
+  "consumer_HEAD": "dae94c9ef4e5db820b5a83337fd2174f4bfda797",
+  "consumer_baseline_manifest_sha256": "bfffb7ed57eb344c26483a433a324998060b0a436cf22f2bca8c1010c58242d3",
+  "source_manifest_sha256": "5cf6125b12cdd341bd83fcff4c0b9d2b00086c152b8eb9ae4f6e1680dfec575a",
+  "source_log": {
+    "file": "final-gate.log",
+    "sha256": "ad87f48541290714903c6a42d7b57c30760d72d109196a91d02d075f29ee7234"
+  },
+  "wire_count": 16,
+  "strict_projection_count": 7,
+  "authority_builder_note": "Actual current_authority_identity/_manifest_aggregate/_verified_identity/_source_identity builders against hashed synthetic temp packets; privilege/cgroup/service/image/container observations mocked, genuine sandbox proc observation afterward."
+}

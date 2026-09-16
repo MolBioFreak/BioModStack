@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
-import { fetchSystemStatus } from '../lib/api';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { buildGpuCatalog, listGpuCatalogEntries } from './gpuCatalog';
 
 const GPU_CATALOG_MAX_AGE_MS = 15_000;
@@ -12,13 +10,7 @@ interface UseLiveGpuCatalogOptions {
 
 export function useLiveGpuCatalog(options: UseLiveGpuCatalogOptions = {}) {
     const requireFresh = options.requireFresh === true;
-    const systemQuery = useQuery({
-        queryKey: ['system'],
-        queryFn: fetchSystemStatus,
-        refetchInterval: 5000,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
+    const systemQuery = useSystemStatus();
     const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {

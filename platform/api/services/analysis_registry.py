@@ -104,15 +104,64 @@ def _normalize_design_id_list(value: Any) -> list[str]:
     return cleaned
 
 
+async def scientific_contract_revision(design: Design, session: AsyncSession) -> int | None:
+    """Read launch authority, never a Design/user-supplied provenance claim."""
+    from services.core_protein_scientific_contract import revision_for_job
+    job = await session.scalar(
+        select(Job).options(load_only(Job.id, Job.provenance)).where(Job.id == design.job_id)
+    )
+    return revision_for_job(job)
+
+
+def unavailable_scientific_identity(design: Design, metric: str, reason: str) -> dict[str, Any]:
+    return {
+        "schema_name": "core_protein_viewer_metric", "schema_version": 1,
+        "contract_revision": 1, "design_id": design.id, "design_name": design.name,
+        "metric": metric, "status": "unavailable", "reason": reason,
+        "document": None, "artifact_sha256": None, "producer_binding": None,
+        "row_axis": None, "column_axis": None,
+        "sampled_row_indices": None, "sampled_column_indices": None,
+        "native_shape": None, "native_row_positions": None, "native_column_positions": None, "pae_matrix": None, "size": None,
+    }
+
+
 async def build_analysis_input_signature(
     definition: AnalysisDefinition,
     subject: Any,
     params: dict[str, Any],
     session: AsyncSession,
+    *,
+    native_selection=None,
 ) -> str:
+    if (definition.subject_kind == "design" and definition.analysis_type in {PAE_MATRIX_ANALYSIS, CHAIN_METRICS_ANALYSIS, IPSAE_INTERFACE_ANALYSIS}
+            and await scientific_contract_revision(subject, session) == 1):
+        from services.core_protein_scientific_contract import verified_native_spatial_design
+        identity = {"core_protein_scientific_contract":1, "viewer_identity_adapter":3,
+            "design_id":subject.id, "analysis_type":definition.analysis_type, "params":params}
+        if definition.analysis_type == IPSAE_INTERFACE_ANALYSIS:
+            identity.update(review_profile_id=subject.review_profile_id,
+                review_role_map=subject.review_role_map,
+                detected_antibody_chains=subject.detected_antibody_chains,
+                detected_target_chain=subject.detected_target_chain,
+                producer_record=subject.confidence_metrics)
+        try:
+            selected = native_selection or await verified_native_spatial_design(subject, session)
+            if selected["design_id"] != subject.id:
+                raise ValueError("foreign selected snapshot")
+        except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+            # This distinct namespace can only cache unavailable results. It
+            # never falls back to legacy paths or reuses a prior healthy run.
+            return _json_hash({**identity, "status":"unavailable"})
+        return _json_hash({**identity, "status":"ok", "native":selected['native'],
+            "artifacts":selected['artifacts'], "block":selected['block']})
     value = definition.build_input_signature(subject, params, session)
     if inspect.isawaitable(value):
         value = await value
+    if definition.subject_kind == "design" and definition.analysis_type in {
+        PAE_MATRIX_ANALYSIS, CHAIN_METRICS_ANALYSIS, CONTACT_MAP_ANALYSIS,
+    } and await scientific_contract_revision(subject, session) == 1:
+        return _json_hash({"legacy_signature": str(value), "core_protein_scientific_contract": 1,
+                           "viewer_identity_adapter": 1, "candidate_id": subject.id})
     return str(value)
 
 
@@ -138,7 +187,13 @@ def normalize_chain_metrics_params(raw: dict[str, Any] | None) -> dict[str, Any]
 
 def normalize_fampnn_psce_profile_params(raw: dict[str, Any] | None) -> dict[str, Any]:
     params = dict(raw or {})
-    return {"ignore_cbeta": _normalize_bool(params.get("ignore_cbeta"), False)}
+    if set(params) - {"chain_id", "ignore_cbeta"}:
+        raise ValueError("Unknown pSCE analysis parameter")
+    if "chain_id" in params and (not isinstance(params["chain_id"], str) or not params["chain_id"].strip()):
+        raise ValueError("pSCE chain_id must be an explicit chain or all_chains")
+    if "ignore_cbeta" in params and type(params["ignore_cbeta"]) is not bool:
+        raise ValueError("pSCE ignore_cbeta must be boolean")
+    return params
 
 
 def normalize_pae_matrix_params(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -148,7 +203,7 @@ def normalize_pae_matrix_params(raw: dict[str, Any] | None) -> dict[str, Any]:
         max_size_value = int(max_size)
     except (TypeError, ValueError):
         max_size_value = 200
-    max_size_value = max(50, min(max_size_value, 500))
+    max_size_value = max(50, min(max_size_value, 1024))
     return {"max_size": max_size_value}
 
 
@@ -205,10 +260,13 @@ def build_chain_metrics_signature(design: Design, params: dict[str, Any], _sessi
 
 
 def build_fampnn_psce_profile_signature(design: Design, params: dict[str, Any], _session: AsyncSession) -> str:
+    from services.structure_utils import resolve_fampnn_psce_policy
     return _json_hash({
         "analysis_type": FAMPNN_PSCE_PROFILE_ANALYSIS,
         "structure": _structure_fingerprint(design.pdb_path),
         "params": params,
+        "psce_policy": resolve_fampnn_psce_policy(design, params),
+        "policy_adapter": 2,
     })
 
 
@@ -278,30 +336,38 @@ async def _job_design_scope_rows(
     return list(result.scalars().all())
 
 
+async def correlation_scientific_scope(designs, session):
+    """One canonical read path for cached computation and source-bound keys."""
+    from services.scientific_analytics import owning_jobs, partition, persisted_projection
+    from services.core_protein_scientific_contract import revision_for_job
+    owners = await owning_jobs(session, designs)
+    projections, sources = {}, []
+    for design in designs:
+        owner = owners.get(design.job_id)
+        if owner is None or revision_for_job(owner) != 1:
+            continue
+        value = await persisted_projection(design, session)
+        projections[design.id] = value
+        sources.append({"id": design.id, "job_id": design.job_id, "revision": 1,
+            "owner_model": owner.model_id, "owner_provenance": owner.provenance,
+            "producer_record": design.confidence_metrics,
+            "projection": {key: ({k: v.model_dump(mode="json") if hasattr(v, "model_dump") else v
+                for k, v in item.items()} if isinstance(item, dict) else item)
+                for key, item in value.items()}})
+    legacy, cohorts = await partition(designs, owners, session, projections=projections)
+    return legacy, [cohort.model_dump(mode="json") for cohort in cohorts], sources
+
+
 async def build_job_correlation_signature(job: Job, params: dict[str, Any], session: AsyncSession) -> str:
     designs = await _job_design_scope_rows(
         session,
         job,
         include_children=bool(params.get("include_children", True)),
         design_ids=params.get("design_ids") or [],
-        columns=(
-            Design.id,
-            Design.plddt_overall,
-            Design.plddt_binder,
-            Design.pae_overall,
-            Design.pae_interaction,
-            Design.rmsd_binder,
-            Design.rmsd_overall,
-            Design.mpnn_score,
-            Design.conf_score,
-            Design.ptm,
-            Design.rog,
-            Design.ligand_iptm,
-            Design.affinity_score,
-            Design.binder_probability,
-        ),
+        columns=tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
+    designs, cohorts, sources = await correlation_scientific_scope(designs, session)
     payload = {
         "analysis_type": JOB_CORRELATION_MATRIX_ANALYSIS,
         "job_id": str(job.id),
@@ -326,6 +392,8 @@ async def build_job_correlation_signature(job: Job, params: dict[str, Any], sess
             for design in designs
         ],
     }
+    if sources:
+        payload.update(scientific_contract_revision=1, scientific_sources=sources, scientific_cohorts=cohorts)
     return _json_hash(payload)
 
 
@@ -431,7 +499,7 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
     FAMPNN_PSCE_PROFILE_ANALYSIS: AnalysisDefinition(
         analysis_type=FAMPNN_PSCE_PROFILE_ANALYSIS,
         subject_kind="design",
-        version="2026-03-23-v1",
+        version="2026-09-12-policy-v2",
         resource_class="cpu_light",
         normalize_params=normalize_fampnn_psce_profile_params,
         build_input_signature=build_fampnn_psce_profile_signature,

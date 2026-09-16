@@ -105,11 +105,26 @@ def normalizeMaturationScoredSamples(raw) {
     }.findAll { item -> item != null }
 }
 
+def resolveMaturationRankingScore(parsed, boolean strict) {
+    if (strict) {
+        def value = parsed.objective_score
+        return value instanceof Number && Double.isFinite(value.doubleValue()) ? value : null
+    }
+    return parsed.objective_score != null ? parsed.objective_score :
+        (parsed.selected_delta_interface_score != null ? parsed.selected_delta_interface_score :
+         (parsed.delta_interface_score ?: 0.0))
+}
+
 workflow MATURATION_CHILD_CORE {
     take:
     pdb_list
 
     main:
+    def scientificContract = params.get('core_protein_scientific_contract')
+    if (scientificContract != null && (scientificContract instanceof Boolean || scientificContract.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def strictScientificContract = scientificContract != null
     def strictAnchorRequirement = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
     def selectedLoopsSpec = normalizeMaturationLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
     def ppiflowRegionMode = normalizeMaturationRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
@@ -157,6 +172,10 @@ workflow MATURATION_CHILD_CORE {
             sampleMeta.parent_id = meta.id
             sampleMeta.id = backbone_pdb.baseName
             sampleMeta.sample_index = manifestEntry.sample_index
+            if (strictScientificContract) {
+                if (!manifestEntry.comparison_path) throw new IllegalArgumentException('Missing native comparison publication')
+                sampleMeta.maturation_comparison_path = manifestEntry.comparison_path
+            }
             tuple(sampleMeta, backbone_pdb)
         }
     }
@@ -171,7 +190,7 @@ workflow MATURATION_CHILD_CORE {
             tuple(meta.id, original_pdb, ppiflow_positions, cdr_positions_by_loop_json)
         }, by: 0)
         .map { _parentId, meta, backbone_pdb, original_pdb, ppiflow_positions, cdr_positions_by_loop_json ->
-            tuple(meta, original_pdb, backbone_pdb, ppiflow_positions, cdr_positions_by_loop_json)
+            tuple(meta, original_pdb, strictScientificContract ? [backbone_pdb, file(meta.maturation_comparison_path.toString())] : backbone_pdb, ppiflow_positions, cdr_positions_by_loop_json)
         }
 
     ScorePartialFlowImprovement(partial_score_inputs)
@@ -200,22 +219,17 @@ workflow MATURATION_CHILD_CORE {
     def partial_scored = ScorePartialFlowImprovement.out.scores
         .join(partial_backbones)
         .map { meta, score_json, backbone_pdb ->
-            def score = 0.0
+            def score = strictScientificContract ? null : 0.0
             try {
                 def parsed = new groovy.json.JsonSlurper().parse(score_json)
-                score = parsed.objective_score
-                if (score == null) {
-                    score = parsed.selected_delta_interface_score
-                }
-                if (score == null) {
-                    score = parsed.delta_interface_score ?: 0.0
-                }
+                score = resolveMaturationRankingScore(parsed, strictScientificContract)
             }
             catch (Exception e) {
-                score = 0.0
+                score = strictScientificContract ? null : 0.0
             }
             tuple(meta, backbone_pdb, score_json, score)
         }
+        .filter { _meta, _backbone, _scoreJson, score -> !strictScientificContract || score != null }
 
     def redesign_enabled = params.maturation_redesign_enabled != false
     def redesign_top_n = params.maturation_redesign_top_n ?: 0
@@ -261,7 +275,7 @@ workflow MATURATION_CHILD_CORE {
             }
             .join(cdr_loop_lookup)
             .map { _sampleId, meta, backbone_pdb, anchors_json, cdr_positions, cdr_positions_by_loop ->
-                tuple(meta, backbone_pdb, anchors_json, cdr_positions, cdr_positions_by_loop)
+                tuple(meta, backbone_pdb, anchors_json, cdr_positions, cdr_positions_by_loop, strictScientificContract ? file(meta.maturation_comparison_path.toString()) : [])
             }
 
         PrepMaturationRedesign(redesign_inputs)
@@ -272,12 +286,12 @@ workflow MATURATION_CHILD_CORE {
         }
 
         def score_inputs = RunMaturationFAMPNN.out.redesigned
-            .map { meta, matured_pdb, _matured_json -> tuple(meta.parent_id ?: meta.id, meta, matured_pdb) }
+            .map { meta, matured_pdb, matured_json -> tuple(meta.parent_id ?: meta.id, meta, matured_pdb, matured_json) }
             .combine(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions, cdr_positions_by_loop_json ->
                 tuple(meta.id, original_pdb, ppiflow_positions, cdr_positions_by_loop_json)
             }, by: 0)
-            .map { _parentId, meta, matured_pdb, original_pdb, ppiflow_positions, cdr_positions_by_loop_json ->
-                tuple(meta, original_pdb, matured_pdb, ppiflow_positions, cdr_positions_by_loop_json)
+            .map { _parentId, meta, matured_pdb, matured_json, original_pdb, ppiflow_positions, cdr_positions_by_loop_json ->
+                tuple(meta, original_pdb, strictScientificContract ? [matured_pdb, matured_json].flatten() : matured_pdb, ppiflow_positions, cdr_positions_by_loop_json)
             }
 
         ScoreMaturationImprovement(score_inputs)

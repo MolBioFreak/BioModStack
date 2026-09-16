@@ -79,6 +79,7 @@ def _load_batch_antiberty_module(monkeypatch) -> object:
 
 
 def _load_align_protenix_module(monkeypatch) -> object:
+    monkeypatch.syspath_prepend(str(SCRIPTS_DIR))
     fake_bio = types.ModuleType("Bio")
     fake_bio_pdb = types.ModuleType("Bio.PDB")
 

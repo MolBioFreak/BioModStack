@@ -81,6 +81,7 @@ def is_isolated_task_runtime(env: Optional[Mapping[str, str]] = None) -> bool:
     return any(
         str(current_env.get(key, "")).strip()
         for key in (
+            "BMS_EXECUTING_IMAGE",
             "APPTAINER_CONTAINER",
             "APPTAINER_NAME",
             "SINGULARITY_CONTAINER",

@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from services.aligned_error_utils import AlignedErrorArtifact, ResidueRecord
+from services.aligned_error_utils import AlignedErrorArtifact, ResidueRecord, validate_numeric_chain_projection
 
 
 def _ptm_func(values: np.ndarray, d0: float) -> np.ndarray:
@@ -103,10 +103,11 @@ class IpsaePairSummary:
     dist_valid_pair_count: int
 
 
-def _residue_label(residue: ResidueRecord | None) -> str | None:
+def _residue_label(residue: ResidueRecord | None, contract_revision: int | None = None) -> str | None:
     if residue is None:
         return None
-    return f"{residue.residue_name:>3} {residue.chain_id:>2} {residue.residue_number:>4}"
+    insertion_code = residue.insertion_code if contract_revision == 1 else ""
+    return f"{residue.residue_name:>3} {residue.chain_id:>2} {residue.residue_number:>4}{insertion_code}"
 
 
 def _round(value: Any, digits: int = 6) -> float | None:
@@ -128,7 +129,13 @@ def _directed_pair_summary(
     dist_cutoff: float,
 ) -> DirectedPairSummary:
     residues = artifact.residues
+    strict_identity = artifact.contract_revision == 1
+    if strict_identity:
+        validate_numeric_chain_projection(residues)
     pae_matrix = artifact.matrix
+    if artifact.row_positions is not None and artifact.column_positions is not None:
+        # Compute in structure order without modifying the native provider matrix.
+        pae_matrix = pae_matrix[np.ix_(np.argsort(artifact.row_positions), np.argsort(artifact.column_positions))]
     chains = np.asarray([residue.chain_id for residue in residues], dtype=object)
     coords = np.asarray([residue.cb_coord for residue in residues], dtype=float)
     distances = np.sqrt(((coords[:, np.newaxis, :] - coords[np.newaxis, :, :]) ** 2).sum(axis=2))
@@ -170,16 +177,16 @@ def _directed_pair_summary(
 
         valid_pair_count += int(np.sum(valid_pairs_ipsae))
         if np.any(valid_pairs_ipsae):
-            unique_residues_chain_1.add(residue.residue_number)
+            unique_residues_chain_1.add(idx if strict_identity else residue.residue_number)
             for match_idx in np.where(valid_pairs_ipsae)[0]:
-                unique_residues_chain_2.add(residues[int(match_idx)].residue_number)
+                unique_residues_chain_2.add(int(match_idx) if strict_identity else residues[int(match_idx)].residue_number)
 
         valid_pairs_dist = chain_2_mask & (pae_matrix[idx] < pae_cutoff) & (distances[idx] < dist_cutoff)
         dist_valid_pair_count += int(np.sum(valid_pairs_dist))
         if np.any(valid_pairs_dist):
-            dist_unique_residues_chain_1.add(residue.residue_number)
+            dist_unique_residues_chain_1.add(idx if strict_identity else residue.residue_number)
             for match_idx in np.where(valid_pairs_dist)[0]:
-                dist_unique_residues_chain_2.add(residues[int(match_idx)].residue_number)
+                dist_unique_residues_chain_2.add(int(match_idx) if strict_identity else residues[int(match_idx)].residue_number)
 
     n0dom = len(unique_residues_chain_1) + len(unique_residues_chain_2)
     d0dom = calc_d0(n0dom, pair_type)
@@ -235,6 +242,8 @@ def _pair_summaries(
     pae_cutoff: float,
     dist_cutoff: float,
 ) -> list[IpsaePairSummary]:
+    if artifact.contract_revision == 1:
+        validate_numeric_chain_projection(artifact.residues)
     unique_chains = _ordered_unique([residue.chain_id for residue in artifact.residues])
     directed: dict[tuple[str, str], DirectedPairSummary] = {}
     for chain_1 in unique_chains:
@@ -281,11 +290,11 @@ def _pair_summaries(
                     d0dom_max=max_d0dom_source.d0dom,
                     d0res=forward.d0res,
                     d0res_max=max_d0res_source.d0res,
-                    residue_label_iptm_asym=_residue_label(forward.best_iptm_residue),
-                    residue_label_ipsae_d0chn_asym=_residue_label(forward.best_ipsae_d0chn_residue),
-                    residue_label_ipsae_d0dom_asym=_residue_label(forward.best_ipsae_d0dom_residue),
-                    residue_label_ipsae_d0res_asym=_residue_label(forward.best_ipsae_d0res_residue),
-                    residue_label_ipsae_d0res_max=_residue_label(max_d0res_source.best_ipsae_d0res_residue),
+                    residue_label_iptm_asym=_residue_label(forward.best_iptm_residue, artifact.contract_revision),
+                    residue_label_ipsae_d0chn_asym=_residue_label(forward.best_ipsae_d0chn_residue, artifact.contract_revision),
+                    residue_label_ipsae_d0dom_asym=_residue_label(forward.best_ipsae_d0dom_residue, artifact.contract_revision),
+                    residue_label_ipsae_d0res_asym=_residue_label(forward.best_ipsae_d0res_residue, artifact.contract_revision),
+                    residue_label_ipsae_d0res_max=_residue_label(max_d0res_source.best_ipsae_d0res_residue, artifact.contract_revision),
                     interface_residue_count_chain_1=forward.interface_residue_count_chain_1,
                     interface_residue_count_chain_2=forward.interface_residue_count_chain_2,
                     interface_dist_residue_count_chain_1=forward.interface_dist_residue_count_chain_1,

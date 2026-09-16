@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { TimeSeriesPlot } from './telemetryMetricPlot';
+import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+    activateExecutionTarget,
+    deactivateExecutionTarget,
     discoverHardware,
+    EXECUTION_TARGET_STORAGE_KEY,
     fetchFanControl,
+    fetchExecutionTargets,
     fetchPowerControl,
     fetchSchedulerConfig,
     fetchSystemStatus,
@@ -11,7 +17,6 @@ import {
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
-    VAST_DISCOVERY_QUERY_KEY,
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import {
@@ -23,7 +28,7 @@ import type {
     TelemetryChartHistoryResponse,
     TelemetryChartPoint,
 } from '../lib/telemetryChart';
-import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
+import { resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
     isTelemetryHistoryFresh,
     isValidPollPreset,
@@ -36,7 +41,6 @@ import {
     resolveTelemetryGapBreakMs,
     resolveTelemetryNominalDomain,
     resolveTelemetryPlotDomain,
-    resolveTelemetryPlotX,
     resolveTelemetryStaleAfterMs,
     resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
@@ -45,6 +49,7 @@ import type {
     PollPreset,
     WindowPreset,
 } from './infraTelemetryHistory';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
 
 const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
@@ -52,7 +57,7 @@ const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
 const SHARED_SCHEDULER_CONFIG_QUERY_KEY = ['schedulerConfig'];
-const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
+const EMPTY_HISTORY_POINTS: TelemetryChartPoint[] = [];
 
 const POLL_PRESETS: ReadonlyArray<{ value: PollPreset; label: string }> = [
     { value: 1000, label: '1s' },
@@ -68,42 +73,6 @@ const WINDOW_PRESETS: ReadonlyArray<{ value: WindowPreset; label: string }> = [
     { value: 30, label: '30m' },
     { value: 60, label: '1h' },
 ];
-
-
-interface AxisConfig {
-    title: string;
-    color: string;
-    range?: [number, number];
-    suffix?: string;
-    decimals?: number;
-}
-
-interface TimeSeriesLine {
-    x?: Array<string | number | null>;
-    y?: Array<number | null>;
-    customdata?: unknown[];
-    name?: string;
-    mode?: string;
-    line?: {
-        color?: string;
-        width?: number;
-        shape?: string;
-        simplify?: boolean;
-    };
-    hovertemplate?: string;
-}
-
-interface TimeSeriesPlotProps {
-    height: number;
-    samples: LiveSample[];
-    yAxis: AxisConfig;
-    series: TimeSeriesLine[];
-    showXAxisLabels?: boolean;
-    traceType?: 'scatter' | 'scattergl';
-    compact?: boolean;
-    redrawKey?: string | number;
-    xDomain?: [number, number];
-}
 
 
 export interface InfraLiveTelemetryProps {
@@ -197,15 +166,6 @@ const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSiz
 };
 
 
-function formatClock(timestamp: string): string {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    });
-}
-
 function PanelFrame({
     title,
     subtitle,
@@ -228,10 +188,7 @@ function PanelFrame({
     );
 }
 
-const PLOT_GRID = 'var(--chart-grid, var(--border-primary))';
-const PLOT_FONT = 'var(--chart-legend, var(--text-secondary))';
 const PLOT_TICK = 'var(--chart-axis, var(--text-muted))';
-const PLOT_PANEL_BG = 'var(--surface-plot, var(--bg-secondary))';
 
 const UI_ACCENT = 'var(--accent-primary)';
 const UI_SUCCESS = 'var(--success)';
@@ -360,15 +317,13 @@ function shouldBreakBetweenSamples(previous: LiveSample, current: LiveSample, de
     return current.timestampMs - previous.timestampMs > sampleGapAllowance(previous, current, defaultGapBreakMs);
 }
 
-function buildGapAwareTraceData<T = number>(
+function buildGapAwareTraceData(
     samples: LiveSample[],
     gapBreakMs: number,
     valueForSample: (sample: LiveSample) => number | null,
-    customForSample?: (sample: LiveSample) => T | null,
-): { x: string[]; y: Array<number | null>; customdata?: Array<T | null> } {
+): { x: string[]; y: Array<number | null> } {
     const x: string[] = [];
     const y: Array<number | null> = [];
-    const customdata: Array<T | null> = [];
 
     for (let index = 0; index < samples.length; index += 1) {
         const sample = samples[index];
@@ -376,27 +331,13 @@ function buildGapAwareTraceData<T = number>(
         if (previous && shouldBreakBetweenSamples(previous, sample, gapBreakMs)) {
             x.push(sample.timestamp);
             y.push(null);
-            if (customForSample) customdata.push(null);
         }
 
         x.push(sample.timestamp);
         y.push(valueForSample(sample));
-        if (customForSample) {
-            customdata.push(customForSample(sample));
-        }
     }
 
-    return customForSample ? { x, y, customdata } : { x, y };
-}
-
-function getTempBandColor(temp: number | null): string {
-    if (temp == null) return UI_LINK;
-    if (temp < 35) return '#3b82f6';
-    if (temp < 50) return '#22d3ee';
-    if (temp < 65) return '#22c55e';
-    if (temp < 75) return '#eab308';
-    if (temp < 85) return '#f97316';
-    return '#ef4444';
+    return { x, y };
 }
 
 function toPercent(value: number, maxValue: number): number {
@@ -846,175 +787,6 @@ function GpuInlinePowerControl({
     );
 }
 
-function parseSeriesTimestamp(value: string | number | null | undefined): number | null {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value !== 'string') return null;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-}
-
-function buildTelemetrySvgPath(
-    line: TimeSeriesLine,
-    xMin: number,
-    xMax: number,
-    yMin: number,
-    yMax: number,
-): string {
-    const xValues = line.x ?? [];
-    const yValues = line.y ?? [];
-    const yRange = Math.max(Number.EPSILON, yMax - yMin);
-    let path = '';
-    let drawing = false;
-
-    for (let index = 0; index < Math.min(xValues.length, yValues.length); index += 1) {
-        const timestampMs = parseSeriesTimestamp(xValues[index]);
-        const value = yValues[index];
-        const x = timestampMs == null ? null : resolveTelemetryPlotX(timestampMs, xMin, xMax);
-        if (x == null || value == null || !Number.isFinite(value)) {
-            drawing = false;
-            continue;
-        }
-
-        const y = Math.max(0, Math.min(100, 100 - ((value - yMin) / yRange) * 100));
-        path += `${drawing ? ' L' : ' M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-        drawing = true;
-    }
-
-    return path;
-}
-
-function formatAxisValue(value: number, axis: AxisConfig): string {
-    const decimals = axis.decimals ?? (Number.isInteger(value) ? 0 : 1);
-    return `${value.toFixed(decimals)}${axis.suffix ?? ''}`;
-}
-
-function TimeSeriesPlot({
-    height,
-    samples,
-    yAxis,
-    series,
-    showXAxisLabels = true,
-    compact = false,
-    xDomain,
-}: TimeSeriesPlotProps) {
-    const firstTimestampMs = samples[0]?.timestampMs ?? Date.now() - 1;
-    const lastTimestampMs = samples[samples.length - 1]?.timestampMs ?? firstTimestampMs + 1;
-    const xMin = xDomain?.[0] ?? Math.min(firstTimestampMs, lastTimestampMs - 1);
-    const xMax = xDomain?.[1] ?? Math.max(lastTimestampMs, firstTimestampMs + 1);
-    const finiteValues = series.flatMap((line) => (line.y ?? []).filter(
-        (value): value is number => value != null && Number.isFinite(value),
-    ));
-    const yMin = yAxis.range?.[0] ?? (finiteValues.length > 0 ? Math.min(...finiteValues) : 0);
-    const computedYMax = yAxis.range?.[1] ?? (finiteValues.length > 0 ? Math.max(...finiteValues) : 1);
-    const yMax = computedYMax > yMin ? computedYMax : yMin + 1;
-    const middleY = yMin + (yMax - yMin) / 2;
-    const legendHeight = compact ? 22 : 26;
-    const xLabelHeight = showXAxisLabels ? 18 : 4;
-
-    return (
-        <div
-            className="relative w-full overflow-hidden rounded-lg border border-[var(--border-primary)]"
-            style={{ height, background: PLOT_PANEL_BG }}
-            role="img"
-            aria-label={`${yAxis.title} telemetry history`}
-            data-bms-telemetry-plot="true"
-        >
-            <div
-                className={`absolute left-11 right-2 top-1 z-10 flex min-w-0 items-center overflow-hidden whitespace-nowrap ${compact ? 'gap-2 text-[9px]' : 'gap-3 text-[10px]'}`}
-                style={{ color: PLOT_FONT }}
-                data-bms-telemetry-legend="true"
-            >
-                {series.map((line, index) => (
-                    <span key={`${line.name ?? 'series'}:${index}`} className="inline-flex min-w-0 items-center gap-1">
-                        <span
-                            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ background: line.line?.color ?? UI_LINK }}
-                        />
-                        <span className="truncate">{line.name ?? `Series ${index + 1}`}</span>
-                    </span>
-                ))}
-            </div>
-
-            <div className="absolute inset-0 min-h-0" data-bms-telemetry-canvas="true">
-            <div
-                className="absolute bottom-1 left-1 top-6 flex w-9 flex-col justify-between text-right text-[9px] tabular-nums"
-                style={{ color: PLOT_TICK }}
-                aria-hidden="true"
-                data-bms-telemetry-axis="true"
-            >
-                <span>{formatAxisValue(yMax, yAxis)}</span>
-                <span>{formatAxisValue(middleY, yAxis)}</span>
-                <span>{formatAxisValue(yMin, yAxis)}</span>
-            </div>
-
-            <div
-                className="absolute left-11 right-2"
-                style={{ top: legendHeight, bottom: xLabelHeight }}
-                data-bms-telemetry-lines="true"
-            >
-                <svg
-                    className="h-full w-full"
-                    viewBox="0 0 1000 100"
-                    preserveAspectRatio="none"
-                    aria-hidden="true"
-                >
-                    {[0, 25, 50, 75, 100].map((y) => (
-                        <line
-                            key={`h:${y}`}
-                            x1="0"
-                            x2="1000"
-                            y1={y}
-                            y2={y}
-                            stroke={PLOT_GRID}
-                            strokeWidth="1"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    ))}
-                    {[0, 200, 400, 600, 800, 1000].map((x) => (
-                        <line
-                            key={`v:${x}`}
-                            x1={x}
-                            x2={x}
-                            y1="0"
-                            y2="100"
-                            stroke={PLOT_GRID}
-                            strokeWidth="1"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    ))}
-                    {series.map((line, index) => {
-                        const path = buildTelemetrySvgPath(line, xMin, xMax, yMin, yMax);
-                        return path ? (
-                            <path
-                                key={`${line.name ?? 'series'}:${index}`}
-                                d={path}
-                                fill="none"
-                                stroke={line.line?.color ?? UI_LINK}
-                                strokeWidth={line.line?.width ?? 1.5}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                vectorEffect="non-scaling-stroke"
-                            />
-                        ) : null;
-                    })}
-                </svg>
-            </div>
-
-            {showXAxisLabels ? (
-                <div
-                    className="absolute bottom-0 left-11 right-2 flex justify-between text-[9px] tabular-nums"
-                    style={{ color: PLOT_TICK }}
-                    aria-hidden="true"
-                >
-                    <span>{samples[0]?.clock ?? '--:--:--'}</span>
-                    <span>{samples[samples.length - 1]?.clock ?? '--:--:--'}</span>
-                </div>
-            ) : null}
-            </div>
-        </div>
-    );
-}
-
 function CpuPanel({
     current,
     samples,
@@ -1022,9 +794,7 @@ function CpuPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     current: SystemStatus['cpu'];
@@ -1033,91 +803,67 @@ function CpuPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
-    const powerScale = resolveCpuPowerScaleWatts(current, samples);
-    const frequencyScale = resolveCpuFrequencyScaleMhz(current, samples);
-    const tempColor = getTempBandColor(current.temperature);
-    const cpuPowerTelemetry = current.power_telemetry;
-    const scaleSubtitle = [
-        powerScale != null ? `Power scale ${powerScale.toFixed(0)}W` : null,
-        `Freq scale ${(frequencyScale / 1000).toFixed(2)}GHz`,
-    ].filter(Boolean).join(' · ');
-    const cpuPowerSubtitle = cpuPowerTelemetry && !cpuPowerTelemetry.available
-        ? `CPU power n/a: ${cpuPowerTelemetry.message}`
-        : scaleSubtitle;
+    const cpuPowerSubtitle = current.power_telemetry && !current.power_telemetry.available
+        ? `CPU power n/a: ${current.power_telemetry.message}` : undefined;
     const cpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
     const cpuFreqTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.cpuFreqMhz, frequencyScale),
         (sample) => sample.cpuFreqMhz / 1000,
     );
     const cpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.cpuPower == null || powerScale == null ? null : toPercent(sample.cpuPower, powerScale),
-        (sample) => sample.cpuPower == null ? null : sample.cpuPower,
+        (sample) => sample.cpuPower,
     );
     const cpuTempTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
         (sample) => sample.cpuTemp ?? null,
-        (sample) => sample.cpuTemp ?? null,
     );
 
     return (
         <PanelFrame title={current.name} subtitle={cpuPowerSubtitle} compact={compact}>
-            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     xDomain={xDomain}
                     series={[
                         {
                             x: cpuUtilTrace.x,
                             y: cpuUtilTrace.y,
-                            mode: 'lines',
+                            axis: { title: 'CPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'CPU %{y:.1f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: cpuFreqTrace.x,
                             y: cpuFreqTrace.y,
-                            customdata: cpuFreqTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Frequency', color: PLOT_TICK, suffix: ' GHz' },
                             name: legendName('Freq', `${(current.frequency_current_mhz / 1000).toFixed(2)} GHz`),
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Freq %{customdata:.2f} GHz<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                         {
                             x: cpuPowerTrace.x,
                             y: cpuPowerTrace.y,
-                            customdata: cpuPowerTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Package power', color: PLOT_TICK, suffix: ' W' },
                             name: legendName('Power', current.power_watts != null ? `${current.power_watts.toFixed(0)}W` : 'n/a'),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Package %{customdata:.0f} W<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: cpuTempTrace.x,
                             y: cpuTempTrace.y,
-                            customdata: cpuTempTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             name: legendName('Temp', current.temperature != null ? `${current.temperature.toFixed(1)}C` : 'n/a'),
-                            line: { color: tempColor, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Temp %{customdata:.1f} C<extra></extra>',
+                            line: { color: '#f472b6', width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -1131,9 +877,7 @@ function RamPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     current: SystemStatus['ram'];
@@ -1142,21 +886,17 @@ function RamPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const ramUsedTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.ramUsed, Math.max(current.total_gb, 1)),
         (sample) => sample.ramUsed,
     );
     const ramFreeTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.ramFree, Math.max(current.total_gb, 1)),
         (sample) => sample.ramFree,
     );
     const ramUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.ramUtil);
@@ -1164,52 +904,43 @@ function RamPanel({
 
     return (
         <PanelFrame title="System Memory" compact={compact}>
-            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     xDomain={xDomain}
                     series={[
                         {
                             x: ramUsedTrace.x,
                             y: ramUsedTrace.y,
-                            customdata: ramUsedTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Used memory', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('Used', `${current.used_gb.toFixed(1)} GB`),
-                            line: { color: UI_LINK, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'Used %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_LINK, width: 1.55 },
                         },
                         {
                             x: ramFreeTrace.x,
                             y: ramFreeTrace.y,
-                            customdata: ramFreeTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Available memory', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('Free', `${current.available_gb.toFixed(1)} GB`),
-                            line: { color: UI_SUCCESS, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Free %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.4 },
                         },
                         {
                             x: ramUtilTrace.x,
                             y: ramUtilTrace.y,
-                            mode: 'lines',
+                            axis: { title: 'RAM utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'RAM %{y:.1f}%<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: ramSwapTrace.x,
                             y: ramSwapTrace.y,
-                            mode: 'lines',
+                            axis: { title: 'Swap utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Swap', `${current.swap_percent.toFixed(1)}%`),
-                            line: { color: UI_ACCENT, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Swap %{y:.1f}%<extra></extra>',
+                            line: { color: UI_ACCENT, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -1223,10 +954,8 @@ function GpuPanel({
     compact = false,
     panelHeight,
     plotHeight,
-    traceType = 'scatter',
     powerControls,
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     gpu: GPUStatus;
@@ -1235,33 +964,26 @@ function GpuPanel({
     compact?: boolean;
     panelHeight?: number;
     plotHeight?: number;
-    traceType?: 'scatter' | 'scattergl';
     powerControls?: GpuInlinePowerControlProps;
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const totalGb = gpu.memory_total_mb / 1024;
     const currentVramGb = (gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024;
-    const powerLimit = powerControls?.currentLimit ?? (gpu.power_limit_w > 0 ? gpu.power_limit_w : Math.max(gpu.max_power_watts, 1));
-    const tempColor = getTempBandColor(gpu.temperature);
     const gpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.gpu[gpu.index]?.util ?? null);
     const gpuVramTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.gpu[gpu.index]?.vram ?? 0, Math.max(totalGb, 1)),
         (sample) => sample.gpu[gpu.index]?.vram ?? null,
     );
     const gpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.gpu[gpu.index]?.power ?? 0, powerLimit),
         (sample) => sample.gpu[gpu.index]?.power ?? null,
     );
     const gpuTempTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.gpu[gpu.index]?.temp ?? null,
         (sample) => sample.gpu[gpu.index]?.temp ?? null,
     );
 
@@ -1271,53 +993,43 @@ function GpuPanel({
             {!compact ? <GpuProcessList gpu={gpu} compact={compact} /> : null}
             {compact && !powerControls ? <GpuProcessList gpu={gpu} compact /> : null}
 
-            <div style={{ height: panelHeight ?? (compact ? 240 : 256) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 240 : 256) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 240 : 256)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={redrawKey}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     xDomain={xDomain}
                     series={[
                         {
                             x: gpuUtilTrace.x,
                             y: gpuUtilTrace.y,
-                            mode: 'lines',
+                            axis: { title: 'GPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${gpu.utilization.toFixed(0)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'GPU %{y:.0f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: gpuVramTrace.x,
                             y: gpuVramTrace.y,
-                            customdata: gpuVramTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'VRAM used + reserved', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('VRAM', `${currentVramGb.toFixed(1)} / ${totalGb.toFixed(0)} GB`),
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'VRAM %{customdata:.1f} GB<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                         {
                             x: gpuPowerTrace.x,
                             y: gpuPowerTrace.y,
-                            customdata: gpuPowerTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Power draw', color: PLOT_TICK, suffix: ' W' },
                             name: legendName('Power', `${gpu.power_draw_w.toFixed(1)}W`),
-                            line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Power %{customdata:.1f} W<extra></extra>',
+                            line: { color: UI_WARNING, width: 1.4 },
                         },
                         {
                             x: gpuTempTrace.x,
                             y: gpuTempTrace.y,
-                            customdata: gpuTempTrace.customdata,
-                            mode: 'lines',
+                            axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             name: legendName('Temp', `${gpu.temperature.toFixed(0)}C`),
-                            line: { color: tempColor, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'Temp %{customdata:.0f} C<extra></extra>',
+                            line: { color: '#f472b6', width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </div>
         </PanelFrame>
@@ -1339,7 +1051,6 @@ function buildChartSample(point: TelemetryChartPoint, pollIntervalMs: PollPreset
         timestamp,
         timestampMs: point.timestamp_ms,
         pollIntervalMs,
-        clock: formatClock(timestamp),
         cpuUtil: point.cpu_utilization!,
         cpuFreqMhz: point.cpu_frequency_current_mhz!,
         cpuPower: point.cpu_power_watts,
@@ -1356,17 +1067,13 @@ function HistoricalTelemetryFallback({
     samples,
     showXAxisLabels,
     compact,
-    traceType,
     gapBreakMs,
-    redrawKey,
     xDomain,
 }: {
     samples: LiveSample[];
     showXAxisLabels: boolean;
     compact: boolean;
-    traceType: 'scatter' | 'scattergl';
     gapBreakMs: number;
-    redrawKey: string | number;
     xDomain: [number, number];
 }) {
     const cpuTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
@@ -1383,29 +1090,22 @@ function HistoricalTelemetryFallback({
                     height={compact ? 168 : 256}
                     samples={samples}
                     yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                    compact={compact}
-                    redrawKey={`${redrawKey}:historical-host`}
                     xDomain={xDomain}
                     series={[
                         {
                             x: cpuTrace.x,
                             y: cpuTrace.y,
-                            mode: 'lines',
                             name: 'CPU',
-                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
-                            hovertemplate: 'CPU %{y:.1f}%<extra></extra>',
+                            line: { color: UI_SUCCESS, width: 1.55 },
                         },
                         {
                             x: ramTrace.x,
                             y: ramTrace.y,
-                            mode: 'lines',
                             name: 'RAM',
-                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
-                            hovertemplate: 'RAM %{y:.1f}%<extra></extra>',
+                            line: { color: UI_LINK, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
-                    traceType={traceType}
                 />
             </PanelFrame>
 
@@ -1415,8 +1115,6 @@ function HistoricalTelemetryFallback({
                         height={compact ? 168 : 256}
                         samples={samples}
                         yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
-                        compact={compact}
-                        redrawKey={`${redrawKey}:historical-gpu`}
                         xDomain={xDomain}
                         series={gpuIndexes.map((gpuIndex, position) => {
                             const trace = buildGapAwareTraceData(
@@ -1427,19 +1125,14 @@ function HistoricalTelemetryFallback({
                             return {
                                 x: trace.x,
                                 y: trace.y,
-                                mode: 'lines',
                                 name: `GPU ${gpuIndex}`,
                                 line: {
                                     color: gpuColors[position % gpuColors.length],
                                     width: 1.45,
-                                    shape: 'linear',
-                                    simplify: false,
                                 },
-                                hovertemplate: `GPU ${gpuIndex} %{y:.1f}%<extra></extra>`,
                             };
                         })}
                         showXAxisLabels={showXAxisLabels}
-                        traceType={traceType}
                     />
                 </PanelFrame>
             ) : null}
@@ -1476,6 +1169,12 @@ export function InfraControlStateCollector() {
     return null;
 }
 
+function vastOperationErrorMessage(error: unknown): string {
+    const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    return error instanceof Error && error.message ? error.message : 'Unknown error';
+}
+
 export function InfraLiveTelemetry({
     showXAxisLabels = true,
     defaultPollIntervalMs = 1000,
@@ -1485,9 +1184,6 @@ export function InfraLiveTelemetry({
 }: InfraLiveTelemetryProps = {}) {
     const compact = variant === 'dashboard';
     const dashboardSizing = DASHBOARD_SIZING[dashboardSize];
-    // Use SVG scatter everywhere here. The dashboard/infra charts are modest in size,
-    // and avoiding Plotly's WebGL path is materially more stable under heavy browser load.
-    const traceType: 'scatter' | 'scattergl' = 'scatter';
     const queryClient = useQueryClient();
     const [restoredState] = useState(() =>
         loadPersistedTelemetryPreferences(defaultPollIntervalMs, defaultWindowMinutes),
@@ -1547,21 +1243,18 @@ export function InfraLiveTelemetry({
                 stableEndMs,
             );
         },
-        refetchInterval: displayIntervalMs,
+        refetchInterval: usesRangeAwareDisplay ? false : displayIntervalMs,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
-    const liveStatusQuery = useQuery({
-        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
-        queryFn: fetchSystemStatus,
-        refetchInterval: pollIntervalMs,
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-    const historyPoints = historyQuery.data?.points ?? [];
-    const samples = historyPoints
+    const chartRefreshLabel = useTelemetryChartRefresh(
+        historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes,
+    );
+    const liveStatusQuery = useSystemStatus(pollIntervalMs);
+    const historyPoints = historyQuery.data?.points ?? EMPTY_HISTORY_POINTS;
+    const samples = useMemo(() => historyPoints
         .filter(isRenderableTelemetryChartPoint)
-        .map((point) => buildChartSample(point, 1000));
+        .map((point) => buildChartSample(point, 1000)), [historyPoints]);
     const latestPoint = historyPoints.at(-1);
     const payload = liveStatusQuery.data?.data;
     const latestTimestampMs = historyQuery.data?.next_cursor_ms ?? latestPoint?.timestamp_ms ?? null;
@@ -1591,10 +1284,16 @@ export function InfraLiveTelemetry({
         displayIntervalMs,
         historyQuery.isError || historyIsStale,
     );
+    const [nominalStartMs, nominalEndMs] = nominalXDomain;
+    const visibleSamples = useMemo(() => samples.filter((sample) =>
+        sample.timestampMs >= nominalStartMs && sample.timestampMs <= nominalEndMs),
+    [samples, nominalStartMs, nominalEndMs]);
     const xDomain = resolveTelemetryPlotDomain(
         nominalXDomain,
-        samples.at(-1)?.timestampMs,
-        historyIsFresh,
+        visibleSamples.at(-1)?.timestampMs,
+        historyIsFresh && !historyQuery.isError,
+        visibleSamples[0]?.timestampMs,
+        bucketIntervalMs,
     );
 
     const { data: powerControlData } = useQuery({
@@ -1656,11 +1355,9 @@ export function InfraLiveTelemetry({
             return { discovery, system };
         },
         onSuccess: ({ discovery, system }) => {
-            queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_SYSTEM_QUERY_KEY, system);
             queryClient.setQueryData(SHARED_POWER_CONTROL_QUERY_KEY, { data: discovery.data.power_control });
             queryClient.setQueryData(SHARED_FAN_CONTROL_QUERY_KEY, { data: discovery.data.fan_control });
-            queryClient.invalidateQueries({ queryKey: INFRA_LIVE_SHARED_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_SYSTEM_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY });
             queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
@@ -1668,9 +1365,38 @@ export function InfraLiveTelemetry({
     });
     const vastDiscoverMutation = useMutation({
         mutationFn: refreshVastExecutionTargets,
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    });
+    const executionTargetsQuery = useQuery({
+        queryKey: ['execution-targets'],
+        queryFn: fetchExecutionTargets,
+        refetchInterval: 5_000,
+        retry: false,
+    });
+    const attachVastMutation = useMutation({
+        mutationFn: (providerInstanceId: string) => {
+            const target = executionTargetsQuery.data?.data.find(item => item.provider_instance_id === providerInstanceId);
+            return activateExecutionTarget(providerInstanceId, target?.active
+                ? { username: target.username ?? undefined, remote_root: target.remote_root } : undefined);
+        },
+        onSettled: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    });
+    useEffect(() => {
+        if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
+            (target) => target.provider === 'vast'
+                && target.provider_instance_id === attachVastMutation.variables
+                && target.active,
+        )) {
+            attachVastMutation.reset();
+        }
+    }, [attachVastMutation.isError, attachVastMutation.variables, attachVastMutation.reset, executionTargetsQuery.data, executionTargetsQuery.isError]);
+    const detachVastMutation = useMutation({
+        mutationFn: deactivateExecutionTarget,
         onSuccess: (response) => {
-            queryClient.setQueryData(VAST_DISCOVERY_QUERY_KEY, response);
-            queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
+            if (window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) === response.data.id) {
+                window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+            }
+            return queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
         },
     });
 
@@ -1680,16 +1406,21 @@ export function InfraLiveTelemetry({
         return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
-    const latestVisibleTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
-    const visibleSamples =
-        Number.isNaN(latestVisibleTimestampMs)
-            ? samples
-            : samples.filter((sample) => sample.timestampMs >= latestVisibleTimestampMs - windowMinutes * 60 * 1000);
-    const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
     const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
+    useEffect(() => {
+        if (executionTargetsQuery.isPending) return;
+        const saved = window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY);
+        const ready = !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
+            (target) => target.id === saved && target.active && target.state === 'ready',
+        );
+        if (saved && !ready) window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+    }, [executionTargetsQuery.data, executionTargetsQuery.isError, executionTargetsQuery.isPending]);
+    const vastTargets = executionTargetsQuery.isError
+        ? []
+        : (executionTargetsQuery.data?.data ?? []).filter((target) => target.provider === 'vast');
 
     return (
         <section className={variant === 'infra'
@@ -1731,6 +1462,9 @@ export function InfraLiveTelemetry({
                             </div>
                             <div className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)] ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}>
                                 {displayIntervalMs / 1000}s
+                                <span className="ml-2 tabular-nums" data-bms-telemetry-refresh="true">
+                                    {chartRefreshLabel}
+                                </span>
                             </div>
                         </div>
                     ) : null}
@@ -1770,9 +1504,104 @@ export function InfraLiveTelemetry({
                     Hardware discovery failed: {discoverMutation.error instanceof Error ? discoverMutation.error.message : 'unknown error'}
                 </div>
             )}
+            {discoverMutation.isSuccess && (
+                <div className="mb-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-sm text-emerald-200" role="status">
+                    Hardware discovery complete: {discoverMutation.data.discovery.data.message}
+                </div>
+            )}
             {vastDiscoverMutation.isError && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
                     Vast discovery failed: {vastDiscoverMutation.error instanceof Error ? vastDiscoverMutation.error.message : 'unknown error'}
+                </div>
+            )}
+            {vastDiscoverMutation.isSuccess && (
+                <div className={`mb-3 rounded-2xl border p-3 text-sm ${vastDiscoverMutation.data.data.available
+                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-500/25 bg-amber-500/10 text-amber-200'}`} role="status">
+                    {vastDiscoverMutation.data.data.available ? 'Vast discovery complete' : 'Vast inventory unavailable'}: {vastDiscoverMutation.data.data.message}
+                </div>
+            )}
+            {executionTargetsQuery.isSuccess && vastTargets.length === 0 && (
+                <div role="status" className="mb-3 text-sm text-[var(--text-muted)]">No owned Vast instances. Local execution is available.</div>
+            )}
+            {executionTargetsQuery.isError && (
+                <div role="alert" className="mb-3 text-sm text-amber-200">Vast inventory unavailable or expired. Discover again; Local remains available.</div>
+            )}
+            {vastTargets.length > 0 && (
+                <div className="mb-4 space-y-2" aria-label="Vast workers">
+                    {vastTargets.map((target) => {
+                        const isReady = target.active && target.state === 'ready';
+                        const isAttaching = target.state === 'probing'
+                            || (attachVastMutation.isPending && attachVastMutation.variables === target.provider_instance_id);
+                        const stateLabel = isReady
+                            ? 'Ready'
+                            : target.active ? 'Attached — runtime not ready'
+                            : isAttaching
+                                ? 'Checking readiness'
+                                : target.state === 'unavailable'
+                                    ? 'Unavailable'
+                                    : target.state === 'inactive'
+                                        ? 'Inactive'
+                                        : 'Discovered';
+                        const canAttach = !isReady && !isAttaching && Boolean(target.host && target.port);
+                        return (
+                            <div
+                                key={target.id}
+                                className="flex flex-col items-stretch gap-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3 sm:flex-row sm:items-center"
+                            >
+                                <div className="min-w-0 flex-1 [overflow-wrap:anywhere] text-sm text-[var(--text-secondary)]">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="font-semibold text-[var(--text-primary)]">
+                                            {target.name ?? `Vast ${target.provider_instance_id}`}
+                                        </span>
+                                        <span className={isReady ? 'font-semibold text-emerald-300' : 'text-[var(--text-muted)]'}>
+                                            {stateLabel}
+                                        </span>
+                                    </div>
+                                    <div className="mt-1 text-xs">
+                                        {String(target.capabilities.gpu_count ?? '?')} × {String(target.capabilities.gpu_name ?? 'GPU')}
+                                        {target.pricing.hourly_rate != null ? ` · $${target.pricing.hourly_rate.toFixed(3)}/hr` : ''}
+                                        {isReady ? ' · Remote analytics available' : ''}
+                                    </div>
+                                    {target.setup && (
+                                        <div role="status" className={`mt-1 text-xs ${target.setup.phase === 'failed' ? 'text-red-300' : 'text-[var(--text-muted)]'}`}>
+                                            Setup · {target.setup.phase}: {target.setup.message}
+                                        </div>
+                                    )}
+                                    {target.last_error && target.last_error !== target.setup?.message && (
+                                        <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
+                                    )}
+                                </div>
+                                <div role="group" aria-label="Worker actions" className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
+                                    {target.active && (
+                                        <button
+                                            type="button"
+                                            onClick={() => detachVastMutation.mutate(target.id)}
+                                            disabled={detachVastMutation.isPending || isAttaching}
+                                            className="shrink-0 whitespace-nowrap rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
+                                        >
+                                            {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
+                                        </button>
+                                    )}
+                                    {!isReady && (
+                                        <button
+                                            type="button"
+                                            onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
+                                            disabled={!canAttach || attachVastMutation.isPending}
+                                            className="shrink-0 whitespace-nowrap rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
+                                        >
+                                            {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+            {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError) && (
+                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
+                    {attachVastMutation.isError ? 'Attach failed' : detachVastMutation.isError ? 'Detach failed' : 'Worker inventory failed'}: {vastOperationErrorMessage(attachVastMutation.error ?? detachVastMutation.error ?? executionTargetsQuery.error)}
                 </div>
             )}
 
@@ -1805,9 +1634,7 @@ export function InfraLiveTelemetry({
                     samples={visibleSamples}
                     showXAxisLabels={showXAxisLabels}
                     compact={compact && dashboardSizing.compactFrame}
-                    traceType={traceType}
                     gapBreakMs={gapBreakMs}
-                    redrawKey={plotRedrawKey}
                     xDomain={xDomain}
                 />
             )}
@@ -1835,9 +1662,7 @@ export function InfraLiveTelemetry({
                             compact={compact && dashboardSizing.compactFrame}
                             panelHeight={compact ? dashboardSizing.cpuPanelHeight : undefined}
                             plotHeight={compact ? dashboardSizing.cpuPlotHeight : undefined}
-                            traceType={traceType}
                             gapBreakMs={gapBreakMs}
-                            redrawKey={`${plotRedrawKey}:cpu`}
                             xDomain={xDomain}
                         />
                         <RamPanel
@@ -1847,14 +1672,19 @@ export function InfraLiveTelemetry({
                             compact={compact && dashboardSizing.compactFrame}
                             panelHeight={compact ? dashboardSizing.ramPanelHeight : undefined}
                             plotHeight={compact ? dashboardSizing.ramPlotHeight : undefined}
-                            traceType={traceType}
                             gapBreakMs={gapBreakMs}
-                            redrawKey={`${plotRedrawKey}:ram`}
                             xDomain={xDomain}
                         />
                     </div>
 
                     <div className={`grid xl:grid-cols-2 ${compact ? dashboardSizing.layoutGapClass : 'gap-6'}`}>
+                        {payload.gpus.length === 0 && (
+                            <div role={payload.gpu_error || liveStatusQuery.isError ? 'alert' : 'status'}
+                                className="col-span-full text-sm text-[var(--text-secondary)]">
+                                {liveStatusQuery.isError ? 'GPU status unavailable' : payload.gpu_error
+                                    ? `GPU telemetry unavailable: ${payload.gpu_error}` : 'No NVIDIA GPU installed'}
+                            </div>
+                        )}
                         {payload.gpus.map((gpu) => (
                             <GpuPanel
                                 key={gpu.index}
@@ -1864,9 +1694,7 @@ export function InfraLiveTelemetry({
                                 compact={compact && dashboardSizing.compactFrame}
                                 panelHeight={compact ? dashboardSizing.gpuPanelHeight : undefined}
                                 plotHeight={compact ? dashboardSizing.gpuPlotHeight : undefined}
-                                traceType={traceType}
                                 gapBreakMs={gapBreakMs}
-                                redrawKey={`${plotRedrawKey}:gpu:${gpu.index}`}
                                 xDomain={xDomain}
                                 powerControls={compact ? {
                                     gpu,

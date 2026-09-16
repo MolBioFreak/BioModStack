@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import subprocess
+from scripts.lib.container_runtime import container_executable
 import tempfile
 from collections.abc import Callable, Mapping
 from functools import lru_cache
@@ -437,7 +438,7 @@ def _bound_openmm_runtime_identity() -> dict[str, Any] | None:
         sif_sha256 = _memoized_sif_sha256(image)
         completed = subprocess.run(
             [
-                "apptainer",
+                container_executable("apptainer"),
                 "exec",
                 str(image),
                 "sh",

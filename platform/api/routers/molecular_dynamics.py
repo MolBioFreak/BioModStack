@@ -18,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Job, JobArtifact, MdAttemptSegment, MdCheckpoint, MdEvent, MdReplicaRun, MdRun, get_session
 from experiment_database import experiment_session_factory
 from services.global_experiments.launch_contexts import LaunchContextError
-from schemas import JobCreate, JobResponse
+from schemas import ExecutionPolicy, JobCreate, JobResponse
 from paths import get_results_dir
 from services.stage_review import resolve_output_dir
 
 from services.md.cancel_actuator import cancel_running_md_run
 from services.md.chemistry_catalog import ChemistryCatalogError, get_chemistry_catalog
-from services.md.feature_gate import molecular_dynamics_feature_enabled
+from services.md.feature_gate import molecular_dynamics_feature_enabled, require_molecular_dynamics_feature
+from services.workflow_request_types import NativeWorkflowDependencyRequest
 from services.md.launch_contract import MDLaunchError, approved_pack_inventory
 from services.md.pause_actuator import pause_running_md_run
 from services.md.read_model import md_queue_snapshot, md_run_snapshot
@@ -40,6 +41,7 @@ from services.md.starting_structures import (
     StartingStructureServerFilePage,
     StartingStructureSourceRef,
     compile_launch_preview,
+    normalize_typed_launch_settings,
     compile_md_job_v2,
     inline_filename,
     inspect_resolved_structure,
@@ -560,6 +562,73 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent) -> None:
             )
 
 
+def _typed_launch_chemistry(intent: MdLaunchIntent) -> tuple[Any, Any]:
+    """Read the same chemistry catalog generation for both preview consumers."""
+    try:
+        catalog = get_chemistry_catalog()
+        view = catalog.view()
+    except ChemistryCatalogError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MD_LAUNCH_SERVICE_UNAVAILABLE",
+                "message": "The molecular-dynamics chemistry catalog is unavailable.",
+            },
+        ) from exc
+    profile = view.get_profile(intent.chemistry_profile_id)
+    return view, profile
+
+
+async def normalize_md_provision_request(
+    intent: MdLaunchIntent, session: AsyncSession,
+) -> NativeWorkflowDependencyRequest:
+    """Dependency-only projection of the actual typed starting-structure intent.
+
+    The source remains a declared binding, never a synthetic resolved structure.
+    /launch-preview and /launch still resolve and verify the exact source bytes.
+    """
+    require_molecular_dynamics_feature("molecular_dynamics")
+    try:
+        await _validate_preview_launch_context(intent)
+        view, profile = _typed_launch_chemistry(intent)
+        effective, warnings, blockers = normalize_typed_launch_settings(
+            intent=intent, profile=profile, current_catalog_digest=view.catalog_digest,
+        )
+        if blockers:
+            raise StartingStructureError(
+                "MD_LAUNCH_BLOCKED",
+                "The molecular-dynamics launch controls contain blockers.",
+                status_code=409,
+            )
+        config = effective.model_dump(mode="json")
+        config["chemistry"] = {
+            "profile_id": intent.chemistry_profile_id,
+            "profile_sha256": intent.chemistry_profile_sha256,
+            "catalog_digest": view.catalog_digest,
+            "requested_scope": profile["scientific_validation"]["scope"]["launch_scope"],
+        }
+        return NativeWorkflowDependencyRequest(
+            model_id="molecular_dynamics", mode="simulate",
+            requested_params=intent.model_dump(mode="json"),
+            effective_params={"md_config": config},
+            entrypoint="workflows/experimental/molecular_dynamics/orchestrator.nf",
+            input_bindings=({
+                "role": "starting_structure",
+                "source_ref": intent.source_ref.model_dump(mode="json"),
+                "expected_sha256": intent.expected_source_sha256,
+                "required": True,
+                "state": "declared",
+            },),
+        )
+    except StartingStructureError as exc:
+        _starting_structure_http_error(exc)
+    except LaunchContextError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
 async def _compile_typed_preview(
     intent: MdLaunchIntent,
     session: AsyncSession,
@@ -567,24 +636,36 @@ async def _compile_typed_preview(
     await _validate_preview_launch_context(intent)
     resolved = await resolve_source(intent.source_ref, session)
     try:
-        try:
-            catalog = get_chemistry_catalog()
-            view = catalog.view()
-        except ChemistryCatalogError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "MD_LAUNCH_SERVICE_UNAVAILABLE",
-                    "message": "The molecular-dynamics chemistry catalog is unavailable.",
-                },
-            ) from exc
-        profile = view.get_profile(intent.chemistry_profile_id)
+        view, profile = _typed_launch_chemistry(intent)
         preview = compile_launch_preview(
             intent=intent,
             resolved=resolved,
             profile=profile,
             current_catalog_digest=view.catalog_digest,
         )
+        if intent.execution_target_id:
+            from component_runtime import SourceIdentity, digest
+            from services.nextflow import build_selected_execution_plan
+            from services.remote_execution.bundle import current_source_identity, RemoteBundleError
+            normalized = await normalize_md_provision_request(intent, session)
+            try:
+                source = SourceIdentity(*current_source_identity())
+            except RemoteBundleError as exc:
+                raise StartingStructureError('MD_REMOTE_SOURCE_UNAVAILABLE',
+                    'Committed BMS source identity is unavailable.', status_code=503) from exc
+            plan = build_selected_execution_plan(
+                model_id=normalized.model_id, mode=normalized.mode,
+                entrypoint=normalized.entrypoint, requested=normalized.requested_params,
+                effective=normalized.effective_params, metadata_settings=normalized.effective_params,
+                native_parameters={'input_bindings': normalized.input_bindings},
+                source_identity=source)
+            preview.execution_plan = plan.to_dict()
+            preview.preview_digest = digest({'native_preview_digest': preview.preview_digest,
+                                            'execution_plan': preview.execution_plan})
+            if not plan.complete:
+                raise StartingStructureError('MD_REMOTE_PLAN_UNSUPPORTED',
+                    'Selected shared MD execution plan is incomplete: ' + '; '.join(row.reason for row in plan.blockers),
+                    status_code=422)
         return preview, resolved, profile or {}
     except Exception:
         resolved.close()
@@ -666,11 +747,21 @@ async def launch_typed_md_job(
             mode="simulate",
             params={"md_job_spec": md_job_spec},
             launch_context_id=request.intent.launch_context_id,
+            execution_target_id=request.intent.execution_target_id,
+            execution_policy=request.intent.execution_policy,
         )
         call_kwargs = {
             "_md_output_creation": {},
             "_md_input_resolver": trusted_source_resolver,
         }
+        if request.intent.execution_target_id:
+            from component_runtime import canonical_bytes
+            from routers.jobs import ApprovedExecutionPlan
+            call_kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
+                canonical_bytes(job_data.model_dump(mode='json')),
+                canonical_bytes({'approval_digest': preview.preview_digest,
+                    'plan': preview.execution_plan, 'admissible': True,
+                    'deferred_preparation': [], 'blockers': []}))
         if request.intent.launch_context_id is None:
             return await create_job(
                 job_data,
@@ -817,8 +908,19 @@ async def retry_md_replica(job_id: str, command: RetryCommand,
         await session.commit()
     except MdStateError as exc:
         await session.rollback(); _state_http_error(exc)
+    parent = await session.get(Job, job_id)
+    event = await session.scalar(select(MdEvent).where(MdEvent.idempotency_key == command.idempotency_key))
+    detail = dict(event.payload or {})
+    transport = detail.get('shared_retry_receipt') or detail.get('pending_transport_receipt') or {}
     return {
-        "schema": "bms.md.retry-receipt.v1", "job_id": job_id,
+        "schema": "bms.md.retry-receipt.v1",
+        "state": 'accepted' if detail.get('shared_retry_receipt') else 'queued',
+        "component_id": (transport.get('component_id') if detail.get('shared_retry_receipt') else
+                         transport.get('child_job_id') if transport.get('replacement') else
+                         transport.get('component_id') or transport.get('child_job_id')),
+        "operation_id": command.idempotency_key, "job_id": job_id,
+        "execution_target_id": parent.execution_target_id,
+        "execution_policy": ExecutionPolicy.from_params(parent.params).model_dump(mode="json"),
         "replica_run_id": replica.id, "child_job_id": replica.child_job_id,
         "replica_index": replica.replica_index, "attempt": replica.attempt,
     }
@@ -847,18 +949,32 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
         lineage_root = parent.lineage_root_job_id or parent.id
         source_stage_key = parent.stage_mode or parent.child_stage or parent.mode
         input_resolver = _trusted_reorchestration_input_resolver(parent, dict(run.normalized_request or {}))
-        created = await create_job(
-            JobCreate(name=parent.name, model_id="molecular_dynamics", mode="simulate", params={
+        job_data = JobCreate(name=parent.name, model_id="molecular_dynamics", mode="simulate", params={
                 "md_job_spec": raw,
                 "lineage_root_job_id": lineage_root,
                 "source_stage_job_id": parent.id,
                 "source_stage_family": parent.stage_family,
                 "source_stage_mode": source_stage_key,
-            }, pinned_gpu=parent.pinned_gpu, execution_target_id=parent.execution_target_id,
+            }, pinned_gpu=None if parent.execution_target_id else parent.pinned_gpu,
+               execution_target_id=parent.execution_target_id,
+               execution_policy=ExecutionPolicy.from_params(parent.params),
                parent_job_id=None, child_stage=None, batch_id=None, batch_name=None,
-               sequence_length=None, launch_context_id=None),
-            BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
+               sequence_length=None, launch_context_id=None)
+        approved_plan = None
+        if parent.execution_target_id:
+            from component_runtime import canonical_bytes
+            from routers.jobs import ApprovedExecutionPlan
+            approved = (parent.provenance or {}).get('execution_plan_approval') or {}
+            if not approved.get('approval_digest') or not isinstance(approved.get('plan'), dict):
+                raise HTTPException(status_code=409, detail='Remote MD re-orchestration requires its retained approved plan; launch a new typed preview')
+            approved_plan = ApprovedExecutionPlan(canonical_bytes(job_data.model_dump(mode='json')),
+                canonical_bytes({'approval_digest': approved['approval_digest'], 'plan': approved['plan'],
+                    'admissible': approved['plan'].get('complete') is True,
+                    'deferred_preparation': [], 'blockers': approved['plan'].get('blockers', [])}))
+        created = await create_job(
+            job_data, BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
             _md_output_creation=output_creation, _md_input_resolver=input_resolver,
+            _approved_execution_plan=approved_plan,
         )
         new_job = await session.get(Job, created.id)
         new_run = await session.get(MdRun, created.id)

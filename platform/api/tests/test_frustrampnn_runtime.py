@@ -38,7 +38,9 @@ def test_runtime_registry_is_canonical_immutable_and_projects_exact_cm_v1(tmp_pa
     registry = runtime.FRUSTRAMPNN_RUNTIME_REGISTRY
 
     assert identity.sif_name == "frustrampnn.sif"
-    assert identity.configured_sif_path == "/mnt/BioModStack/apptainer/frustrampnn.sif"
+    assert identity.configured_sif_path == (
+        os.environ.get("BMS_FRUSTRAMPNN_SIF") or str(runtime.get_container_path("frustrampnn.sif"))
+    )
     assert identity.sif_sha256 == SIF_SHA256
     assert identity.executable_path == "/opt/venv/bin/frustrampnn"
     assert identity.executable_sha256 == EXECUTABLE_SHA256
@@ -151,14 +153,16 @@ def _fake_apptainer(tmp_path: Path, capture: Path) -> Path:
             import json, os, pathlib, sys
             args = sys.argv[1:]
             container = args[args.index('exec') + 1]
-            internal = args[-1]
-            record = {{'argv': args, 'container_exists': pathlib.Path(container).exists()}}
-            pathlib.Path({str(capture)!r}).write_text(json.dumps(record), encoding='utf-8')
+            targets = args[args.index('sha256sum') + 1:]
+            record = {{'argv': args, 'container_bytes': pathlib.Path(container).read_bytes().decode()}}
+            with pathlib.Path({str(capture)!r}).open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(record) + '\\n')
             values = {{
                 '/opt/venv/bin/frustrampnn': {EXECUTABLE_SHA256!r},
                 '/opt/frustrampnn_weights/megascale.ckpt': {CHECKPOINT_SHA256!r},
             }}
-            print(values[internal], internal)
+            for internal in targets:
+                print(values[internal] + '  ' + internal)
             """
         ),
         encoding="utf-8",
@@ -173,6 +177,8 @@ def test_container_asset_hashes_use_pinned_sif_fd_and_match_registry(tmp_path: P
     pinned = runtime.open_verified_container(image, digest)
     capture = tmp_path / "capture.json"
     apptainer = _fake_apptainer(tmp_path, capture)
+    image.unlink()
+    image.write_bytes(b'replacement-sif')
     try:
         assets = runtime.verify_container_assets(apptainer, pinned)
     finally:
@@ -182,9 +188,14 @@ def test_container_asset_hashes_use_pinned_sif_fd_and_match_registry(tmp_path: P
         "executable_sha256": EXECUTABLE_SHA256,
         "checkpoint_sha256": CHECKPOINT_SHA256,
     }
-    observed = json.loads(capture.read_text(encoding="utf-8"))
-    assert observed["container_exists"] is True
-    assert observed["argv"][:2] == ["exec", str(pinned.proc_path)]
+    launches = capture.read_text(encoding="utf-8").splitlines()
+    assert len(launches) == 1
+    observed = json.loads(launches[0])
+    assert observed["container_bytes"] == "qualified-sif"
+    assert observed["argv"] == [
+        "exec", str(pinned.proc_path), "sha256sum",
+        "/opt/venv/bin/frustrampnn", "/opt/frustrampnn_weights/megascale.ckpt",
+    ]
 
 
 def test_container_asset_verification_fails_closed_on_hash_mismatch(tmp_path: Path) -> None:
@@ -204,6 +215,198 @@ def test_container_asset_verification_fails_closed_on_hash_mismatch(tmp_path: Pa
             runtime.verify_container_assets(apptainer, pinned, identity=hostile_identity)
     finally:
         pinned.close()
+
+
+@pytest.mark.parametrize("asset", ["executable", "checkpoint"])
+@pytest.mark.parametrize("digest", ["0" * 64, "bad", "A" * 64])
+def test_each_registered_asset_digest_is_enforced(tmp_path, asset, digest):
+    runtime = _runtime()
+    image, image_digest = _qualified_image(tmp_path)
+    identity = runtime.FrustraMPNNRuntimeIdentity(**{
+        **runtime.runtime_identity_dict(), f"{asset}_sha256": digest,
+    })
+    apptainer = _fake_apptainer(tmp_path, tmp_path / "capture.jsonl")
+    with runtime.open_verified_container(image, image_digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError, match="malformed|does not match"):
+            runtime.verify_container_assets(apptainer, pinned, identity=identity)
+
+
+_EXEC_RECORD = f"{EXECUTABLE_SHA256}  /opt/venv/bin/frustrampnn\n"
+_CHECKPOINT_RECORD = f"{CHECKPOINT_SHA256}  /opt/frustrampnn_weights/megascale.ckpt\n"
+
+
+@pytest.mark.parametrize("output", [
+    "", _EXEC_RECORD, _CHECKPOINT_RECORD,
+    _EXEC_RECORD + _CHECKPOINT_RECORD + _EXEC_RECORD,
+    _EXEC_RECORD + _EXEC_RECORD,
+    _EXEC_RECORD + _CHECKPOINT_RECORD + f"{'0' * 64}  /extra\n",
+    _EXEC_RECORD.replace("/opt/venv/bin/frustrampnn", "/renamed") + _CHECKPOINT_RECORD,
+    _EXEC_RECORD.replace(EXECUTABLE_SHA256, "not-a-digest") + _CHECKPOINT_RECORD,
+    _EXEC_RECORD.replace(EXECUTABLE_SHA256, EXECUTABLE_SHA256.upper()) + _CHECKPOINT_RECORD,
+    _EXEC_RECORD.replace("  /", " /") + _CHECKPOINT_RECORD,
+    _EXEC_RECORD + _CHECKPOINT_RECORD + "\n",
+    _EXEC_RECORD + _CHECKPOINT_RECORD + "unexpected diagnostic\n",
+    _EXEC_RECORD.replace("\n", " trailing\n") + _CHECKPOINT_RECORD,
+    _EXEC_RECORD.replace(EXECUTABLE_SHA256, "0" * 64) + _CHECKPOINT_RECORD,
+    _EXEC_RECORD + _CHECKPOINT_RECORD.replace(CHECKPOINT_SHA256, "0" * 64),
+])
+@pytest.mark.parametrize("managed", [False, True])
+def test_asset_output_fails_closed(tmp_path, monkeypatch, output, managed):
+    runtime = _runtime()
+    if managed:
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    image, digest = _qualified_image(tmp_path)
+    monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a, 0, stdout=output))
+    with runtime.open_verified_container(image, digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError):
+            runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+
+
+@pytest.mark.parametrize("error", [OSError("unavailable"), subprocess.CalledProcessError(17, "sha256sum")])
+@pytest.mark.parametrize("managed", [False, True])
+def test_asset_launch_errors_are_wrapped(tmp_path, monkeypatch, error, managed):
+    runtime = _runtime()
+    if managed:
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    image, digest = _qualified_image(tmp_path)
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(runtime.subprocess, "run", fail)
+    with runtime.open_verified_container(image, digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError, match="cannot authenticate") as raised:
+            runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+        assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize("with_fd", [False, True])
+def test_public_single_asset_hash_remains_compatible(tmp_path, with_fd):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    capture = tmp_path / "capture.jsonl"
+    apptainer = _fake_apptainer(tmp_path, capture)
+    with runtime.open_verified_container(image, digest) as pinned:
+        assert runtime.container_sha256(
+            apptainer, pinned.proc_path if with_fd else image,
+            "/opt/venv/bin/frustrampnn", **({"container_fd": pinned.fd} if with_fd else {}),
+        ) == EXECUTABLE_SHA256
+    launches = capture.read_text().splitlines()
+    assert len(launches) == 1
+    assert json.loads(launches[0])["argv"][-2:] == ["sha256sum", "/opt/venv/bin/frustrampnn"]
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_asset_inspection_uses_only_selected_managed_helper(tmp_path, monkeypatch, selected):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+    if selected:
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    else:
+        monkeypatch.delenv("BMS_CONTAINER_EXECUTABLE", raising=False)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["pass_fds"] == (pinned.fd,)
+        assert os.fstat(pinned.fd).st_size == image.stat().st_size
+        assert argv == (["/managed/bms-container", "inspect-files", os.fspath(pinned.proc_path),
+                         "/opt/venv/bin/frustrampnn", "/opt/frustrampnn_weights/megascale.ckpt"] if selected else
+                        ["/usr/bin/apptainer", "exec", os.fspath(pinned.proc_path), "sha256sum",
+                         "/opt/venv/bin/frustrampnn", "/opt/frustrampnn_weights/megascale.ckpt"])
+        return subprocess.CompletedProcess(argv, 0, stdout=_EXEC_RECORD + _CHECKPOINT_RECORD)
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    with runtime.open_verified_container(image, digest) as pinned:
+        runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+    assert len(calls) == 1
+
+
+def test_managed_inspection_failure_never_falls_back(tmp_path, monkeypatch):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+    monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        raise subprocess.CalledProcessError(125, argv, output=_EXEC_RECORD)
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    with runtime.open_verified_container(image, digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError, match="cannot authenticate"):
+            runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+    assert len(calls) == 1 and calls[0][1] == "inspect-files"
+
+
+def test_asset_hash_rejects_closed_pin_and_mismatched_descriptor(tmp_path):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    with runtime.open_verified_container(image, digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError, match="does not match"):
+            runtime.container_sha256("/does/not/exist", image, "/asset", container_fd=pinned.fd)
+    with pytest.raises(runtime.RuntimeValidationError, match="already closed"):
+        runtime.verify_container_assets("/does/not/exist", pinned)
+
+
+def test_shared_image_hashes_once_and_legacy_still_hashes(tmp_path, monkeypatch):
+    runtime = _runtime()
+    from lib import shared_runtime_images as store
+    source, digest = _qualified_image(tmp_path)
+    image = store.publish_image(source, tmp_path / "store", digest)
+    calls = []
+    shared_hash, legacy_hash = store._hash, runtime.sha256_fd
+    def count_shared(fd):
+        calls.append("shared")
+        return shared_hash(fd)
+    def count_legacy(fd):
+        calls.append("legacy")
+        return legacy_hash(fd)
+    monkeypatch.setattr(store, "_hash", count_shared)
+    monkeypatch.setattr(runtime, "sha256_fd", count_legacy)
+    with runtime.open_verified_container(image, digest) as pinned:
+        assert pinned.sha256 == digest
+    assert calls == ["shared"]
+    with runtime.open_verified_container(source, digest) as pinned:
+        assert pinned.sha256 == digest
+    assert calls == ["shared", "legacy"]
+
+
+@pytest.mark.parametrize("drift", ["replacement", "mode", "link", "timestamp"])
+def test_shared_image_generation_drift_is_refused(tmp_path, monkeypatch, drift):
+    runtime = _runtime()
+    from lib import shared_runtime_images as store
+    source, digest = _qualified_image(tmp_path)
+    image = store.publish_image(source, tmp_path / "store", digest)
+    verify = runtime.verify_image
+    def change_after_verification(path, expected):
+        identity = verify(path, expected)
+        if drift == "replacement":
+            path.parent.chmod(0o700)
+            path.unlink()
+            path.write_bytes(source.read_bytes())
+            path.chmod(0o400)
+            path.parent.chmod(0o500)
+        elif drift == "mode":
+            path.chmod(0o600)
+        elif drift == "link":
+            os.link(path, tmp_path / "alias")
+        else:
+            info = path.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000))
+        return identity
+    monkeypatch.setattr(runtime, "verify_image", change_after_verification)
+    with pytest.raises(runtime.RuntimeValidationError, match="generation changed|mode or link"):
+        runtime.open_verified_container(image, digest)
+
+
+@pytest.mark.parametrize("roster", [(), ("/asset", "/asset"), ("relative",), ("/a/../b",)])
+def test_asset_roster_is_rejected_before_launch(monkeypatch, roster):
+    runtime = _runtime()
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid roster launched a container")
+    monkeypatch.setattr(runtime.subprocess, "run", unexpected)
+    with pytest.raises(runtime.RuntimeValidationError):
+        runtime._container_sha256_many("/usr/bin/apptainer", "/image", roster)
 
 
 def test_command_is_exact_gpu_safe_and_returns_receipt_metadata(tmp_path: Path) -> None:
@@ -227,7 +430,7 @@ def test_command_is_exact_gpu_safe_and_returns_receipt_metadata(tmp_path: Path) 
     )
 
     assert list(invocation.argv) == [
-        "/usr/bin/apptainer", "exec", "--containall", "--writable-tmpfs", "--nv",
+        "/usr/bin/apptainer", "exec", "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
         "--env", "CUDA_VISIBLE_DEVICES=3",
         "--bind", f"{normalized}:/bms/input/normalized.pdb:ro",
@@ -297,7 +500,6 @@ def test_predict_batch_command_is_exact_gpu_safe_and_product_owned(
     assert list(invocation.argv) == [
         "/usr/bin/apptainer",
         "exec",
-        "--containall",
         "--writable-tmpfs",
         "--nv",
         "--env",

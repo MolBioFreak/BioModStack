@@ -720,9 +720,13 @@ def test_backup_rejects_foreign_key_violations_and_removes_artifact(tmp_path: Pa
             INSERT INTO child VALUES (1, 99);
             """
         )
-    with pytest.raises(RuntimeError, match="foreign key"):
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == [
+            ("child", 1, "parent", 0)
+        ]
+    with pytest.raises(RuntimeError, match="SQLite source failed integrity validation"):
         backup_sqlite_database(source, destination)
     assert not destination.exists()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["source.db"]
 
 
 @pytest.mark.asyncio

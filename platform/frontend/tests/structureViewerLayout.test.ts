@@ -47,7 +47,7 @@ test('new metric workbench owns minimize and restore in normal and fullscreen mo
     assert.match(host, /aria-label="Minimize metric workbench"/);
     assert.match(host, /Show metrics/);
     assert.match(host, /onMetricWorkbenchVisibilityChange/);
-    assert.match(pane, /showMetricWorkbench=\{!shapeMetrics && !isFullscreen && metricWorkbenchOpen\}/);
+    assert.match(pane, /showMetricWorkbench=\{!shapeMetrics && metricWorkbenchOpen\}/);
 });
 
 test('structure viewer separates persisted structure summaries from spatial visual layers', () => {
@@ -159,7 +159,7 @@ test('metric workbench visibility state is shared across normal and fullscreen m
     const source = readFileSync(STRUCTURE_VIEWER_PANE_PATH, 'utf8');
 
     assert.match(source, /metricWorkbenchOpen/);
-    assert.match(source, /showMetricWorkbench=\{!shapeMetrics && !isFullscreen && metricWorkbenchOpen\}/);
+    assert.match(source, /showMetricWorkbench=\{!shapeMetrics && metricWorkbenchOpen\}/);
     assert.match(source, /onMetricWorkbenchVisibilityChange=\{shapeMetrics \? undefined : setMetricWorkbenchOpen\}/);
     assert.match(source, /showSequenceTrack/);
 });

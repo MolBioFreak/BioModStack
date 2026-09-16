@@ -25,6 +25,17 @@ modes:
     name: Distributed Prediction
     description: Run Fold-CP multi-GPU structure prediction from a prepared Boltz input path
     params:
+      - colabfold_use_env
+      - colabfold_use_filter
+      - colabfold_use_templates
+      - colabfold_pairing_mode
+      - colabfold_pairing_strategy
+      - msa_provider
+      - msa_neurosnap_coverage_percent
+      - msa_neurosnap_identity_percent
+      - msa_neurosnap_max_sequences
+      - msa_neurosnap_force_uppercase
+      - msa_neurosnap_pad_sequences
       - input_path
       - gpu_ids
       - size_cp
@@ -37,6 +48,70 @@ modes:
       - seed
 
 params:
+  - name: colabfold_use_env
+    type: boolean
+    description: "ColabFold API only — Include environmental sequence databases. Native use_env."
+    default: true
+
+  - name: colabfold_use_filter
+    type: boolean
+    description: "ColabFold API only — Filter alignments; unfiltered paired search unsupported. Native use_filter."
+    default: true
+
+  - name: colabfold_use_templates
+    type: boolean
+    description: "ColabFold API only — Retrieve templates; unsupported by the current MSA artifact contract. Native use_templates."
+    default: false
+
+  - name: colabfold_pairing_mode
+    type: string
+    description: "ColabFold API only — Unpaired, paired, or both alignment roles; paired requires distinct chains. Native pairing_mode."
+    default: unpaired
+    enum: ["unpaired", "paired", "unpaired_paired"]
+
+  - name: colabfold_pairing_strategy
+    type: string
+    description: "ColabFold API only — ColabFold species pairing strategy. Native pairing_strategy."
+    default: greedy
+    enum: ["greedy", "complete"]
+
+  - name: msa_provider
+    type: string
+    description: "External MSA provider; auto selects ColabFold. Local disabled. Unsupported consumer/output combinations fail admission."
+    default: colabfold_api
+    enum: [auto, colabfold_api, neurosnap_api]
+
+  - name: msa_neurosnap_coverage_percent
+    type: number
+    description: "Neurosnap API only — Coverage: Minimum query coverage (%)."
+    default: 35
+    minimum: 10
+    maximum: 90
+
+  - name: msa_neurosnap_identity_percent
+    type: number
+    description: "Neurosnap API only — Identity threshold: Provider minimum identity to query (%); not local redundancy filtering."
+    default: 50
+    minimum: 25
+    maximum: 100
+
+  - name: msa_neurosnap_max_sequences
+    type: integer
+    description: "Neurosnap API only — Max Sequences: Final MSA depth limit."
+    default: 1000000
+    minimum: 10
+    maximum: 1000000
+
+  - name: msa_neurosnap_force_uppercase
+    type: boolean
+    description: "Neurosnap API only — Force Uppercase: Uppercase residues including A3M insertions; consumer compatibility required."
+    default: false
+
+  - name: msa_neurosnap_pad_sequences
+    type: boolean
+    description: "Neurosnap API only — Pad Sequences: C-terminal gap padding to longest row; consumer compatibility required."
+    default: false
+
   - name: input_path
     type: file
     description: Path to a Boltz YAML / FASTA input file, directory of configs, or preprocessed Boltz directory

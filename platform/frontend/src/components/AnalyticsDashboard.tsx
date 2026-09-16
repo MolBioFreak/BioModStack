@@ -1,3 +1,5 @@
+import { ScientificAnalytics } from './ScientificAnalytics';
+import { parseScientificPoint } from '../lib/scientificAnalytics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
@@ -426,7 +428,27 @@ function pearson(valuesX: number[], valuesY: number[]): number {
     return denominator === 0 ? 0 : numerator / denominator;
 }
 
-export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLens = 'auto', loadedDesignCount }: AnalyticsDashboardProps) {
+export function AnalyticsDashboard(props: AnalyticsDashboardProps) {
+    const { designs, jobId } = props;
+    const ids = designs.map(design => design.id);
+    const {data, isPending, error} = useQuery({
+        queryKey: ['scientific-analytics-authority', jobId, ids.join(',')],
+        queryFn: () => fetchDesignPlotlyMetrics(jobId!, {include_children:true, design_ids:ids, limit:ids.length}).then(response => response.data),
+        enabled: Boolean(jobId && ids.length),
+    });
+    if (!jobId || !ids.length) return <LegacyAnalyticsDashboard {...props} />;
+    if (error) return <div role="alert">Scientific analytics unavailable: {error.message}</div>;
+    if (isPending || !data) return <div role="status">Loading scientific metric authority…</div>;
+    const scientific = data.points.filter(point => point.contract_revision === 1).map(parseScientificPoint);
+    if (!scientific.length) return <LegacyAnalyticsDashboard {...props} />;
+    const legacyIds = new Set(data.points.filter(point => point.contract_revision == null).map(point => point.id));
+    return <>
+        <ScientificAnalytics points={scientific} cohorts={data.scientific_cohorts ?? []} />
+        {legacyIds.size > 0 && <section aria-label="Historical analytics"><h2>Historical analytics — legacy interpretation</h2><LegacyAnalyticsDashboard {...props} designs={designs.filter(design => legacyIds.has(design.id))} /></section>}
+    </>;
+}
+
+function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLens = 'auto', loadedDesignCount }: AnalyticsDashboardProps) {
     const queryClient = useQueryClient();
     const [colorScale, setColorScale] = useState<ColorScaleName>('Viridis');
     const [reverseColorScale, setReverseColorScale] = useState(false);

@@ -1091,6 +1091,8 @@ async def resubmit_workspace_run_group(
 
 @router.post(
     "/ops/ngs-molbio/package-acceptance/evidence",
+    deprecated=True,
+    description="Historical v1 package-evidence contract; not current PM-11 acceptance.",
     response_model=SharedPackageEvidenceReceiptPointer,
     response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED,
@@ -1115,7 +1117,11 @@ async def record_ngs_molbio_package_evidence(
         ) from exc
 
 
-@router.post("/ops/ngs-molbio/package-acceptance", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/ops/ngs-molbio/package-acceptance", status_code=status.HTTP_201_CREATED,
+    deprecated=True,
+    description="Historical v1 acceptance only. This receipt cannot establish current PM-11/PM-12 acceptance.",
+)
 async def record_ngs_molbio_package_acceptance(
     payload: SharedPackageAcceptanceRequest,
     request: Request,

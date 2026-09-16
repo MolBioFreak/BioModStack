@@ -403,18 +403,20 @@ export function RawReadInspector({
                         {population.filtered.toLocaleString()} {population.filtered === 1 ? 'result' : 'results'} · {population.selected.toLocaleString()} loaded
                     </div>
                 )}
-                <div className="grid grid-cols-[minmax(150px,1fr)_minmax(190px,1.2fr)_82px] gap-1">
-                    <input aria-label="Filter reads by ID" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
-                    <select aria-label="Sort reads by" value={sortBy} onChange={(event) => {
-                        setSortBy(event.target.value as SortableReadField);
-                        setMetricMin('');
-                        setMetricMax('');
-                    }} className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs">
-                        {sortableFields.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
-                    </select>
-                    <button aria-label="Toggle sort direction" type="button" onClick={() => setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">
-                        {sortDirection === 'asc' ? '↑ Asc' : '↓ Desc'}
-                    </button>
+                <div className="flex min-w-0 flex-wrap gap-1">
+                    <input aria-label="Filter reads by ID" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by read ID" className="min-w-0 max-w-full flex-[1_1_150px] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
+                    <div className="flex min-w-0 max-w-full flex-[1.2_1_260px] gap-1">
+                        <select aria-label="Sort reads by" value={sortBy} onChange={(event) => {
+                            setSortBy(event.target.value as SortableReadField);
+                            setMetricMin('');
+                            setMetricMax('');
+                        }} className="min-w-0 flex-1 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs">
+                            {sortableFields.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                        </select>
+                        <button aria-label="Toggle sort direction" type="button" onClick={() => setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')} className="shrink-0 rounded border border-[var(--border-primary)] px-2 py-1 text-xs">
+                            {sortDirection === 'asc' ? '↑ Asc' : '↓ Desc'}
+                        </button>
+                    </div>
                 </div>
                 <div className="grid grid-cols-[1fr_1fr_auto] gap-1">
                     <input aria-label="Selected metric minimum" value={metricMin} onChange={(event) => setMetricMin(event.target.value)} disabled={sortBy === 'read_id'} inputMode="decimal" placeholder="Minimum" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[10px]" />

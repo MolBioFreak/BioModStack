@@ -399,11 +399,12 @@ def _write_stub_apptainer(path: Path) -> None:
         "#!/usr/bin/env python3\n"
         "import csv, os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "if len(args) >= 4 and args[0] == 'exec' and args[2] == 'sha256sum':\n"
+        "inspection = len(args) >= 3 and args[0] == 'inspect-files'\n"
+        "if inspection or (len(args) >= 4 and args[0] == 'exec' and args[2] == 'sha256sum'):\n"
         "    assert pathlib.Path(args[1]).read_bytes()\n"
-        "    target = args[3]\n"
-        "    digest = os.environ['STUB_EXEC_SHA'] if target.endswith('/frustrampnn') else os.environ['STUB_CHECKPOINT_SHA']\n"
-        "    print(digest, target)\n"
+        "    for target in (args[2:] if inspection else args[3:]):\n"
+        "        digest = os.environ['STUB_EXEC_SHA'] if target.endswith('/frustrampnn') else os.environ['STUB_CHECKPOINT_SHA']\n"
+        "        print(digest + '  ' + target)\n"
         "    raise SystemExit(0)\n"
         "capture = os.environ.get('STUB_CAPTURE')\n"
         "if capture:\n"
@@ -430,12 +431,15 @@ def _write_stub_apptainer(path: Path) -> None:
     path.chmod(0o755)
 
 
-@pytest.fixture
-def stub_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+@pytest.fixture(params=["apptainer", "bms-container"])
+def stub_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     container = tmp_path / "frustrampnn-stub.sif"
     container.write_bytes(b"stub-sif-generation\n")
-    apptainer = tmp_path / "apptainer"
+    apptainer = tmp_path / request.param
     _write_stub_apptainer(apptainer)
+    if request.param == "bms-container":
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", str(apptainer))
     identity = _stub_identity(container)
     monkeypatch.setenv("STUB_EXEC_SHA", identity.executable_sha256)
     monkeypatch.setenv("STUB_CHECKPOINT_SHA", identity.checkpoint_sha256)
@@ -1190,9 +1194,10 @@ def test_nextflow_stub_smoke_preserves_candidate_identity(tmp_path: Path) -> Non
 
 def test_preflight_uses_provisioned_api_python_without_model_inference() -> None:
     assert API_PYTHON.is_file() and os.access(API_PYTHON, os.X_OK)
-    container = Path("/mnt/BioModStack/apptainer/frustrampnn.sif")
+    container = Path(FRUSTRAMPNN_RUNTIME_IDENTITY.configured_sif_path)
     apptainer = shutil.which("apptainer")
-    assert container.is_file() and apptainer is not None
+    if not container.is_file() or apptainer is None:
+        pytest.skip("central-registry FrustraMPNN SIF/Apptainer unavailable in isolated runtime")
     completed = subprocess.run(
         [
             str(API_PYTHON), str(SCRIPT_PATH),
@@ -1301,7 +1306,7 @@ def test_v3_batch_finalizer_builds_closed_bundle_from_real_predict_batch_rows_wi
     }
     output = tmp_path / "candidate_bundle"
     batch_argv = (
-        "apptainer", "exec", "--containall", "--writable-tmpfs", "--nv",
+        "/test/bms-container", "exec", "--writable-tmpfs", "--nv",
         "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID", "--env", "CUDA_VISIBLE_DEVICES=3",
         "--bind", f"{tmp_path}/batch.json:/bms/batch/input.json:ro",
         "--bind", f"{tmp_path}/adapter.py:/bms/adapter/run_frustrampnn_predict_batch.py:ro",

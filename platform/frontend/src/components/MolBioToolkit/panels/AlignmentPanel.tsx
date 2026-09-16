@@ -1,3 +1,4 @@
+import { useInputOwnership } from './useInputOwnership';
 import { useEffect, useMemo, useState } from 'react';
 import {
     alignMolBioSequences,
@@ -148,7 +149,7 @@ export function AlignmentPanel({
     const [gapExtendScore, setGapExtendScore] = useState(-1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [result, setResult] = useState<SequenceAlignmentResult | null>(null);
+    const [resultState, setResultState] = useState<{ token: object; value: SequenceAlignmentResult } | null>(null);
 
     const selectionSnapshot = useMemo(() => createSelectionSnapshot(
         selection,
@@ -202,7 +203,10 @@ export function AlignmentPanel({
     const referenceOffset = referenceScope === 'selection' && selectionRange ? selectionRange.start : 0;
     const parsedQuery = useMemo(() => parseSequenceInput(queryRaw), [queryRaw]);
     const submittedQueryName = resolveSubmittedQueryName(queryName, parsedQuery.name);
+    const owner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, referenceSequence, referenceOffset, referenceScope, circularReference, parsedQuery.sequence, submittedQueryName, mode, strand, matchScore, mismatchScore, gapOpenScore, gapExtendScore]);
+    const result = resultState?.token === owner.token ? resultState.value : null;
     const alignmentDisplayName = getAlignmentDisplayName(result?.query_name ?? submittedQueryName);
+    useEffect(() => { setLoading(false); setError(null); }, [owner.token]);
     const invalidQuery = parsedQuery.invalidCharacters.length > 0;
     const effectiveCircularReference = referenceScope === 'full' && circularReference && sequenceData.circular;
     const blocks = useMemo(
@@ -263,11 +267,11 @@ export function AlignmentPanel({
                     gap_extend_score: gapExtendScore,
                 },
             });
-            setResult(response.data);
+            if (owner.isCurrent()) setResultState({ token: owner.token, value: response.data });
         } catch (alignmentError) {
-            setError(alignmentError instanceof Error ? alignmentError.message : 'Alignment failed');
+            if (owner.isCurrent()) setError(alignmentError instanceof Error ? alignmentError.message : 'Alignment failed');
         } finally {
-            setLoading(false);
+            if (owner.isCurrent()) setLoading(false);
         }
     };
 

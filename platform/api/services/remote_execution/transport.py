@@ -8,8 +8,14 @@ import json
 import os
 import re
 import shlex
+import signal
 import tempfile
+import sys
+
+from .result_generation import durable_json, transfer_marker
+from .transfer_supervisor import SCHEMA, process_identity
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
@@ -18,6 +24,10 @@ from paths import get_data_root
 
 class RemoteTransportError(RuntimeError):
     pass
+
+
+class RemoteConnectionError(RemoteTransportError):
+    """SSH could not establish an authenticated command channel."""
 
 
 def _host_key_digest(encoded_key: str) -> str:
@@ -35,6 +45,8 @@ class RemoteConnection:
     port: int
     username: str
     remote_root: str
+    runtime_binding: dict | None = None
+    provision_operation_id: str | None = None
 
     @classmethod
     def from_target(cls, target: object) -> "RemoteConnection":
@@ -56,7 +68,9 @@ class RemoteConnection:
             or any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in root_path.parts[1:])
         ):
             raise RemoteTransportError("Execution target has an invalid remote root")
-        return cls(str(getattr(target, "id", "")), host, port, username, remote_root)
+        capabilities = getattr(target, "capabilities", None) or {}
+        return cls(str(getattr(target, "id", "")), host, port, username, remote_root,
+                   deepcopy(capabilities.get("critical_runtime_binding")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,18 +122,144 @@ def _ssh_base(connection: RemoteConnection) -> list[str]:
     ]
 
 
+async def _run_owned(argv: Sequence[str], destination: Path, *, timeout: float) -> CommandResult:
+    """Artifact transfers with a durable, API-death-aware lifecycle."""
+    marker = transfer_marker(destination)
+    # Only the collector's freshly prepared legacy boot fence may launch. Do
+    # not overwrite an active or ambiguous supervisor record on a direct retry.
+    if not marker.exists() or json.loads(marker.read_text()) != {
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    }:
+        raise RemoteTransportError("Result transport requires a freshly prepared ownership fence")
+    durable_json(marker, dict(schema=SCHEMA, phase="starting",
+                             destination=str(destination.resolve()),
+                             boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                             controller=process_identity(os.getpid())))
+    read_fd, write_fd = os.pipe()
+    task = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(Path(__file__).with_name("transfer_supervisor.py")),
+            str(marker), str(read_fd), *argv, pass_fds=(read_fd,),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, start_new_session=True,
+        )
+        os.close(read_fd)
+        read_fd = -1
+        task = asyncio.create_task(process.communicate())
+        try:
+            stdout, stderr = await asyncio.wait_for(asyncio.shield(task), timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            # Closing our private pipe asks the still-owned supervisor to stop.
+            # Never signal a recovered PID, nor kill the receipt authority.
+            os.close(write_fd)
+            write_fd = -1
+            cleanup = asyncio.create_task(asyncio.wait_for(asyncio.shield(task), 5))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+                except asyncio.TimeoutError:
+                    break
+            try:
+                cleanup.result()
+            except asyncio.TimeoutError:
+                pass  # receipt absent => retained fence; no byte reclamation
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise RemoteTransportError("Remote transport timed out") from None
+        return CommandResult(int(process.returncode or 0),
+                             stdout.decode("utf-8", errors="replace"),
+                             stderr.decode("utf-8", errors="replace"))
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                os.close(fd)
+
+
+async def cancel_owned_transfer(destination: Path, *, timeout: float = 5.0) -> bool | None:
+    """Address the durable destination owner, never signal a PID from disk.
+
+    None means no endpoint was reachable, not proof of writer quiescence. The
+    caller must then hold the producer guard and verify the retained fence.
+    """
+    import socket
+    import struct
+    from .transfer_supervisor import control_address
+
+    marker = transfer_marker(destination)
+    def request():
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+            control.settimeout(timeout)
+            try:
+                control.connect(control_address(marker))
+            except (ConnectionRefusedError, FileNotFoundError):
+                return None
+            try:
+                record = json.loads(marker.read_text())
+                pid, uid, _ = struct.unpack('3i', control.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if (uid != os.getuid() or record.get('schema') != SCHEMA
+                        or record.get('destination') != str(destination.resolve())
+                        or record.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                        or record.get('supervisor') != process_identity(pid)):
+                    return False
+                control.sendall(b'cancel\n')
+                if control.recv(64) != b'quiescent\n':
+                    return False
+                # ACK follows fsync, but is not itself the quiescence authority.
+                # The producer may already have consumed the record; in that
+                # case the caller must obtain its guard before accepting absence.
+                try:
+                    receipt = json.loads(marker.read_text())
+                except FileNotFoundError:
+                    return None
+                from .result_generation import validate_transfer_receipt
+                validate_transfer_receipt(receipt, destination)
+                if any(receipt.get(key) != record.get(key) for key in
+                       ('boot_id', 'controller', 'supervisor', 'destination')):
+                    return False
+                return True
+            except (OSError, ValueError, KeyError):
+                return False
+    return await asyncio.to_thread(request)
+
+
 async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
     process = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        async def stop_group() -> None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+        cleanup = asyncio.create_task(stop_group())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise RemoteTransportError("Remote transport timed out") from None
     return CommandResult(
         returncode=int(process.returncode or 0),
@@ -167,6 +307,55 @@ async def persist_host_key(line: str, fingerprint: str) -> None:
     os.chmod(path, 0o600)
 
 
+# Only fixed messages from our checked-in bootstrap script, never remote logs.
+BOOTSTRAP_ERRORS = frozenset(re.findall(r"fail '([^']+)'", Path(__file__).with_name("bootstrap_worker.sh").read_text()))
+
+
+def _controlled_remote_failure(stdout: str) -> str | None:
+    for line in reversed(stdout.splitlines()):
+        if line.startswith("BMS_SETUP_ERROR:") and line.removeprefix("BMS_SETUP_ERROR:") in BOOTSTRAP_ERRORS:
+            return line.removeprefix("BMS_SETUP_ERROR:")
+        missing = re.fullmatch(r"missing:([A-Za-z0-9][A-Za-z0-9._+-]{0,63})", line.strip())
+        if missing:
+            return f"Remote readiness prerequisite is missing: {missing.group(1)}"
+        occupied = re.fullmatch(r"occupied:(/[A-Za-z0-9._/-]{1,499})", line.strip())
+        if occupied:
+            return f"Remote readiness path is occupied: {occupied.group(1)}"
+    return None
+
+
+def _provision_argv(connection: RemoteConnection, operation_id: str, mode: str,
+                    argv: Sequence[str] = ()) -> list[str]:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", operation_id):
+        raise RemoteTransportError("Invalid provisioning operation identity")
+    # No bootstrap upload outside the fence. The exact checked-in stdlib source
+    # travels over the already authenticated SSH command channel; caller stdin
+    # remains untouched (helper bytes, JSON, or the rsync receiver protocol).
+    source = Path(__file__).with_name("_provision_transport.py").read_bytes()
+    encoded = base64.b64encode(source).decode("ascii")
+    loader = "import base64;exec(compile(base64.b64decode(" + repr(encoded) + "),'<bms-provision-transport>','exec'))"
+    return ["python3", "-c", loader, mode, connection.remote_root, operation_id, *map(str, argv)]
+
+
+async def quiesce_provision(connection: RemoteConnection, operation_id: str) -> bool:
+    """Fence late admissions and prove remote provisioning groups have stopped.
+
+    This is intentionally independent of the bound connection's operation so
+    restart reconciliation can stop its persisted predecessor. Unknown receipts,
+    SSH failure and uncertain process identity retain backend recovery ownership.
+    """
+    try:
+        argv = _provision_argv(connection, operation_id, "quiesce")
+        result = await _run([*_ssh_base(connection), shlex.join(argv)], timeout=60)
+        value = json.loads(result.stdout)
+        return (result.returncode == 0 and isinstance(value, dict)
+                and value.get("schema") == "bms.provision-transport.v1"
+                and value.get("operation_id") == operation_id
+                and value.get("quiescent") is True)
+    except (RemoteTransportError, OSError, ValueError):
+        return False
+
+
 async def run_remote(
     connection: RemoteConnection,
     argv: Sequence[str],
@@ -176,15 +365,20 @@ async def run_remote(
 ) -> CommandResult:
     if not argv or any("\x00" in str(value) for value in argv):
         raise RemoteTransportError("Invalid remote command")
+    if connection.provision_operation_id is not None:
+        argv = _provision_argv(connection, connection.provision_operation_id, "run", argv)
     remote_command = " ".join(shlex.quote(str(value)) for value in argv)
     result = await _run(
         [*_ssh_base(connection), remote_command],
         input_bytes=input_bytes,
         timeout=timeout,
     )
+    if result.returncode == 255:
+        raise RemoteConnectionError("Remote SSH connection or authentication failed")
     if result.returncode != 0:
+        controlled = _controlled_remote_failure(result.stdout)
         detail = result.stderr.strip().splitlines()[-1:] or ["remote command failed"]
-        raise RemoteTransportError(detail[0][:500])
+        raise RemoteTransportError(controlled or detail[0][:500])
     return result
 
 
@@ -195,6 +389,7 @@ async def rsync_to_remote(
     *,
     delete: bool = True,
     timeout: float = 3600,
+    ownership_directory: Path | None = None,
 ) -> None:
     source = source.resolve()
     ssh_command = " ".join(
@@ -206,20 +401,17 @@ async def rsync_to_remote(
         "--archive",
         "--partial",
         "--protect-args",
-        "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r",
     ]
     if source.is_dir() and delete:
         rsync_options.append("--delete")
-    result = await _run(
-        [
-            *rsync_options,
-            "--rsh",
-            ssh_command,
-            str(source) + ("/" if source.is_dir() else ""),
-            f"{connection.username}@{connection.host}:{destination}",
-        ],
-        timeout=timeout,
-    )
+    if connection.provision_operation_id is not None:
+        receiver = _provision_argv(connection, connection.provision_operation_id, "run", ["rsync"])
+        rsync_options.append("--rsync-path=" + shlex.join(receiver))
+    argv = [*rsync_options, '--rsh', ssh_command,
+            str(source) + ('/' if source.is_dir() else ''),
+            f'{connection.username}@{connection.host}:{destination}']
+    result = (await _run_owned(argv, ownership_directory, timeout=timeout)
+              if ownership_directory is not None else await _run(argv, timeout=timeout))
     if result.returncode != 0:
         raise RemoteTransportError((result.stderr.strip() or "rsync upload failed")[-500:])
 
@@ -268,7 +460,14 @@ async def rsync_selected_from_remote(
             list_path = Path(handle.name)
             for relative_path in relative_paths:
                 handle.write(relative_path.encode("utf-8") + b"\0")
-        result = await _run(
+        # The result collector has already fenced this generation. Other
+        # selected-download users retain their existing transport contract.
+        async def run_selected(argv):
+            if transfer_marker(destination).exists():
+                return await _run_owned(argv, destination, timeout=timeout)
+            return await _run(argv, timeout=timeout)
+
+        result = await run_selected(
             [
                 "rsync",
                 "--archive",
@@ -282,7 +481,6 @@ async def rsync_selected_from_remote(
                 f"{connection.username}@{connection.host}:{source.rstrip('/')}/",
                 str(destination.resolve()) + "/",
             ],
-            timeout=timeout,
         )
     finally:
         if list_path is not None:
@@ -294,14 +492,10 @@ async def rsync_selected_from_remote(
 
 async def probe_readiness(connection: RemoteConnection) -> dict[str, object]:
     root = connection.remote_root
-    canonical_data_root = str(get_data_root())
     script = (
         "set -eu; "
         f"mkdir -p {shlex.quote(root)}/{{revisions,runtimes,attempts,incoming,cache}}; "
         f"test -w {shlex.quote(root)}; "
-        f"mkdir -p {shlex.quote(canonical_data_root)}; test -w {shlex.quote(canonical_data_root)}; "
-        f"for p in apptainer weights runtime; do d={shlex.quote(canonical_data_root)}/\"$p\"; "
-        "test ! -e \"$d\" || test -L \"$d\" || { echo \"occupied:$d\"; exit 21; }; done; "
         "for c in python3 bash rsync tar sha256sum java apptainer nvidia-smi; do command -v \"$c\" >/dev/null || { echo \"missing:$c\"; exit 20; }; done; "
         "python3 -c 'import json,platform,shutil,subprocess; "
         "g=subprocess.run([\"nvidia-smi\",\"--query-gpu=index,uuid,name,memory.total\",\"--format=csv,noheader,nounits\"],capture_output=True,text=True,check=True); "

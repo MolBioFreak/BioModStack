@@ -1,13 +1,12 @@
+import { useState } from 'react';
+import MolstarViewer from './MolstarViewer';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchRFD3Generation, type Job, type RFD3GenerationRange, type RFD3GenerationReadModel } from '../lib/api';
+import { fetchRFD3Generation, type RFD3GenerationRange, type RFD3GenerationReadModel } from '../lib/api';
 
 interface RFD3GenerationResultsPaneProps {
     jobId: string;
 }
-
-export const isRFD3GenerationResultJob = (job: Job | null | undefined): boolean =>
-    job?.model_id === 'protein_modification_experimental' && job?.mode === 'de_novo_design';
 
 const formatNumber = (value: number | null, digits = 2): string =>
     value == null ? '—' : value.toFixed(digits);
@@ -24,6 +23,9 @@ const SummaryCard = ({ label, value, detail }: { label: string; value: string | 
 );
 
 export function RFD3GenerationResultsContent({ result }: { result: RFD3GenerationReadModel }) {
+    const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+    const selectedCandidate = selectedCandidateId === null ? result.candidates[0]
+        : result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
     return (
         <div className="space-y-5" data-bms-result-pane="rfd3-generation">
             <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
@@ -59,18 +61,23 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                         <tbody className="divide-y divide-slate-800">
                             {result.candidates.map((candidate) => (
                                 <tr key={candidate.candidate_id} className="text-slate-300">
-                                    <td className="px-4 py-3 font-mono text-emerald-200">{candidate.candidate_id}</td>
+                                    <td className="px-4 py-3 font-mono text-emerald-200"><button type="button" aria-pressed={candidate === selectedCandidate} onClick={() => setSelectedCandidateId(candidate.candidate_id)}>{candidate.candidate_id}</button></td>
                                     <td className="px-4 py-3">{candidate.status}</td>
                                     <td className="px-4 py-3">{candidate.length}</td>
                                     <td className="px-4 py-3">{formatNumber(candidate.radius)}</td>
                                     <td className="px-4 py-3">{formatNumber(candidate.helix_count, 0)}</td>
                                     <td className="px-4 py-3">{formatNumber(candidate.strand_count, 0)}</td>
-                                    <td className="px-4 py-3"><a className="text-cyan-300 hover:text-cyan-100" href={candidate.structure_url}>Open structure</a></td>
+                                    <td className="px-4 py-3"><a className="text-cyan-300 hover:text-cyan-100" href={candidate.structure_url} download>Download mmCIF</a></td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
+                {selectedCandidate && <div className="border-t border-slate-800 p-5">
+                    <h3 className="mb-3 text-lg font-semibold text-white">{selectedCandidate.candidate_id}</h3>
+                    <MolstarViewer structureUrl={selectedCandidate.structure_url} format="cif" label={selectedCandidate.candidate_id} artifactJobId={result.job_id} height={500} />
+                </div>}
+                {selectedCandidateId !== null && !selectedCandidate && <p role="alert" className="p-6 text-sm text-amber-200">Selected candidate is unavailable. Choose another candidate.</p>}
                 {result.candidates.length === 0 && <div className="p-6 text-sm text-slate-400">No generated candidates are available.</div>}
             </section>
         </div>
@@ -92,7 +99,7 @@ export function RFD3GenerationResultsPane({ jobId }: RFD3GenerationResultsPanePr
     if (resultQuery.isError || !result || result.schema !== 'bms.rfd3.generation.read-model.v1' || result.job_id !== jobId) {
         return <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-100">The typed RFD3 generation read model is not available yet.</div>;
     }
-    return <RFD3GenerationResultsContent result={result} />;
+    return <RFD3GenerationResultsContent key={jobId} result={result} />;
 }
 
 export default RFD3GenerationResultsPane;

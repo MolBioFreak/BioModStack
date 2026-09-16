@@ -211,7 +211,15 @@ async def test_health_rejects_same_name_conditional_noop_immutable_trigger(
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 22
+        from molbio_database import _expected_immutable_triggers
+        expected = _expected_immutable_triggers()
+        assert "molbio_immutable_primer_revisions_update" in expected
+        async with engine.connect() as connection:
+            names = set((await connection.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'molbio_immutable_%'"
+            ))).scalars())
+        assert names == set(expected)
+        assert health["immutable_trigger_count"] == len(expected)
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:

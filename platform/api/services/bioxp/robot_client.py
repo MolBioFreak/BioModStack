@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import json
 import re
 import time
@@ -32,6 +33,11 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "protocol_execute": ("POST", "/protocol/execute", 30.0),
+    "protocol_jobs": ("GET", "/protocol/jobs", 10.0),
+    "protocol_job": ("GET", "/protocol/jobs/{job_id}", 10.0),
+    "protocol_control": ("POST", "/protocol/jobs/{job_id}/control", 15.0),
+    "protocol_review": ("POST", "/protocol/jobs/{job_id}/review", 15.0),
     "activate_usb_for_service": ("POST", "/reconnect", 30.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),
@@ -55,17 +61,19 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
     "operator_dashboard_v2": ("GET", "/operator/v2/dashboard", 5.0),
     "pipette_readback": ("POST", "/liquid/readback", 120.0),
+    "pipette_request_lookup": ("GET", "/liquid/requests", 10.0),
     "pipette_application_status": ("GET", "/liquid/application/status", 10.0),
     "pipette_application_plan": ("POST", "/liquid/application/plan", 10.0),
     "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
     "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
-    "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 5.0),
+    "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 15.0),
     "interrupt_operator_action_v1": ("POST", "/operator/v2/actions/{action_id}", 10.0),
     "submit_operator_method_v1": ("POST", "/operator/v2/methods", 5.0),
     "operator_method_status_v1": ("GET", "/operator/v2/methods/{method_id}", 5.0),
+    "operator_command_identity": ("GET", "/operator/idempotency/command/{key}", 5.0),
     "operator_command_status_v2": ("GET", "/operator/v2/commands/{command_id}", 5.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),
-    "operator_action_history_v2": ("GET", "/operator/v2/actions/history", 5.0),
+
     "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
     "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 5.0),
     "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
@@ -136,8 +144,12 @@ class _CameraStatusResponse(BaseModel):
         )
         if self.available and any(value is None for value in frame_values):
             raise ValueError("available camera status requires complete frame metadata")
-        if not self.available and any(value is not None for value in frame_values):
-            raise ValueError("unavailable camera status cannot claim frame metadata")
+        stale_frame = (
+            all(value is not None for value in frame_values)
+            and self.frame_age_seconds > self.freshness_budget_seconds
+        )
+        if not self.available and any(value is not None for value in frame_values) and not stale_frame:
+            raise ValueError("unavailable camera status cannot claim fresh or incomplete frame metadata")
         return self
 
 
@@ -252,8 +264,14 @@ class BioXpRobotClient:
         self.target = target
         self.routes = dict(routes or DEFAULT_ROBOT_ROUTES)
         self._monotonic_clock = monotonic_clock or time.monotonic
+        # Per-client (therefore per-connection) evidence anchor. Keep only the
+        # latest identity; source capture timestamps remain source-owned.
+        self._camera_age_anchor: tuple[tuple[int, int, object, object], float] | None = None
         self._snapshot_retry_backoff_seconds = snapshot_retry_backoff_seconds
         self._snapshot_retry_after = 0.0
+        # Scheduling cost only, never an observation or command permission.
+        # A new generation-bound client cannot inherit the previous target's cost.
+        self._snapshot_acquisition_seconds: float | None = None
         pinned_transport = PinnedAddressTransport(target, transport=transport)
         self._client = httpx.AsyncClient(
             base_url=target.api_url,
@@ -264,9 +282,11 @@ class BioXpRobotClient:
         )
 
     async def probe(self) -> dict[str, Any]:
+        started = self._monotonic_clock()
         payload = await self.probe_status_only()
         now = self._monotonic_clock()
-        if _hardware_evidence_needs_refresh(payload) and now < self._snapshot_retry_after:
+        needs_refresh = _hardware_evidence_needs_refresh(payload, self._snapshot_acquisition_seconds)
+        if needs_refresh and now < self._snapshot_retry_after:
             payload = dict(payload)
             payload["automatic_snapshot_refresh"] = {
                 "attempted": False,
@@ -275,20 +295,44 @@ class BioXpRobotClient:
                 "retry_after_s": max(0.0, self._snapshot_retry_after - now),
             }
             return payload
-        if _hardware_evidence_needs_refresh(payload):
+        if needs_refresh:
             try:
                 collected = await self.request(
                     "collect_hardware_snapshot",
+                    json_data={"automatic": True},
                     timeout_override=_AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS,
                 )
+                if collected.get("published") is False and collected.get("reason") == "operator_action_pending":
+                    # Foreground priority is not a failed controller query.
+                    # Retry observation on a subsequent poll, not after the
+                    # thirty-second transport-failure backoff. Never retry motion.
+                    self._snapshot_retry_after = self._monotonic_clock() + 0.5
+                    return {**payload, "automatic_snapshot_refresh": {
+                        "attempted": True, "published": False, "retry_deferred": True,
+                        "retry_after_s": 0.5, "reason": "operator_action_pending"}}
                 snapshot_id = _require_published_snapshot(collected)
                 payload = await self.probe_status_only()
+                # Include status, admission/transport, the whole collection and
+                # final readback, not just the producer's hardware phase.
+                elapsed = self._monotonic_clock() - started
+                if math.isfinite(elapsed) and elapsed >= 0:
+                    self._snapshot_acquisition_seconds = elapsed
                 payload = dict(payload)
                 payload["automatic_snapshot_refresh"] = {
                     "attempted": True,
                     "published": True,
                     "snapshot_id": snapshot_id,
                 }
+                # A deck sample can already be several seconds old when the
+                # full collection returns. Do not then unconditionally sleep a
+                # whole status tick. Only successful, still-fresh observations
+                # can request an earlier next probe; missing/failed evidence
+                # retains normal polling/backoff rather than a zero-delay loop.
+                if _hardware_refresh_due_in(payload) > 0:
+                    next_probe = _hardware_refresh_due_in(payload, self._snapshot_acquisition_seconds)
+                    if next_probe > 0 or (self._snapshot_acquisition_seconds is not None
+                                          and self._snapshot_acquisition_seconds >= 1.0):
+                        payload["automatic_snapshot_refresh"]["next_probe_after_s"] = next_probe
                 self._snapshot_retry_after = 0.0
             except (RobotResponseError, RobotTransportError) as exc:
                 # Runtime reachability remains truthful when only the query-only
@@ -312,6 +356,7 @@ class BioXpRobotClient:
         return payload
 
     async def camera_status(self) -> dict[str, Any]:
+        request_started = self._monotonic_clock()
         try:
             method, path_template, timeout_seconds = self.routes["camera_status"]
         except KeyError as exc:
@@ -368,7 +413,33 @@ class BioXpRobotClient:
             status = _CameraStatusResponse.model_validate(payload)
         except ValidationError as exc:
             raise RobotTransportError("BioXP robot returned a malformed camera status") from exc
-        return status.model_dump(mode="json")
+        result = status.model_dump(mode="json")
+        if status.available:
+            received = self._monotonic_clock()
+            if not (math.isfinite(request_started) and math.isfinite(received)) or received < request_started:
+                raise RobotTransportError("BioXP camera monotonic timing was invalid")
+            assert status.frame_age_seconds is not None
+            assert status.frame_sequence is not None
+            # The producer may observe at any point during the request. Charge
+            # the entire round trip, including body read/validation, as a
+            # conservative upper bound instead of granting transit as freshness.
+            anchor = request_started - status.frame_age_seconds
+            identity = (status.provider_generation, status.frame_sequence,
+                        status.frame_captured_at, status.content_sha256)
+            previous = self._camera_age_anchor
+            if previous is not None and previous[0] == identity:
+                anchor = min(anchor, previous[1])
+            age = status.frame_age_seconds + (received - request_started)
+            if previous is not None and previous[0] == identity:
+                age = max(age, received - previous[1])
+            if not math.isfinite(age):
+                raise RobotTransportError("BioXP camera age exceeded the supported range")
+            # Concurrent status requests can complete out of source order. An
+            # older frame must not evict the newer frame's retained age anchor.
+            if previous is None or identity[:2] >= previous[0][:2]:
+                self._camera_age_anchor = (identity, anchor)
+            result["frame_age_seconds"] = age
+        return result
 
     async def camera_latest(self) -> CameraImage:
         return await self._camera_image("camera_latest")
@@ -580,6 +651,19 @@ class BioXpRobotClient:
         except KeyError as exc:
             raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
         path = _render_route_path(path_template, path_params)
+        headers: dict[str, str] = {}
+        if route_name in {"pipette_readback", "pipette_application_plan", "pipette_request_lookup"}:
+            # The connection lease carries this request-scoped identity unchanged.
+            # It is transport metadata, never part of the robot's liquid body.
+            json_data = dict(json_data or {})
+            key = json_data.pop("idempotency_key", None)
+            if not isinstance(key, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}", key) is None:
+                raise RobotTransportError("Direct-liquid requests require a valid idempotency key")
+            headers["Idempotency-Key"] = key
+            if route_name == "pipette_request_lookup":
+                if json_data:
+                    raise RobotTransportError("Direct-liquid lookup does not accept a body")
+                json_data = None
         attempts = 2 if retry_read_once and method == "GET" else 1
         for attempt in range(attempts):
             try:
@@ -588,6 +672,7 @@ class BioXpRobotClient:
                     path,
                     json=json_data,
                     params=params,
+                    headers=headers,
                     timeout=_bounded_timeout(timeout if timeout_override is None else timeout_override),
                 )
                 if 300 <= response.status_code < 400:
@@ -663,7 +748,9 @@ async def _read_limited_body(
     return bytes(body)
 
 
-def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:
+def _hardware_evidence_needs_refresh(
+    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
+) -> bool:
     runtime_ready = payload.get("runtime_ready")
     if not isinstance(runtime_ready, bool):
         runtime_ready = payload.get("runtime_available")
@@ -672,19 +759,46 @@ def _hardware_evidence_needs_refresh(payload: Mapping[str, Any]) -> bool:
     capabilities = payload.get("capabilities")
     if not isinstance(capabilities, (list, tuple, set)) or "collect_hardware_snapshot" not in capabilities:
         return False
-    freshness = payload.get("freshness")
-    freshness = freshness if isinstance(freshness, Mapping) else {}
-    available = payload.get("available") is True
-    cache_fresh = payload.get("cache_state") == "fresh" and freshness.get("state") == "fresh"
-    age_s = freshness.get("age_s")
-    fresh_for_s = freshness.get("fresh_for_s")
-    if not available or not cache_fresh:
-        return True
-    if isinstance(age_s, bool) or not isinstance(age_s, (int, float)):
-        return True
-    if isinstance(fresh_for_s, bool) or not isinstance(fresh_for_s, (int, float)) or fresh_for_s <= 0:
-        return True
-    return float(age_s) >= float(fresh_for_s) / 2.0
+    return _hardware_refresh_due_in(payload, acquisition_seconds) <= 0.0
+
+
+def _hardware_refresh_due_in(
+    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
+) -> float:
+    """Query scheduling only; these observations never grant command authority.
+
+    Generic status covers different domains and may remain fresh after motion
+    invalidates axes/gripper. Require the producer's admission-domain projection
+    and the independent deck sample, with their original source-owned budgets.
+    Missing or malformed evidence requests collection, never stale readiness.
+    """
+    remaining = []
+    for key in ("admission_observation", "deck_authority"):
+        observation = payload.get(key)
+        if not isinstance(observation, Mapping):
+            return 0.0
+        # A fresh negative observation (for example unreferenced axes) is
+        # still a completed query. It is not permission and must not cause a
+        # full-collection storm; absence/invalidation is expressed by freshness.
+        if key == "admission_observation" and observation.get("cache_state") != "fresh":
+            return 0.0
+        freshness = observation.get("freshness")
+        if not isinstance(freshness, Mapping) or freshness.get("state") != "fresh":
+            return 0.0
+        age, window = freshness.get("age_s"), freshness.get("fresh_for_s")
+        if (isinstance(age, bool) or not isinstance(age, (int, float))
+                or isinstance(window, bool) or not isinstance(window, (int, float))
+                or not math.isfinite(age) or not math.isfinite(window)
+                or age < 0 or window <= 0):
+            return 0.0
+        # The existing worker checks at <=1s. Reserve that tick as well as
+        # the measured previous full replacement cost, retaining half-budget
+        # when earlier. Neither cost nor scheduling can extend source expiry.
+        threshold = window / 2.0
+        if acquisition_seconds is not None:
+            threshold = min(threshold, window - acquisition_seconds - 1.0)
+        remaining.append(max(0.0, threshold - age))
+    return min(remaining)
 
 
 def _require_published_snapshot(response: object) -> str:

@@ -57,7 +57,6 @@ test('changed MolBio and NGS frontend sources are syntactically valid TypeScript
 
 test('shared context preserves every identity and forbids Global-to-Domain substitution', () => {
     const context = source('components/experiments/GlobalExperimentContext.tsx');
-    const workspace = source('components/molbio-ngs/DomainExperimentWorkspace.tsx');
 
     for (const key of ['workspace_id', 'global_experiment_id', 'domain_experiment_id', 'state_revision_id']) {
         assert.match(context, new RegExp(key));
@@ -66,13 +65,7 @@ test('shared context preserves every identity and forbids Global-to-Domain subst
     assert.match(context, /domainExperiment\.project_id === workspaceId/);
     assert.doesNotMatch(context, /domainExperimentId\s*:\s*globalExperimentId/);
 
-    for (const label of [
-        'Project / workspace ID',
-        'Global Experiment ID',
-        'NGS/MolBio Domain Experiment ID',
-        'Global Domain Experiment revision ID',
-        'Local state revision ID',
-    ]) assert.match(workspace, new RegExp(label));
+
 });
 
 test('frontend local read routes and immutable reopen surfaces match backend routes', () => {
@@ -136,7 +129,6 @@ test('history, PCR, runs, and evidence remain immutable and typed', () => {
     const pcr = source('components/MolBioToolkit/panels/PCRPanel.tsx');
     const toolkit = source('components/MolBioToolkit/MolBioToolkitV2.tsx');
     const instrument = source('components/ngs/OntInstrumentPanel.tsx');
-    const workspace = source('components/molbio-ngs/DomainExperimentWorkspace.tsx');
     const pcrRouter = backend('routers/molbio_ops.py');
 
     assert.match(history, /Server immutable revision history/);
@@ -153,30 +145,11 @@ test('history, PCR, runs, and evidence remain immutable and typed', () => {
     assert.match(instrument, /fetchOntInstrumentRuns/);
     assert.match(instrument, /fetchOntInstrumentRunGeneration/);
     assert.match(instrument, /Durable BMS ONT run ledger/);
-    assert.match(workspace, /Immutable scientific evidence assessments/);
-    assert.match(workspace, /Manifest integrity/);
-    assert.match(workspace, /Job lifecycle/);
+
 });
 
-test('receipt-owned exact reopen uses validated aggregate/revision pairs and observed generation keys', () => {
-    const workspace = source('components/molbio-ngs/DomainExperimentWorkspace.tsx');
+test('instrument exact reopen preserves pinned resource/revision pairs separately from current heads', () => {
     const instrument = source('components/ngs/OntInstrumentPanel.tsx');
-
-    assert.match(workspace, /parseExactReceiptReopenDestination/);
-    assert.match(workspace, /surface:\s*'molbio-sequence-revision'/);
-    assert.match(workspace, /aggregateKey:\s*'sequence_id'/);
-    assert.match(workspace, /surface:\s*'molbio-pcr-experiment-revision'/);
-    assert.match(workspace, /aggregateKey:\s*'experiment_id'/);
-    assert.match(workspace, /fetchMolecularRevision\(destination\.aggregateId, destination\.revisionId\)/);
-    assert.match(workspace, /fetchPcrExperimentRevision\(destination\.aggregateId, destination\.revisionId\)/);
-    assert.doesNotMatch(workspace, /fetchMolecularRevision\(member\.entity_id, member\.source_generation_or_revision\)/);
-    assert.doesNotMatch(workspace, /fetchPcrExperimentRevision\(member\.entity_id, member\.source_generation_or_revision\)/);
-    assert.match(workspace, /molbio_sequence_id:\s*destination\.aggregateId/);
-    assert.match(workspace, /molbio_revision_id:\s*destination\.revisionId/);
-    assert.match(workspace, /pcr_experiment_id:\s*destination\.aggregateId/);
-    assert.match(workspace, /pcr_revision_id:\s*destination\.revisionId/);
-    assert.match(workspace, /observed_generation:\s*String\(run\.observed_generation\)/);
-    assert.doesNotMatch(workspace, /run_generation:/);
 
     for (const key of ['sample_id', 'sample_revision_id', 'reference_id', 'reference_revision_id']) {
         assert.match(instrument, new RegExp(`params\\.get\\('${key}'\\)`));

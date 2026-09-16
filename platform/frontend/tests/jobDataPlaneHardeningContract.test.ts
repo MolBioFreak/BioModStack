@@ -8,11 +8,11 @@ const consumers: Record<string, RegExp> = {
   'JobBrowser.tsx': /fetchJobs\(\{[\s\S]*?limit: PAGE_SIZE,[\s\S]*?summary: true[\s\S]*?\}\)/u,
   'ReferenceSelector.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
   'BatchComparePane.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
-  'Dashboard.tsx': /fetchJobs\(\{ limit: 100, summary: true \}\)/u,
+  'Dashboard.tsx': /fetchJobs\(\{ limit: 100, summary: true \}, queryClient\.getQueryData/u,
   'LigandSelector.tsx': /fetchJobs\(\{ status: 'completed', limit: 50, summary: true \}\)/u,
   'DesignBrowser.tsx': /fetchJobs\(\{ limit: 500, summary: true \}\)/u,
-  'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}\)/u,
-  'ResultsViewer.tsx': /fetchJobs\(\{ include_children: true, limit: 500, summary: true \}\)/u,
+  'QuickViewer.tsx': /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u,
+  'ResultsViewer.tsx': /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u,
   'NGSToolkit.tsx': /fetchJobs\(\{[\s\S]*?include_children: true,[\s\S]*?model_id,[\s\S]*?limit: 500,[\s\S]*?offset,[\s\S]*?summary: true,[\s\S]*?\}\)/u,
 };
 

@@ -121,6 +121,23 @@ async def lifespan(app: FastAPI):
 
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
     await init_db()
+    from services.remote_execution.targets import AttachmentController, invalidate_vast_inventory, run_vast_inventory_refresh
+    from services.remote_execution.preloading import PreloadController
+    app.state.preload_controller = PreloadController(async_session)
+    await app.state.preload_controller.recover()
+    app.state.attachment_controller = AttachmentController(async_session)
+    await app.state.attachment_controller.recover()
+    async with async_session() as inventory_session:
+        await invalidate_vast_inventory(inventory_session)
+    vast_inventory_stop = asyncio.Event()
+    vast_inventory_task = asyncio.create_task(
+        run_vast_inventory_refresh(async_session, vast_inventory_stop), name="vast-inventory-refresh"
+    )
+    from services.remote_execution.telemetry import remote_telemetry
+    remote_telemetry_stop = asyncio.Event()
+    remote_telemetry_task = asyncio.create_task(
+        remote_telemetry.run(async_session, remote_telemetry_stop), name="remote-telemetry"
+    )
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
@@ -193,8 +210,10 @@ async def lifespan(app: FastAPI):
         logger.info("[STARTUP] ONT signal-workbench worker disabled: approved Squigualiser runtime policy absent or mismatched")
     else:
         _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
-        await _ont_signal_worker.start()
-        logger.info("[STARTUP] governed ONT signal-workbench worker started")
+        if await _ont_signal_worker.start():
+            logger.info("[STARTUP] governed ONT signal-workbench worker started")
+        else:
+            logger.warning("[STARTUP] ONT signal-workbench backend unavailable: worker blocked; scientific work unchanged; restart after provisioning to retry recovery")
 
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,
@@ -231,6 +250,12 @@ async def lifespan(app: FastAPI):
     yield
     
     # Cleanup on shutdown
+    remote_telemetry_stop.set()
+    await remote_telemetry_task
+    await app.state.preload_controller.close()
+    await app.state.attachment_controller.close()
+    vast_inventory_stop.set()
+    await vast_inventory_task
     if bioxp_runtime is not None:
         await bioxp_runtime.close()
         logger.info("[SHUTDOWN] BioXP control plane closed")
@@ -396,10 +421,15 @@ app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")
 
 @app.get("/api/health")
-async def health_check():
-    """Separate process liveness from dependency and workflow readiness."""
-    molbio = await molbio_health()
-    molbio_ngs = await molbio_ngs_health()
+async def health_check(deep: bool = False):
+    """Report readiness without rescanning retained science on ordinary polls.
+
+    Explicit ``?deep=true`` requests keep the full diagnostic integrity audit.
+    Startup, release and exact scientific reads retain their own checks.
+    """
+    molbio, molbio_ngs = await asyncio.gather(
+        molbio_health(deep=deep), molbio_ngs_health(deep=deep),
+    )
     readiness = await collect_runtime_readiness(molbio=molbio, molbio_ngs=molbio_ngs)
     return {
         "status": "healthy" if readiness["ready"] else "degraded",

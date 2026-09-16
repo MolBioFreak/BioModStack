@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+
+from services.core_protein_scientific_contract import revision_for_job
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
@@ -244,7 +246,130 @@ def build_ppiflow_paper_rank_metric(
     )
 
 
-def build_design_metric_provenance(subject: Any) -> Dict[str, Any]:
+def _finite_real(value: Any) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def validate_ppiflow_rank_inputs(subject: Any) -> Dict[str, Any]:
+    """Validate bound native scalar evidence once for both rank and completeness.
+
+    This is a pure validator, not an authority check. The public projection callers
+    opt into it only with a trusted persisted Job revision.
+    """
+    confidence = _confidence_payload(subject)
+    inputs = confidence.get("ppiflow_rank_inputs", {})
+    malformed_inputs = not isinstance(inputs, Mapping)
+    if malformed_inputs:
+        inputs = {}
+    binding = confidence.get("ppiflow_rank_binding")
+    valid_binding = (
+        isinstance(binding, Mapping)
+        and binding.get("candidate_id") == _value_from_subject(subject, "name")
+        and isinstance(binding.get("document_id"), str) and bool(binding["document_id"])
+        and isinstance(binding.get("structure_sha256"), str)
+        and len(binding["structure_sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in binding["structure_sha256"])
+    )
+    binding = binding if isinstance(binding, Mapping) else {}
+    states = {}
+    values = {}
+    records = {}
+    for key, label, aliases, kind in (
+        ("validator_iptm", "iptm", ("iptm", "validator_iptm"), "native_scalar_iptm"),
+        ("rosetta_interface_score", "rosetta", ("rosetta_interface_score", "rosetta_interface_dg"), "raw_interface_score"),
+    ):
+        record = inputs.get(key)
+        state, reason = "ok", None
+        if malformed_inputs:
+            state, reason = "invalid", "invalid_rank_evidence"
+        elif record is None:
+            state, reason = "unavailable", f"missing_{label}_evidence"
+        elif not isinstance(record, Mapping):
+            state, reason = "invalid", f"invalid_{label}_evidence"
+        else:
+            value = record.get("value")
+            digest = record.get("source_sha256")
+            if (not _finite_real(value)
+                    or (label == "iptm" and not 0 <= value <= 1)):
+                state, reason = "invalid", f"invalid_{label}_scalar"
+            elif record.get("metric_kind") != kind or (label == "rosetta" and record.get("unit") != "REU"):
+                state, reason = "invalid", f"invalid_{label}_kind"
+            elif (not isinstance(digest, str) or len(digest) != 64
+                  or any(c not in "0123456789abcdef" for c in digest)):
+                state, reason = "invalid", f"invalid_{label}_source_hash"
+            elif ("ppiflow_rank_binding" in confidence and (
+                  not valid_binding
+                  or record.get("document_id") != binding["document_id"]
+                  or record.get("structure_sha256") != binding["structure_sha256"])):
+                state, reason = "invalid", f"invalid_{label}_structure_binding"
+            elif (not record.get("candidate_id") or record.get("candidate_id") != _value_from_subject(subject, "name")
+                  or not isinstance(record.get("interface_id"), str) or not record["interface_id"].strip()):
+                state, reason = "invalid", f"invalid_{label}_binding"
+            else:
+                duplicates = [_value_from_subject(subject, alias) for alias in aliases]
+                duplicates += [confidence.get(alias) for alias in aliases]
+                if any(not _finite_real(v) or v != value
+                       for v in duplicates if v is not None):
+                    state, reason = "invalid", f"conflicting_{label}_aliases"
+                else:
+                    values[key] = value
+                    records[key] = dict(record)
+        states[key] = {"state": state, "reason_code": reason}
+    if len(records) == 2 and records["validator_iptm"]["interface_id"] != records["rosetta_interface_score"]["interface_id"]:
+        states["validator_iptm"] = {"state": "invalid", "reason_code": "interface_scope_mismatch"}
+    failure = next((s for s in states.values() if s["state"] == "invalid"), None)
+    failure = failure or next((s for s in states.values() if s["state"] != "ok"), None)
+    value = None if failure else 100.0 * values["validator_iptm"] - values["rosetta_interface_score"]
+    if value is not None and not math.isfinite(value):
+        failure = {"state": "invalid", "reason_code": "nonfinite_composite_rank"}
+        value = None
+    record = build_ppiflow_paper_rank_metric(validator_iptm=None, rosetta_interface_score=None)
+    record.update(value=value, **(failure or {"state": "ok", "reason_code": None}))
+    record["provenance"].update(inputs=records)
+    return {"record": record, "inputs": states}
+
+
+def build_ppiflow_rank_envelope(
+    subject: Any, *, descriptor: Mapping[str, Any], expected_source: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Ingress adapter for the closed canonical metric, not a new rank consumer.
+
+    The ingestion owner must hash/validate its actual source document and supply
+    its exact approved descriptor and candidate/document mapping. This function
+    never derives identity from filenames or substitutes a source hash. Native
+    metric_record metadata remains separate from this persisted envelope.
+    """
+    from services.core_protein_scientific_contract import validate_descriptor, validate_metric
+
+    descriptor = validate_descriptor(descriptor)
+    if (descriptor["metric_key"] != "ppiflow_paper_rank_score"
+            or descriptor["unit"] != "composite_score"
+            or descriptor["direction"] != "higher_is_better"):
+        raise ValueError("PPIFlow rank descriptor contradicts its native formula")
+    result = validate_ppiflow_rank_inputs(subject)["record"]
+    state, value, reason = result["state"], result["value"], result["reason_code"]
+    inputs = _confidence_payload(subject).get("ppiflow_rank_inputs")
+    if expected_source.get("candidate_id") != _value_from_subject(subject, "name"):
+        state, value, reason = "invalid", None, "rank_source_candidate_mismatch"
+    elif isinstance(inputs, Mapping):
+        for item in inputs.values():
+            if isinstance(item, Mapping) and (
+                item.get("document_id") != expected_source.get("document_id")
+                or item.get("interface_id") != descriptor["scope"]
+            ):
+                state, value, reason = "invalid", None, "rank_source_scope_mismatch"
+                break
+    return validate_metric({**descriptor, "state": state, "value": value,
+                            "reason_code": reason, "source": dict(expected_source)},
+                           expected_source=expected_source)
+
+
+def build_design_metric_provenance(subject: Any, *, job: Any = None) -> Dict[str, Any]:
     provenance: Dict[str, Any] = {"metrics": []}
     confidence = _confidence_payload(subject)
     artifact_path = _value_from_subject(subject, "json_path") or _value_from_subject(subject, "pdb_path")
@@ -283,7 +408,9 @@ def build_design_metric_provenance(subject: Any) -> Dict[str, Any]:
                 stage_mode=stage_mode,
             )
         )
-    if validator_iptm is not None and rosetta_interface_score is not None:
+    if revision_for_job(job) == 1:
+        provenance["metrics"].append(validate_ppiflow_rank_inputs(subject)["record"])
+    elif validator_iptm is not None and rosetta_interface_score is not None:
         provenance["metrics"].append(
             build_ppiflow_paper_rank_metric(
                 validator_iptm=validator_iptm,
@@ -295,7 +422,7 @@ def build_design_metric_provenance(subject: Any) -> Dict[str, Any]:
     return provenance
 
 
-def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
+def build_design_metric_completeness(subject: Any, *, job: Any = None) -> Dict[str, Any]:
     confidence = _confidence_payload(subject)
     has_psce = _value_from_subject(subject, "fampnn_psce") is not None
     has_seq_probs = bool(
@@ -321,6 +448,12 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
         or confidence.get("rosetta_interface_score") is not None
     )
     paper_rank = bool(has_validator and has_rosetta)
+    strict_rank = None
+    if revision_for_job(job) == 1:
+        strict_rank = validate_ppiflow_rank_inputs(subject)
+        has_validator = strict_rank["inputs"]["validator_iptm"]["state"] == "ok"
+        has_rosetta = strict_rank["inputs"]["rosetta_interface_score"]["state"] == "ok"
+        paper_rank = strict_rank["record"]["state"] == "ok"
 
     missing: List[str] = []
     if has_psce and not has_seq_probs:
@@ -346,5 +479,6 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
             "validator_confidence_available": has_validator,
             "rosetta_interface_score_available": has_rosetta,
             "paper_rank_available": paper_rank,
+            **({"paper_rank_reason_code": strict_rank["record"]["reason_code"]} if strict_rank else {}),
         },
     }

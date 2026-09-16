@@ -224,12 +224,7 @@ class ExecutionTarget(Base):
             name="uq_execution_target_provider_instance",
         ),
         CheckConstraint("provider IN ('vast')", name="ck_execution_target_provider"),
-        Index(
-            "uq_execution_targets_one_active",
-            "active",
-            unique=True,
-            sqlite_where=text("active = 1"),
-        ),
+
         Index("ix_execution_targets_provider_state", "provider", "state"),
     )
 
@@ -1257,6 +1252,8 @@ class Design(Base):
     id = Column(String(36), primary_key=True)
     job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    # Native producer authority, independent of offloaded provenance and workflow stages.
+    producer_model_id = Column(String(64), nullable=True)
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
     lineage_root_job_id = Column(String(36), nullable=True, index=True)

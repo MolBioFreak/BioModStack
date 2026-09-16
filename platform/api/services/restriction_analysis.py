@@ -76,7 +76,11 @@ class InvalidDNAError(ValueError):
 
 
 class AnalysisLimitError(ValueError):
-    pass
+    def __init__(self, message: str, *, budget: str | None = None, limit: int | None = None, observed: int | None = None):
+        super().__init__(message)
+        self.budget = budget
+        self.limit = limit
+        self.observed = observed
 
 
 class StrictModel(BaseModel):
@@ -534,6 +538,20 @@ def analyze_sequence(
     regions: tuple[tuple[int, int], ...] = (),
 ) -> AnalysisResult:
     normalized = normalize_dna(sequence)
+    return _analyze_normalized_sequence(
+        sequence=normalized, source_sha=hashlib.sha256(normalized.encode("ascii")).hexdigest(),
+        topology=topology, catalog=catalog, records=records,
+        include_possible_sites=include_possible_sites, regions=regions,
+    )
+
+
+def _analyze_normalized_sequence(
+    *, sequence: str, source_sha: str, topology: Literal["linear", "circular"],
+    catalog: CatalogView, records: Sequence[RestrictionRecord],
+    include_possible_sites: bool = True, regions: tuple[tuple[int, int], ...] = (),
+) -> AnalysisResult:
+    """Internal pipeline: DNA and its hash were established at the source boundary."""
+    normalized = sequence
     if topology not in {"linear", "circular"}:
         raise InvalidDNAError("topology must be linear or circular")
     if len(normalized) > MAX_INLINE_SEQUENCE_LENGTH:
@@ -558,9 +576,8 @@ def analyze_sequence(
     if pattern_count > MAX_ANALYSIS_PATTERNS:
         raise AnalysisLimitError("pattern count exceeds analysis limit")
     if scan_work > MAX_SCAN_WORK:
-        raise AnalysisLimitError("scan work exceeds analysis limit")
+        raise AnalysisLimitError("scan work exceeds analysis limit", budget="scan_work", limit=MAX_SCAN_WORK, observed=scan_work)
 
-    source_sha = hashlib.sha256(normalized.encode("ascii")).hexdigest()
     record_ids = tuple(sorted(selected))
     scope_sha = hashlib.sha256(rfc8785.dumps({"enzyme_ids": record_ids})).hexdigest()
     region_sha = hashlib.sha256(rfc8785.dumps({

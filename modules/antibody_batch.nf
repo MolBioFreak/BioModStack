@@ -190,6 +190,12 @@ process AlignBoltzValidation {
     path "alignment_batch.log"
 
     script:
+    def revision = params.get('core_protein_scientific_contract')
+    if (revision != null && (revision instanceof Boolean || revision.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def scientificArgs = revision == null ? '' : '--core_protein_scientific_contract 1'
+    def quoteRole = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def resolvedBinderChains = params.antibody_chains ?: params.binder_chains ?: 'H,L'
     def resolvedTargetChains = params.antigen_chains ?: params.target_chains ?: 'T'
     def anchor_target = (params.boltz_anchor_target == true || params.boltz_anchor_target == 'true')
@@ -208,8 +214,8 @@ process AlignBoltzValidation {
         --boltz_dir ./ \\
         --output_dir predictions \\
         --design_type binder \\
-        --binder_chains "${resolvedBinderChains}" \\
-        --target_chains "${resolvedTargetChains}" \\
+        --binder_chains ${quoteRole(revision == null ? resolvedBinderChains : (params.antibody_chains ?: params.binder_chains ?: ''))} \\
+        --target_chains ${quoteRole(revision == null ? resolvedTargetChains : (params.antigen_chains ?: params.target_chains ?: ''))} ${scientificArgs} \\
         --geometry_mode "${geometryMode}" ${boltzStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_batch.log
@@ -228,7 +234,7 @@ process AlignBoltzValidation {
 process BatchProtenixValidation {
     label 'Protenix'
     label 'gpu'
-    container "${params.container_dir}/protenix.sif"
+    container { params.protenix_container_path ?: "${params.container_dir}/protenix.sif" }
 
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "predictions/*.cif"
@@ -248,6 +254,11 @@ process BatchProtenixValidation {
     path "protenix_batch.log"
 
     script:
+    def revision = params.get('core_protein_scientific_contract')
+    if (revision != null && (revision instanceof Boolean || revision.toString() != '1')) {
+        throw new IllegalArgumentException('core_protein_scientific_contract must be exactly 1')
+    }
+    def scientificArgs = revision == null ? '' : '--core_protein_scientific_contract 1'
     def model_name = params.protenix_model_weights ?: 'protenix-v2'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
@@ -302,12 +313,13 @@ process BatchProtenixValidation {
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
     fi
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1
     export PIP_NO_USER=1
-    mkdir -p "\$PROTENIX_ROOT_DIR/common" "\$PROTENIX_ROOT_DIR/checkpoint" "\$PROTENIX_ROOT_DIR/triton" "\$PROTENIX_ROOT_DIR/matplotlib"
+    mkdir -p "\$XDG_CACHE_HOME" "\$TRITON_CACHE_DIR" "\$MPLCONFIGDIR"
 
     if ! command -v python3 &> /dev/null; then
         echo "[BatchProtenixValidation] ERROR: python3 not found in container image" >&2
@@ -350,10 +362,10 @@ payload = json.loads(Path('chain_roles.json').read_text())
 print(",".join(payload.get('all_target_chain_ids') or []))
 PY
 )"
-    if [ -z "\$PROTENIX_BINDER_CHAINS" ]; then
+    if [ "${revision == null}" = "true" ] && [ -z "\$PROTENIX_BINDER_CHAINS" ]; then
         PROTENIX_BINDER_CHAINS="${fallbackAlignmentBinderChains}"
     fi
-    if [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
+    if [ "${revision == null}" = "true" ] && [ -z "\$PROTENIX_TARGET_CHAINS" ]; then
         PROTENIX_TARGET_CHAINS="${fallbackAlignmentTargetChains}"
     fi
 
@@ -390,6 +402,7 @@ PY
             echo "[BatchProtenixValidation] Using shared MSA cache at \$PROTENIX_MSA_CACHE_DIR"
         fi
         python3 ${params.code_root}/scripts/prepare_protenix_msa.py \\
+            --generated-service protenix:generated_msa \\
             --input_json input.json \\
             --output_json prepared_input.json \\
             --out_dir msa_prepared \\
@@ -446,7 +459,7 @@ PY
         --design_type binder \\
         --binder_chains "\$PROTENIX_BINDER_CHAINS" \\
         --target_chains "\$PROTENIX_TARGET_CHAINS" \\
-        --chain_roles_json chain_roles.json \\
+        --chain_roles_json chain_roles.json ${scientificArgs} \\
         --geometry_mode "${geometryMode}" ${protenixStrictArgs} \\
         --ncpus ${task.cpus} \\
         2>&1 | tee alignment_protenix.log

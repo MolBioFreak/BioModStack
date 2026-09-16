@@ -95,7 +95,6 @@ _CORE_EXECUTION_ACTIVE_STATES = frozenset({"planned", "started"})
 _MAX_CORE_EXECUTION_OWNER_ROWS = 10_000
 _MAX_CORE_EXECUTION_ATTEMPTS_PER_JOB = 10_000
 _MAX_RECOVERABLE_DISPATCH_ROWS = 10_000
-_MAX_CONNECTOR_CONVERGENCE_ROWS = 10_000
 _MAX_EVIDENCE_RECEIPT_BYTES = 262_144
 _MAX_IDENTITY_SCAN_DEPTH = 64
 _MAX_IDENTITY_SCAN_NODES = 10_000
@@ -266,7 +265,7 @@ def _validate_closed_package_evidence(
     expected_runtime_implementation_sha256: str,
 ) -> None:
     schema = _read(_EVIDENCE_SCHEMA_PATH)
-    errors = sorted(_validator(schema).iter_errors(dict(body)), key=lambda error: list(error.absolute_path))
+    errors = sorted(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(dict(body)), key=lambda error: list(error.absolute_path))
     if errors:
         first = errors[0]
         location = ".".join(str(part) for part in first.absolute_path) or "$"
@@ -803,49 +802,58 @@ async def _recoverable_dispatch_outbox_count(
     return recoverable
 
 
+async def _connector_scalar_rows(session, columns, predicate=None):
+    """Keyset walk scalar identities within the caller's fenced snapshot."""
+    after = None
+    while True:
+        query = select(*columns).order_by(columns[0]).limit(512)
+        if predicate is not None:
+            query = query.where(predicate)
+        if after is not None:
+            query = query.where(columns[0] > after)
+        rows = (await session.execute(query)).all()
+        if not rows:
+            return
+        for row in rows:
+            yield row
+        after = rows[-1][0]
+
+
+async def _connector_scalar_pairs(left, right):
+    local, remote = await anext(left, None), await anext(right, None)
+    while local is not None or remote is not None:
+        if remote is None or (local is not None and local[0] < remote[0]):
+            yield local, None
+            local = await anext(left, None)
+        elif local is None or remote[0] < local[0]:
+            yield None, remote
+            remote = await anext(right, None)
+        else:
+            yield local, remote
+            local, remote = await anext(left, None), await anext(right, None)
+
+
 async def _connector_convergence_count(
     experiment_session: AsyncSession,
     local_session: AsyncSession,
 ) -> int:
-    local_rows = list(
-        (
-            await local_session.scalars(
-                select(MolBioNGSOutboxEvent)
-                .order_by(MolBioNGSOutboxEvent.id)
-                .limit(_MAX_CONNECTOR_CONVERGENCE_ROWS + 1)
-            )
-        ).all()
-    )
-    inbox_rows = list(
-        (
-            await experiment_session.scalars(
-                select(ExperimentDomainConnectorInbox)
-                .where(
-                    ExperimentDomainConnectorInbox.source_store_id == _LOCAL_SOURCE_STORE_ID
-                )
-                .order_by(ExperimentDomainConnectorInbox.event_id)
-                .limit(_MAX_CONNECTOR_CONVERGENCE_ROWS + 1)
-            )
-        ).all()
-    )
-    if (
-        len(local_rows) > _MAX_CONNECTOR_CONVERGENCE_ROWS
-        or len(inbox_rows) > _MAX_CONNECTOR_CONVERGENCE_ROWS
-    ):
-        raise SharedPackageAcceptanceError(
-            "connector event convergence scan exceeded its fail-closed row bound"
-        )
-    local_by_id = {row.id: row for row in local_rows}
-    inbox_by_id = {row.event_id: row for row in inbox_rows}
-    settled_event_ids = {
-        row.id for row in local_rows if row.status == "acknowledged"
-    } | {
-        row.event_id for row in inbox_rows if row.disposition in {"applied", "duplicate"}
-    }
+    event_fields = ("binding_revision_id", "state_revision_id", "event_type", "event_stream",
+                    "stream_generation", "source_generation", "payload_sha256", "acknowledgement_sha256")
+    local_columns = [MolBioNGSOutboxEvent.id, MolBioNGSOutboxEvent.status,
+                     MolBioNGSOutboxEvent.global_domain_experiment_id,
+                     *(getattr(MolBioNGSOutboxEvent, field) for field in event_fields)]
+    inbox_columns = [ExperimentDomainConnectorInbox.event_id, ExperimentDomainConnectorInbox.disposition,
+                     ExperimentDomainConnectorInbox.domain_experiment_id,
+                     *(getattr(ExperimentDomainConnectorInbox, field) for field in event_fields)]
     divergent = 0
-    for event_id in settled_event_ids:
-        local = local_by_id.get(event_id)
-        inbox = inbox_by_id.get(event_id)
+    async for local, inbox in _connector_scalar_pairs(
+        _connector_scalar_rows(local_session, local_columns),
+        _connector_scalar_rows(experiment_session, inbox_columns,
+            ExperimentDomainConnectorInbox.source_store_id == _LOCAL_SOURCE_STORE_ID),
+    ):
+        if not ((local is not None and local.status == "acknowledged") or
+                (inbox is not None and inbox.disposition in {"applied", "duplicate"})):
+            continue
         if (
             local is None
             or inbox is None
@@ -863,39 +871,18 @@ async def _connector_convergence_count(
         ):
             divergent += 1
 
-    command_rows = list(
-        (
-            await experiment_session.scalars(
-                select(ExperimentDomainConnectorCommand)
-                .order_by(ExperimentDomainConnectorCommand.command_id)
-                .limit(_MAX_CONNECTOR_CONVERGENCE_ROWS + 1)
-            )
-        ).all()
-    )
-    acknowledgement_rows = list(
-        (
-            await local_session.scalars(
-                select(MolBioNGSConnectorAcknowledgement)
-                .order_by(MolBioNGSConnectorAcknowledgement.command_id)
-                .limit(_MAX_CONNECTOR_CONVERGENCE_ROWS + 1)
-            )
-        ).all()
-    )
-    if (
-        len(command_rows) > _MAX_CONNECTOR_CONVERGENCE_ROWS
-        or len(acknowledgement_rows) > _MAX_CONNECTOR_CONVERGENCE_ROWS
+    command_fields = ("command_id", "acknowledgement_id", "binding_revision_id", "acknowledgement_sha256")
+    async for command, acknowledgement in _connector_scalar_pairs(
+        _connector_scalar_rows(experiment_session, [
+            *(getattr(ExperimentDomainConnectorCommand, field) for field in command_fields),
+            ExperimentDomainConnectorCommand.status]),
+        _connector_scalar_rows(local_session, [
+            *(getattr(MolBioNGSConnectorAcknowledgement, field) for field in command_fields),
+            MolBioNGSConnectorAcknowledgement.disposition]),
     ):
-        raise SharedPackageAcceptanceError(
-            "connector command convergence scan exceeded its fail-closed row bound"
-        )
-    command_by_id = {row.command_id: row for row in command_rows}
-    acknowledgement_by_command_id = {row.command_id: row for row in acknowledgement_rows}
-    settled_command_ids = {
-        row.command_id for row in command_rows if row.status in {"applied", "duplicate"}
-    } | set(acknowledgement_by_command_id)
-    for command_id in settled_command_ids:
-        command = command_by_id.get(command_id)
-        acknowledgement = acknowledgement_by_command_id.get(command_id)
+        if not (acknowledgement is not None or
+                (command is not None and command.status in {"applied", "duplicate"})):
+            continue
         if (
             command is None
             or acknowledgement is None
@@ -907,7 +894,6 @@ async def _connector_convergence_count(
         ):
             divergent += 1
     return divergent
-
 
 async def _active_core_execution_owner_count(core_session: AsyncSession) -> int:
     """Count newest nonterminal execution owners independently of Job status."""
@@ -1137,7 +1123,7 @@ async def validate_shared_package_acceptance(
         )
     if candidate["content_sha256"] != _content_sha256(candidate):
         raise SharedPackageAcceptanceError("shared package acceptance content digest mismatch")
-    runtime = runtime_implementation_record()
+    runtime = runtime_implementation_record(fresh=True)
     if candidate["runtime_implementation_sha256"] != runtime["content_sha256"]:
         raise SharedPackageAcceptanceError("acceptance binds a different runtime implementation record")
     if (

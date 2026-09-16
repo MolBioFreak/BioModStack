@@ -6,6 +6,11 @@ import shutil
 from pathlib import Path
 import json
 try:
+    from scripts.lib.boltzgen_native import protocol_from_entities, selected_checkpoint_members
+except ModuleNotFoundError:
+    # Direct CLI inside /scripts; package imports use the same source helper.
+    from lib.boltzgen_native import protocol_from_entities, selected_checkpoint_members
+try:
     import gemmi
 except ImportError:
     gemmi = None
@@ -101,8 +106,14 @@ def create_metadata_json(
     output_dir: Path,
     known_design_ids: set[str] | None = None,
     batch_prefix: str = "",
+    core_protein_scientific_contract=None,
+    producer_identity=None,
+    filter_from_inverse_folded=None,
 ):
     """Convert BoltzGen metrics CSV to JSON metadata files."""
+    if core_protein_scientific_contract == 1:
+        from lib.filtering.evidence import csv_metadata
+        return csv_metadata(csv_path, output_dir, known_design_ids, batch_prefix, producer_identity, filter_from_inverse_folded)
     try:
         import pandas as pd
         df = pd.read_csv(csv_path)
@@ -160,7 +171,7 @@ def create_metadata_json(
         return False
 
 
-def extract_metrics_from_npz(batch_dir: Path, output_dir: Path) -> int:
+def extract_metrics_from_npz(batch_dir: Path, output_dir: Path, core_protein_scientific_contract=None, known_design_ids=None, batch_prefix="", producer_identity=None) -> int:
     """
     Extract confidence metrics from BoltzGen NPZ files.
     
@@ -169,6 +180,9 @@ def extract_metrics_from_npz(batch_dir: Path, output_dir: Path) -> int:
     
     Returns: number of designs processed
     """
+    if core_protein_scientific_contract == 1:
+        from lib.filtering.evidence import npz_metadata
+        return npz_metadata(batch_dir, output_dir, known_design_ids, batch_prefix, producer_identity)
     import numpy as np
     
     processed = 0
@@ -261,45 +275,28 @@ def auto_detect_protocol(config_path: str) -> str:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        entities = config.get('entities', [])
-        
-        has_dna = False
-        has_rna = False
-        has_ligand = False
-        has_protein = False
-        
-        for entity in entities:
-            if 'dna' in entity:
-                has_dna = True
-            elif 'rna' in entity:
-                has_rna = True
-            elif 'ligand' in entity:
-                has_ligand = True
-            elif 'protein' in entity:
-                has_protein = True
-        
-        # Determine protocol based on entity types
-        if has_dna or has_rna:
-            # DNA/RNA targets use protein-anything
-            protocol = "protein-anything"
-            print(f"Auto-detected protocol: {protocol} (DNA/RNA target detected)")
-        elif has_ligand:
-            # Small molecule targets use protein-small_molecule
-            protocol = "protein-small_molecule"
-            print(f"Auto-detected protocol: {protocol} (ligand target detected)")
-        else:
-            # Default for protein-only
-            protocol = "protein-anything"
-            print(f"Auto-detected protocol: {protocol} (protein target)")
-        
+        protocol = protocol_from_entities(config.get('entities', []))
+        print(f"Auto-detected protocol: {protocol}")
         return protocol
         
     except Exception as e:
         print(f"Warning: Protocol auto-detection failed: {e}, using default")
         return "protein-small_molecule"
 
+def run_with_native_identity(command, *, reuse=False):
+    """Observe installed source around the existing invocation, not a version stamp."""
+    from lib.boltzgen_native import observe_source, unavailable_identity
+    before = observe_source()
+    code = os.system(command)
+    after = observe_source()
+    if reuse or code != 0 or before != after:
+        return code, unavailable_identity('reused_failed_or_changed_producer')
+    return code, after
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run BoltzGen Wrapper")
+    parser.add_argument("--core-protein-scientific-contract", type=int, choices=[1], default=None)
     parser.add_argument("--config", type=str, help="Path to single design spec YAML (backward compat)")
     parser.add_argument("--configs", type=str, nargs='+', help="Paths to multiple design spec YAMLs for batch processing")
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
@@ -321,6 +318,12 @@ def main():
     parser.add_argument("--inverse_fold_num_sequences", type=int, default=None,
                         help="Number of sequences per backbone")
     
+    # Checkpoint paths are runtime placement, not scientific overrides.
+    parser.add_argument("--design_checkpoints", nargs='+', default=None)
+    parser.add_argument("--inverse_fold_checkpoint", default=None)
+    parser.add_argument("--folding_checkpoint", default=None)
+    parser.add_argument("--affinity_checkpoint", default=None)
+    parser.add_argument("--moldir", default=None)
     # Checkpoint and pipeline control parameters (new)
     parser.add_argument("--checkpoint_mode", type=str, default=None,
                         choices=['diverse', 'adherence'],
@@ -359,10 +362,12 @@ def main():
     # Process each config in the batch
     successful_configs = 0
     failed_configs = 0
+    producer_identities = {}
 
     for i, config_path in enumerate(config_files):
         config_name = Path(config_path).stem
         batch_out_dir = Path(args.out_dir) / f"batch_{i}_{config_name}"
+        preexisting_outputs = batch_out_dir.exists() and any(batch_out_dir.iterdir())
         batch_out_dir.mkdir(exist_ok=True)
         
         print(f"\n[{i+1}/{len(config_files)}] Processing: {config_path}")
@@ -383,9 +388,9 @@ def main():
             cmd += f" --diffusion_batch_size {args.diffusion_batch_size}"
 
         # Add diffusion parameters if specified
-        if args.step_scale:
+        if args.step_scale is not None:
             cmd += f" --step_scale {args.step_scale}"
-        if args.noise_scale:
+        if args.noise_scale is not None:
             cmd += f" --noise_scale {args.noise_scale}"
         
         # Add inverse folding parameters if specified
@@ -394,14 +399,30 @@ def main():
         if args.inverse_fold_num_sequences:
             cmd += f" --inverse_fold_num_sequences {args.inverse_fold_num_sequences}"
         
-        # Add checkpoint mode if using single checkpoint
-        if args.checkpoint_mode:
-            # Map our mode names to checkpoint paths
+        # Explicit placement must not be combined with a second mode selector.
+        import shlex
+        if args.design_checkpoints and args.checkpoint_mode:
+            parser.error('--design_checkpoints and --checkpoint_mode are mutually exclusive')
+        active_members = selected_checkpoint_members(
+            protocol, args.checkpoint_mode or 'both', args.skip_inverse_folding)
+        if args.design_checkpoints:
+            cmd += ' --design_checkpoints ' + shlex.join(args.design_checkpoints)
+        elif args.checkpoint_mode:
+            # Preserve the existing direct-wrapper mode aliases.
             checkpoint_map = {
                 'diverse': 'huggingface:boltzgen/boltzgen1_diverse:boltzgen1_diverse.ckpt',
                 'adherence': 'huggingface:boltzgen/boltzgen1_adherence:boltzgen1_adherence.ckpt'
             }
             cmd += f" --design_checkpoints {checkpoint_map[args.checkpoint_mode]}"
+        for option, member in (
+            ('inverse_fold_checkpoint', 'boltzgen1_ifold.ckpt'),
+            ('folding_checkpoint', 'boltz2_conf_final.ckpt'),
+            ('affinity_checkpoint', 'boltz2_aff.ckpt'),
+            ('moldir', None),
+        ):
+            value = getattr(args, option)
+            if value and (member is None or member in active_members):
+                cmd += f' --{option} ' + shlex.quote(value)
         
         # Skip inverse folding if requested
         if args.skip_inverse_folding:
@@ -416,7 +437,10 @@ def main():
             cmd += " " + " ".join(unknown)
         
         print(f"Executing: {cmd}")
-        ret = os.system(cmd)
+        if args.core_protein_scientific_contract == 1:
+            ret, producer_identities[str(batch_out_dir)] = run_with_native_identity(cmd, reuse=args.reuse or bool(unknown) or preexisting_outputs)
+        else:
+            ret = os.system(cmd)
         
         if ret != 0:
             failed_configs += 1
@@ -532,6 +556,9 @@ def main():
                     designs_dir,
                     known_design_ids=converted_design_ids,
                     batch_prefix=batch_prefix,
+                    core_protein_scientific_contract=args.core_protein_scientific_contract,
+                    producer_identity=producer_identities.get(str(batch_dir)),
+                    filter_from_inverse_folded=None if unknown else not args.skip_inverse_folding,
                 )
                 print(f"Created JSON metadata from {loc}")
                 csv_found = True
@@ -542,7 +569,12 @@ def main():
         print("No metrics CSV found - extracting from NPZ files (analysis step may have failed)")
         npz_extracted = 0
         for batch_dir in batch_dirs:
-            npz_extracted += extract_metrics_from_npz(batch_dir, designs_dir)
+            npz_extracted += extract_metrics_from_npz(
+                batch_dir, designs_dir, core_protein_scientific_contract=args.core_protein_scientific_contract,
+                producer_identity=producer_identities.get(str(batch_dir)),
+                known_design_ids=converted_design_ids,
+                batch_prefix=batch_dir.name.replace("batch_", "b") + "_" if len(batch_dirs) > 1 else "",
+            )
         if npz_extracted > 0:
             print(f"Extracted metrics from {npz_extracted} NPZ files")
     
@@ -551,7 +583,11 @@ def main():
         json_path = designs_dir / f"confidence_{pdb.stem}.json"
         if not json_path.exists():
             with open(json_path, 'w') as f:
-                json.dump({'design_id': pdb.stem, 'source': 'boltzgen'}, f)
+                metadata = {'design_id': pdb.stem, 'source': 'boltzgen'}
+                if args.core_protein_scientific_contract == 1:
+                    from lib.filtering.evidence import metric_evidence, CORE
+                    metadata.update(core_protein_scientific_contract=1, metric_evidence={k: metric_evidence(k, None) for k in CORE})
+                json.dump(metadata, f, allow_nan=False)
     
     report_stage("affinity", "complete", args.job_id, f"Processed {cif_converted} design metrics")
     

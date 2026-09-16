@@ -36,6 +36,13 @@ from services.ont_ngs_contract import DORADO_LOCK_PATH
 from services.ngs_molbio_source_authority import SourceBuildRevisionError, source_build_revision
 from services.ngs_molbio_runtime_status import NgsMolBioRuntimeAuthorityError, runtime_implementation_record
 
+# Scientific task scripts and the API share one immutable image-store owner.
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.container_runtime import container_executable
+from lib.shared_runtime_images import SharedRuntimeImageError, publish_image, verify_image
+
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
 DIMER_TOKENS = ("dimer", "multimer", "concatemer")
@@ -366,24 +373,93 @@ def verify_current_artifact_bytes(
     expected_size: int,
     expected_sha256: str,
 ) -> None:
-    """Verify the current descriptor-backed source without consulting the snapshot cache."""
+    """Verify fresh source identity, reusing only unchanged descriptor digests."""
 
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
+    digest, size = _sha256_file_and_size(path)
+    if size != expected_size:
+        raise AlignmentSessionError("artifact integrity size mismatch")
+    if digest != expected_sha256:
+        raise AlignmentSessionError("artifact integrity digest mismatch")
+
+
+def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
+    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
     source = _open_regular_file_no_symlinks(path)
+    snapshot = tempfile.TemporaryFile(mode="w+b")
     try:
-        if os.fstat(source.fileno()).st_size != expected_size:
+        before = os.fstat(source.fileno())
+        if before.st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
+        try:
+            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
+        except OSError:
+            copied = 0
+            while copied <= expected_size:
+                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+                if not chunk:
+                    break
+                snapshot.write(chunk)
+                copied += len(chunk)
+        snapshot.seek(0)
+        if os.fstat(snapshot.fileno()).st_size != expected_size:
             raise AlignmentSessionError("artifact integrity size mismatch")
         digest = hashlib.sha256()
-        copied = 0
-        while copied <= expected_size:
-            chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
-            if not chunk:
-                break
-            copied += len(chunk)
+        size = 0
+        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
             digest.update(chunk)
-        if copied != expected_size or digest.hexdigest() != expected_sha256:
+            size += len(chunk)
+        if size != expected_size or digest.hexdigest() != expected_sha256:
             raise AlignmentSessionError("artifact integrity digest mismatch")
+        snapshot.flush()
+        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
+        snapshot.close()
+        return readonly
+    except BaseException:
+        snapshot.close()
+        raise
+    finally:
+        source.close()
+
+
+def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
+    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
+    source = _open_regular_file_no_symlinks(path)
+    snapshot = tempfile.TemporaryFile(mode="w+b")
+    try:
+        before = os.fstat(source.fileno())
+        if before.st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
+        try:
+            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
+        except OSError:
+            copied = 0
+            while copied <= expected_size:
+                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
+                if not chunk:
+                    break
+                snapshot.write(chunk)
+                copied += len(chunk)
+        snapshot.seek(0)
+        if os.fstat(snapshot.fileno()).st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
+            digest.update(chunk)
+            size += len(chunk)
+        if size != expected_size or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+        snapshot.flush()
+        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
+        snapshot.close()
+        return readonly
+    except BaseException:
+        snapshot.close()
+        raise
     finally:
         source.close()
 
@@ -398,8 +474,11 @@ def open_verified_artifact_snapshot(
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
     if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
-        raise AlignmentSessionError("artifact exceeds snapshot limit")
-    cached = _reserve_snapshot(expected_sha256, expected_size)
+        return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
+    try:
+        cached = _reserve_snapshot(expected_sha256, expected_size)
+    except AlignmentSessionError:
+        return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
     if cached is not None:
         return cached
 
@@ -495,12 +574,13 @@ def _safe_job_root(
 def _sha256_file_and_size(path: Path) -> tuple[str, int]:
     """Hash one no-follow descriptor and return its size from the same descriptor."""
     handle = _open_regular_file_no_symlinks(path)
-    digest = hashlib.sha256()
+    from services.scientific_artifacts.writer import descriptor_content_digest, ScientificArtifactError
+
     try:
-        size_bytes = os.fstat(handle.fileno()).st_size
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-        return digest.hexdigest(), size_bytes
+        size, digest = descriptor_content_digest(handle.fileno(), scope=str(path.parent.resolve()))
+        return digest, size
+    except ScientificArtifactError as exc:
+        raise AlignmentSessionError(str(exc)) from exc
     finally:
         handle.close()
 
@@ -789,10 +869,21 @@ class _PinnedSamtoolsCommand:
         assert self.runtime_directory_fd is not None
         assert self.runtime_directory_identity is not None
         runtime_fd = self.pass_fds[0]
-        metadata = os.fstat(runtime_fd)
-        path_metadata = os.stat(self.runtime_path, follow_symlinks=False)
-        directory_metadata = os.fstat(self.runtime_directory_fd)
-        directory_path_metadata = os.stat(self.runtime_path.parent, follow_symlinks=False)
+        try:
+            metadata = os.fstat(runtime_fd)
+            directory_metadata = os.fstat(self.runtime_directory_fd)
+            visible_directory_fd = _open_nofollow(
+                self.runtime_path.parent, directory=True, label="shared pinned NGS runtime directory",
+            )
+            try:
+                directory_path_metadata = os.fstat(visible_directory_fd)
+                path_metadata = os.stat(
+                    self.runtime_path.name, dir_fd=visible_directory_fd, follow_symlinks=False,
+                )
+            finally:
+                os.close(visible_directory_fd)
+        except OSError as exc:
+            raise AlignmentSessionError("shared pinned NGS runtime snapshot is unavailable") from exc
         if (
             _runtime_stat_identity(metadata) != self.runtime_identity
             or _runtime_stat_identity(path_metadata) != self.runtime_identity
@@ -804,11 +895,11 @@ class _PinnedSamtoolsCommand:
             or not stat.S_ISDIR(directory_metadata.st_mode)
             or stat.S_IMODE(directory_metadata.st_mode) & 0o222
         ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
+            raise AlignmentSessionError("shared pinned NGS runtime snapshot is unsafe")
 
 
 _samtools_runtime_lock = threading.RLock()
-_samtools_runtime_cache: dict[tuple[str, str], _PinnedSamtoolsCommand] = {}
+_samtools_runtime_cache: dict[tuple[str, str, str], _PinnedSamtoolsCommand] = {}
 
 
 def _clear_samtools_runtime_cache() -> None:
@@ -872,114 +963,58 @@ def _sha256_descriptor(descriptor: int) -> str:
     return digest.hexdigest()
 
 
-def _private_runtime_snapshot(
-    source_fd: int,
+def _runtime_image_store(source: Path) -> Path:
+    from paths import get_container_dir
+
+    configured = os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+    if configured:
+        root = Path(configured).expanduser()
+    else:
+        # Resolve the installation profile as well as environment overrides.
+        # A source may already be an object; its parent is never a store root.
+        root = get_container_dir().expanduser() / ".image-store"
+    if not root.is_absolute():
+        raise AlignmentSessionError("shared NGS runtime image store path is invalid")
+    return root
+
+
+def _shared_runtime_snapshot(
+    source: Path,
     *,
-    directory: Path,
+    store_root: Path,
     expected_digest: str,
 ) -> tuple[int, int, Path, tuple[int, int, int, int, int], int, tuple[int, int, int, int, int]]:
-    """Copy one stable source generation into one private named read-only image."""
-    metadata_before = os.fstat(source_fd)
-    process_directory = directory / f".bms-ngs-runtime-{expected_digest}"
-    runtime_path = process_directory / "runtime.sif"
-    if process_directory.exists():
-        source_digest = _sha256_descriptor(source_fd)
-        metadata_after = os.fstat(source_fd)
-        if (
-            _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after)
-            or source_digest != expected_digest
-        ):
-            raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(
-            process_directory,
-            directory=True,
-            label="private pinned NGS runtime directory",
-        )
-        try:
-            private_metadata = os.fstat(runtime_fd)
-            directory_metadata = os.fstat(directory_fd)
-            if (
-                _sha256_descriptor(runtime_fd) != expected_digest
-                or not stat.S_ISREG(private_metadata.st_mode)
-                or private_metadata.st_size != metadata_after.st_size
-                or stat.S_IMODE(private_metadata.st_mode) & 0o222
-                or not stat.S_ISDIR(directory_metadata.st_mode)
-                or stat.S_IMODE(directory_metadata.st_mode) & 0o222
-            ):
-                raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-            return (
-                runtime_fd,
-                private_metadata.st_size,
-                runtime_path,
-                _runtime_stat_identity(private_metadata),
-                directory_fd,
-                _runtime_stat_identity(directory_metadata),
-            )
-        except Exception:
-            os.close(runtime_fd)
-            os.close(directory_fd)
-            raise
-    digest = hashlib.sha256()
-    size = 0
-    staging_directory = Path(
-        tempfile.mkdtemp(prefix=f".bms-ngs-runtime-{expected_digest}.partial-", dir=directory)
-    )
-    os.chmod(staging_directory, 0o700)
-    temporary_path = staging_directory / "runtime.sif"
+    """Publish centrally, then bind verified object bytes to retained no-follow FDs.
+
+    Publication and hashing belong to the shared store, not to each job. Cached
+    commands only check the immutable object identities; the mutable source is
+    not execution authority after admission.
+    """
     runtime_fd: int | None = None
     directory_fd: int | None = None
     try:
-        with temporary_path.open("xb") as snapshot:
-            while chunk := os.pread(source_fd, SNAPSHOT_CHUNK_BYTES, size):
-                snapshot.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-            snapshot.flush()
-            os.fsync(snapshot.fileno())
-            metadata_after = os.fstat(source_fd)
-            if _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after):
-                raise AlignmentSessionError("pinned NGS runtime changed during snapshot validation")
-            if size != metadata_after.st_size or digest.hexdigest() != expected_digest:
-                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-            os.fchmod(snapshot.fileno(), 0o400)
-        os.chmod(staging_directory, 0o500)
-        try:
-            os.rename(staging_directory, process_directory)
-        except OSError:
-            if not process_directory.exists():
-                raise
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-            return _private_runtime_snapshot(
-                source_fd,
-                directory=directory,
-                expected_digest=expected_digest,
-            )
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(process_directory, directory=True, label="private pinned NGS runtime directory")
-        runtime_identity = _runtime_stat_identity(os.fstat(runtime_fd))
-        directory_identity = _runtime_stat_identity(os.fstat(directory_fd))
-        private_metadata = os.fstat(runtime_fd)
-        if (
-            not stat.S_ISREG(private_metadata.st_mode)
-            or private_metadata.st_size != size
-            or stat.S_IMODE(private_metadata.st_mode) & 0o222
-        ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-        return runtime_fd, size, runtime_path, runtime_identity, directory_fd, directory_identity
-    except Exception:
+        runtime_path = publish_image(source, store_root, expected_digest)
+        record = verify_image(runtime_path, expected_digest)
+        runtime_fd = _open_nofollow(runtime_path, directory=False, label="shared pinned NGS runtime")
+        directory_fd = _open_nofollow(
+            runtime_path.parent, directory=True, label="shared pinned NGS runtime directory",
+        )
+        metadata = os.fstat(runtime_fd)
+        identity = _runtime_stat_identity(metadata)
+        verified_identity = tuple(record[key] for key in ("device", "inode", "size", "mtime_ns", "ctime_ns"))
+        if record["sha256"] != expected_digest or identity != verified_identity:
+            raise AlignmentSessionError("shared pinned NGS runtime changed during validation")
+        return (
+            runtime_fd, metadata.st_size, runtime_path, identity,
+            directory_fd, _runtime_stat_identity(os.fstat(directory_fd)),
+        )
+    except Exception as exc:
         if runtime_fd is not None:
             os.close(runtime_fd)
         if directory_fd is not None:
             os.close(directory_fd)
-        try:
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-        except OSError:
-            pass
+        if isinstance(exc, (OSError, ValueError, SharedRuntimeImageError)):
+            raise AlignmentSessionError(f"shared pinned NGS runtime snapshot is unsafe: {exc}") from exc
         raise
 
 
@@ -1002,47 +1037,40 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
     runtime_sif = Path(runtime_raw).expanduser()
     if not runtime_sif.is_absolute():
         raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
-    key = (os.fspath(runtime_sif), "descriptor-only")
+    store_root = _runtime_image_store(runtime_sif)
+    apptainer = container_executable()
+    if not apptainer:
+        raise AlignmentSessionError("Scientific container runtime is unavailable for the pinned NGS runtime")
+    key = (os.fspath(runtime_sif), os.fspath(store_root), apptainer)
     with _samtools_runtime_lock:
+        # The small canonical lock stays fresh even when image bytes are cached.
+        expected_digest, expected_version = _ngs_runtime_identity()
+        if expected_version != "1.24":
+            raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
         cached = _samtools_runtime_cache.get(key)
         if cached is not None:
+            if cached.runtime_sha256 != expected_digest:
+                raise AlignmentSessionError("cached NGS runtime does not match the canonical lock")
             cached.verify_runtime()
             return cached
-        apptainer = shutil.which("apptainer")
-        if not apptainer:
-            raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
-        expected_digest, expected_version = _ngs_runtime_identity()
-        source_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
-        runtime_fd: int | None = None
-        directory_fd: int | None = None
-        runtime_path: Path | None = None
-        try:
-            (
-                runtime_fd,
-                runtime_size,
-                runtime_path,
-                runtime_identity,
-                directory_fd,
-                directory_identity,
-            ) = _private_runtime_snapshot(
-                source_fd,
-                directory=runtime_sif.parent,
-                expected_digest=expected_digest,
-            )
-        finally:
-            os.close(source_fd)
-        if runtime_fd is None or directory_fd is None or runtime_path is None:
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unavailable")
+        (
+            runtime_fd,
+            runtime_size,
+            runtime_path,
+            runtime_identity,
+            directory_fd,
+            directory_identity,
+        ) = _shared_runtime_snapshot(
+            runtime_sif,
+            store_root=store_root,
+            expected_digest=expected_digest,
+        )
         try:
             command = _PinnedSamtoolsCommand(
                 argv=(
                     apptainer,
                     "exec",
                     "--no-home",
-                    "--pid",
-                    "--net",
-                    "--network",
-                    "none",
                     f"/proc/self/fd/{runtime_fd}",
                     "samtools",
                 ),
@@ -1293,11 +1321,16 @@ def _session_records(
     source_reference_sha256: str,
     workflow_id: str,
     input_mode: str,
+    manifest_digests: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     records = _manifest_records(job_id, job_root)
     for record in records:
+        expected_manifest = (manifest_digests or {}).get(record.get("manifest"))
+        if expected_manifest is not None and record.get("source_manifest_sha256") != expected_manifest:
+            record["error"] = "source manifest differs from published identity"
+            record["manifest_error"] = record["error"]
         if record.get("kind") == "__manifest_authority__":
             continue
         if record.get("manifest_error"):
@@ -1447,7 +1480,7 @@ def _session_records(
 def _public_session(session: dict[str, Any], package_artifact_set_sha256: str | None) -> dict[str, Any]:
     production_package_authority = package_artifact_set_sha256 is not None
     if production_package_authority and session.get("_complete_manifest_authority") is not True:
-        raise AlignmentSessionError("complete session manifest authority is required")
+        session = {**session, "ready": False, "unavailable_reason": "Session manifest evidence is unavailable"}
     if package_artifact_set_sha256 is None:
         package_artifact_set_sha256 = hashlib.sha256(rfc8785.dumps([
             {"role": role, "sha256": artifact["sha256"], "size_bytes": artifact["size_bytes"]}
@@ -1491,6 +1524,7 @@ def build_alignment_sessions(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    manifest_digests: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     safe_job_id, job_root = _safe_job_root(
         job_id,
@@ -1500,7 +1534,7 @@ def build_alignment_sessions(
     )
     return [
         _public_session(session, package_artifact_set_sha256)
-        for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode)
+        for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests)
     ]
 
 
@@ -1515,38 +1549,51 @@ def resolve_alignment_session(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    manifest_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     safe_job_id, job_root = _safe_job_root(
         job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
     )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
+    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests):
         if session["session_id"] == session_id:
             return _public_session(session, package_artifact_set_sha256)
     raise AlignmentSessionError(f"alignment session not found for job_id: {safe_job_id}")
 
 
-def _resolve_internal_artifact(
-    job_id: str,
-    artifact_id: str,
-    *,
-    source_reference_sha256: str,
-    workflow_id: str = "ont_fastq_qc",
-    input_mode: str = "fastq",
-    results_dir: str | Path | None = None,
-    job_output_dir: str | Path | None = None,
-    pinned_root_descriptor: bool = False,
-) -> tuple[Path, dict[str, Any]]:
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact_id):
-        raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(
-        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
-    )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
-        if session["ready"] is not True:
+def _delivery_artifact_records(job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests=None):
+    for record in _manifest_records(job_id, job_root):
+        if record.get("path") is None or record.get("error") or record.get("manifest_error"):
             continue
-        for artifact in session["artifacts"].values():
-            if artifact["artifact_id"] == artifact_id and artifact["integrity_valid"] is True:
-                return artifact["_path"], artifact
+        if record.get("workflow_id") != workflow_id or record.get("input_mode") != input_mode:
+            continue
+        reference = record.get("source_reference_sequence_sha256") if _is_dimer(record) else record.get("reference_sequence_sha256")
+        if reference != source_reference_sha256 or _dimer_mode_conflict(record):
+            continue
+        expected = (manifest_digests or {}).get(record["manifest"])
+        if expected is not None and record.get("source_manifest_sha256") != expected:
+            continue
+        yield record
+
+
+def _resolve_internal_artifact(
+    job_id: str, artifact_id: str, *, source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc", input_mode: str = "fastq",
+    results_dir: str | Path | None = None, job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False, manifest_digests: dict[str, str] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor)
+    for record in _delivery_artifact_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests):
+        role = _artifact_role(record["kind"])
+        digest = record.get("declared_sha256")
+        if role is None or not isinstance(digest, str):
+            continue
+        expected_id = hashlib.sha256(f"{safe_job_id}\0{record['manifest']}\0{role}\0{record['declared_path']}\0{digest}".encode()).hexdigest()
+        if expected_id != artifact_id:
+            continue
+        artifact = _artifact_descriptor(safe_job_id, record, role)
+        if artifact["integrity_valid"]:
+            return artifact["_path"], artifact
+        raise AlignmentSessionError("requested alignment artifact integrity mismatch")
     raise AlignmentSessionError("alignment artifact not found")
 
 
@@ -1650,10 +1697,11 @@ def _package_artifact_descriptor(
     owner_scope: str = "result_root",
     managed_input_path: Path | None = None,
     display_order_override: int | None = None,
+    verify_bytes: bool = True,
 ) -> dict[str, Any]:
-    resolved_path = path.resolve(strict=True)
+    resolved_path = path.resolve(strict=verify_bytes)
     if owner_scope == "managed_input_snapshot":
-        if managed_input_path is None or resolved_path != managed_input_path.resolve(strict=True):
+        if managed_input_path is None or resolved_path != managed_input_path.resolve(strict=verify_bytes):
             raise AlignmentSessionError("managed source input is not the exact persisted snapshot")
         relative = None
     else:
@@ -1869,6 +1917,8 @@ def build_ngs_package_artifacts(
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
+    published_artifacts: list[dict[str, Any]] | None = None,
+    verify_source_input: bool = False,
 ) -> list[dict[str, Any]]:
     """Build a digest-bound inventory from canonical persisted NGS manifests."""
     from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
@@ -1881,9 +1931,11 @@ def build_ngs_package_artifacts(
     )
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
+    if published_artifacts is not None:
+        return [dict(artifact) for artifact in published_artifacts]
     source_input_identity = (
         _stable_file_identity(source_input_path, label="persisted canonical source input")
-        if input_mode in {"fastq", "bam"}
+        if verify_source_input and input_mode in {"fastq", "bam"}
         else None
     )
     sequence_candidates = _sequence_manifest_candidates(job_root, input_mode)
@@ -1960,6 +2012,8 @@ def build_ngs_package_artifacts(
             or verification_reference.get("normalized_sequence_sha256") != source_reference_sha256
         ):
             raise AlignmentSessionError("construct-verification reference identity does not match persisted Job")
+        if input_mode == "fastq" and not verify_source_input:
+            source_input_identity = _verification_input_identity(verification_manifest, "source_reads")
         if input_mode == "fastq" and (
             source_input_identity is None
             or _verification_input_identity(verification_manifest, "source_reads") != source_input_identity
@@ -2024,6 +2078,9 @@ def build_ngs_package_artifacts(
                 role="source_reads",
                 owner_scope="managed_input_snapshot",
                 managed_input_path=Path(source_input_path),
+                observed_sha256=source_input_identity[0],
+                observed_size_bytes=source_input_identity[1],
+                verify_bytes=verify_source_input,
             )
             if descriptor.get("size_bytes") != source_input_identity[1]:
                 raise AlignmentSessionError("retained FASTQ size does not match persisted source input")
@@ -2093,8 +2150,9 @@ def resolve_ngs_package_artifact(
                 pinned_root_descriptor=authority.get("pinned_root_descriptor") is True,
             )
             relative = artifact.get("relative_path")
-            if not isinstance(relative, str):
-                break
+            if (not isinstance(relative, str) or Path(relative).is_absolute()
+                    or any(part in {"", ".", ".."} for part in Path(relative).parts)):
+                raise AlignmentSessionError("unsafe NGS artifact path")
             path = job_root / relative
         observed_digest, observed_size = _sha256_file_and_size(path)
         if observed_digest != artifact.get("sha256") or observed_size != artifact.get("size_bytes"):
@@ -2104,39 +2162,23 @@ def resolve_ngs_package_artifact(
 
 
 def resolve_alignment_artifact_by_role(
-    job_id: str,
-    mode: str,
-    role: str,
-    sha256: str,
-    *,
-    source_reference_sha256: str,
-    workflow_id: str = "ont_fastq_qc",
-    input_mode: str = "fastq",
-    results_dir: str | Path | None = None,
-    job_output_dir: str | Path | None = None,
-    pinned_root_descriptor: bool = False,
+    job_id: str, mode: str, role: str, sha256: str, *, source_reference_sha256: str,
+    workflow_id: str = "ont_fastq_qc", input_mode: str = "fastq",
+    results_dir: str | Path | None = None, job_output_dir: str | Path | None = None,
+    pinned_root_descriptor: bool = False, manifest_digests: dict[str, str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """Resolve one digest-bound artifact from an exact ready session."""
-    if (
-        mode not in SESSION_MODES
-        or role not in LINKED_REPORT_ROLES
-        or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
-    ):
+    if mode not in SESSION_MODES or role not in LINKED_REPORT_ROLES or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
         raise AlignmentSessionError("alignment artifact not found")
-    safe_job_id, job_root = _safe_job_root(
-        job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor,
-    )
-    for session in _session_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode):
-        if session["mode"] != mode or session["ready"] is not True:
-            continue
-        artifact = session["artifacts"].get(role)
-        if (
-            artifact is not None
-            and artifact["integrity_valid"] is True
-            and artifact["sha256"] == sha256
-        ):
-            return artifact["_path"], artifact
-    raise AlignmentSessionError("alignment artifact not found")
+    safe_job_id, job_root = _safe_job_root(job_id, results_dir, job_output_dir, pinned_root_descriptor=pinned_root_descriptor)
+    matches = [record for record in _delivery_artifact_records(safe_job_id, job_root, source_reference_sha256, workflow_id, input_mode, manifest_digests)
+               if _is_dimer(record) == (mode == "dimer_candidates") and _artifact_role(record["kind"]) == role
+               and record.get("declared_sha256") == sha256]
+    if len(matches) != 1:
+        raise AlignmentSessionError("alignment artifact not found")
+    artifact = _artifact_descriptor(safe_job_id, matches[0], role)
+    if not artifact["integrity_valid"]:
+        raise AlignmentSessionError("requested alignment artifact integrity mismatch")
+    return artifact["_path"], artifact
 
 
 def resolve_session_alignment_bundle(
@@ -2908,27 +2950,59 @@ def resolve_cached_alignment_presentation(
     return package
 
 
+# Only producer-observed manifest digests can admit a warm derivative. The
+# filesystem's self-declared digest is not authority. Eviction/restart falls back
+# to the existing bounded producer; source/policy/revision changes change the key.
+_presentation_receipts: OrderedDict[tuple[int, int, str], str] = OrderedDict()
+_presentation_receipts_lock = threading.RLock()
+_PRESENTATION_RECEIPT_MAX_ENTRIES = 128
+
+
+@contextmanager
+def _alignment_presentation_generation_slot() -> Iterator[None]:
+    lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    with (lock_root / ".generation.lock").open("a+b") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
 def _serialize_alignment_presentation_generation(function: Any) -> Any:
     @wraps(function)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
-        lock_root.mkdir(parents=True, exist_ok=True)
-        lock_handle = (lock_root / ".generation.lock").open("a+b")
-        try:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
+        with _alignment_presentation_generation_slot():
             return function(*args, **kwargs)
-        finally:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                lock_handle.close()
     return wrapped
 
 
-@_serialize_alignment_presentation_generation
+def _load_trusted_presentation(
+    namespace: Path, destination: Path, cache_key: str, manifest_sha256: str,
+) -> dict[str, Any]:
+    lock_fd = os.open(
+        ".generation.lock", os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o640, dir_fd=int(namespace.parts[4]),
+    )
+    with os.fdopen(lock_fd, "a+b") as reader_lock:
+        try:
+            fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+        with open_presentation_authority_root(destination, create=False) as pinned_destination:
+            cached = _load_derived_package(
+                pinned_destination, expected_authority_sha256=cache_key,
+                expected_manifest_sha256=manifest_sha256,
+            )
+        if cached is None:
+            raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+        return cached
+
+
 @_pin_presentation_root(create=True)
 def build_alignment_presentation(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path,
@@ -2981,13 +3055,20 @@ def build_alignment_presentation(
     namespace_parts = namespace.parts
     if not (len(namespace_parts) == 5 and namespace_parts[1:4] == ("proc", "self", "fd") and namespace_parts[4].isdigit()):
         raise AlignmentSessionError("presentation namespace is not pinned")
+    namespace_identity = namespace.stat()
+    receipt_key = (namespace_identity.st_dev, namespace_identity.st_ino, cache_key)
+    with _presentation_receipts_lock:
+        observed_manifest = _presentation_receipts.get(receipt_key)
+    trusted_manifest = expected_manifest_sha256 or observed_manifest
+    if trusted_manifest is not None and destination.exists():
+        return _load_trusted_presentation(namespace, destination, cache_key, trusted_manifest)
     lock_fd = os.open(
         ".generation.lock",
         os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o640,
         dir_fd=int(namespace_parts[4]),
     )
-    with os.fdopen(lock_fd, "a+b") as producer_lock:
+    with os.fdopen(lock_fd, "a+b") as producer_lock, _alignment_presentation_generation_slot():
         try:
             fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -3315,8 +3396,12 @@ def build_alignment_presentation(
             active=destination,
             protected_names=protected_names,
         )
+        with _presentation_receipts_lock:
+            _presentation_receipts[receipt_key] = package["manifest_metadata"]["sha256"]
+            _presentation_receipts.move_to_end(receipt_key)
+            while len(_presentation_receipts) > _PRESENTATION_RECEIPT_MAX_ENTRIES:
+                _presentation_receipts.popitem(last=False)
         return package
-
 
 def build_alignment_preview(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,

@@ -4,12 +4,6 @@ export interface WorkflowModelResultJob {
     readonly params?: Record<string, unknown> | null;
 }
 
-export interface WorkflowModelResultDesign {
-    readonly id: string;
-    readonly provenance?: Record<string, unknown> | null;
-    readonly artifact_class?: string | null;
-}
-
 export interface WorkflowModelResultSibling {
     readonly modelId: string;
     readonly label: string;
@@ -25,39 +19,39 @@ const labelForModel = (modelId: string): string => {
         frustrampnn: 'FrustraMPNN',
         thermompnn: 'ThermoMPNN',
         proteinmpnn: 'ProteinMPNN',
-        fampnn: 'FAMPNN',
+        rfd3: 'RFD3',
+        fampnn: 'FA-MPNN',
         esmfold2: 'ESMFold2',
+        protenix_v2: 'Protenix V2',
+        protein_modification_experimental: 'All results',
+        protein_local_redesign: 'All results',
     };
     return known[modelId] ?? modelId.split(/[_-]+/).filter(Boolean).map((token) => token[0]?.toUpperCase() + token.slice(1)).join(' ');
 };
 
-const designModelId = (design: WorkflowModelResultDesign): string => {
-    const value = design.provenance?.model_id;
-    return typeof value === 'string' ? value.trim().toLowerCase() : '';
-};
+export const primaryWorkflowResultModel = (job: WorkflowModelResultJob): string =>
+    job.mode?.trim().toLowerCase() === 'structure_prediction' ? 'structure_prediction' : job.model_id.trim().toLowerCase();
 
 export const buildWorkflowModelResults = ({
     job,
-    designs,
+    modelCounts,
     frustraMpnnAvailable,
 }: {
     job: WorkflowModelResultJob;
-    designs: readonly WorkflowModelResultDesign[];
+    modelCounts: Readonly<Record<string, number>>;
     frustraMpnnAvailable: boolean;
 }): WorkflowModelResultSibling[] => {
-    const jobModelId = job.model_id.trim().toLowerCase();
-    const jobMode = job.mode?.trim().toLowerCase() ?? '';
-    const primaryModelId = jobMode === 'structure_prediction' ? 'structure_prediction' : jobModelId;
+    const primaryModelId = primaryWorkflowResultModel(job);
     const validator = typeof job.params?.structure_validator === 'string'
         ? job.params.structure_validator.trim().toLowerCase()
         : '';
-    const persisted = Array.from(new Set(designs.map(designModelId).filter(Boolean)));
+    const persisted = Object.keys(modelCounts);
     const siblings: WorkflowModelResultSibling[] = [{
         modelId: primaryModelId,
         label: primaryModelId === 'structure_prediction' ? 'Structure Prediction' : labelForModel(primaryModelId),
         kind: 'primary',
     }];
-    if (validator && validator !== primaryModelId && (persisted.includes(validator) || designs.some((design) => design.artifact_class === 'validated_complex'))) {
+    if (validator && validator !== primaryModelId && persisted.includes(validator)) {
         siblings.push({ modelId: validator, label: 'Validator', kind: 'validator' });
     }
     if (frustraMpnnAvailable && primaryModelId !== 'frustrampnn') {
@@ -69,8 +63,3 @@ export const buildWorkflowModelResults = ({
     }
     return siblings;
 };
-
-export const filterDesignsForResultModel = <T extends WorkflowModelResultDesign>(
-    designs: readonly T[],
-    modelId: string,
-): T[] => designs.filter((design) => designModelId(design) === modelId);

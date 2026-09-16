@@ -64,7 +64,8 @@ def test_contact_map_params_are_clamped() -> None:
 
 def test_pae_params_and_job_scope_are_normalized() -> None:
     assert normalize_pae_matrix_params({"max_size": 12})["max_size"] == 50
-    assert normalize_pae_matrix_params({"max_size": 900})["max_size"] == 500
+    assert normalize_pae_matrix_params({"max_size": 900})["max_size"] == 900
+    assert normalize_pae_matrix_params({"max_size": 2000})["max_size"] == 1024
     assert normalize_job_scope_params({
         "include_children": "false",
         "design_ids": [" b ", "a", "b", ""],

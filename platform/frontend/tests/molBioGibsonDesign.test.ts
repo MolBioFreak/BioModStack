@@ -22,7 +22,7 @@ test('DNA Weaver plan exposes constraints, QC, exports, and server-authoritative
     assert.match(panel, /setDnaWeaverPlan\(null\);/);
     assert.match(panel, /saveDnaWeaverGibsonAssembly/);
     assert.match(panel, /selected_plan_checksum/);
-    assert.match(panel, /Regenerate \+ Verify \+ Save/);
+    assert.match(panel, /Save computed plan/);
     assert.match(api, /\/api\/molbio\/assembly\/gibson\/dnaweaver\/save/);
     assert.match(api, /plan_checksum/);
 });

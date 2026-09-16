@@ -276,6 +276,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "systemd-run", "--user", f"--unit={web_unit}", "--collect",
         f"--working-directory={frontend}",
         f"--setenv=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{api_port}",
+        "--setenv=NODE_ENV=production",
         "--setenv=BMS_BIOXP_MUTATIONS_ENABLED=0",
         str(frontend / "node_modules/.bin/vite"), "--host", "127.0.0.1", "--port", str(web_port),
     ]

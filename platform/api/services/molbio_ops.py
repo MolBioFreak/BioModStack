@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 
@@ -67,8 +67,11 @@ def _matches_pattern(sequence: str, pattern: str, start: int) -> bool:
 
 def find_pattern_positions(sequence: str, pattern: str, circular: bool = False) -> List[int]:
     """Return all pattern start indices, including IUPAC-aware circular matches."""
-    seq = clean_sequence(sequence)
-    pat = clean_sequence(pattern)
+    return _find_pattern_positions_canonical(clean_sequence(sequence), clean_sequence(pattern), circular)
+
+
+def _find_pattern_positions_canonical(seq: str, pat: str, circular: bool = False) -> List[int]:
+    """Internal search on request-local validated nucleotide strings."""
     if not seq or not pat:
         return []
     if len(pat) > len(seq):
@@ -113,8 +116,16 @@ def resolve_primer_binding_sites(
     sequence_type: str = "dna",
     min_anneal_length: int = 8,
 ) -> List[PrimerBinding]:
-    seq = clean_sequence(template)
-    primer_seq = clean_sequence(primer)
+    return _resolve_primer_binding_sites_canonical(
+        clean_sequence(template), clean_sequence(primer), reverse, circular,
+        sequence_type, min_anneal_length,
+    )
+
+
+def _resolve_primer_binding_sites_canonical(
+    seq: str, primer_seq: str, reverse: bool = False, circular: bool = False,
+    sequence_type: str = "dna", min_anneal_length: int = 8,
+) -> List[PrimerBinding]:
     if not seq or not primer_seq:
         return []
 
@@ -122,7 +133,7 @@ def resolve_primer_binding_sites(
     for anneal_length in range(len(primer_seq), minimum - 1, -1):
         anneal_sequence = primer_seq[-anneal_length:]
         query = reverse_complement(anneal_sequence, sequence_type) if reverse else anneal_sequence
-        positions = find_pattern_positions(seq, query, circular=circular)
+        positions = _find_pattern_positions_canonical(seq, query, circular=circular)
         if positions:
             return [
                 PrimerBinding(
@@ -150,7 +161,7 @@ def pcr_product(
     if not (seq and fwd and rev):
         raise ValueError("Template and primers must be non-empty.")
 
-    fwd_sites = resolve_primer_binding_sites(
+    fwd_sites = _resolve_primer_binding_sites_canonical(
         seq,
         fwd,
         reverse=False,
@@ -160,7 +171,7 @@ def pcr_product(
     if not fwd_sites:
         raise ValueError("Forward primer not found in template.")
 
-    rev_sites = resolve_primer_binding_sites(
+    rev_sites = _resolve_primer_binding_sites_canonical(
         seq,
         rev,
         reverse=True,
@@ -170,103 +181,42 @@ def pcr_product(
     if not rev_sites:
         raise ValueError("Reverse primer binding site not found in template.")
 
-    candidates: list[PCRProductResult] = []
+    # Each resolver returns a single anneal length, hence constant overhangs.
+    # Start/end/wrap geometry therefore determines the exact product bytes.
+    # Reject on the second distinct geometry without allocating either amplicon.
+    geometry: tuple[int, int, bool, int] | None = None
     template_length = len(seq)
-    fwd_overhang_prefix = lambda binding: fwd[: binding.overhang_length]
-    rev_overhang_suffix = lambda binding: reverse_complement(rev[: binding.overhang_length], sequence_type)
-
     for fwd_binding in fwd_sites:
         for rev_binding in rev_sites:
-            fwd_start = fwd_binding.start
-            rev_end = rev_binding.end
-
+            start, end = fwd_binding.start, rev_binding.end
             if circular:
-                template_span = (rev_end - fwd_start) % template_length
-                if template_span == 0:
-                    template_span = template_length
-                wraps_origin = fwd_start + template_span > template_length
-                wrapped_end = (fwd_start + template_span) % template_length
-                if wraps_origin:
-                    template_segment = seq[fwd_start:] + seq[:wrapped_end]
-                else:
-                    template_segment = seq[fwd_start:fwd_start + template_span]
-                product_sequence = (
-                    fwd_overhang_prefix(fwd_binding)
-                    + template_segment
-                    + rev_overhang_suffix(rev_binding)
-                )
-                candidate = PCRProductResult(
-                    sequence=product_sequence,
-                    start=fwd_start,
-                    end=wrapped_end,
-                    length=len(product_sequence),
-                    wraps_origin=wraps_origin,
-                )
+                span = (end - start) % template_length or template_length
+                wraps = start + span > template_length
+                end = (start + span) % template_length
             else:
-                if rev_end <= fwd_start:
+                if end <= start:
                     continue
-                template_segment = seq[fwd_start:rev_end]
-                product_sequence = (
-                    fwd_overhang_prefix(fwd_binding)
-                    + template_segment
-                    + rev_overhang_suffix(rev_binding)
+                span, wraps = end - start, False
+            current = (start, end, wraps, span)
+            if geometry is not None and geometry != current:
+                raise ValueError(
+                    "Ambiguous PCR primer placement produced multiple distinct amplicons; "
+                    "explicit binding sites are required."
                 )
-                candidate = PCRProductResult(
-                    sequence=product_sequence,
-                    start=fwd_start,
-                    end=rev_end,
-                    length=len(product_sequence),
-                    wraps_origin=False,
-                )
+            geometry = current
 
-            candidates.append(candidate)
-
-    if not candidates:
+    if geometry is None:
         if circular:
             raise ValueError("Unable to construct a circular-template PCR product from the primer pair.")
         raise ValueError("Reverse primer site occurs before forward primer (linear PCR expected).")
+    start, end, wraps, span = geometry
+    segment = seq[start:] + seq[:end] if wraps else seq[start:start + span]
+    product_sequence = (
+        fwd[:fwd_sites[0].overhang_length] + segment
+        + reverse_complement(rev[:rev_sites[0].overhang_length], sequence_type)
+    )
+    return PCRProductResult(product_sequence, start, end, len(product_sequence), wraps)
 
-    distinct_candidates = {
-        (
-            candidate.start,
-            candidate.end,
-            candidate.wraps_origin,
-            candidate.sequence,
-        ): candidate
-        for candidate in candidates
-    }
-    if len(distinct_candidates) > 1:
-        raise ValueError(
-            "Ambiguous PCR primer placement produced "
-            f"{len(distinct_candidates)} distinct amplicons; explicit binding sites are required."
-        )
-    return next(iter(distinct_candidates.values()))
-
-
-def ligate_fragments(fragments: List[str], circular: bool = True) -> str:
-    if not fragments:
-        return ""
-    seq = "".join(clean_sequence(f) for f in fragments)
-    return seq
-
-
-def gibson_assembly(fragments: List[str], overlap_length: int = 20) -> str:
-    if not fragments:
-        return ""
-    if overlap_length < 0:
-        raise ValueError("overlap_length must be >= 0")
-    assembled = clean_sequence(fragments[0])
-    for frag in fragments[1:]:
-        frag_clean = clean_sequence(frag)
-        if overlap_length > 0:
-            prev_overlap = assembled[-overlap_length:]
-            next_overlap = frag_clean[:overlap_length]
-            if prev_overlap != next_overlap:
-                raise ValueError("Gibson overlap mismatch between fragments.")
-            assembled += frag_clean[overlap_length:]
-        else:
-            assembled += frag_clean
-    return assembled
 
 
 def apply_mutations(sequence: str, mutations: List[Dict]) -> str:

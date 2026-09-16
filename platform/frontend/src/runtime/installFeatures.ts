@@ -92,7 +92,13 @@ async function fetchBmsFeatureState(): Promise<BmsFeatureState> {
     if (!response.ok) {
         throw new Error(`install features unavailable (${response.status})`);
     }
-    const payload = await response.json().catch(() => null) as unknown;
+    const payload = await response.json() as BmsFeaturesEnvelope | null;
+    // Only validated configuration may replace the query's last successful value.
+    // Missing/invalid replies are transport failures, not a server disable decision.
+    if (typeof payload?.features?.bioxp !== 'boolean'
+        || (payload.dev_features !== undefined && typeof payload.dev_features?.bioxp !== 'boolean')) {
+        throw new Error('invalid install features response');
+    }
     return normalizeBmsFeatureState(payload);
 }
 
@@ -128,9 +134,10 @@ export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boo
 
 export function resolveBmsFeatureQueryState(
     data: BmsFeatureState | undefined,
-    failed: boolean,
+    _failed: boolean,
 ): BmsFeatureState {
-    if (failed || !data) {
+    // Refetch errors retain validated query data; a cold query remains disabled.
+    if (!data) {
         return {
             features: { ...DEFAULT_BMS_FEATURES },
             devFeatures: { ...DEFAULT_BMS_DEV_FEATURES },

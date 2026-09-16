@@ -22,10 +22,11 @@ const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
 
 test('viewer reads compact incremental server-bucketed telemetry without browser history writes', () => {
     const telemetrySource = readFileSync('src/components/InfraLiveTelemetry.tsx', 'utf8');
+    const plotSource = readFileSync('src/components/telemetryMetricPlot.tsx', 'utf8');
     const historySource = readFileSync('src/components/infraTelemetryHistory.ts', 'utf8');
     const apiSource = readFileSync('src/lib/api.ts', 'utf8');
     assert.doesNotMatch(telemetrySource, /react-plotly\.js|plotly\.js/);
-    assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
+    assert.match(plotSource, /function TimeSeriesPlot[\s\S]*?<svg/);
     assert.match(telemetrySource, /fetchTelemetryChartHistory\([\s\S]*?stableStartMs,[\s\S]*?requestEndMs,[\s\S]*?bucketIntervalMs,[\s\S]*?cursor/);
     assert.match(telemetrySource, /resolveTelemetryChartCursor\(/);
     assert.match(telemetrySource, /mergeTelemetryChartHistory\(/);
@@ -33,9 +34,12 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.match(apiSource, /\/api\/telemetry\/chart-history/);
     assert.match(telemetrySource, /placeholderData: \(previousData\)/);
     assert.doesNotMatch(telemetrySource, /'minute'|mergeMinuteHistoryWithRawTail|downsampleTelemetryTail|MINUTE_LIVE_TAIL_MS/);
-    assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
-    assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
-    assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
+    assert.match(telemetrySource, /refetchInterval: usesRangeAwareDisplay \? false : displayIntervalMs/);
+    assert.match(telemetrySource, /useTelemetryChartRefresh\(\s*historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes/);
+    assert.match(telemetrySource, /const liveStatusQuery = useSystemStatus\(pollIntervalMs\)/);
+    const collectorSource = readFileSync('src/lib/useSystemStatus.ts', 'utf8');
+    assert.match(collectorSource, /queryFn: fetchSystemStatus/);
+    assert.match(collectorSource, /jobPollingInterval\(interval, query\)/);
     assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data;/);
     assert.doesNotMatch(
         telemetrySource,
@@ -67,8 +71,8 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.match(telemetrySource, /Live status unavailable\. Historical charts remain available\./);
     assert.match(telemetrySource, /<HistoricalTelemetryFallback/);
     assert.match(telemetrySource, /Telemetry collection is stale/);
-    assert.match(telemetrySource, /const xMin = xDomain\?\.\[0\]/);
-    assert.match(telemetrySource, /const xMax = xDomain\?\.\[1\]/);
+    assert.match(plotSource, /const xMin = xDomain\?\.\[0\]/);
+    assert.match(plotSource, /const xMax = xDomain\?\.\[1\]/);
     assert.match(telemetrySource, /persistTelemetryPreferences/);
     assert.doesNotMatch(telemetrySource, /persistTelemetryState|appendRetainedTelemetrySample|subscribeSharedTelemetryCollectorState/);
     assert.doesNotMatch(historySource, /bms_infra_live_telemetry_v1|samples: LiveSample\[\]|persistTelemetryState/);
@@ -129,9 +133,9 @@ test('fresh plotted telemetry reaches the right edge while stale telemetry prese
     assert.equal(isTelemetryHistoryFresh(undefined, 120_000, 10_000), false);
 
     assert.deepEqual(
-        resolveTelemetryPlotDomain(nominalDomain, 119_000, true),
-        nominalDomain,
-        'fresh telemetry must use the cadence-owned wall-clock domain instead of waiting for a bucket timestamp',
+        resolveTelemetryPlotDomain(nominalDomain, 119_000, true, 61_000, 1_000),
+        [61_000, 119_000],
+        'fresh telemetry trims only the cadence padding to actual plotted endpoints',
     );
     assert.deepEqual(
         resolveTelemetryPlotDomain(nominalDomain, 119_000, false),
@@ -236,7 +240,6 @@ test('raw telemetry is averaged into aligned buckets with an in-place partial en
         timestamp: new Date(timestampMs).toISOString(),
         timestampMs,
         pollIntervalMs: 1000,
-        clock: '',
         cpuUtil: value,
         cpuFreqMhz: value * 100,
         cpuPower: value,

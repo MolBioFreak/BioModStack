@@ -37,7 +37,6 @@ from services.structure_utils import (
     compute_contact_map,
     compute_gyration_radius,
     get_chain_ids,
-    get_per_chain_fampnn_psce,
     get_per_chain_metrics,
     get_residue_count,
     get_secondary_structure,
@@ -86,7 +85,7 @@ def _annotation_field(annotation: Any, field: str) -> Any:
     return getattr(annotation, field, None)
 
 
-def _design_chain_lists(design: Design) -> tuple[list[str], list[str]]:
+def _design_chain_lists(design: Design, *, allow_detected: bool = True) -> tuple[list[str], list[str]]:
     role_map = design.review_role_map if isinstance(design.review_role_map, dict) else {}
 
     def _chains(value: Any) -> list[str]:
@@ -95,7 +94,7 @@ def _design_chain_lists(design: Design) -> tuple[list[str], list[str]]:
 
     binder_chains = _chains(role_map.get("binder_chains") or role_map.get("antibody_chains"))
     target_chains = _chains(role_map.get("target_chains"))
-    if not binder_chains and str(role_map.get("result_role") or "").strip().lower() in {
+    if allow_detected and not binder_chains and str(role_map.get("result_role") or "").strip().lower() in {
         "antibody_binder",
         "binder",
     }:
@@ -251,38 +250,37 @@ def _compute_chain_metrics(design: Design) -> tuple[dict[str, Any], dict[str, An
 
 
 def _compute_fampnn_psce_profile(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
-    structure_path = _resolve_design_structure_path(design)
-    ignore_cbeta = bool((params or {}).get("ignore_cbeta", False))
-    chains = get_per_chain_fampnn_psce(str(structure_path), ignore_cbeta=ignore_cbeta) or {}
-    all_scores = [
-        float(score)
-        for chain in chains.values()
-        if isinstance(chain, dict)
-        for score in (chain.get("psce") or [])
-        if isinstance(score, (int, float))
-    ]
-    residue_count = sum(int(chain.get("length") or 0) for chain in chains.values() if isinstance(chain, dict))
-    result = {
-        "design_id": design.id,
-        "design_name": design.name,
-        "metric_kind": "fampnn_psce",
-        "direction": "lower_is_better",
-        "scope": "all_chains",
-        "ignore_cbeta": ignore_cbeta,
-        "chains": chains,
-    }
-    summary = {
-        "chain_count": len(chains),
-        "residue_count": residue_count,
-        "avg_psce": round(sum(all_scores) / len(all_scores), 4) if all_scores else None,
-        "max_psce": round(max(all_scores), 4) if all_scores else None,
-        "min_psce": round(min(all_scores), 4) if all_scores else None,
-        "ignore_cbeta": ignore_cbeta,
-    }
+    from services.structure_utils import fampnn_psce_authority, resolve_fampnn_psce_policy
+    policy = resolve_fampnn_psce_policy(design, params)
+    result = {"design_id": design.id, "design_name": design.name,
+              "metric_kind": "fampnn_psce", "direction": "lower_is_better",
+              "policy": policy, "chains": {}}
+    if policy is None:
+        result.update(status="unavailable", reason="historical_psce_policy_unknown",
+                      scope=None, ignore_cbeta=None)
+        return result, {"status": "unavailable", "reason": result["reason"]}, result
+    profile = fampnn_psce_authority().compute_psce_profile(_resolve_design_structure_path(design), policy)
+    result.update(status="ok", scope=policy["chain_id"], ignore_cbeta=policy["ignore_cbeta"], chains=profile["chains"])
+    summary = {**profile["summary"], "policy": policy, "ignore_cbeta": policy["ignore_cbeta"]}
     return result, summary, result
 
 
-def _compute_pae_matrix(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
+def _compute_pae_matrix(
+    design: Design, params: dict[str, Any], *, contract_revision: int | None = None,
+    identity_evidence: dict[str, Any] | None = None, document_id: str = "primary",
+    producer_binding: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    # Producer registration currently has paths/formats, but no native ordered
+    # axis ledger. Never infer that ledger from structure order or matrix size.
+    from services.analysis_registry import unavailable_scientific_identity
+    if contract_revision == 1 and identity_evidence is None:
+        result = unavailable_scientific_identity(design, "pae", "missing_producer_native_axis_ledger")
+        return result, {"status": result["status"], "reason": result["reason"]}, None
+    if contract_revision == 1 and (not isinstance(producer_binding, dict)
+            or set(producer_binding) != {"candidate_id", "document_id"}
+            or any(not isinstance(v, str) or not v.strip() for v in producer_binding.values())):
+        result = unavailable_scientific_identity(design, "pae", "missing_producer_to_design_identity_binding")
+        return result, {"status": result["status"], "reason": result["reason"]}, None
     structure_path = _resolve_design_structure_path(design)
     aligned_error_path = _resolve_design_aligned_error_path(design)
     max_size = int((params or {}).get("max_size") or 200)
@@ -291,7 +289,36 @@ def _compute_pae_matrix(design: Design, params: dict[str, Any]) -> tuple[dict[st
         aligned_error_format=design.aligned_error_format,
         matrix_key=design.aligned_error_key,
         structure_path=str(structure_path),
+        **({"contract_revision": 1, "candidate_id": producer_binding["candidate_id"], "document_id": producer_binding["document_id"],
+            "identity_evidence": identity_evidence, "selected_model": 1, "selected_altloc": ""}
+           if contract_revision == 1 else {}),
     )
+    if contract_revision == 1:
+        # The numerical loader validates producer evidence against the native
+        # artifact and exact structure. It alone establishes native axis order.
+        evidence = artifact.identity_evidence
+        rows, columns = artifact.matrix.shape
+        row_indices = list(range(0, rows, max(1, (rows + max_size - 1) // max_size)))
+        column_indices = list(range(0, columns, max(1, (columns + max_size - 1) // max_size)))
+        source_sha = evidence["row_axis"]["source_sha256"]
+        result = {
+            "schema_name": "core_protein_viewer_metric", "schema_version": 1,
+            "contract_revision": 1, "design_id": design.id, "design_name": design.name,
+            "metric": "pae", "status": "ok", "reason": None,
+            "document": {"documentId": document_id, "candidateId": design.id,
+                         "contentSha256": source_sha,
+                         "sourceKind": "mmcif" if structure_path.suffix.lower() in {".cif", ".mmcif"} else "pdb"},
+            "artifact_sha256": evidence["artifact_sha256"], "producer_binding": dict(producer_binding),
+            "row_axis": evidence["row_axis"], "column_axis": evidence["column_axis"],
+            "native_shape": [rows, columns], "native_row_positions": list(artifact.row_positions),
+            "native_column_positions": list(artifact.column_positions), "sampled_row_indices": row_indices,
+            "sampled_column_indices": column_indices,
+            "pae_matrix": artifact.matrix[row_indices][:, column_indices].tolist(),
+            "size": len(row_indices),
+        }
+        from services.scientific_viewer_contract import ScientificViewerMetric
+        result = ScientificViewerMetric.model_validate(result).model_dump()
+        return result, {"status": "ok", "native_shape": [rows, columns]}, None
     pae_matrix = artifact.matrix.tolist()
     size = len(pae_matrix)
     if size > max_size:
@@ -315,7 +342,54 @@ def _compute_pae_matrix(design: Design, params: dict[str, Any]) -> tuple[dict[st
     return result, summary, None
 
 
-def _compute_ipsae_interface(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
+async def _dispatch_ipsae_interface(design, params, session, *, selected=None):
+    from types import SimpleNamespace
+    from services.analysis_registry import scientific_contract_revision
+    from services.core_protein_scientific_contract import verified_native_spatial_design
+    from services.boltz_scientific_persistence import _revalidate
+
+    if await scientific_contract_revision(design, session) != 1:
+        return _compute_ipsae_interface(design, params)
+    try:
+        selected = selected or await verified_native_spatial_design(design, session)
+        if selected["design_id"] != design.id:
+            raise ValueError("foreign selected snapshot")
+        if 'aligned_error' not in selected['native']:
+            raise ValueError('unsupported_model_native_spatial_metric')
+        native = selected["native"]
+        # Use the existing verified producer descriptors, not Design paths or
+        # inferred matrix/structure order. No additional producer is admitted.
+        adapted = SimpleNamespace(id=design.id, name=design.name,
+            pdb_path=selected["artifacts"]["structure"]["path"],
+            aligned_error_path=selected["artifacts"]["pae"]["path"],
+            aligned_error_format="boltz_pae_npz", aligned_error_key=native["aligned_error"]["matrix_key"],
+            review_role_map=design.review_role_map,
+            detected_antibody_chains=design.detected_antibody_chains)
+        evidence = native["aligned_error"]["identity_evidence"]
+        evidence = {key: evidence[key] for key in ("artifact_sha256", "matrix_key", "row_axis", "column_axis")}
+        binding = {key: selected["block"][key] for key in ("candidate_id", "document_id")}
+        result, summary, _, _ = _compute_ipsae_interface(adapted, params,
+            contract_revision=1, identity_evidence=evidence, producer_binding=binding)
+        _revalidate(selected["publication_root"], selected["publication_receipt"])
+        result.update(contract_revision=1, status="ok", reason=None,
+            producer_binding=binding, identity_evidence=evidence)
+        # Marked derived evidence lives in the bound analysis artifact, never
+        # backfilled into historical scalar interpretations.
+        return result, dict(summary, status="ok", reason=None), result, {}
+    except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError) as exc:
+        result = {"design_id": design.id, "design_name": design.name,
+            "contract_revision": 1, "status": "unavailable", "ipsae": None,
+            "reason": ("unsupported_model_native_spatial_metric"
+                       if str(exc) == "unsupported_model_native_spatial_metric"
+                       else "missing_or_invalid_producer_identity_or_roles")}
+        return result, {"status": result["status"], "reason": result["reason"]}, result, {}
+
+
+def _compute_ipsae_interface(
+    design: Design, params: dict[str, Any], *, contract_revision: int | None = None,
+    identity_evidence: dict[str, Any] | None = None,
+    producer_binding: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
     structure_path = _resolve_design_structure_path(design)
     aligned_error_path = _resolve_design_aligned_error_path(design)
     artifact = load_aligned_error_artifact(
@@ -323,8 +397,16 @@ def _compute_ipsae_interface(design: Design, params: dict[str, Any]) -> tuple[di
         aligned_error_format=design.aligned_error_format,
         matrix_key=design.aligned_error_key,
         structure_path=str(structure_path),
+        **({"contract_revision": 1, "candidate_id": producer_binding["candidate_id"],
+            "document_id": producer_binding["document_id"], "identity_evidence": identity_evidence,
+            "selected_model": 1, "selected_altloc": ""} if contract_revision == 1 else {}),
     )
-    binder_chains, target_chains = _design_chain_lists(design)
+    binder_chains, target_chains = _design_chain_lists(design, allow_detected=contract_revision != 1)
+    if contract_revision == 1:
+        available = {residue.chain_id for residue in artifact.residues}
+        if (not binder_chains or not target_chains or set(binder_chains) & set(target_chains)
+                or not set(binder_chains + target_chains) <= available):
+            raise ValueError("missing_or_invalid_producer_roles")
     result = compute_ipsae_interface(
         artifact,
         pae_cutoff=float((params or {}).get("pae_cutoff") or 10.0),
@@ -541,24 +623,11 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
         session,
         job,
         params,
-        (
-            Design.id,
-            Design.plddt_overall,
-            Design.plddt_binder,
-            Design.pae_overall,
-            Design.pae_interaction,
-            Design.rmsd_binder,
-            Design.rmsd_overall,
-            Design.mpnn_score,
-            Design.conf_score,
-            Design.ptm,
-            Design.rog,
-            Design.ligand_iptm,
-            Design.affinity_score,
-            Design.binder_probability,
-        ),
+        tuple(getattr(Design, column.key) for column in Design.__table__.columns),
     )
     designs = [design for design in designs if _design_supports_job_analysis(design, JOB_CORRELATION_MATRIX_ANALYSIS)]
+    from services.analysis_registry import correlation_scientific_scope
+    designs, cohorts, _sources = await correlation_scientific_scope(designs, session)
     metric_names = [metric_name for metric_name in JOB_CORRELATION_METRICS if len(_extract_metric_values(designs, metric_name)) >= 5]
     matrix: list[list[float]] = []
     sample_sizes: list[list[int]] = []
@@ -582,6 +651,7 @@ async def _compute_job_correlation_matrix(session, job: Job, params: dict[str, A
         "metrics": metric_names,
         "matrix": matrix,
         "sample_sizes": sample_sizes,
+        "scientific_cohorts": cohorts,
     }
     summary = {
         "metric_count": len(metric_names),
@@ -772,7 +842,18 @@ async def _run_analysis(run_id: str) -> int:
             definition = get_analysis_definition(run.analysis_type)
             if definition is None or definition.subject_kind != "design":
                 raise ValueError(f"Unsupported design analysis type: {run.analysis_type}")
-            current_signature = await build_analysis_input_signature(definition, design, params, session)
+            native_selection = None
+            if run.analysis_type in {CHAIN_METRICS_ANALYSIS, PAE_MATRIX_ANALYSIS, IPSAE_INTERFACE_ANALYSIS}:
+                from services.analysis_registry import scientific_contract_revision
+                if await scientific_contract_revision(design, session) == 1:
+                    from services.core_protein_scientific_contract import verified_native_spatial_design
+                    try:
+                        native_selection = await verified_native_spatial_design(design, session)
+                    except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+                        pass  # Signature below occupies the unavailable namespace.
+            current_signature = await build_analysis_input_signature(
+                definition, design, params, session,
+                **({"native_selection": native_selection} if native_selection is not None else {}))
             if current_signature != run.input_signature:
                 raise ValueError("Design analysis input signature changed after queueing")
             structure_path = _resolve_design_structure_path(design)
@@ -784,13 +865,26 @@ async def _run_analysis(run_id: str) -> int:
             elif run.analysis_type == CONTACT_MAP_ANALYSIS:
                 result_payload, summary_payload, inline_payload = _compute_contact_map(design, params)
             elif run.analysis_type == CHAIN_METRICS_ANALYSIS:
-                result_payload, summary_payload, inline_payload, design_updates = _compute_chain_metrics(design)
+                from services.analysis_registry import scientific_contract_revision
+                if await scientific_contract_revision(design, session) == 1:
+                    from services.core_protein_scientific_contract import compute_persisted_native_metric
+                    metric = await compute_persisted_native_metric(design, 'chain_metrics', session, selected=native_selection)
+                    result_payload = metric.model_dump(mode='json')
+                    summary_payload = {'status': metric.status, 'reason': metric.reason}
+                    inline_payload = None
+                else:
+                    result_payload, summary_payload, inline_payload, design_updates = _compute_chain_metrics(design)
             elif run.analysis_type == FAMPNN_PSCE_PROFILE_ANALYSIS:
                 result_payload, summary_payload, inline_payload = _compute_fampnn_psce_profile(design, params)
             elif run.analysis_type == PAE_MATRIX_ANALYSIS:
-                result_payload, summary_payload, inline_payload = _compute_pae_matrix(design, params)
+                from services.analysis_registry import scientific_contract_revision
+                if await scientific_contract_revision(design, session) == 1:
+                    from services.core_protein_scientific_contract import compute_persisted_pae
+                    result_payload, summary_payload, inline_payload = await compute_persisted_pae(design, params, session, selected=native_selection)
+                else:
+                    result_payload, summary_payload, inline_payload = _compute_pae_matrix(design, params)
             elif run.analysis_type == IPSAE_INTERFACE_ANALYSIS:
-                result_payload, summary_payload, inline_payload, design_updates = _compute_ipsae_interface(design, params)
+                result_payload, summary_payload, inline_payload, design_updates = await _dispatch_ipsae_interface(design, params, session, selected=native_selection)
             elif run.analysis_type == ANTIBODY_ANNOTATION_PACK_ANALYSIS:
                 result_payload, summary_payload, inline_payload, design_updates = _compute_antibody_annotation_pack(design)
             else:

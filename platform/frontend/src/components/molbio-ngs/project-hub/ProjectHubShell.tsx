@@ -22,6 +22,8 @@ type ProjectHubSection = (typeof TABS)[number][0];
 
 type ProjectHubShellProps = {
     model: ProjectHubReadModel;
+    paging?: Record<string, string>;
+    onPage?: (section: string, cursor: string | null) => void;
     canMutate: boolean;
     mutationBlocker: string | null;
     selectedSection: string | null;
@@ -125,6 +127,7 @@ function TechnicalDetails({ model }: { model: ProjectHubReadModel }) {
                 {model.plasmids.map((plasmid) => (
                     <section key={plasmid.sequence_id} className="min-w-0 rounded-lg border border-border-primary bg-surface p-3">
                         <h4 className="font-semibold text-content">{plasmid.name}</h4>
+                        {plasmid.attached_revision_href && <Link to={plasmid.attached_revision_href} className="text-accent">Open exact attached revision</Link>}
                         <dl className="mt-2 space-y-2">
                             {[
                                 ['molecular document ID', plasmid.sequence_id],
@@ -199,7 +202,7 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails, onAttac
                 <Presence label="Replication origins" value={plasmid.replication_origin_count === null ? null : plasmid.replication_origin_count > 0} suffix={`${plasmid.replication_origin_count ?? 0} annotated`} />
                 <div className="flex items-center justify-between gap-3 border-b border-border-primary py-2 text-[11px]">
                     <span className={MUTED}>Saved Mol Bio experiments</span>
-                    <strong className="text-content">{plasmid.saved_experiment_count ? plasmid.saved_experiment_count : 'None yet'}</strong>
+                    <strong className="text-content">{plasmid.saved_experiment_count_complete === false ? `${plasmid.saved_experiment_count} on this page` : plasmid.saved_experiment_count ? plasmid.saved_experiment_count : 'None yet'}</strong>
                 </div>
             </div>
             <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
@@ -222,7 +225,7 @@ function Overview({ model, canMutate, onEdit, onAttach, onNavigate }: { model: P
         <>
             <div className="mb-3 flex items-end justify-between gap-4">
                 <div><h2 className="text-xl font-bold text-content">DNA sequences</h2><p className="text-sm text-content-secondary">Project DNA inventory, sequence summaries, and saved work. A DNA sequence can be classified as a plasmid.</p></div>
-                <button className="text-xs font-semibold text-accent" type="button" onClick={() => onNavigate({ section: 'plasmids', plasmid: null })}>Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
+                <button className="text-xs font-semibold text-accent" type="button" onClick={() => onNavigate({ section: 'plasmids', plasmid: null })}>Compare {model.pages && model.pages.members.total_count > model.plasmids.length ? 'this page:' : 'all'} {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
             </div>
             <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
                 {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onCompare={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onAttach={() => onAttach(plasmid)} />)}
@@ -242,9 +245,9 @@ function PlasmidsTab({ model, canMutate, onEdit, selectedPlasmidId }: { model: P
         <>
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-bold text-content">DNA sequences</h2><p className="text-sm text-content-secondary">Current saved DNA sequences, maps, classifications, and imported annotations for this Project.</p></div>{canMutate && <Link className={PRIMARY} to={model.project.add_plasmid_href}>+ Add DNA sequence</Link>}</div>
             <section data-testid="project-plasmid-comparison" className={`${PANEL} mb-4 p-4`}>
-                <h2 className="text-lg font-bold text-content">{selected ? `Compare ${selected.name} with Project DNA sequences` : 'Compare all Project DNA sequences'}</h2>
+                <h2 className="text-lg font-bold text-content">{selected ? `Compare ${selected.name} with Project DNA sequences` : model.pages && model.pages.members.total_count > model.plasmids.length ? 'Compare this page of Project DNA sequences' : 'Compare all Project DNA sequences'}</h2>
                 <p className="text-xs text-content-secondary">Current revision metrics appear together for direct review.</p>
-                <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">{model.plasmids.map((plasmid) => <div key={plasmid.sequence_id} className={`rounded-lg border p-3 ${plasmid.sequence_id === selected?.sequence_id ? 'border-accent bg-accent/10' : 'border-border-primary bg-surface'}`}><strong className="text-content">{plasmid.name}</strong><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><div><dt className="text-content-muted">Length</dt><dd className="font-semibold text-content">{plasmid.length_bp.toLocaleString()} bp</dd></div><div><dt className="text-content-muted">GC</dt><dd className="font-semibold text-content">{plasmid.gc_percent === null ? '—' : `${plasmid.gc_percent.toFixed(2)}%`}</dd></div><div><dt className="text-content-muted">Features</dt><dd className="font-semibold text-content">{plasmid.feature_count}</dd></div><div><dt className="text-content-muted">Saved work</dt><dd className="font-semibold text-content">{plasmid.saved_experiment_count}</dd></div></dl></div>)}</div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">{model.plasmids.map((plasmid) => <div key={plasmid.sequence_id} className={`rounded-lg border p-3 ${plasmid.sequence_id === selected?.sequence_id ? 'border-accent bg-accent/10' : 'border-border-primary bg-surface'}`}><strong className="text-content">{plasmid.name}</strong><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><div><dt className="text-content-muted">Length</dt><dd className="font-semibold text-content">{plasmid.length_bp.toLocaleString()} bp</dd></div><div><dt className="text-content-muted">GC</dt><dd className="font-semibold text-content">{plasmid.gc_percent === null ? '—' : `${plasmid.gc_percent.toFixed(2)}%`}</dd></div><div><dt className="text-content-muted">Features</dt><dd className="font-semibold text-content">{plasmid.feature_count}</dd></div><div><dt className="text-content-muted">Saved work</dt><dd className="font-semibold text-content">{plasmid.saved_experiment_count_complete === false ? `${plasmid.saved_experiment_count} on this page` : plasmid.saved_experiment_count}</dd></div></dl></div>)}</div>
             </section>
             <div data-testid="project-plasmid-desktop-table" className={`${PANEL} hidden overflow-x-auto lg:block`}>
                 <table className="w-full text-left text-xs">
@@ -423,7 +426,7 @@ function EditDialog({ plasmid, saving, error, onCancel, onSave }: { plasmid: Pro
     );
 }
 
-export default function ProjectHubShell({ model, canMutate, mutationBlocker, selectedSection, selectedPlasmidId, onNavigate, onSavePlasmidInfo, saveError, saving }: ProjectHubShellProps) {
+export default function ProjectHubShell({ model, canMutate, mutationBlocker, selectedSection, selectedPlasmidId, onNavigate, onSavePlasmidInfo, saveError, saving, paging = {}, onPage }: ProjectHubShellProps) {
     const requested = TABS.some(([key]) => key === selectedSection) ? selectedSection as ProjectHubSection : 'overview';
     const isHistorical = model.identity.selected_state_revision_id !== model.identity.current_state_revision_id;
     const effectiveCanMutate = canMutate && !isHistorical;
@@ -463,6 +466,15 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
                 {!isHistorical && !canMutate && mutationBlocker && <div className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-content-secondary" role="status">{mutationBlocker}</div>}
                 <nav role="tablist" aria-label="Project sections" className="mt-4 flex gap-1 overflow-x-auto border-b border-border-primary">{TABS.map(([key, label], index) => <button key={key} type="button" role="tab" id={`project-tab-${key}`} aria-controls={`project-panel-${key}`} aria-selected={requested === key} tabIndex={requested === key ? 0 : -1} onKeyDown={(event) => handleTabKey(event, index)} onClick={() => onNavigate({ section: key, plasmid: null })} className={`shrink-0 border-b-2 px-4 py-3 text-xs font-semibold ${requested === key ? 'border-accent text-content' : 'border-transparent text-content-muted hover:text-content'}`}>{label}</button>)}</nav>
                 <main id={`project-panel-${requested}`} role="tabpanel" aria-labelledby={`project-tab-${requested}`} className="mt-5">{content}</main>
+                {model.pages && onPage && <nav aria-label="Project section pages" className="mt-4 flex flex-wrap gap-3">
+                    {Object.entries(model.pages).map(([section, page]) => (
+                        <div key={section} className="rounded-lg border border-border-primary p-3 text-xs">
+                            <span>{section === 'members' ? 'DNA memberships' : section}: {page.total_count} total · bounded page</span>
+                            {paging[`${section}_cursor`] && <button className={BUTTON} type="button" onClick={() => onPage(section, null)}>First {section} page</button>}
+                            {page.has_more && <button className={BUTTON} type="button" onClick={() => onPage(section, page.next_cursor)}>Next {section} page</button>}
+                        </div>
+                    ))}
+                </nav>}
             </div>
             {editing && <EditDialog plasmid={editing} saving={saving} error={saveError} onCancel={closeDialog} onSave={async (draft) => { await onSavePlasmidInfo(editing, draft); closeDialog(); }} />}
             <ProjectAttachmentDialog open={attachmentSource !== null} source={attachmentSource ?? undefined} onClose={() => setAttachmentSource(null)} />

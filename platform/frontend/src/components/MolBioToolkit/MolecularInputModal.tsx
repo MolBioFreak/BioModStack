@@ -42,6 +42,7 @@ interface MolecularInputModalProps {
     hasOpenSequence: boolean;
     currentSequenceData?: SequenceData | null;
     demos: SequenceData[];
+    onDemoIntent?: () => void;
 }
 
 function TopologyBadge({ circular }: { circular: boolean }) {
@@ -94,8 +95,10 @@ export function MolecularInputModal({
     hasOpenSequence,
     currentSequenceData,
     demos,
+    onDemoIntent,
 }: MolecularInputModalProps) {
     const [activeTab, setActiveTab] = useState<InputTab>('library');
+    useEffect(() => { if (isOpen && activeTab === 'demos') onDemoIntent?.(); }, [isOpen, activeTab, onDemoIntent]);
 
     const [search, setSearch] = useState('');
     const [sequenceTypeFilter, setSequenceTypeFilter] = useState<'all' | 'dna' | 'rna'>('all');
@@ -119,6 +122,10 @@ export function MolecularInputModal({
     const [primerResults, setPrimerResults] = useState<LibraryPrimer[]>([]);
     const [primerLoading, setPrimerLoading] = useState(false);
     const [primerError, setPrimerError] = useState<string | null>(null);
+    const primerQueryKey = JSON.stringify([primerSearch.trim(), primerFavoritesOnly]);
+    const [primerPage, setPrimerPage] = useState({ key: '', offset: 0 });
+    const primerOffset = primerPage.key === primerQueryKey ? primerPage.offset : 0;
+    const [primerHasMore, setPrimerHasMore] = useState(false);
 
     const importInputRef = useRef<HTMLInputElement>(null);
     const modalPanelRef = useRef<HTMLDivElement | null>(null);
@@ -164,6 +171,8 @@ export function MolecularInputModal({
 
     useEffect(() => {
         if (!isOpen || activeTab !== 'library') return;
+        let cancelled = false;
+        setLibraryResults([]);
         const timeoutId = window.setTimeout(async () => {
             setLibraryLoading(true);
             setLibraryError(null);
@@ -176,19 +185,22 @@ export function MolecularInputModal({
                     sort_by: sortBy,
                     sort_desc: true,
                 });
-                setLibraryResults(response.data);
+                if (!cancelled) setLibraryResults(response.data);
             } catch (error) {
-                setLibraryError(error instanceof Error ? error.message : 'Failed to load construct library');
+                if (!cancelled) setLibraryError(error instanceof Error ? error.message : 'Failed to load construct library');
             } finally {
-                setLibraryLoading(false);
+                if (!cancelled) setLibraryLoading(false);
             }
         }, search ? 250 : 0);
 
-        return () => window.clearTimeout(timeoutId);
+        return () => { cancelled = true; window.clearTimeout(timeoutId); };
     }, [activeTab, isOpen, search, sequenceTypeFilter, topologyFilter, sortBy]);
 
     useEffect(() => {
         if (!isOpen || activeTab !== 'primers') return;
+        let cancelled = false;
+        if (primerOffset === 0) setPrimerResults([]);
+        setPrimerHasMore(false);
         const timeoutId = window.setTimeout(async () => {
             setPrimerLoading(true);
             setPrimerError(null);
@@ -196,17 +208,22 @@ export function MolecularInputModal({
                 const response = await fetchPrimers({
                     search: primerSearch.trim() || undefined,
                     favorites_only: primerFavoritesOnly,
+                    limit: 50,
+                    offset: primerOffset,
                 });
-                setPrimerResults(response.data);
+                if (!cancelled) {
+                    setPrimerResults((current) => primerOffset === 0 ? response.data : [...current, ...response.data]);
+                    setPrimerHasMore(response.data.length === 50);
+                }
             } catch (error) {
-                setPrimerError(error instanceof Error ? error.message : 'Failed to load primer library');
+                if (!cancelled) setPrimerError(error instanceof Error ? error.message : 'Failed to load primer library');
             } finally {
-                setPrimerLoading(false);
+                if (!cancelled) setPrimerLoading(false);
             }
         }, primerSearch ? 250 : 0);
 
-        return () => window.clearTimeout(timeoutId);
-    }, [activeTab, isOpen, primerSearch, primerFavoritesOnly]);
+        return () => { cancelled = true; window.clearTimeout(timeoutId); };
+    }, [activeTab, isOpen, primerSearch, primerFavoritesOnly, primerOffset]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -225,7 +242,7 @@ export function MolecularInputModal({
         ? parsedBuildInput.sequenceType
         : buildType;
     const buildUnitLabel = sequenceUnitLabel(buildSequenceType);
-    const buildGc = calculateGcPercent(parsedBuildInput.sequence);
+    const buildGc = useMemo(() => isOpen ? calculateGcPercent(parsedBuildInput.sequence) : 0, [isOpen, parsedBuildInput.sequence]);
 
     if (!isOpen) return null;
 
@@ -667,6 +684,7 @@ export function MolecularInputModal({
                                     })}
                                 </div>
                             )}
+                            {primerHasMore && !primerLoading && <button type="button" onClick={() => setPrimerPage({ key: primerQueryKey, offset: primerOffset + 50 })} className="rounded border border-slate-600 px-4 py-2 text-slate-200">Load more primers</button>}
                         </div>
                     )}
 

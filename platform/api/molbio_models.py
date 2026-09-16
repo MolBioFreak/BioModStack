@@ -130,6 +130,7 @@ class MolecularRevision(MolBioBase):
     __table_args__ = (
         UniqueConstraint("document_id", "revision_number", name="uq_molecular_revision_number"),
         Index("ix_molecular_revisions_document_created", "document_id", "created_at"),
+        Index("ix_molecular_revisions_digest_created", "content_sha256", "created_at", "id"),
     )
 
     id = Column(String(36), primary_key=True)

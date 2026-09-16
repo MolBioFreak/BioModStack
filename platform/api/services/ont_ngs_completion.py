@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Job
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.ont_ngs_contract import resolve_ont_workflow_alias
 from services.resource_usage_evidence import (
     ResourceUsageEvidenceError,
     attach_resource_usage_receipt,
@@ -71,9 +72,13 @@ class OntNgsCompletionError(RuntimeError):
 
 
 def is_ont_fastq_qc_job(job: Job) -> bool:
+    from services.ont_ngs_contract import resolve_ont_workflow_alias
+
     params = job.params if isinstance(job.params, dict) else {}
+    # Typed submission preserves the requested alias alongside canonical IDs.
+    # Compare their existing registry identities, not their display spelling.
     workflow_values = {
-        str(params[key]).strip()
+        resolve_ont_workflow_alias(str(params[key]).strip())
         for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
         if params.get(key) is not None and str(params[key]).strip()
     }
@@ -97,8 +102,10 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
     """Return whether one Job is the bounded external move-BAM alignment lane."""
 
     params = job.params if isinstance(job.params, dict) else {}
+    # Typed submission preserves the requested alias alongside canonical IDs.
+    # Compare their existing registry identities, not their display spelling.
     workflow_values = {
-        str(params[key]).strip()
+        resolve_ont_workflow_alias(str(params[key]).strip())
         for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
         if params.get(key) is not None and str(params[key]).strip()
     }
@@ -117,6 +124,140 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
         and isinstance(params.get("source_external_move_registration_receipt_id"), str)
         and bool(params.get("source_external_move_registration_receipt_id"))
     )
+
+
+def ont_native_completion_path(job: Any) -> str:
+    """Select the existing local native owner, not a remote scientific recipe.
+
+    Pooled assignment has a dedicated atomic review submission, not the ordinary
+    NGS Job lifecycle. Instrument/raw-signal control is not admitted by this
+    selector; ordinary Nextflow launch admission remains with its existing owner.
+    """
+    from services.ont_ngs_contract import get_ont_workflow_spec
+
+    params = job.params if isinstance(job.params, dict) else {}
+    workflows = {
+        resolve_ont_workflow_alias(str(params[key]).strip())
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    inputs = {
+        str(params[key]).strip()
+        for key in ("ont_input_mode", "input_mode")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    if (str(job.model_id or "").strip().lower() != "nanopore"
+            or len(workflows) != 1 or len(inputs) != 1):
+        raise OntNgsCompletionError("NGS completion workflow/input identities conflict or are absent")
+    workflow = next(iter(workflows))
+    try:
+        spec = get_ont_workflow_spec(workflow)
+    except KeyError as exc:
+        raise OntNgsCompletionError("NGS completion workflow is not registered") from exc
+    if workflow == "ont_pooled_reference_assignment" or next(iter(inputs)) not in spec.input_modes:
+        raise OntNgsCompletionError("NGS completion requires an ordinary supported Job input mode")
+    if is_ont_fastq_qc_job(job):
+        return "fastq_qc"
+    if is_ont_signal_alignment_job(job):
+        return "signal_alignment"
+    return "shared_native_import"
+
+
+async def validate_and_prepare_remote_ont_completion(
+    job: Any, *, attempt_id: str, output_root: Path, manifest: Any,
+    resource_usage_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate received native evidence before staging the caller's publication.
+
+    The executor owns manifest authentication, incoming-generation custody and the
+    database/publication journal transaction. No commits or remote operations occur
+    here; failure leaves the attached Job untouched. Presentation is on demand.
+    A shared_native_import result is NOT scientific completion: after publication
+    the executor must call finalize_successful_job in its existing transaction
+    path, exactly as local Nextflow does for these ordinary modes.
+    """
+    from types import SimpleNamespace
+    from services.ont_submission_trust import verify_launch_input_snapshots
+    from services.remote_stage_receipts import (
+        canonical_bytes, project_remote_stage_terminals, validate_remote_stage_receipts,
+    )
+    from services.resource_usage_evidence import (
+        GLOBAL_RESOURCE_ADMISSION_PARAM, REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA,
+        validate_producer_resource_usage_receipt,
+    )
+    if (not getattr(job, "execution_target_id", None)
+            or getattr(job, "remote_attempt_id", None) != attempt_id
+            or getattr(job, "nextflow_run_id", None) != f"remote:{attempt_id}"
+            or getattr(job, "remote_state", None) != "returning"):
+        raise OntNgsCompletionError("NGS return lost current attempt authority")
+    completion_path = ont_native_completion_path(job)
+    persisted_root = resolve_persisted_job_result_root(job)
+    root = Path(output_root)
+    if not root.is_absolute() or root != root.resolve() or not root.is_dir():
+        raise OntNgsCompletionError("NGS incoming generation must be a real confined directory")
+    receipts = await run_in_threadpool(
+        validate_remote_stage_receipts, output_root=root, job_id=str(job.id),
+        attempt_id=attempt_id, manifest=manifest,
+    )
+    terminals = project_remote_stage_terminals(receipts=receipts, persisted_result_root=persisted_root)
+    provenance = dict(job.provenance or {})
+    provenance.pop("result_integrity", None)
+    # The incoming generation has its own receipt set; retained historical stages
+    # are not evidence for this attempt. The publication journal retains old data.
+    provenance["stage_terminal_states"] = terminals
+    provenance["remote_stage_receipts"] = {
+        "schema": "bms.remote-stage-receipt.v1", "attempt_id": attempt_id,
+        "job_id": str(job.id),
+        "receipts_sha256": hashlib.sha256(canonical_bytes(receipts)).hexdigest(),
+    }
+    staged = SimpleNamespace(
+        id=job.id, model_id=job.model_id, params=dict(job.params or {}),
+        provenance=provenance, output_dir=job.output_dir,
+        child_output_dir=getattr(job, "child_output_dir", None),
+        execution_target_id=job.execution_target_id, remote_attempt_id=attempt_id,
+        status="completed",
+    )
+    await run_in_threadpool(verify_launch_input_snapshots, staged.params)
+    original_params = staged.params
+    try:
+        if (not isinstance(resource_usage_receipt, Mapping)
+                or resource_usage_receipt.get("schema") != REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA):
+            raise ResourceUsageEvidenceError("remote resource observations are unavailable")
+        staged.params = attach_resource_usage_receipt(staged.params, resource_usage_receipt)
+        handoff = staged.params.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
+        if not isinstance(handoff, Mapping):
+            raise ResourceUsageEvidenceError("NGS return has no persisted resource admission")
+        await run_in_threadpool(validate_producer_resource_usage_receipt, staged, handoff)
+    except (ResourceUsageEvidenceError, TypeError, ValueError):
+        # Never accept unbound observations or make their absence science failure.
+        staged.params = original_params
+        resource_usage_receipt = None
+    if completion_path == "shared_native_import":
+        # Native stage declarations are authenticated above, not manufactured from
+        # exit status. The ordinary importer still owns terminal success/failure.
+        job.params = staged.params
+        job.provenance = staged.provenance
+        job.completed_stages = [stage for stage, terminal in terminals.items()
+                                if terminal["status"] == "complete"]
+        job.stage_outputs = {stage: list(terminal["outputs"])
+                             for stage, terminal in terminals.items()}
+        return {"completion_path": completion_path, "state": "pending_native_import"}
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open(root, flags)
+    try:
+        pinned = Path(f"/proc/self/fd/{descriptor}")
+        validator = (validate_and_prepare_ont_fastq_qc_completion if completion_path == "fastq_qc"
+                     else validate_and_prepare_ont_signal_alignment_completion)
+        result = await validator(staged, resource_usage_receipt=resource_usage_receipt,
+                                 pinned_result_root=pinned)
+        if root.stat().st_ino != os.fstat(descriptor).st_ino or root.stat().st_dev != os.fstat(descriptor).st_dev:
+            raise OntNgsCompletionError("NGS incoming generation changed during validation")
+    finally:
+        os.close(descriptor)
+    for name in ("params", "provenance", "completed_stages", "stage_outputs", "status",
+                 "queue_status", "paused", "current_stage", "stage_progress", "error_message"):
+        setattr(job, name, getattr(staged, name))
+    return {**result, "completion_path": completion_path}
 
 
 async def validate_and_prepare_ont_signal_alignment_completion(
@@ -159,87 +300,6 @@ async def validate_and_prepare_ont_signal_alignment_completion(
         os.close(descriptor)
 
 
-async def _materialize_ready_alignment_presentations(
-    *,
-    job: Job,
-    pinned_result_root: Path,
-    source_reference_sha256: str,
-    workflow_id: str,
-    input_mode: str,
-    package_artifact_set_sha256: str,
-) -> list[dict[str, str]]:
-    sessions = await run_in_threadpool(
-        ngs_alignment_sessions.build_alignment_sessions,
-        str(job.id),
-        source_reference_sha256=source_reference_sha256,
-        package_artifact_set_sha256=package_artifact_set_sha256,
-        workflow_id=workflow_id,
-        input_mode=input_mode,
-        job_output_dir=pinned_result_root,
-        pinned_root_descriptor=True,
-    )
-    primary_sessions = [item for item in sessions if item.get("mode") == "primary" and item.get("ready") is True]
-    if len(primary_sessions) != 1:
-        raise OntNgsCompletionError("exactly one ready primary alignment session is required")
-    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-    prior_integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
-    prior_presentations = (
-        prior_integrity.get("alignment_presentations")
-        if isinstance(prior_integrity, dict) else None
-    )
-    expected_by_session = {
-        item["session_id"]: item
-        for item in prior_presentations or []
-        if (
-            isinstance(item, dict)
-            and isinstance(item.get("session_id"), str)
-            and re.fullmatch(r"[0-9a-f]{64}", str(item.get("manifest_sha256"))) is not None
-        )
-    }
-    receipts: list[dict[str, str]] = []
-    try:
-        for ready_session in (item for item in sessions if item.get("ready") is True):
-            alignment_path, alignment_metadata, index_path, index_metadata = await run_in_threadpool(
-                ngs_alignment_sessions.resolve_session_alignment_bundle,
-                str(job.id),
-                ready_session["session_id"],
-                source_reference_sha256=source_reference_sha256,
-                workflow_id=workflow_id,
-                input_mode=input_mode,
-                job_output_dir=pinned_result_root,
-                pinned_root_descriptor=True,
-            )
-            package = await run_in_threadpool(
-                ngs_alignment_sessions.build_alignment_presentation,
-                alignment_path,
-                bam_sha256=alignment_metadata["sha256"],
-                bam_size_bytes=alignment_metadata["size_bytes"],
-                index=index_path,
-                index_sha256=index_metadata["sha256"],
-                index_size_bytes=index_metadata["size_bytes"],
-                source_manifest_sha256=alignment_metadata["source_manifest_sha256"],
-                source_alignment_relative_path=alignment_metadata.get("relative_path"),
-                source_index_relative_path=index_metadata.get("relative_path"),
-                job_id=str(job.id),
-                session_id=ready_session["session_id"],
-                mode=ready_session["mode"],
-                cache_root=pinned_result_root / ".alignment-presentations",
-                artifact_set_sha256=ready_session["artifact_set_sha256"],
-                alignment_pair_sha256=ready_session["alignment_pair_sha256"],
-                expected_manifest_sha256=(
-                    expected_by_session.get(ready_session["session_id"], {}).get("manifest_sha256")
-                ),
-            )
-            receipts.append({
-                "session_id": ready_session["session_id"],
-                "authority_sha256": package["manifest"]["authority_sha256"],
-                "manifest_sha256": package["manifest_metadata"]["sha256"],
-            })
-    except ngs_alignment_sessions.AlignmentSessionError as exc:
-        raise OntNgsCompletionError(f"alignment presentation materialization failed: {exc}") from exc
-    return sorted(receipts, key=lambda item: item["session_id"])
-
-
 async def _validate_signal_alignment_from_pinned_root(
     job: Any,
     *,
@@ -250,12 +310,14 @@ async def _validate_signal_alignment_from_pinned_root(
     if not is_ont_signal_alignment_job(job):
         raise OntNgsCompletionError("job is not a bounded external signal alignment owner")
     if resource_usage_receipt is not None:
-        if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
-            raise OntNgsCompletionError("provided producer resource evidence is incomplete")
         try:
+            if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
+                raise ResourceUsageEvidenceError("producer resource observations are incomplete")
             job.params = attach_resource_usage_receipt(job.params, resource_usage_receipt)
-        except ResourceUsageEvidenceError as exc:
-            raise OntNgsCompletionError("producer resource evidence is invalid") from exc
+        except (ResourceUsageEvidenceError, TypeError, ValueError):
+            # Invalid observations are not accepted as evidence, but neither are
+            # they authority to reject otherwise valid native alignment outputs.
+            resource_usage_receipt = None
 
     params = job.params if isinstance(job.params, dict) else {}
     reference_sha256 = params.get("reference_sequence_sha256")
@@ -327,24 +389,11 @@ async def _validate_signal_alignment_from_pinned_root(
         workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
         input_mode="bam",
         source_input_path=source_bam_path,
+        verify_source_input=True,
         job_output_dir=pinned_result_root,
         pinned_root_descriptor=True,
     )
     package_authority = canonical_ngs_package_authority(descriptors)
-    if (
-        package_authority["declared_artifact_count"] != 5
-        or package_authority["present_artifact_count"] != 5
-        or package_authority["unavailable_artifact_count"] != 0
-    ):
-        raise OntNgsCompletionError("signal-alignment package artifact denominator is not canonical")
-    presentation_receipts = await _materialize_ready_alignment_presentations(
-        job=job,
-        pinned_result_root=pinned_result_root,
-        source_reference_sha256=reference_sha256,
-        workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
-        input_mode="bam",
-        package_artifact_set_sha256=package_authority["artifact_set_sha256"],
-    )
 
     result_integrity = {
         "state": "validated",
@@ -355,9 +404,10 @@ async def _validate_signal_alignment_from_pinned_root(
         "reference_sequence_sha256": reference_sha256,
         "source_bam_sha256": source_bam_sha256,
         "sequence_qc_manifest_sha256": manifest_sha256,
-        "alignment_presentations": presentation_receipts,
+        "artifacts": descriptors,
         **package_authority,
     }
+    result_integrity["resource_evidence_status"] = "unavailable"
     if resource_usage_receipt is not None:
         result_integrity["resource_evidence_status"] = "accepted"
         result_integrity["resource_usage_receipt_sha256"] = resource_usage_receipt.get("receipt_sha256")
@@ -451,7 +501,7 @@ def _validate_terminal_stages(
                 raise OntNgsCompletionError("required NGS stage output is duplicated across stages")
             observed_paths.add(suffix)
             observed_suffixes.append(suffix)
-        if tuple(observed_suffixes) != _REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]:
+        if set(observed_suffixes) != set(_REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]):
             raise OntNgsCompletionError(f"required NGS stage output contract mismatch: {stage}")
         stage_outputs[stage] = list(outputs)
     return list(_REQUIRED_TERMINAL_STAGES), stage_outputs
@@ -588,16 +638,17 @@ async def _validate_and_prepare_from_pinned_root(
             "resource_evidence_status": "historical_unavailable",
         }
     else:
-        if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
-            raise OntNgsCompletionError("complete producer resource evidence is required before ONT success")
+        resource_authority = {"resource_evidence_status": "unavailable", "resource_usage_receipt_sha256": None}
         try:
-            job.params = attach_resource_usage_receipt(job.params, resource_usage_receipt)
-        except ResourceUsageEvidenceError as exc:
-            raise OntNgsCompletionError("producer resource evidence is invalid") from exc
-        resource_authority = {
-            "resource_evidence_status": "accepted",
-            "resource_usage_receipt_sha256": resource_usage_receipt.get("receipt_sha256"),
-        }
+            if isinstance(resource_usage_receipt, Mapping) and resource_usage_receipt.get("complete") is True:
+                job.params = attach_resource_usage_receipt(job.params, resource_usage_receipt)
+                resource_authority = {
+                    "resource_evidence_status": "accepted",
+                    "resource_usage_receipt_sha256": resource_usage_receipt.get("receipt_sha256"),
+                }
+        except ResourceUsageEvidenceError:
+            # Missing resource observations do not invalidate scientific output.
+            pass
     result_root = pinned_result_root
     fastq_manifest_path = result_root / "fastq_qc" / "qc_manifest.json"
     verification_manifest_path = result_root / "verification" / "qc_manifest.json"
@@ -655,24 +706,11 @@ async def _validate_and_prepare_from_pinned_root(
         workflow_id=_FASTQ_QC_WORKFLOW,
         input_mode="fastq",
         source_input_path=source_input_path,
+        verify_source_input=True,
         job_output_dir=result_root,
         pinned_root_descriptor=True,
     )
     package_authority = canonical_ngs_package_authority(package_artifacts)
-    if (
-        package_authority["declared_artifact_count"] != 36
-        or package_authority["present_artifact_count"] != 34
-        or package_authority["unavailable_artifact_count"] != 2
-    ):
-        raise OntNgsCompletionError("NGS package artifact denominator is not canonical")
-    presentation_receipts = await _materialize_ready_alignment_presentations(
-        job=job,
-        pinned_result_root=pinned_result_root,
-        source_reference_sha256=str(fastq_reference["expected_sha256"]),
-        workflow_id=_FASTQ_QC_WORKFLOW,
-        input_mode="fastq",
-        package_artifact_set_sha256=package_authority["artifact_set_sha256"],
-    )
 
     completed_stages, stage_outputs = _validate_terminal_stages(job, result_root, persisted_result_root)
 
@@ -688,7 +726,7 @@ async def _validate_and_prepare_from_pinned_root(
         "sequence_qc_manifest_sha256": fastq_digest,
         "construct_verification_manifest_sha256": verification_digest,
         "construct_verification_verdict": verification_manifest.get("verdict"),
-        "alignment_presentations": presentation_receipts,
+        "artifacts": package_artifacts,
         **resource_authority,
         **package_authority,
     }

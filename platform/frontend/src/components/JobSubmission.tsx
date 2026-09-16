@@ -1,14 +1,16 @@
+import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { ParamField, compactUiCopy } from './ModelParameterField';
+import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
-import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
-import { MutagenesisTemplate } from './MutagenesisTemplate';
+import { MutagenesisTemplate, buildMutagenesisWorkflowRequest } from './MutagenesisTemplate';
 import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
 
 import { StructurePredictionTemplate } from './StructurePredictionTemplate';
@@ -24,11 +26,7 @@ import {
     parseMolecularDynamicsHandoffRoute,
 } from './gen2StartingStructureState.js';
 import { ConformationalMappingLauncher } from './conformationalMapping/ConformationalMappingLauncher';
-import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
-import { StructureInput } from './StructureInput';
-import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
-import { parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
 import { getWorkflowModelTopics } from './workflowModelInventory.js';
@@ -36,6 +34,8 @@ import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { ExecutionPolicyControl } from './ExecutionPolicyControl';
+import { initialExecutionPolicy } from '../lib/executionPolicy';
 import { ProjectTechnicalDetails, ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from './project-manager/ProjectWorkflowSetup';
 import {
     hydrateFrustraMpnnSettings,
@@ -44,16 +44,6 @@ import {
     type FrustraMpnnRequestedSettings,
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
-
-const LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS = new Set([
-    'protein_cad_experimental',
-    'protein_local_redesign',
-    'protein_hunter_experimental',
-]);
-
-const LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS = new Set([
-    'confornets_experimental',
-]);
 
 interface FileBrowserProps {
     onSelect: (path: string) => void;
@@ -171,436 +161,6 @@ function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
     );
 }
 
-const compactUiCopy = (value: unknown, maxLength = 118): string => {
-    if (typeof value !== 'string') return '';
-    const text = value.trim().replace(/\s+/g, ' ');
-    if (!text || text.length <= maxLength) return text;
-    const firstSentence = text.match(/^.{1,118}?[.!?](?:\s|$)/)?.[0]?.trim();
-    if (firstSentence && firstSentence.length <= maxLength) return firstSentence;
-    return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
-};
-
-
-// Reusable param field component for grouped rendering
-const canonicalStructureSourceName = (target: SelectedTarget): string => {
-    const base = (target.name || target.pdbId || 'structure_input')
-        .replace(/[^\w.-]+/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '');
-    return /\.(pdb|cif|mmcif)$/i.test(base) ? base : `${base}.pdb`;
-};
-
-function ParamField({
-    param,
-    params,
-    updateParam,
-    setShowFileBrowser,
-    setActiveSequenceField,
-    setShowSequenceManager,
-    setSequenceToSave,
-    ligandPresets
-}: {
-    param: UntypedApiValue;
-    params: Record<string, UntypedApiValue>;
-    updateParam: (key: string, value: UntypedApiValue) => void;
-    setShowFileBrowser: (name: string | null) => void;
-    setActiveSequenceField: (name: string) => void;
-    setShowSequenceManager: (show: boolean) => void;
-    setSequenceToSave?: (sequence: { sequence: string; name?: string } | null) => void;
-    ligandPresets: UntypedApiValue[];
-}) {
-    const isTextareaField = param.type === 'textarea' || param.ui_control === 'textarea' || param.preset_type === 'json';
-    const isSequenceField = ['sequence', 'dna', 'rna'].includes(String(param.preset_type || '')) || param.name === 'sequence' || (param.type === 'text' && !isTextareaField);
-    const isContigField = typeof param.name === 'string' && param.name.includes('contig');
-    const isPdbPresetField = param.preset_type === 'pdb';
-    const isPathField = param.type === 'file' || param.type === 'directory';
-    const isNumericField = param.type === 'integer' || param.type === 'number';
-    const isSliderField = param.ui_control === 'slider' && isNumericField && param.minimum !== undefined && param.maximum !== undefined;
-    const isWide = isTextareaField || isSequenceField || isPathField || param.preset_type === 'ligand';
-    const sequenceUnit = param.preset_type === 'dna' ? 'bp' : param.preset_type === 'rna' ? 'nt' : 'aa';
-    const normalizeSequenceInput = (raw: string) => {
-        const upper = raw.toUpperCase().replace(/\s+/g, '');
-        if (param.preset_type === 'dna') return upper.replace(/U/g, 'T').replace(/[^ACGTN]/g, '');
-        if (param.preset_type === 'rna') return upper.replace(/T/g, 'U').replace(/[^ACGUN]/g, '');
-        return upper.replace(/[^A-Z]/g, '');
-    };
-    const label = param.label || param.name;
-    const description = compactUiCopy(param.description, 112);
-    const value = params[param.name] ?? param.default ?? (param.type === 'boolean' ? false : '');
-    const numericValue = (() => {
-        const parsed = Number(value);
-        if (Number.isFinite(parsed)) return parsed;
-        const fallback = Number(param.default ?? param.minimum ?? 0);
-        return Number.isFinite(fallback) ? fallback : 0;
-    })();
-    const numericStep = param.step ?? (param.type === 'integer' ? 1 : 0.01);
-    const pathPlaceholder = param.ui_placeholder || param.placeholder || (param.type === 'directory' ? '/path/to/directory' : '/path/to/file');
-    const [showSequenceImportModal, setShowSequenceImportModal] = useState(false);
-    const [sequenceImportTab, setSequenceImportTab] = useState<'library' | 'pdb'>('library');
-    const [pdbImportTarget, setPdbImportTarget] = useState<SelectedTarget | null>(null);
-    const [pdbParsedStructure, setPdbParsedStructure] = useState<ParsedPDB | null>(null);
-    const [pdbParsedChains, setPdbParsedChains] = useState<Chain[]>([]);
-    const [pdbImportError, setPdbImportError] = useState<string | null>(null);
-    const applySequenceImport = (sequence: string, name?: string, chainId?: string) => {
-        updateParam(param.name, normalizeSequenceInput(sequence));
-        if (name) {
-            updateParam('sequence_name', name.replace(/\.(pdb|cif|mmcif)$/i, ''));
-        }
-        if (chainId) {
-            updateParam('chain_id', chainId);
-            updateParam('primary_chain_id', chainId);
-        }
-    };
-    const resetPdbImportState = () => {
-        setPdbImportTarget(null);
-        setPdbParsedStructure(null);
-        setPdbParsedChains([]);
-        setPdbImportError(null);
-    };
-    const openSequenceImport = (tab: 'library' | 'pdb') => {
-        setSequenceImportTab(tab);
-        if (tab === 'pdb') resetPdbImportState();
-        setShowSequenceImportModal(true);
-    };
-    const handlePdbSequenceImportSelect = async (target: SelectedTarget | null) => {
-        if (!target) return;
-        setPdbImportError(null);
-        try {
-            let file: File;
-            if (target.type === 'upload' && target.file) {
-                file = target.file;
-            } else if (target.url) {
-                const response = await fetch(target.url);
-                const blob = await response.blob();
-                file = new File([blob], canonicalStructureSourceName(target), { type: blob.type || 'chemical/x-pdb' });
-            } else {
-                setPdbImportError('Selected structure has no downloadable source.');
-                return;
-            }
-            const parsed = await parsePDBFile(file);
-            if (parsed.chains.length === 0) {
-                setPdbImportError('No protein chains found in selected PDB/mmCIF.');
-                return;
-            }
-            setPdbImportTarget(target);
-            setPdbParsedStructure(parsed);
-            setPdbParsedChains(parsed.chains);
-            if (parsed.chains.length === 1) {
-                const chain = parsed.chains[0];
-                applySequenceImport(chain.sequence, target.name || target.pdbId || `Chain ${chain.id}`, chain.id || 'A');
-                setShowSequenceImportModal(false);
-                resetPdbImportState();
-            }
-        } catch (err) {
-            console.error('Failed to import PDB sequence:', err);
-            setPdbImportError('Failed to parse PDB/mmCIF sequence.');
-        }
-    };
-    const importPdbChain = (chain: Chain) => {
-        applySequenceImport(chain.sequence, pdbImportTarget?.name || pdbImportTarget?.pdbId || `Chain ${chain.id}`, chain.id || 'A');
-        setShowSequenceImportModal(false);
-        resetPdbImportState();
-    };
-    const updateNumeric = (raw: string) => {
-        const parsed = param.type === 'integer' ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
-        if (Number.isFinite(parsed)) {
-            updateParam(param.name, parsed);
-        } else {
-            updateParam(param.name, param.default ?? param.minimum ?? 0);
-        }
-    };
-
-    return (
-        <div className={isWide ? 'col-span-full' : ''}>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                {label}
-                {param.required && <span className="text-red-400 ml-1">*</span>}
-            </label>
-            {description && <p className="text-xs text-slate-500 mb-2">{description}</p>}
-
-            {param.type === 'boolean' ? (
-                <label className="flex items-center gap-3 rounded-lg border border-slate-700/70 bg-slate-900/40 px-3 py-2.5 cursor-pointer hover:border-slate-500 transition-colors">
-                    <input
-                        type="checkbox"
-                        checked={Boolean(value)}
-                        onChange={(e) => updateParam(param.name, e.target.checked)}
-                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
-                    />
-                    <span className="text-sm text-slate-200">{value ? 'Enabled' : 'Disabled'}</span>
-                </label>
-            ) : param.enum ? (
-                <select
-                    value={value ?? ''}
-                    onChange={(e) => updateParam(param.name, e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                    {param.enum.map((opt: string) => (
-                        <option key={opt || '__empty'} value={opt}>{param.enum_labels?.[opt] || opt || 'Auto / none'}</option>
-                    ))}
-                </select>
-            ) : isContigField ? (
-                <PresetSelector
-                    presetType="contig"
-                    value={value || ''}
-                    onChange={(val) => updateParam(param.name, val)}
-                    onBrowse={() => { }}
-                    placeholder={param.ui_placeholder || param.placeholder || "Select a contig preset..."}
-                />
-            ) : isSliderField ? (
-                <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 p-2.5 space-y-2" data-bms-template-slider="compact">
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                        <span>Default {param.default ?? '—'}</span>
-                        {param.recommended_range && <span>Typical {param.recommended_range}</span>}
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="min-w-10 text-sm text-slate-200 font-medium">{numericValue}</span>
-                        <input
-                            type="number"
-                            value={numericValue}
-                            onChange={(e) => updateNumeric(e.target.value)}
-                            min={param.minimum}
-                            max={param.maximum}
-                            step={numericStep}
-                            className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white text-sm text-right"
-                        />
-                    </div>
-                    <input
-                        type="range"
-                        min={param.minimum}
-                        max={param.maximum}
-                        step={numericStep}
-                        value={numericValue}
-                        onChange={(e) => updateNumeric(e.target.value)}
-                        className="w-full accent-blue-500"
-                    />
-                    <div className="flex justify-between text-[11px] text-slate-500">
-                        <span>{param.minimum}</span>
-                        <span>{param.maximum}</span>
-                    </div>
-                    {param.default_source && (
-                        <div className="text-[11px] text-slate-500">{param.default_source}</div>
-                    )}
-                </div>
-            ) : isTextareaField ? (
-                <textarea
-                    value={value || ''}
-                    onChange={(e) => updateParam(param.name, e.target.value)}
-                    rows={6}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder={param.ui_placeholder || param.placeholder || ''}
-                    data-bms-template-textarea="raw"
-                />
-            ) : isPdbPresetField ? (
-                <StructureInput
-                    value={value || ''}
-                    onChange={(v) => updateParam(param.name, v)}
-                    onBrowse={() => setShowFileBrowser(param.name)}
-                    targetChain={params[param.name === 'pdb_sequence_path' ? 'pdb_chain_ids' : 'target_chain'] || params['chain_id'] || ''}
-                    onTargetChainChange={(c) => updateParam(param.name === 'pdb_sequence_path' ? 'pdb_chain_ids' : 'target_chain', c)}
-                    enableMultiSelect={false}
-                    enableDirectory={param.type === 'directory'}
-                />
-            ) : param.preset_type === 'ligand' ? (
-                <div className="space-y-2">
-                    <select
-                        value=""
-                        onChange={(e) => updateParam(param.name, e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                        <option value="">Select preset ligand...</option>
-                        {ligandPresets.map((preset: UntypedApiValue) => (
-                            <option key={preset.id} value={preset.smiles}>
-                                {preset.name}
-                            </option>
-                        ))}
-                    </select>
-                    <input
-                        type="text"
-                        value={value || ''}
-                        onChange={(e) => updateParam(param.name, e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder={param.ui_placeholder || "Or enter SMILES string..."}
-                    />
-                </div>
-            ) : isSequenceField ? (
-                <div className="space-y-2">
-                    <div className="flex gap-2 items-center flex-wrap">
-                        <button
-                            type="button"
-                            onClick={() => openSequenceImport('library')}
-                            className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
-                        >
-                            Sequence Library
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => openSequenceImport('pdb')}
-                            className="rounded-lg border border-blue-600/30 bg-blue-600/12 px-3 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-600/20"
-                        >
-                            Import from PDB
-                        </button>
-                        <span className="text-xs text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
-                            {String(value || '').length} {sequenceUnit}
-                        </span>
-                        {String(value || '').length > 0 && setSequenceToSave && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setSequenceToSave({ sequence: String(value || ''), name: params['sequence_name'] || params['job_name'] || '' });
-                                    setActiveSequenceField(param.name);
-                                    setShowSequenceManager(true);
-                                }}
-                                className="rounded-lg border border-emerald-600/30 bg-emerald-600/12 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-600/20"
-                            >
-                                Save to Library
-                            </button>
-                        )}
-                        {String(value || '').length > 0 && (
-                            <button
-                                type="button"
-                                onClick={() => updateParam(param.name, '')}
-                                className="px-2 py-2 text-slate-500 hover:text-red-400 text-sm transition-colors"
-                                title="Clear sequence"
-                            >
-                                ✕
-                            </button>
-                        )}
-                    </div>
-                    <textarea
-                        value={value || ''}
-                        onChange={(e) => updateParam(param.name, normalizeSequenceInput(e.target.value))}
-                        rows={6}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder={param.ui_placeholder || param.placeholder || 'Enter amino acid sequence...'}
-                    />
-                    {showSequenceImportModal && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" data-bms-sequence-pdb-import-modal="true">
-                            <div className="flex h-[80vh] max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-                                <div className="flex border-b border-slate-700 bg-slate-800/50 rounded-t-xl">
-                                    <button
-                                        type="button"
-                                        onClick={() => setSequenceImportTab('library')}
-                                        className={`flex-1 border-b-2 py-4 text-sm font-medium transition-colors ${sequenceImportTab === 'library' ? 'border-emerald-500 bg-slate-800 text-emerald-400' : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}
-                                    >
-                                        Sequence Library
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setSequenceImportTab('pdb')}
-                                        className={`flex-1 border-b-2 py-4 text-sm font-medium transition-colors ${sequenceImportTab === 'pdb' ? 'border-blue-500 bg-slate-800 text-blue-400' : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}
-                                    >
-                                        Import from PDB
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowSequenceImportModal(false);
-                                            resetPdbImportState();
-                                        }}
-                                        className="rounded-tr-xl px-5 text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-                                <div className="relative flex-1 overflow-hidden">
-                                    {sequenceImportTab === 'library' && (
-                                        <div className="absolute inset-0 overflow-auto p-5">
-                                            <SequenceManager
-                                                onSelect={(seq) => {
-                                                    applySequenceImport(seq.sequence, seq.name, params['chain_id'] || 'A');
-                                                    setShowSequenceImportModal(false);
-                                                }}
-                                                initialSequence={String(value || '')}
-                                                initialName={String(params['sequence_name'] || params['job_name'] || '')}
-                                                onClose={() => setShowSequenceImportModal(false)}
-                                            />
-                                        </div>
-                                    )}
-                                    {sequenceImportTab === 'pdb' && (
-                                        <div className="absolute inset-0 overflow-auto p-5">
-                                            {pdbImportError && (
-                                                <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                                                    {pdbImportError}
-                                                </div>
-                                            )}
-                                            {pdbParsedChains.length > 0 ? (
-                                                <div className="space-y-4">
-                                                    <div className="flex items-center justify-between">
-                                                        <div>
-                                                            <h3 className="text-lg font-medium text-slate-200">Select PDB Chain</h3>
-                                                            <p className="text-sm text-slate-500">
-                                                                {pdbParsedStructure?.models?.length ? `${pdbParsedStructure.models.length} model(s); ` : ''}
-                                                                import one monomer chain into this workflow.
-                                                            </p>
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={resetPdbImportState}
-                                                            className="text-sm text-slate-400 hover:text-white"
-                                                        >
-                                                            ← Back to PDB connector
-                                                        </button>
-                                                    </div>
-                                                    <div className="grid gap-2">
-                                                        {pdbParsedChains.map((chain, idx) => (
-                                                            <button
-                                                                key={`${chain.id}-${idx}`}
-                                                                type="button"
-                                                                onClick={() => importPdbChain(chain)}
-                                                                className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-800 p-3 text-left transition-colors hover:border-blue-500 hover:bg-blue-600/15"
-                                                            >
-                                                                <span className="font-medium text-slate-200">Chain {chain.id}</span>
-                                                                <span className="rounded bg-slate-900/70 px-2 py-1 font-mono text-xs text-slate-400">{chain.sequence.length} aa</span>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <TargetAntigenSelector
-                                                    onSelect={handlePdbSequenceImportSelect}
-                                                    selectedTarget={pdbImportTarget}
-                                                />
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            ) : isPathField ? (
-                <div className="flex gap-2">
-                    <input
-                        type="text"
-                        value={value || ''}
-                        onChange={(e) => updateParam(param.name, e.target.value)}
-                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm font-mono outline-none"
-                        placeholder={pathPlaceholder}
-                    />
-                    <button
-                        type="button"
-                        onClick={() => setShowFileBrowser(param.name)}
-                        className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 text-sm transition-colors"
-                    >
-                        Browse
-                    </button>
-                </div>
-            ) : (
-                <input
-                    type={isNumericField ? 'number' : 'text'}
-                    value={value ?? ''}
-                    onChange={(e) => isNumericField ? updateNumeric(e.target.value) : updateParam(param.name, e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder={param.ui_placeholder || param.placeholder || ''}
-                    min={param.minimum}
-                    max={param.maximum}
-                    step={numericStep}
-                />
-            )}
-        </div>
-    );
-}
-
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
     'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',
     'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'protein_hunter', 'proteinmpnn', 'protenix', 'rf3',
@@ -703,6 +263,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
 };
 
 export function JobSubmission() {
+    const [initialReturnPolicy] = useState(initialExecutionPolicy);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -755,6 +316,11 @@ export function JobSubmission() {
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
+    // Keep user scopes in the canonical cloned/saved request state.
+    const fampnnOverrides = params.fampnn_analysis_overrides;
+    const setFampnnOverrides = (value: unknown) => setParams(previous => ({ ...previous, fampnn_analysis_overrides: value }));
+    let fampnnError = '';
+    try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn');
     const [explicitRunFrustrampnn, setExplicitRunFrustrampnn] = useState<boolean | undefined>(undefined);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
@@ -878,6 +444,15 @@ export function JobSubmission() {
         if (stored) {
             try {
                 const data = JSON.parse(stored);
+                // A saved Local choice must clear any unrelated launcher target.
+                if (data.execution_target_id) {
+                    sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, data.execution_target_id);
+                } else {
+                    sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+                }
+                window.dispatchEvent(new Event('bms:execution-target-change'));
+                data.params = fampnnUserParams(data.params || {});
+                delete data.params.remote_result_policy;
                 console.log('Loading cloned job data:', data);
 
                 // Set common fields
@@ -977,6 +552,11 @@ export function JobSubmission() {
                         template_model_id: 'protein_local_redesign',
                     });
                 }
+                else if (data.mode === 'shape_blueprint' || data.params?.modification_mode === 'shape_blueprint') {
+                    setWizardMode('experimental');
+                    setSelectedTemplateId('protein_modification_experimental');
+                    setClonedValues({ ...data.params, name: data.name, modification_mode: 'shape_blueprint' });
+                }
                 // 7. Manual Mode
                 else {
                     setWizardMode('manual');
@@ -1025,82 +605,16 @@ export function JobSubmission() {
         esmfold2: 'structure_prediction',
         esmfold2_experimental: 'structure_prediction',
     };
-    const hardcodedWorkflowTemplates = useMemo(() => [
-        {
-            id: 'mutagenesis',
-            name: 'Mutagenesis Library',
-            description: 'Build variant libraries and predict structures.',
-            icon: 'dna',
-            color: '#8B5CF6',
-            stages: [{ tool: 'Library Gen' }, { tool: 'Structure Prediction' }],
-        },
-        {
-            id: 'structure_prediction',
-            name: 'Structure Prediction',
-            description: 'Predict proteins, nucleic acids, and complexes.',
-            icon: 'microscope',
-            color: '#F59E0B',
-            stages: [{ tool: 'Boltz-2 / Fold-CP / Boltz API / Protenix / ESMFold2' }],
-        },
-
-        {
-            id: 'antibody_denovo',
-            name: 'De Novo Nanobody Toolkit',
-            description: 'Generate, refine, validate, and review nanobody candidates.',
-            icon: 'flask',
-            color: '#14B8A6',
-            stages: [
-                { tool: 'RFantibody / BoltzGen / PPIFlow' },
-                { tool: 'FAMPNN' },
-                { tool: 'PPIFlow (Opt.)' },
-                { tool: 'Protenix / Boltz2 / ESMFold2' },
-                { tool: 'Review + QC' }
-            ],
-        },
-
-        {
-            id: 'oligo_design',
-            name: 'Oligo Designer',
-            description: 'Design nucleoprotein assemblies with validation.',
-            icon: 'dna',
-            color: '#6366F1',
-            stages: [{ tool: 'RFDpoly' }, { tool: 'Boltz-2' }, { tool: 'Filtering' }],
-        },
-    ], []);
-    const hardcodedExperimentalTemplates = useMemo(() => [
-        {
-            id: 'protein_modification_experimental',
-            name: 'De Novo Design',
-            description: 'Generate new proteins with native RFD3, iterate an existing structure, or generate into a shape blueprint.',
-            icon: 'cube',
-            color: '#22C55E',
-            experimental: true,
-            stages: [
-                { tool: 'RFD3 (Preferred)' },
-                { tool: 'RFD3 Iteration' },
-                { tool: 'Shape Blueprint' },
-                { tool: 'DISCO / La-Proteina (Backup)' },
-            ],
-        },
-
-    ], []);
-    const visibleApiTemplates = useMemo(() => {
-        const templates = templatesData?.data ?? [];
-        return templates.filter((t: UntypedApiValue) =>
-            !['structure_validation', 'structure_prediction', 'boltz_cp_experimental'].includes(t.id) &&
-            t.id !== 'binder_design' &&
-            !LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id) &&
-            !LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id) &&
-            (t.id !== 'dna_polymerase' || (window as UntypedApiValue).__DEBUG_MODE__)
-        );
-    }, [templatesData]);
+    const visibleApiTemplates = useMemo(() => visibleLauncherTemplates(
+        templatesData?.data ?? [], Boolean((window as UntypedApiValue).__DEBUG_MODE__)
+    ), [templatesData]);
     const workflowTemplateCards = useMemo(
-        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => !t.experimental), ...hardcodedWorkflowTemplates],
-        [hardcodedWorkflowTemplates, visibleApiTemplates]
+        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => !t.experimental), ...launcherWorkflowTemplates],
+        [launcherWorkflowTemplates, visibleApiTemplates]
     );
     const experimentalTemplateCards = useMemo(
-        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => t.experimental), ...hardcodedExperimentalTemplates],
-        [hardcodedExperimentalTemplates, visibleApiTemplates]
+        () => [...visibleApiTemplates.filter((t: UntypedApiValue) => t.experimental), ...launcherExperimentalTemplates],
+        [launcherExperimentalTemplates, visibleApiTemplates]
     );
 
     useEffect(() => {
@@ -1185,8 +699,8 @@ export function JobSubmission() {
 
         setWizardMode('manual');
         setSelectedTemplateId(null);
-        setClonedValues(undefined);
-        setParams(template.params || {});
+        setClonedValues(fampnnUserParams(template.params || {}));
+        setParams(fampnnUserParams(template.params || {}));
         if (template.model_id) setSelectedModelId(template.model_id);
         if (template.mode) setSelectedModeId(template.mode);
         setJobName(template.params?.job_name || template.name || '');
@@ -1267,33 +781,42 @@ export function JobSubmission() {
         ?? configuredFrustrampnnWorkflow?.default_enabled
         ?? false;
 
-    // Initialize params when model/mode changes (manual mode)
+    const initializedModelParams = useRef<{ id: string | null; clone: typeof clonedValues } | null>(null);
+    const initializedTemplateParams = useRef<{ id: string | null; clone: typeof clonedValues } | null>(null);
+    // Refreshes may fill missing defaults, never replace saved/operator values.
     useEffect(() => {
-        if (selectedModel) {
+        if (wizardMode === 'manual' && selectedModel) {
+            initializedTemplateParams.current = null;
             const defaults: Record<string, UntypedApiValue> = {};
             (selectedModel.params || []).forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
-            const nextParams = { ...defaults, ...(clonedValues || {}) };
-            setParams(nextParams);
+            const prior = initializedModelParams.current;
+            const sameDraft = prior?.id === selectedModelId && prior?.clone === clonedValues;
+            setParams(previous => ({ ...defaults, ...(sameDraft ? previous : clonedValues || {}) }));
+            initializedModelParams.current = { id: selectedModelId, clone: clonedValues };
         }
-    }, [selectedModel, selectedModelId, clonedValues]);
+    }, [wizardMode, selectedModel, selectedModelId, clonedValues]);
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
-        if (templateDetail?.user_params) {
+        if (wizardMode !== 'manual' && templateDetail?.user_params) {
+            initializedModelParams.current = null;
             const defaults: Record<string, UntypedApiValue> = {};
             templateDetail.user_params.forEach((p: UntypedApiValue) => {
                 if (p.default !== undefined) defaults[p.name] = p.default;
             });
             const nextParams = { ...defaults, ...(clonedValues || {}) };
-            setParams(nextParams);
+            const prior = initializedTemplateParams.current;
+            const sameDraft = prior?.id === selectedTemplateId && prior?.clone === clonedValues;
+            setParams(previous => sameDraft ? { ...defaults, ...previous } : nextParams);
+            initializedTemplateParams.current = { id: selectedTemplateId, clone: clonedValues };
             const defaultTemplateName = nextParams.job_name || nextParams.name || nextParams.sequence_name || templateDetail.name || selectedTemplateId || '';
-            if (defaultTemplateName) {
+            if (defaultTemplateName && !sameDraft) {
                 setJobName(prev => (clonedValues?.name || clonedValues?.job_name) ? String(defaultTemplateName) : (prev.trim() ? prev : String(defaultTemplateName)));
             }
         }
-    }, [templateDetail, selectedTemplateId, clonedValues]);
+    }, [wizardMode, templateDetail, selectedTemplateId, clonedValues]);
 
     useEffect(() => {
         if (!selectedTemplateId || isDedicatedLauncherTemplate(selectedTemplateId)) {
@@ -1507,8 +1030,8 @@ export function JobSubmission() {
             }
             : params;
         return configuredFrustrampnnWorkflow
-            ? mergeFrustraMpnnLaunchParams(baseParams, runFrustrampnn, frustrampnnSettings)
-            : baseParams;
+            ? mergeFrustraMpnnLaunchParams(fampnnUserParams(baseParams), runFrustrampnn, frustrampnnSettings)
+            : fampnnUserParams(baseParams);
     }, [
         isTemplateMode,
         params,
@@ -1528,8 +1051,22 @@ export function JobSubmission() {
             })
             .map((param: UntypedApiValue) => param.label || param.name)
         : [];
+    const fampnnLaunchParams = isTemplateMode ? { ...templateDetail?.preset_params, ...params } : params;
+    const usesFampnn = wizardMode === 'manual' && selectedModelId === 'fampnn';
+    // General RFD3 is backbone-only, BoltzGen skips sequence design, and the
+    // legacy RFdiffusion FA-MPNN parent is not in the admitted caller inventory.
+    const unsupportedFampnnParent = isTemplateMode && !isDedicatedLauncherTemplate(selectedTemplateId)
+        && (fampnnLaunchParams.seq_method === 'fampnn' || fampnnLaunchParams.seq_design_fampnn === true);
+    const activeFampnnOverrides = fampnnLaunchParams.fampnn_analysis_overrides;
+    if (usesFampnn) {
+        try { hydrateFampnnOverrides(activeFampnnOverrides); } catch (error) { fampnnError = String(error); }
+    } else { fampnnError = ''; }
+    if (unsupportedFampnnParent) fampnnError = 'This general/binder template is not an admitted FA-MPNN caller. Launch remains disabled; use the standalone or local-redesign launcher.';
+    const genericFampnnControl = usesFampnn ? <FampnnAnalysisControls value={activeFampnnOverrides} onChange={setFampnnOverrides}
+        summaryDefault="Declared input protein residues"
+        mutationDefault="Declared input protein residues" /> : null;
     const allMissingRequiredTemplateParams = missingRequiredTemplateParams;
-    const isReady = frustrampnnConfigurationReady && Boolean(
+    const isReady = !fampnnError && frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
         (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
@@ -1541,15 +1078,14 @@ export function JobSubmission() {
             : 'Select a workflow and complete required fields')
         : '';
 
-    const handleSubmit = () => {
-        if (!isReady) return;
-
+    const buildWorkflowRequest = (): Partial<Job> | null => {
         // Get template data - handle both axios response wrapper and direct data
         const templateData = templateDetail;
 
         if (isTemplateMode && templateData) {
             // Template mode: merge preset params with user params
-            const mergedParams = { ...templateData.preset_params, ...params };
+            const mergedParams = fampnnUserParams({ ...templateData.preset_params, ...params });
+            delete mergedParams.fampnn_analysis_overrides;
             const templateModelIdOverride = mergedParams.template_model_id;
             const templateModeIdOverride = mergedParams.template_mode_id;
             delete mergedParams.template_model_id;
@@ -1604,8 +1140,7 @@ export function JobSubmission() {
                     effectiveModelId = mapping.model_id;
                     nextflowProfile = mapping.mode;
                 } else if (selectedTemplateId === 'structure_prediction') {
-                    alert(`Unsupported Structure predictor: ${mergedParams.pred_method}`);
-                    return;
+                    return null;
                 } else {
                     nextflowProfile = mergedParams.pred_method;
                 }
@@ -1622,11 +1157,6 @@ export function JobSubmission() {
                 ? mergeFrustraMpnnLaunchParams(mergedParams, runFrustrampnn, frustrampnnSettings)
                 : mergedParams;
 
-            console.log('DEBUG params state:', params);
-            console.log('DEBUG num_parallel_jobs from params:', params.num_parallel_jobs);
-            console.log('DEBUG mergedParams:', governedMergedParams);
-            console.log('DEBUG num_parallel_jobs from mergedParams:', governedMergedParams.num_parallel_jobs);
-            console.log('Submitting job:', { name: templateLaunchName, model_id: effectiveModelId, mode: nextflowProfile, params: governedMergedParams });
 
             // Add complex_components if ligands are selected
             const finalParams = ligands.length > 0 ? {
@@ -1637,12 +1167,12 @@ export function JobSubmission() {
                 ]
             } : governedMergedParams;
 
-            submitMutation.mutate({
+            return {
                 name: templateLaunchName,
                 model_id: effectiveModelId,
                 mode: nextflowProfile,
                 params: finalParams,
-            });
+            };
         } else if (selectedModelId && selectedModeId) {
             // Manual mode
 
@@ -1650,13 +1180,20 @@ export function JobSubmission() {
             const filteredParams: Record<string, UntypedApiValue> = {};
             if (selectedMode && selectedMode.params) {
                 selectedMode.params.forEach((paramName: string) => {
-                    if (params[paramName] !== undefined && params[paramName] !== '') {
+                    // Empty native sequence settings (e.g. omit_AAs or a
+                    // cleared optional target chain) are values, not defaults.
+                    const preserveNativeEmpty = selectedModelId === 'fampnn' || selectedModelId === 'proteinmpnn';
+                    if (params[paramName] !== undefined && (params[paramName] !== '' || preserveNativeEmpty)) {
                         filteredParams[paramName] = params[paramName];
                     }
                 });
             } else {
                 // Fallback if no params defined in mode (shouldn't happen for well-defined models)
                 Object.assign(filteredParams, params);
+            }
+
+            for (const key of Object.keys(filteredParams)) {
+                if (!(key in fampnnUserParams(filteredParams)) || key === 'fampnn_analysis_overrides') delete filteredParams[key];
             }
 
             // specific check for ntp_type to ensure it's not sent if empty even if in params list
@@ -1679,17 +1216,23 @@ export function JobSubmission() {
                 ]
             } : governedFilteredParams;
 
-            submitMutation.mutate({
+            return {
                 name: jobName,
                 model_id: selectedModelId,
                 mode: selectedModeId,
                 params: finalParams,
-            });
-        } else {
-            console.error('Submit failed: Template data not loaded or invalid mode', { wizardMode, templateData, selectedTemplateData });
+                ...(selectedModelId === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
+            };
         }
+        return null;
     };
-
+    // Dedicated forms own separate live state; don't substitute a generic request.
+    const workflowRequest = (isTemplateMode && isDedicatedLauncherTemplate(selectedTemplateId)) || !frustrampnnConfigurationReady || (usesFampnn && !!fampnnError) ? null : buildWorkflowRequest();
+    const handleSubmit = () => {
+        if (!isReady) return;
+        const request = buildWorkflowRequest();
+        if (request) submitMutation.mutate(request);
+    };
     const genericFrustrampnnControl = resolvedFrustrampnnWorkflowId ? (
         <div
             className="rounded-xl border border-cyan-900/70 bg-cyan-950/15 p-4"
@@ -1757,12 +1300,7 @@ export function JobSubmission() {
             params: pinnedParams as Record<string, UntypedApiValue>,
         };
     })();
-    const submitPreparedStructure = useMutation({
-        mutationFn: async () => {
-            if (!preparedStructureScheduler) {
-                throw new Error('The prepared Project structure-prediction scheduler is unavailable.');
-            }
-            const response = await submitJob({
+    const preparedStructureRequest = preparedStructureScheduler ? {
                 name: preparedStructureScheduler.name,
                 model_id: preparedStructureScheduler.modelId,
                 mode: preparedStructureScheduler.mode,
@@ -1771,7 +1309,13 @@ export function JobSubmission() {
                 ...(preparedStructureScheduler.context.pinned_gpu === null
                     ? {}
                     : { pinned_gpu: preparedStructureScheduler.context.pinned_gpu }),
-            });
+            } : null;
+    const submitPreparedStructure = useMutation({
+        mutationFn: async () => {
+            if (!preparedStructureRequest) {
+                throw new Error('The prepared Project structure-prediction scheduler is unavailable.');
+            }
+            const response = await submitJob(preparedStructureRequest);
             return {
                 response: response.data,
                 returnUri: await completeCurrentLaunchContext(response.data),
@@ -1789,6 +1333,7 @@ export function JobSubmission() {
                 <main className="mx-auto max-w-4xl space-y-5">
                     <section className="rounded-2xl border border-blue-500/40 bg-blue-950/30 p-5">
                         <h1 className="text-xl font-semibold">Confirm prepared Project structure prediction</h1>
+                        <ExecutionTargetPicker workflowRequest={preparedStructureRequest} />
                         <p className="mt-2 text-sm text-blue-100/80">
                             This request is immutable. BioModStack will submit the exact server-pinned scheduler values; the native structure form cannot recompute or edit them.
                         </p>
@@ -1835,7 +1380,8 @@ export function JobSubmission() {
     return (
         <div className="min-h-screen bg-slate-950 p-6">
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft(projectDraftValues as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.startRun(projectDraftValues as JsonObject)}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
-            <ExecutionTargetPicker />
+            {!(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
@@ -1927,41 +1473,9 @@ export function JobSubmission() {
                                             console.log('[MUTAGENESIS BATCH] Ignoring reference MSA (mutants regenerate MSAs)');
                                         }
 
-                                        // Build params with mutagenesis_variants array
-                                        const batchParams = {
-                                            // Always regenerate MSAs for mutants (no shared reference MSA)
-                                            msa_force_refresh: true,
-                                            // Array of variants (each with name + sequence)
-                                            mutagenesis_variants: variants.map(v => ({
-                                                name: v.name,
-                                                sequence: v.sequence
-                                            })),
-                                            // Predictor params (same for all variants)
-                                            boltz_recycling_steps: predictorConfig.recycling_steps,
-                                            boltz_num_samples: predictorConfig.diffusion_samples,
-                                            boltz_sampling_steps: predictorConfig.sampling_steps,
-                                            boltz_use_msa: predictorConfig.use_msa,
-                                            boltz_use_potentials: predictorConfig.use_potentials,
-                                            boltz_step_scale: predictorConfig.step_scale,
-                                            pred_method: predictorConfig.predictor,
-                                            run_frustrampnn: predictorConfig.run_frustrampnn,
-                                            // Complex components: ligands array now includes DNA/RNA with sequence field
-                                            ...(predictorConfig.ligands?.length ? {
-                                                ligands: predictorConfig.ligands
-                                            } : {})
-                                        };
 
                                         try {
-                                            await submitMutation.mutateAsync({
-                                                name: jobNamePrefix,
-                                                model_id: predictorConfig.predictor === 'rf3'
-                                                    ? 'rf3'
-                                                    : predictorConfig.predictor === 'esmfold2'
-                                                        ? 'esmfold2'
-                                                        : 'boltz2',
-                                                mode: 'predict',
-                                                params: batchParams
-                                            });
+                                            await submitMutation.mutateAsync(buildMutagenesisWorkflowRequest(jobNamePrefix, variants, predictorConfig));
                                             queryClient.invalidateQueries({ queryKey: ['jobs'] });
                                         } catch (error) {
                                             console.error("[MUTAGENESIS BATCH] Submission failed", error);
@@ -2202,6 +1716,7 @@ export function JobSubmission() {
                                 ))}
                             </div>
 
+                            {unsupportedFampnnParent && <p role="alert">{fampnnError}</p>}
                             {genericFrustrampnnControl}
 
                             {(templateDetail?.preset_params?.pred_method ||
@@ -2305,6 +1820,7 @@ export function JobSubmission() {
                                 )
                                 }
 
+                                {genericFampnnControl}
                                 {genericFrustrampnnControl}
 
                                 {/* Ligand Selector for Complex Prediction mode in manual/advanced mode */}

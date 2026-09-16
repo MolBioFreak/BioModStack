@@ -1,7 +1,9 @@
 """Durable Parquet materialization and integrity verification."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import contextmanager
+from threading import RLock
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -10,11 +12,11 @@ import os
 from pathlib import Path
 import re
 import stat
-from typing import Any, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 import uuid
 
-import pyarrow as pa
-import pyarrow.parquet as pq
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 from paths import get_data_root
 from .contracts import (
@@ -29,6 +31,57 @@ from .contracts import (
 
 class ScientificArtifactError(RuntimeError):
     """Artifact bytes or metadata failed a closed integrity check."""
+
+
+# Digest reuse is bounded metadata, never cached path authorization or open files.
+# Striped locks coalesce concurrent reads without serializing unrelated artifacts.
+_DIGEST_MEMO_LIMIT = 512
+_digest_memo: OrderedDict[tuple, tuple[int, str]] = OrderedDict()
+_digest_memo_lock = RLock()
+_digest_locks = tuple(RLock() for _ in range(32))
+
+
+def _descriptor_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def descriptor_content_digest(descriptor: int, *, scope: str) -> tuple[int, str]:
+    """Digest an already-authorized no-follow descriptor, preserving its offset.
+
+    Callers retain ownership/path checks and compare the result to their receipt.
+    Reopening and fstat are mandatory even on a warm hit. Mutation during a cold
+    read fails closed; inode replacement, writes (including restored mtime) and
+    changed root/receipt scope cannot reuse the previous digest.
+    """
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise ScientificArtifactError("artifact is not a regular verified file")
+    identity = _descriptor_identity(before)
+    key = (scope, *identity)
+    with _digest_locks[hash(key) % len(_digest_locks)]:
+        with _digest_memo_lock:
+            cached = _digest_memo.get(key)
+            if cached is not None:
+                _digest_memo.move_to_end(key)
+        if cached is None:
+            digest = hashlib.sha256()
+            size = 0
+            while size < before.st_size:
+                block = os.pread(descriptor, min(1024 * 1024, before.st_size - size), size)
+                if not block:
+                    break
+                digest.update(block)
+                size += len(block)
+            cached = (size, digest.hexdigest())
+        if _descriptor_identity(os.fstat(descriptor)) != identity or cached[0] != before.st_size:
+            raise ScientificArtifactError("artifact changed during verification")
+        with _digest_memo_lock:
+            _digest_memo[key] = cached
+            _digest_memo.move_to_end(key)
+            while len(_digest_memo) > _DIGEST_MEMO_LIMIT:
+                _digest_memo.popitem(last=False)
+        return cached
 
 
 @dataclass(frozen=True)
@@ -168,6 +221,8 @@ def install_parquet_rows(
     transaction_id: str | None = None,
 ) -> InstalledArtifact:
     """Write deterministic Parquet bytes and atomically install one artifact."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
     materialized = [dict(row) for row in rows]
     table = pa.Table.from_pylist(materialized, schema=schema)
     destination_root = artifact_root(root)
@@ -346,17 +401,18 @@ def verified_artifact_snapshot(
             raise ScientificArtifactError("artifact is missing or is not a regular verified file")
         if metadata.st_size != expected_size:
             raise ScientificArtifactError("artifact bytes do not match its receipt")
-        digest = hashlib.sha256()
-        os.lseek(leaf, 0, os.SEEK_SET)
-        while True:
-            block = os.read(leaf, 1024 * 1024)
-            if not block:
-                break
-            digest.update(block)
-        os.lseek(leaf, 0, os.SEEK_SET)
-        if digest.hexdigest() != expected_sha:
+        size, digest = descriptor_content_digest(leaf, scope=f"{base}:{expected_sha}")
+        if (size, digest) != (expected_size, expected_sha):
             raise ScientificArtifactError("artifact bytes do not match its receipt")
+        verified_identity = _descriptor_identity(metadata)
+        if _descriptor_identity(os.fstat(leaf)) != verified_identity:
+            raise ScientificArtifactError("artifact changed during verification")
         yield Path(f"/proc/self/fd/{leaf}")
+        if _descriptor_identity(os.fstat(leaf)) != verified_identity:
+            # Unlink/rename changes ctime too. The pinned original remains valid
+            # only if a fresh digest still agrees; never reopen the replacement.
+            if descriptor_content_digest(leaf, scope=f"{base}:{expected_sha}") != (expected_size, expected_sha):
+                raise ScientificArtifactError("artifact changed while its snapshot was consumed")
     except OSError as exc:
         raise ScientificArtifactError("artifact path contains a symlink or unsafe component") from exc
     finally:
@@ -365,6 +421,8 @@ def verified_artifact_snapshot(
 
 
 def read_rows(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None, max_rows: int = 1_000_000) -> list[dict[str, Any]]:
+    import pyarrow.parquet as pq
+
     with verified_artifact_snapshot(artifact, root=root) as path:
         table = pq.read_table(path)
         if table.num_rows > max_rows:

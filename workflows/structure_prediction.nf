@@ -20,6 +20,7 @@ import java.util.Arrays
 
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
+include { RemoteCanonicalFrustraMPNN } from '../modules/frustrampnn_remote.nf'
 
 // Workflow-specific param defaults
 params.sequence_input = null
@@ -168,8 +169,6 @@ def producerIdentitySha256(producerMeta) {
 process PrepareStructurePredictionFrustraMPNNCandidate {
     tag "frustrampnn-source:${candidate_meta.producer_stage}:${candidate_meta.producer_candidate_key}"
     stageInMode 'copy'
-    publishDir { "${params.out_dir}/${new File(candidate_meta.producer_candidate_key.toString()).parent}" },
-        mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
 
     input:
     tuple val(candidate_meta), path(predicted_structure), val(settings_base64), \
@@ -239,7 +238,7 @@ process PublishStructurePredictionFrustraMPNNCandidate {
     def candidateId = result_meta.candidate_id.toString()
     """
     set -euo pipefail
-    '${params.api_python}' '${params.code_root}/scripts/publish_frustrampnn_bundle.py' \
+    '${params.api_python}' '${params.code_root}/scripts/publish_remote_frustrampnn_bundle.py' \
       --source-bundle '${candidate_bundle}' --allowed-root '${params.out_dir}' \
       --destination '${params.out_dir}/frustrampnn/results/${candidateId}' \
       --marker 'published_${candidateId}.json'
@@ -256,13 +255,14 @@ process ReportStructurePredictionFrustraMPNNComplete {
     script:
     """
     set -euo pipefail
-    mapfile -t outputs < <('${params.api_python}' \
+    '${params.api_python}' \
       '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
       --job-root '${params.out_dir}' \
-      published_*.json)
-    test \"\${#outputs[@]}\" -gt 0
+      published_*.json > validated_outputs.txt
+    mapfile -t outputs < validated_outputs.txt
+    test "\${#outputs[@]}" -gt 0
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+      '${params.job_id}' frustrampnn complete "\${outputs[@]}"
     : > frustrampnn_complete.reported
     """
 }
@@ -341,13 +341,22 @@ workflow STRUCTURE_PREDICTION {
                     source_format: producer_meta.source_format,
                 ], predicted)
             }
-            SchedulerFrustraMPNNParentFanout(
-                canonical_candidates,
-                Channel.value(params.job_id.toString()),
-                Channel.value('structure_prediction'),
-                Channel.value(params.frustrampnn_settings.toString()),
-                Channel.value(settingsValueOrigin),
-            )
+            if (System.getenv('BMS_REMOTE_EXECUTION') == '1') {
+                PrepareStructurePredictionFrustraMPNNCandidate(canonical_candidates.map { meta, source ->
+                    tuple(meta, source, settingsBase64, settingsSha256, settingsValueOrigin)
+                })
+                RemoteCanonicalFrustraMPNN(PrepareStructurePredictionFrustraMPNNCandidate.out.prepared)
+                PublishStructurePredictionFrustraMPNNCandidate(RemoteCanonicalFrustraMPNN.out.result)
+                ReportStructurePredictionFrustraMPNNComplete(PublishStructurePredictionFrustraMPNNCandidate.out.marker.collect())
+            } else {
+                SchedulerFrustraMPNNParentFanout(
+                    canonical_candidates,
+                    Channel.value(params.job_id.toString()),
+                    Channel.value('structure_prediction'),
+                    Channel.value(params.frustrampnn_settings.toString()),
+                    Channel.value(settingsValueOrigin),
+                )
+            }
         } else {
             if (!params.job_id) error('FrustraMPNN not-requested reporting requires --job_id')
             ReportStructurePredictionFrustraMPNNNotRequested(Channel.value(true))

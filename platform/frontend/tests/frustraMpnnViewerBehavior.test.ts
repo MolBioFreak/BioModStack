@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { api } from '../src/lib/api.js';
 import * as frustraMpnnApi from '../src/lib/frustraMpnnApi.js';
-import { backendHashes, backendStatistics } from './fixtures/frustraMpnnBackendContracts.js';
+import { backendHashes, backendStatistics, backendDerivedStatistics } from './fixtures/frustraMpnnBackendContracts.js';
 
 const analysisPayload = {
     analysis_id: '11111111-1111-4111-8111-111111111111',
@@ -24,27 +23,7 @@ const analysisPayload = {
     diagnostic: 'bounded failure',
 } as const;
 
-const v2Statistics = {
-    ...structuredClone(backendStatistics),
-    schema_version: 2,
-    output_contract_version: '3.0',
-    analysis_receipt: {
-        schema_name: 'frustrampnn_statistics_analysis_receipt',
-        schema_version: 1,
-        analysis_id: analysisPayload.analysis_id,
-        core_artifact_id: analysisPayload.core_artifact_id,
-        core_bundle_relative_path: 'results/core-artifact-1',
-        core_landscape_sha256: analysisPayload.core_landscape_sha256,
-        core_manifest_sha256: analysisPayload.core_manifest_sha256,
-        formula_version: analysisPayload.formula_version,
-        policy_version: analysisPayload.policy_version,
-        package_version: analysisPayload.package_version,
-        statistics_schema_version: 2,
-        attempt_count: 1,
-    },
-};
-
-test('analysis parser and transport are exact while statistics retain v1 and accept real v2', async () => {
+test('analysis parser and transport preserve schema-checked derived statistics provenance', async () => {
     const module = frustraMpnnApi as unknown as {
         parseFrustraMpnnStatisticsAnalysis?: (value: unknown, parentJobId: string, invocationId: string) => typeof analysisPayload;
         fetchFrustraMpnnStatisticsAnalysis?: (parentJobId: string, invocationId: string, signal?: AbortSignal) => Promise<typeof analysisPayload>;
@@ -55,9 +34,11 @@ test('analysis parser and transport are exact while statistics retain v1 and acc
     assert.equal(typeof module.retryFrustraMpnnStatisticsAnalysis, 'function');
 
     assert.equal(frustraMpnnApi.parseFrustraMpnnStatistics(backendStatistics).schema_version, 1);
-    const parsedV2 = frustraMpnnApi.parseFrustraMpnnStatistics(v2Statistics);
+    const parsedV2 = frustraMpnnApi.parseFrustraMpnnStatistics(backendDerivedStatistics);
     assert.equal(parsedV2.schema_version, 2);
     assert.equal(parsedV2.output_contract_version, '3.0');
+    assert.deepEqual(parsedV2, backendDerivedStatistics);
+    assert.deepEqual(parsedV2.comparison_compatibility_basis, backendDerivedStatistics.comparison_compatibility_basis);
     assert.equal(parsedV2.analysis_receipt.analysis_id, analysisPayload.analysis_id);
     const parsedV3Response = frustraMpnnApi.parseFrustraMpnnStatisticsResponse({
         result_id: 'result-1',
@@ -72,12 +53,17 @@ test('analysis parser and transport are exact while statistics retain v1 and acc
         effective_settings_json: null,
         capability_inventory_sha256: null,
         statistics_sha256: backendHashes.f,
-        statistics_json: v2Statistics,
+        statistics_json: backendDerivedStatistics,
         comparison_compatibility_id: backendHashes.e,
-        statistics: v2Statistics,
+        statistics: backendDerivedStatistics,
     });
-    assert.equal(parsedV3Response.authority_version, 'v3');
+    assert.equal('authority_version' in parsedV3Response, false);
     assert.equal(parsedV3Response.statistics?.schema_version, 2);
+    assert.equal('statistics_json' in parsedV3Response, false);
+    const canonicalOnly = { ...parsedV3Response };
+    assert.deepEqual(frustraMpnnApi.parseFrustraMpnnStatisticsResponse(canonicalOnly), parsedV3Response);
+    assert.deepEqual(frustraMpnnApi.parseFrustraMpnnStatisticsResponse({ ...canonicalOnly, statistics_json: structuredClone(canonicalOnly.statistics) }), parsedV3Response);
+    assert.throws(() => frustraMpnnApi.parseFrustraMpnnStatisticsResponse({ ...canonicalOnly, statistics_json: null }), /aliases conflict/);
     assert.throws(
         () => module.parseFrustraMpnnStatisticsAnalysis!({ ...analysisPayload, extra: true }, 'job-1', 'invoke-1'),
         /unknown or missing keys/,
@@ -118,16 +104,4 @@ test('analysis parser and transport are exact while statistics retain v1 and acc
     }
 });
 
-test('FrustraMpnnResultsViewer source gates and owns v3 derived statistics queries exactly', () => {
-    const source = readFileSync(new URL('../src/components/FrustraMpnnResultsViewer.tsx', import.meta.url), 'utf8');
-    assert.match(source, /const hasExactV3AnalysisOwner = Boolean\([\s\S]*detail\.data\.parent_job_id === job\.id[\s\S]*detail\.data\.invocation_id === selectedInvocation[\s\S]*detail\.data\.component_contract_version === '3\.0'[\s\S]*terminal_result\.component_contract_version === '3\.0'/);
-    assert.match(source, /queryKey: \['frustrampnn-statistics-analysis', job\.id, selectedInvocation\]/);
-    assert.match(source, /enabled: hasExactV3AnalysisOwner/);
-    assert.match(source, /analysis\.state === 'queued' \|\| analysis\.state === 'running' \? 3000 : false/);
-    assert.match(source, /queryKey: \['frustrampnn-statistics', job\.id, selectedInvocation\]/);
-    assert.match(source, /enabled: hasExactV3AnalysisOwner && statisticsAnalysis\.data\?\.state === 'completed'/);
-    assert.match(source, /invalidateQueries\(\{ queryKey: \['frustrampnn-statistics-analysis', job\.id, selectedInvocation\] \}\)/);
-    assert.match(source, /invalidateQueries\(\{ queryKey: \['frustrampnn-statistics', job\.id, selectedInvocation\] \}\)/);
-    assert.match(source, /statisticsOverride=\{fetchedStatistics\}/);
-    assert.match(source, /canRetry=\{resultContext\.canRetryStatisticsAnalysis\}/);
-});
+// Mounted viewer ownership/query transitions are covered by the component suite.

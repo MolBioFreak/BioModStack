@@ -32,8 +32,7 @@ process ConstructVerify {
     def profileConfig = shellQuote("${codeRoot}/config/ngs/construct_verify_profiles.json")
     def referenceDigest = shellQuote(params.reference_sequence_sha256 ?: '')
     def profileId = shellQuote(params.construct_verify_profile ?: 'plasmid_strict_v1')
-    def containerDir = params.container_dir ?: ''
-    def doradoImage = shellQuote("${containerDir}/dorado.sif")
+
     """
     set -euo pipefail
 
@@ -48,15 +47,8 @@ process ConstructVerify {
 
     if command -v samtools >/dev/null 2>&1; then
         SAMTOOLS_ARGS=(--samtools-command samtools)
-    elif command -v apptainer >/dev/null 2>&1 && [[ -f ${doradoImage} ]]; then
-        SAMTOOLS_ARGS=(
-            --samtools-command apptainer
-            --samtools-command exec
-            --samtools-command ${doradoImage}
-            --samtools-command samtools
-        )
     else
-        echo "samtools not found on host and no fallback dorado container available" >&2
+        echo "samtools missing from the selected NGS runtime" >&2
         exit 127
     fi
 

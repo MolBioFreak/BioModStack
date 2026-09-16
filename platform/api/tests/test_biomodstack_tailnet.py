@@ -1194,6 +1194,17 @@ def test_production_tailnet_proxy_rejects_unrelated_host_listener(monkeypatch, t
         tailnet._validated_production_tailnet_proxy(tmp_path)
 
 
+def _configured_storage_mounts(monkeypatch):
+    import biomodstack_runtime_profile as runtime_profile
+    resolved = runtime_profile.resolve_runtime_paths(profile={"data_root": "/mnt/BioModStack"}, environ={})
+    monkeypatch.setattr(runtime_profile, "resolve_installed_core_runtime_paths", lambda root: resolved)
+    return sorted([
+        {"type": "bind", "source": m["source"], "destination": m["target"],
+         "mode": "ro" if m["read_only"] else "rw", "rw": not m["read_only"], "propagation": "rprivate"}
+        for m in runtime_profile.core_runtime_storage_mounts(resolved)
+    ], key=lambda m: (m["destination"], m["source"]))
+
+
 def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp_path: Path) -> None:
     revision = "a" * 40
     commands: list[list[str]] = []
@@ -1209,11 +1220,9 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
         ],
         "State": {"Pid": 123},
         "HostConfig": {"ReadonlyRootfs": False},
-        "Mounts": [{
-            "Type": "bind", "Source": "/mnt/BioModStack",
-            "Destination": "/var/lib/biomodstack", "Mode": "rw",
-            "RW": True, "Propagation": "rprivate",
-        }],
+        "Mounts": [{"Type": m["type"], "Source": m["source"], "Destination": m["destination"],
+                    "Mode": m["mode"], "RW": m["rw"], "Propagation": m["propagation"]}
+                   for m in _configured_storage_mounts(monkeypatch)],
         "Config": {
             "WorkingDir": "/app/platform/api",
             "Labels": {
@@ -1256,7 +1265,7 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
     revision = "a" * 40
     runtime_report = {
         "containers": [
-            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000", "cwd": "/app/platform/api", "readonly_rootfs": False, "mounts": [{"type": "bind", "source": "/mnt/BioModStack", "destination": "/var/lib/biomodstack", "mode": "rw", "rw": True, "propagation": "rprivate"}]},
+            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000", "cwd": "/app/platform/api", "readonly_rootfs": False, "mounts": _configured_storage_mounts(monkeypatch)},
             {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": tailnet.MANAGED_WEB_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/", "readonly_rootfs": False, "mounts": []},
         ]
     }

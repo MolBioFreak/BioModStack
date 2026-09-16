@@ -34,6 +34,7 @@ from antibody_pipeline_contract import (
 from database import (
     Design,
     FrustraMPNNResult,
+    ConformationalMappingRequest,
     Job,
     ShapeDesignGeometry,
     ShapeDesignRequest,
@@ -54,7 +55,6 @@ from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, r
 from .rfd3_generation import GenerationContractError, file_sha256, validate_result_manifest
 from .conformational_mapping.persistence import (
     ConformationalPersistenceError,
-    get_request as get_cm_request,
     ingest_result_bundle as ingest_cm_result_bundle,
 )
 from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads, validate_schema
@@ -69,10 +69,11 @@ from .frustrampnn.manifests import (
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
 from .frustrampnn.persistence import (
     FrustraMPNNPersistenceError,
+    _exact_design_link,
     ingest_result_bundle as ingest_frustrampnn_result_bundle,
     load_and_validate_result_bundle as validate_frustrampnn_result_bundle,
 )
-from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius, get_per_chain_fampnn_psce
+from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics, compute_gyration_radius
 
 
 
@@ -594,6 +595,16 @@ def _trusted_producer_review_fields(job: Optional[Job], payload: Any) -> Dict[st
     return fields
 
 
+def _fampnn_producer_identity(payload: Any, structure_path: Optional[Path]) -> Optional[str]:
+    # The native sidecar binds the produced structure, not an upstream sequence
+    # whose scores may also accompany a later prediction. No path/name inference.
+    if (not isinstance(payload, dict) or payload.get("producer_model_id") != "fampnn"
+            or not structure_path or not payload.get("producer_structure_sha256")):
+        return None
+    return ("fampnn" if hashlib.sha256(structure_path.read_bytes()).hexdigest()
+            == payload["producer_structure_sha256"] else None)
+
+
 def _default_fampnn_metrics() -> Dict[str, Any]:
     return {
         "avg_psce": None,
@@ -666,47 +677,33 @@ def _compute_binder_metrics_from_structure(structure_path: Optional[Path]) -> Di
     return metrics
 
 
-def _compute_fampnn_metrics_from_structure(structure_path: Optional[Path]) -> Dict[str, Any]:
+def _compute_fampnn_metrics_from_structure(structure_path: Optional[Path], policy=None) -> Dict[str, Any]:
     metrics = _default_fampnn_metrics()
     if not structure_path or not structure_path.exists():
         return metrics
-
     metrics.update(_compute_binder_metrics_from_structure(structure_path))
-
+    from services.structure_utils import fampnn_psce_authority
+    owner = fampnn_psce_authority()
+    # Sidecar-free imports retain the historical fallback's all-chain/CB scope,
+    # but now record it. Never apply this policy to an existing unknown scalar.
+    policy = policy if policy is not None else owner.psce_policy("all_chains", False)
     try:
-        chain_profiles = get_per_chain_fampnn_psce(structure_path)
-    except Exception as exc:
-        print(f"[Ingester] Failed FA-MPNN structure-side metric extraction for {structure_path}: {exc}")
+        profile = owner.compute_psce_profile(structure_path, policy)
+    except owner.NoScoredSidechainError:
         return metrics
-
-    residue_psces: List[float] = []
-    chain_avg_psce: Dict[str, float] = {}
-    for chain_id, profile in chain_profiles.items():
-        chain_scores = [
-            value
-            for value in (profile.get("psce") if isinstance(profile, dict) else []) or []
-            if isinstance(value, (int, float))
-        ]
-        if not chain_scores:
-            continue
-        residue_psces.extend(float(value) for value in chain_scores)
-        chain_avg = safe_float(profile.get("avg_psce") if isinstance(profile, dict) else None)
-        if chain_avg is None:
-            chain_avg = sum(chain_scores) / len(chain_scores)
-        chain_avg_psce[str(chain_id)] = round(float(chain_avg), 2)
-
-    if not residue_psces:
-        return metrics
-
-    metrics["avg_psce"] = round(sum(residue_psces) / len(residue_psces), 2)
-    metrics["max_residue_psce"] = round(max(residue_psces), 2)
-    metrics["min_residue_psce"] = round(min(residue_psces), 2)
-    metrics["chain_avg_psce"] = chain_avg_psce or None
+    summary = profile["summary"]
+    metrics.update(avg_psce=round(summary["avg_psce"], 2),
+                   max_residue_psce=round(summary["max_psce"], 2),
+                   min_residue_psce=round(summary["min_psce"], 2),
+                   chain_avg_psce={c: round(v["avg_psce"], 2) for c, v in profile["chains"].items()},
+                   psce_policy=policy)
     return metrics
 
 
 def _build_fampnn_payload(fam_payload: Optional[Dict[str, Any]], fam_metrics: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     payload = dict(fam_payload or {})
+    if fam_metrics.get("psce_policy") is not None:
+        payload["psce_policy"] = fam_metrics["psce_policy"]
     if fam_metrics.get("chain_avg_psce") and not isinstance(payload.get("chain_avg_psce"), dict):
         payload["chain_avg_psce"] = fam_metrics["chain_avg_psce"]
     if fam_metrics.get("avg_psce") is not None and safe_float(payload.get("fampnn_avg_psce")) is None:
@@ -758,8 +755,7 @@ def _extract_fampnn_metrics(
             chain_avg_psce = normalized_chain_avg or None
 
         avg_psce = safe_float(fam_payload.get("fampnn_avg_psce"))
-        if avg_psce is None and chain_avg_psce:
-            avg_psce = sum(chain_avg_psce.values()) / len(chain_avg_psce)
+        # Chain means cannot reconstruct a residue-weighted overall mean.
 
         max_residue_psce = safe_float(fam_payload.get("fampnn_max_residue_psce"))
         min_residue_psce = safe_float(fam_payload.get("fampnn_min_residue_psce"))
@@ -802,7 +798,22 @@ def _extract_fampnn_metrics(
                 binder_sequence = first_chain
                 binder_length = len(first_chain)
 
-    structure_metrics = _compute_fampnn_metrics_from_structure(structure_path)
+    policy = fam_payload.get("psce_policy") if isinstance(fam_payload, dict) else None
+    if policy is not None:
+        from services.structure_utils import fampnn_psce_authority
+        policy = fampnn_psce_authority().validate_psce_policy(policy)
+        metrics["psce_policy"] = policy
+    # Never fill gaps in an unlabelled historical score using a guessed policy.
+    # Complete producer sidecars need no second parse (including sequence).
+    need_scores = any(v is None for v in (avg_psce, max_residue_psce, min_residue_psce))
+    historical_scores = policy is None and any(v is not None for v in (avg_psce, max_residue_psce, min_residue_psce, chain_avg_psce))
+    structure_metrics = _default_fampnn_metrics()
+    if need_scores and not historical_scores:
+        structure_metrics = _compute_fampnn_metrics_from_structure(structure_path, policy)
+        if structure_metrics.get("psce_policy"):
+            metrics["psce_policy"] = structure_metrics["psce_policy"]
+    elif binder_sequence is None and structure_path:
+        structure_metrics.update(_compute_binder_metrics_from_structure(structure_path))
     if avg_psce is None:
         avg_psce = structure_metrics["avg_psce"]
     if max_residue_psce is None:
@@ -1705,7 +1716,7 @@ def _resolve_esmfold2_final_root(output_path: Path) -> Optional[Path]:
         if not candidate.exists():
             continue
         manifest = _load_json_any(candidate / "manifest.json")
-        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() == "esmfold2_experimental":
+        if isinstance(manifest, dict) and str(manifest.get("workflow") or "").strip().lower() in {"esmfold2", "esmfold2_experimental"}:
             return candidate
         if any(candidate.glob("*.metrics.json")) and (
             any(candidate.glob("*.cif")) or any(candidate.glob("*.mmcif")) or any(candidate.glob("*.pdb"))
@@ -1776,48 +1787,78 @@ async def ingest_esmfold2_results(
     current_job: Optional[Job] = None,
     *,
     commit: bool = True,
+    remove_stage_reviews: bool = False,
 ) -> int:
+    from services.core_protein_result_contract import (
+        CandidateIntegrityError, prepare_esmfold2_publication, revalidate_prepared_publication,
+    )
+    from services.core_protein_scientific_contract import revision_for_job
+
+    # Authority comes from the persisted job, not current_job or a file marker.
+    with session.no_autoflush:
+        persisted_job = await session.get(Job, job_id)
+    strict = revision_for_job(persisted_job) == 1
     final_root = _resolve_esmfold2_final_root(output_path)
     if final_root is None:
+        if strict:
+            raise CandidateIntegrityError("missing_candidate_declaration", "ESMFold2 producer manifest is missing")
         return 0
 
     manifest_path = final_root / "manifest.json"
-    manifest_payload = _load_json_any(manifest_path)
+    manifest_payload = {} if strict else _load_json_any(manifest_path)
     if not isinstance(manifest_payload, dict):
         manifest_payload = {}
 
-    existing_designs = (
-        await session.execute(
-            select(Design).where(
-                Design.job_id == job_id,
-                Design.source_stage.is_(None),
+    with session.no_autoflush:
+        existing_designs = (
+            await session.execute(
+                select(Design).where(
+                    Design.job_id == job_id,
+                    Design.source_stage.is_(None),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
     existing_by_name = {design.name: design for design in existing_designs}
+    prepared = {}
+    receipt = None
+    if strict:
+        prepared, receipt = prepare_esmfold2_publication(persisted_job, final_root, existing_designs)
+        revalidate_prepared_publication(final_root, receipt)
+        if existing_designs:
+            return 0
+
+    # The dispatcher delegates review cleanup here so every strict candidate is
+    # validated once, before any DELETE, autoflush, or publication mutation.
+    if remove_stage_reviews:
+        await session.execute(delete(Design).where(Design.job_id == job_id, Design.source_stage.is_not(None)))
 
     job_context = _job_stage_context(current_job)
     created = 0
     seen_names: set[str] = set()
-    for entry in _esmfold2_sample_entries(final_root, manifest_payload):
+    entries = ([{'sample_id': candidate} for candidate in prepared] if strict
+               else _esmfold2_sample_entries(final_root, manifest_payload))
+    for entry in entries:
         sample_id = str(entry.get("sample_id") or entry.get("id") or entry.get("name") or "").strip()
-        metrics_path = _resolve_existing_child_path(final_root, entry.get("metrics"))
-        metrics_payload = _load_json_payload(metrics_path) if metrics_path else None
-        combined_payload: Dict[str, Any] = {}
-        combined_payload.update(manifest_payload)
-        combined_payload.update(entry)
-        if isinstance(metrics_payload, dict):
-            combined_payload.update(metrics_payload)
-        if not sample_id:
-            sample_id = str(combined_payload.get("sample_id") or "").strip()
-
-        structure_path = (
-            _resolve_existing_child_path(final_root, combined_payload.get("cif"))
-            or _resolve_existing_child_path(final_root, combined_payload.get("structure_path"))
-            or (final_root / f"{sample_id}.cif" if sample_id and (final_root / f"{sample_id}.cif").exists() else None)
-            or (final_root / f"{sample_id}.mmcif" if sample_id and (final_root / f"{sample_id}.mmcif").exists() else None)
-            or (final_root / f"{sample_id}.pdb" if sample_id and (final_root / f"{sample_id}.pdb").exists() else None)
-        )
+        if strict:
+            sample_id = entry['sample_id']
+            combined_payload = prepared[sample_id]["payload"]
+            metrics_path = Path(prepared[sample_id]["artifacts"]["metrics"]["path"])
+            structure_path = Path(prepared[sample_id]["artifacts"]["structure"]["path"])
+        else:
+            metrics_path = _resolve_existing_child_path(final_root, entry.get("metrics"))
+            metrics_payload = _load_json_payload(metrics_path) if metrics_path else None
+            combined_payload: Dict[str, Any] = {**manifest_payload, **entry}
+            if isinstance(metrics_payload, dict):
+                combined_payload.update(metrics_payload)
+            if not sample_id:
+                sample_id = str(combined_payload.get("sample_id") or "").strip()
+            structure_path = (
+                _resolve_existing_child_path(final_root, combined_payload.get("cif"))
+                or _resolve_existing_child_path(final_root, combined_payload.get("structure_path"))
+                or (final_root / f"{sample_id}.cif" if sample_id and (final_root / f"{sample_id}.cif").exists() else None)
+                or (final_root / f"{sample_id}.mmcif" if sample_id and (final_root / f"{sample_id}.mmcif").exists() else None)
+                or (final_root / f"{sample_id}.pdb" if sample_id and (final_root / f"{sample_id}.pdb").exists() else None)
+            )
         if structure_path is None:
             print(f"[Ingester] No ESMFold2 structure found for sample {sample_id or '<unknown>'}")
             continue
@@ -1827,14 +1868,20 @@ async def ingest_esmfold2_results(
             continue
         seen_names.add(design_name)
 
-        structure_plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-        plddt_candidates = [
-            _normalize_confidence_percent(combined_payload.get("plddt_mean")),
-            _normalize_confidence_percent(combined_payload.get("mean_plddt")),
-            _normalize_confidence_percent(combined_payload.get("plddt")),
-            _normalize_confidence_percent(structure_plddt),
-        ]
-        plddt_overall = next((value for value in plddt_candidates if value is not None), None)
+        structure_plddt, residue_plddt = (prepared[sample_id]["structure_confidence"] if strict
+                                          else extract_plddt_from_pdb(structure_path))
+        native_scalars = {}
+        if strict:
+            native_scalars = {m['metric_key']: m['value'] for m in prepared[sample_id]['block']['metrics']}
+            plddt_overall = native_scalars['plddt'] * 100 if native_scalars['plddt'] is not None else None
+        else:
+            plddt_candidates = [
+                _normalize_confidence_percent(combined_payload.get("plddt_mean")),
+                _normalize_confidence_percent(combined_payload.get("mean_plddt")),
+                _normalize_confidence_percent(combined_payload.get("plddt")),
+                _normalize_confidence_percent(structure_plddt),
+            ]
+            plddt_overall = next((value for value in plddt_candidates if value is not None), None)
         esmfold2_record = _filtered_esmfold2_record(
             combined_payload,
             manifest_path=manifest_path,
@@ -1849,6 +1896,12 @@ async def ingest_esmfold2_results(
             "esmfold2": esmfold2_record,
             "esmfold2_components": combined_payload.get("components"),
         }
+        if strict:
+            confidence_metrics.update(core_protein_scientific_contract=1,
+                                      core_protein_candidate_artifacts=prepared[sample_id]["artifacts"],
+                                      core_protein_scientific=prepared[sample_id]["block"])
+            if receipt.get("execution_settings"):
+                confidence_metrics["core_protein_execution_settings"] = receipt["execution_settings"]
         model_variant = str(combined_payload.get("model_variant") or manifest_payload.get("model_variant") or "").strip() or None
         model_id_or_path = str(combined_payload.get("model_id_or_path") or manifest_payload.get("model_id_or_path") or "").strip() or None
         provenance = {
@@ -1867,6 +1920,7 @@ async def ingest_esmfold2_results(
         }
 
         design_fields = {
+            "producer_model_id": "esmfold2",
             "pdb_path": str(structure_path),
             "json_path": str(metrics_path) if metrics_path else (str(manifest_path) if manifest_path.exists() else None),
             "stage_family": "esmfold2",
@@ -1880,8 +1934,8 @@ async def ingest_esmfold2_results(
             "confidence_metrics": confidence_metrics,
             "plddt_overall": plddt_overall,
             "residue_plddt": residue_plddt,
-            "ptm": safe_float(combined_payload.get("ptm")),
-            "iptm": safe_float(combined_payload.get("iptm")),
+            "ptm": native_scalars["ptm"] if strict else safe_float(combined_payload.get("ptm")),
+            "iptm": native_scalars["iptm"] if strict else safe_float(combined_payload.get("iptm")),
             "mpnn_score": None,
             "fampnn_psce": None,
         }
@@ -1902,6 +1956,12 @@ async def ingest_esmfold2_results(
             ))
         created += 1
 
+    if strict:
+        persisted_job.provenance = {**(persisted_job.provenance or {}),
+                                    "core_protein_candidate_publication": receipt}
+        if receipt.get("execution_settings"):
+            persisted_job.provenance = {**persisted_job.provenance,
+                "core_protein_execution_settings": receipt["execution_settings"]}
     if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Ingested {created} ESMFold2 designs for job {job_id}")
@@ -2478,6 +2538,7 @@ async def ingest_confornets_results(
         existing_design = _match_existing_confornets_design(existing_designs, structure_path, manifest_entry, sample_entry)
         if existing_design is not None:
             incoming_conf = payload.get("confidence_metrics")
+            existing_design.producer_model_id = "confornets"
             existing_design.name = payload["name"]
             existing_design.pdb_path = payload["pdb_path"]
             existing_design.json_path = payload["json_path"]
@@ -2504,6 +2565,7 @@ async def ingest_confornets_results(
             id=str(uuid.uuid4()),
             job_id=job_id,
             **payload,
+            producer_model_id="confornets",
             is_favorite=False,
             created_at=datetime.utcnow(),
         )
@@ -2528,8 +2590,9 @@ class ShapeNoCandidates(RuntimeError):
 
     integrity_state = "no_candidates"
 
-    def __init__(self, reason: Dict[str, Any]):
+    def __init__(self, reason: Dict[str, Any], publication: Dict[str, Any] | None = None):
         self.reason = reason
+        self.shape_publication = publication
         super().__init__(str(reason.get("message") or reason.get("code") or "Shape produced no candidates"))
 
 
@@ -2552,13 +2615,102 @@ def _shape_contained_artifact(output_root: Path, descriptor: Dict[str, Any], lab
     if stat.st_nlink != 1:
         raise RuntimeError(f"Shape {label} must not be hard-linked")
     expected_bytes = descriptor.get("bytes")
-    if not isinstance(expected_bytes, int) or expected_bytes != stat.st_size:
+    if type(expected_bytes) is not int or expected_bytes != stat.st_size:
         raise RuntimeError(f"Shape {label} byte count mismatch")
     expected_sha = descriptor.get("sha256")
-    actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    actual_sha = file_sha256(resolved)
     if not isinstance(expected_sha, str) or expected_sha != actual_sha:
         raise RuntimeError(f"Shape {label} SHA-256 mismatch")
     return resolved
+
+
+def _validate_shape_terminal_closure(
+    output_root: Path, manifest: dict[str, Any], request_spec: dict[str, Any],
+    aggregate: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Reuse native plan/accounting authority, then join every terminal artifact."""
+    from scripts.shape_blueprint.plan_rfd3_batches import plan_batches
+    from scripts.shape_blueprint.build_rfd3_aggregate import build_aggregate
+
+    plan = json.loads(read_frustrampnn_regular(output_root, "run/shape_batches/rfd3_batch_plan.json"))
+    expected_plan = plan_batches(
+        request_spec, gpu_memory_gib=plan["resource_admission"]["gpu_memory_gib"],
+    )
+    if not _strict_canonical_json_equal(plan, expected_plan):
+        raise RuntimeError("Shape batch plan differs from immutable native request")
+    expected_aggregate = build_aggregate(plan=plan, admission_records=aggregate["candidate_outcomes"])
+    if not _strict_canonical_json_equal(aggregate, expected_aggregate) or aggregate["status"] not in {"complete", "no_yield"}:
+        raise RuntimeError("Shape aggregate accounting is incomplete or conflicts with its native plan")
+    if manifest.get("rfd3_aggregate_status") != aggregate["status"]:
+        raise RuntimeError("Shape terminal aggregate status binding mismatch")
+    accepted_backbones = {item["candidate_id"] for item in aggregate["candidate_outcomes"] if item["status"] == "accepted"}
+    sequence_count = request_spec["sequences_per_backbone"]
+    sequence_enabled = request_spec["sequence_policy"] != "skip" and sequence_count > 0
+    engine = request_spec.get("sequence_engine") or ("proteinmpnn" if request_spec["sequence_policy"] == "auto" else None)
+    start = 1 if engine == "proteinmpnn" else 0
+    expected_members = ({f"{candidate}__{engine}__{index:03d}" for candidate in accepted_backbones
+                         for index in range(start, start + sequence_count)}
+                        if sequence_enabled else accepted_backbones)
+    members: list[str] = []
+    prepared: dict[str, dict[str, Any]] = {}
+    for collection, count_key in (("candidates", "candidate_count"), ("rejections", "rejected_count")):
+        entries = manifest.get(collection)
+        if not isinstance(entries, list) or type(manifest.get(count_key)) is not int or manifest[count_key] != len(entries):
+            raise RuntimeError("Shape terminal candidate/rejection count mismatch")
+        for item in entries:
+            candidate_id = item.get("candidate_id")
+            provenance = item.get("provenance")
+            if (not isinstance(candidate_id, str) or not candidate_id or candidate_id in prepared
+                    or item.get("name") != candidate_id or not isinstance(provenance, dict)):
+                raise RuntimeError("Shape terminal candidate identity is missing or duplicated")
+            if collection == "rejections" and (not isinstance(item.get("reason"), dict) or not item["reason"].get("code")):
+                raise RuntimeError("Shape rejection lacks native reason")
+            member = provenance.get("sequence_name") if sequence_enabled else candidate_id
+            if not isinstance(member, str) or not member:
+                raise RuntimeError("Shape terminal member identity is absent")
+            members.append(member)
+            paths = {role: _shape_contained_artifact(output_root, item.get(role) or {}, f"{candidate_id} {role}")
+                     for role in ("structure", "source_backbone", "metrics")}
+            metrics = json.loads(paths["metrics"].read_text(encoding="utf-8"))
+            if metrics.get("schema") != "bms_shape_candidate_metrics_v1" or any(metrics.get(key) != value for key, value in {
+                "candidate_id": candidate_id, "geometry_sha256": request_spec["geometry_sha256"],
+                "point_pool_sha256": request_spec["point_pool_sha256"], "sdf_sha256": request_spec["sdf_sha256"],
+                "source_backbone_sha256": item["source_backbone"]["sha256"],
+            }.items()):
+                raise RuntimeError("Shape terminal metrics identity mismatch")
+            evidence = None
+            artifacts = []
+            if sequence_enabled:
+                evidence = dict(item.get("validator_evidence") or {})
+                suite_path = _shape_contained_artifact(output_root, evidence, "validator suite")
+                suite = json.loads(suite_path.read_text(encoding="utf-8"))
+                records = suite.get("records")
+                validators = request_spec["validator_suite"]
+                if (suite.get("schema") != "bms_shape_validator_suite_v1"
+                        or suite.get("sequence_name") != provenance.get("sequence_name")
+                        or suite.get("validators") != validators
+                        or not isinstance(records, dict) or set(records) != set(validators)):
+                    raise RuntimeError("Shape validator suite selection/candidate binding mismatch")
+                expected = [(validator, descriptor["filename"], descriptor["sha256"], descriptor["bytes"])
+                            for validator, record in records.items() for descriptor in record.get("artifacts", [])]
+                declared = item.get("validator_artifacts")
+                if not isinstance(declared, list):
+                    raise RuntimeError("Shape validator artifact bindings are missing")
+                observed = [(descriptor["validator"], descriptor["native_path"], descriptor["sha256"], descriptor["bytes"])
+                            for descriptor in declared]
+                if len(set(expected)) != len(expected) or len(set(observed)) != len(observed) or set(expected) != set(observed):
+                    raise RuntimeError("Shape validator native artifact inventory mismatch")
+                evidence["path"] = str(suite_path)
+                for descriptor in declared:
+                    path = _shape_contained_artifact(output_root, descriptor, "validator native artifact")
+                    artifacts.append({**descriptor, "path": str(path)})
+            elif item.get("validator_evidence") is not None or item.get("validator_artifacts"):
+                raise RuntimeError("Shape initial-only candidate declares unrequested validator evidence")
+            prepared[candidate_id] = {"paths": paths, "metrics": metrics,
+                                      "validator_evidence": evidence, "validator_artifacts": artifacts}
+    if len(set(members)) != len(members) or set(members) != expected_members:
+        raise RuntimeError("Shape admitted-to-terminal candidate set is incomplete or duplicated")
+    return prepared
 
 
 async def _ingest_shape_result_manifest(
@@ -2624,6 +2776,8 @@ async def _ingest_shape_result_manifest(
             raise RuntimeError(f"Shape result manifest {key} binding mismatch")
     aggregate_descriptor = manifest.get("rfd3_aggregate")
     aggregate_payload: dict[str, Any] | None = None
+    if not isinstance(aggregate_descriptor, dict):
+        raise RuntimeError("Shape terminal result requires native RFD3 aggregate authority")
     if aggregate_descriptor is not None:
         aggregate_path = _shape_contained_artifact(output_root, aggregate_descriptor, "RFD3 aggregate manifest")
         try:
@@ -2645,6 +2799,20 @@ async def _ingest_shape_result_manifest(
         ):
             raise RuntimeError("RFD3 aggregate manifest binding is invalid")
 
+    assert aggregate_payload is not None
+    prepared = _validate_shape_terminal_closure(
+        output_root, manifest, {**request_spec, "request_sha256": request.request_sha256}, aggregate_payload,
+    )
+    publication = {
+        "manifest": {"relative_path": "results/shape_result_manifest.json", "path": str(resolved_manifest),
+                     "sha256": file_sha256(resolved_manifest), "bytes": resolved_manifest.stat().st_size},
+        "rfd3_aggregate": dict(aggregate_descriptor),
+        "rejections": manifest["rejections"],
+        "candidate_ids": [item["candidate_id"] for item in manifest["candidates"]],
+    }
+    prior_publication = (job.provenance or {}).get("shape_result_publication")
+    if prior_publication is not None and not _strict_canonical_json_equal(prior_publication, publication):
+        raise RuntimeError("Shape terminal publication conflicts with immutable prior custody")
     candidates = manifest.get("candidates")
     outcome = manifest.get("outcome")
     if not isinstance(candidates, list) or manifest.get("candidate_count") != len(candidates):
@@ -2653,7 +2821,7 @@ async def _ingest_shape_result_manifest(
         reason = manifest.get("reason")
         if candidates or not isinstance(reason, dict) or not reason.get("code"):
             raise RuntimeError("Shape no_candidates result lacks an explicit reason")
-        raise ShapeNoCandidates(reason)
+        raise ShapeNoCandidates(reason, publication)
     if outcome != "candidates" or not candidates:
         raise RuntimeError("Shape candidate result must contain at least one candidate")
 
@@ -2671,25 +2839,11 @@ async def _ingest_shape_result_manifest(
             raise RuntimeError("Shape candidate names must uniquely equal candidate IDs")
         seen_ids.add(candidate_id)
         seen_names.add(name)
-        structure = _shape_contained_artifact(output_root, item.get("structure") or {}, f"{candidate_id} structure")
-        source_backbone = _shape_contained_artifact(output_root, item.get("source_backbone") or {}, f"{candidate_id} source backbone")
-        metrics_path = _shape_contained_artifact(output_root, item.get("metrics") or {}, f"{candidate_id} metrics")
-        try:
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"Shape candidate metrics are malformed: {candidate_id}") from exc
-        if not isinstance(metrics, dict) or metrics.get("schema") != "bms_shape_candidate_metrics_v1":
-            raise RuntimeError(f"Shape candidate metrics schema is invalid: {candidate_id}")
-        metric_bindings = {
-            "candidate_id": candidate_id,
-            "geometry_sha256": bindings["geometry_sha256"],
-            "point_pool_sha256": bindings["point_pool_sha256"],
-            "sdf_sha256": bindings["sdf_sha256"],
-            "source_backbone_sha256": item["source_backbone"]["sha256"],
-        }
-        for key, expected in metric_bindings.items():
-            if metrics.get(key) != expected:
-                raise RuntimeError(f"Shape candidate metrics {key} binding mismatch: {candidate_id}")
+        closure = prepared[candidate_id]
+        structure = closure["paths"]["structure"]
+        source_backbone = closure["paths"]["source_backbone"]
+        metrics_path = closure["paths"]["metrics"]
+        metrics = closure["metrics"]
         existing = (
             await session.execute(select(Design).where(Design.job_id == str(job.id), Design.name == name))
         ).scalar_one_or_none()
@@ -2700,45 +2854,21 @@ async def _ingest_shape_result_manifest(
                 "metrics": dict(item["metrics"]),
             }
             stored_manifest = existing.review_artifact_manifest
-            role_map = existing.review_role_map if isinstance(existing.review_role_map, dict) else {}
-
-            def normalized_artifact(
-                descriptor: dict[str, Any], *, kind: str, path: str
-            ) -> dict[str, Any]:
-                return {
-                    "kind": kind,
-                    "state": "ready",
-                    "path": path,
-                    "reason": None,
-                    **{
-                        key: descriptor[key]
-                        for key in ("sha256", "bytes", "format", "relative_path")
-                        if key in descriptor
-                    },
-                }
-
-            expected_stored_manifest = {
-                "schema": REVIEW_ARTIFACT_SCHEMA,
-                "artifacts": {
-                    "structure": normalized_artifact(
-                        expected_manifest["structure"], kind="structure", path=str(existing.pdb_path)
-                    ),
-                    "source_backbone": normalized_artifact(
-                        expected_manifest["source_backbone"],
-                        kind="source_backbone",
-                        path=str(existing.source_pdb_path),
-                    ),
-                    "metrics": normalized_artifact(
-                        expected_manifest["metrics"], kind="shape_metrics", path=str(existing.json_path)
-                    ),
-                },
-                "roles": {**role_map, "has_binder": False},
-            }
+            from .result_contracts import build_review_artifact_manifest
+            expected_stored_manifest = build_review_artifact_manifest(SimpleNamespace(
+                review_profile_id="shape_blueprint", review_role_map=existing.review_role_map,
+                review_artifact_manifest=expected_manifest, pdb_path=str(structure),
+                source_pdb_path=str(source_backbone), json_path=str(metrics_path),
+                provenance={"shape_validator_evidence": closure["validator_evidence"],
+                            "shape_validator_artifacts": closure["validator_artifacts"]},
+            ))
             if (
                 Path(existing.pdb_path).resolve() != structure
                 or Path(existing.source_pdb_path or "").resolve() != source_backbone
                 or Path(existing.json_path or "").resolve() != metrics_path
                 or stored_manifest != expected_stored_manifest
+                or (existing.provenance or {}).get("shape_validator_evidence") != closure["validator_evidence"]
+                or (existing.provenance or {}).get("shape_validator_artifacts", []) != closure["validator_artifacts"]
             ):
                 raise RuntimeError(f"Shape candidate conflicts with an existing Design: {name}")
             continue
@@ -2757,6 +2887,7 @@ async def _ingest_shape_result_manifest(
             name=name,
             pdb_path=str(structure),
             source_pdb_path=str(source_backbone),
+            producer_model_id="rfd3" if request_spec["sequence_policy"] == "skip" else "esmfold2",
             json_path=str(metrics_path),
             lineage_root_job_id=str(job.id),
             stage_family="shape_blueprint",
@@ -2780,6 +2911,8 @@ async def _ingest_shape_result_manifest(
                 **bindings,
                 "candidate_id": candidate_id,
                 "shape_result_manifest": str(resolved_manifest),
+                "shape_validator_evidence": closure["validator_evidence"],
+                "shape_validator_artifacts": closure["validator_artifacts"],
             },
             plddt_overall=metrics.get("plddt_overall"),
             confidence_metrics=metrics,
@@ -2798,6 +2931,7 @@ async def _ingest_shape_result_manifest(
     persisted_ids = [str((row.provenance or {}).get("candidate_id") or "") for row in persisted]
     if len(persisted_ids) != len(seen_ids) or set(persisted_ids) != seen_ids:
         raise RuntimeError("persisted Shape Designs do not exactly match the terminal manifest")
+    job.provenance = {**(job.provenance or {}), "shape_result_publication": publication}
     if commit:
         await session.commit()
     return created
@@ -2815,15 +2949,40 @@ def _local_redesign_canonical_sha(payload: Any) -> str:
     ).hexdigest()
 
 
+class RFD3ResultIntegrityError(RuntimeError):
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
+def _local_redesign_read_bytes(path: Path) -> bytes:
+    """Read one stable regular artifact without following any symlink component."""
+    fd = _open_absolute_no_symlinks(path, directory=False)
+    try:
+        before = os.fstat(fd)
+        if before.st_nlink != 1:
+            raise RuntimeError("RFD3 local-redesign artifact must not be hard-linked")
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            content = stream.read()
+        after = os.fstat(fd)
+        identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if identity(before) != identity(after) or len(content) != before.st_size:
+            raise RuntimeError("RFD3 local-redesign artifact changed during verification")
+        return content
+    finally:
+        os.close(fd)
+
+
 def _local_redesign_validate_native_request_artifact(
     path: Path,
     *,
     request_payload: Mapping[str, Any],
     request_sha256: str,
+    verified_content: bytes | None = None,
 ) -> None:
     expected_text = rfd3_canonical_json(request_payload) + "\n"
     try:
-        artifact_text = path.read_text(encoding="utf-8")
+        artifact_text = (verified_content if verified_content is not None else _local_redesign_read_bytes(path)).decode("utf-8")
     except OSError as exc:
         raise RuntimeError("RFD3 local-redesign native request artifact is unavailable") from exc
     if (
@@ -2849,7 +3008,7 @@ def _local_redesign_safe_job_artifact(output_root: Path, relative_path: str) -> 
             raise RuntimeError("RFD3 local-redesign artifact path contains a symlink")
     resolved = current.resolve()
     if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
-        raise RuntimeError("RFD3 local-redesign artifact is missing or outside the job output root")
+        raise RFD3ResultIntegrityError("artifact_unavailable", "RFD3 local-redesign artifact is missing or outside the job output root")
     if resolved.stat().st_nlink != 1:
         raise RuntimeError("RFD3 local-redesign artifact must not be hard-linked")
     return resolved
@@ -2868,7 +3027,7 @@ def _local_redesign_external_source(path_value: str) -> Path:
         or source != stored_source.resolve()
     ):
         raise RuntimeError("RFD3 local-redesign source structure is missing or unsafe")
-    return source
+    return stored_source.absolute()
 
 
 def _local_redesign_validate_artifact(
@@ -2876,7 +3035,7 @@ def _local_redesign_validate_artifact(
     *,
     output_root: Path,
     source_path: Path,
-) -> Path:
+) -> bytes:
     role = str(descriptor.get("role") or "").strip()
     relative = descriptor.get("relative_path")
     storage = descriptor.get("storage_path")
@@ -2896,25 +3055,27 @@ def _local_redesign_validate_artifact(
         resolved = _local_redesign_safe_job_artifact(output_root, relative)
         if resolved != Path(storage).expanduser().resolve():
             raise RuntimeError(f"RFD3 local-redesign artifact storage path mismatch: {role}")
-    actual_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
-    if actual_sha != expected_sha or resolved.stat().st_size != expected_bytes:
+    content = _local_redesign_read_bytes(resolved)
+    actual_sha = hashlib.sha256(content).hexdigest()
+    if actual_sha != expected_sha or len(content) != expected_bytes:
         raise RuntimeError(f"RFD3 local-redesign artifact identity mismatch: {role}")
-    return resolved
+    return content
 
 
-async def _ingest_rfd3_local_redesign_manifest(
-    job: Job,
-    output_root: Path,
-    session: AsyncSession,
-    *,
-    commit: bool,
-) -> int:
+def validate_rfd3_local_redesign_manifest(
+    output_root: Path, request: RFD3LocalRedesignRequest,
+) -> dict[str, Any]:
+    """Native immutable RFD3 proof, shared by ingest and explicit reverify.
+
+    Does not mutate ORM state or ingest on a read boundary.
+    """
     manifest_path = output_root / "collected" / "protein_local_redesign" / "rfd3_result_manifest.json"
     manifest = None
     if not manifest_path.is_file() or manifest_path.is_symlink():
-        raise RuntimeError("RFD3 local-redesign result manifest is absent or unsafe")
+        raise RFD3ResultIntegrityError("manifest_unavailable", "RFD3 local-redesign result manifest is absent or unsafe")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_bytes = _local_redesign_read_bytes(manifest_path)
+        manifest = json.loads(manifest_bytes)
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"RFD3 local-redesign result manifest is malformed: {exc}") from exc
     if not isinstance(manifest, dict) or manifest.get("schema") != "bms.rfd3.local-redesign.result.v1":
@@ -2922,13 +3083,8 @@ async def _ingest_rfd3_local_redesign_manifest(
     unsigned = dict(manifest)
     claimed_manifest_sha = unsigned.pop("manifest_sha256", None)
     if not isinstance(claimed_manifest_sha, str) or _local_redesign_canonical_sha(unsigned) != claimed_manifest_sha:
-        raise RuntimeError("RFD3 local-redesign result manifest SHA-256 is invalid")
+        raise RFD3ResultIntegrityError("digest_mismatch", "RFD3 local-redesign result manifest SHA-256 is invalid")
 
-    request = (
-        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id)))
-    ).scalar_one_or_none()
-    if request is None:
-        raise RuntimeError("RFD3 local-redesign job has no immutable request row")
     request_payload = request.request_json
     if not isinstance(request_payload, dict):
         raise RuntimeError("RFD3 local-redesign request JSON is invalid")
@@ -2964,21 +3120,24 @@ async def _ingest_rfd3_local_redesign_manifest(
         raise RuntimeError("RFD3 local-redesign request has no source input")
     source_request = source_binding["path"]
     source_path = _local_redesign_external_source(source_request)
-    if source_binding.get("sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest():
-        raise RuntimeError("RFD3 local-redesign source hash is invalid")
 
     manifest_artifacts = manifest.get("artifacts")
     candidates = manifest.get("candidates")
     if not isinstance(manifest_artifacts, list) or not isinstance(candidates, list) or not candidates:
         raise RuntimeError("RFD3 local-redesign result lacks declared artifacts or candidates")
     descriptor_by_path: dict[str, dict[str, Any]] = {}
+    semantic_bytes: dict[str, bytes] = {}
     for descriptor in manifest_artifacts:
         if not isinstance(descriptor, dict):
             raise RuntimeError("RFD3 local-redesign artifact entry is malformed")
         relative_path = descriptor.get("relative_path")
         if not isinstance(relative_path, str) or relative_path in descriptor_by_path:
             raise RuntimeError("RFD3 local-redesign artifact paths must be unique")
-        _local_redesign_validate_artifact(descriptor, output_root=output_root, source_path=source_path)
+        if descriptor.get("role") == "source_structure" and descriptor.get("sha256") != source_binding.get("sha256"):
+            raise RuntimeError("RFD3 local-redesign source hash is invalid")
+        content = _local_redesign_validate_artifact(descriptor, output_root=output_root, source_path=source_path)
+        if descriptor.get("role") in {"native_request", "native_prediction_metadata", "preparation_receipt", "native_producer_input"}:
+            semantic_bytes[relative_path] = content
         descriptor_by_path[relative_path] = descriptor
 
     role_counts: dict[str, int] = {}
@@ -2998,13 +3157,10 @@ async def _ingest_rfd3_local_redesign_manifest(
     native_request_descriptor = next(
         descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "native_request"
     )
-    native_request_path = _local_redesign_safe_job_artifact(
-        output_root, str(native_request_descriptor["relative_path"])
-    )
     _local_redesign_validate_native_request_artifact(
-        native_request_path,
-        request_payload=request_payload,
-        request_sha256=request.request_sha256,
+        output_root / native_request_descriptor["relative_path"],
+        request_payload=request_payload, request_sha256=request.request_sha256,
+        verified_content=semantic_bytes[native_request_descriptor["relative_path"]],
     )
 
     execution = request_payload.get("execution")
@@ -3073,11 +3229,8 @@ async def _ingest_rfd3_local_redesign_manifest(
         native_metadata_descriptor = next(
             item for item in candidate_artifacts if item.get("role") == "native_prediction_metadata"
         )
-        native_metadata_path = _local_redesign_safe_job_artifact(
-            output_root, str(native_metadata_descriptor["relative_path"])
-        )
         try:
-            native_metadata = json.loads(native_metadata_path.read_text(encoding="utf-8"))
+            native_metadata = json.loads(semantic_bytes[native_metadata_descriptor["relative_path"]])
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"RFD3 local-redesign native metadata is malformed: {candidate_id}") from exc
         if not isinstance(native_metadata, dict):
@@ -3110,17 +3263,6 @@ async def _ingest_rfd3_local_redesign_manifest(
     if seen_artifacts != declared_candidate_artifacts:
         raise RuntimeError("RFD3 local-redesign candidate artifact assignment is incomplete")
 
-    runtime_records = [
-        candidate.get("metrics", {}).get("inference_metadata")
-        for candidate in candidates
-        if isinstance(candidate.get("metrics"), dict) and candidate.get("metrics", {}).get("inference_metadata") is not None
-    ]
-    if runtime_records:
-        request.runtime_identity_json = {
-            "source": "native_rfd3_prediction_metadata",
-            "records": runtime_records,
-        }
-
     receipt_descriptors = [
         descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "preparation_receipt"
     ]
@@ -3135,7 +3277,7 @@ async def _ingest_rfd3_local_redesign_manifest(
         raise RuntimeError("RFD3 local-redesign preparation receipt is unavailable")
     else:
         try:
-            preparation_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            preparation_receipt = json.loads(semantic_bytes[receipt_relative_path])
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("RFD3 local-redesign preparation receipt is malformed") from exc
         if (
@@ -3155,9 +3297,8 @@ async def _ingest_rfd3_local_redesign_manifest(
         native_input_relative_path = str(native_input_descriptors[0].get("relative_path") or "")
         if native_input_relative_path != "collected/protein_local_redesign/rfd3_input_protein_local_redesign_0.json":
             raise RuntimeError("RFD3 local-redesign native producer input path is invalid")
-        native_input_path = _local_redesign_safe_job_artifact(output_root, native_input_relative_path)
         try:
-            native_input_payload = json.loads(native_input_path.read_text(encoding="utf-8"))
+            native_input_payload = json.loads(semantic_bytes[native_input_relative_path])
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("RFD3 local-redesign native producer input is malformed") from exc
         receipt_native = preparation_receipt.get("native_rfd3")
@@ -3185,7 +3326,38 @@ async def _ingest_rfd3_local_redesign_manifest(
             != ("not_requested" if request_payload.get("sequence_policy") == "skip" else "requested")
         ):
             raise RuntimeError("RFD3 local-redesign preparation receipt semantics are invalid")
-        request.preparation_receipt_json = preparation_receipt
+
+
+    return {"manifest": manifest, "manifest_path": manifest_path,
+            "digest": claimed_manifest_sha, "manifest_bytes": manifest_bytes, "candidates": candidates,
+            "descriptors": descriptor_by_path, "preparation_receipt": preparation_receipt}
+
+
+async def _ingest_rfd3_local_redesign_manifest(
+    job: Job, output_root: Path, session: AsyncSession, *, commit: bool,
+) -> int:
+    request = (
+        await session.execute(select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == str(job.id)))
+    ).scalar_one_or_none()
+    if request is None:
+        raise RuntimeError("RFD3 local-redesign job has no immutable request row")
+    proof = validate_rfd3_local_redesign_manifest(output_root, request)
+    manifest = proof["manifest"]
+    manifest_path = proof["manifest_path"]
+    claimed_manifest_sha = proof["digest"]
+    candidates = proof["candidates"]
+    descriptor_by_path = proof["descriptors"]
+    request.preparation_receipt_json = proof["preparation_receipt"]
+    runtime_records = [
+        candidate.get("metrics", {}).get("inference_metadata")
+        for candidate in candidates
+        if isinstance(candidate.get("metrics"), dict) and candidate.get("metrics", {}).get("inference_metadata") is not None
+    ]
+    if runtime_records:
+        request.runtime_identity_json = {
+            "source": "native_rfd3_prediction_metadata",
+            "records": runtime_records,
+        }
 
     request.result_manifest_sha256 = claimed_manifest_sha
     now = datetime.utcnow()
@@ -3202,8 +3374,8 @@ async def _ingest_rfd3_local_redesign_manifest(
         "role": "rfd3_result_manifest",
         "relative_path": "collected/protein_local_redesign/rfd3_result_manifest.json",
         "storage_path": str(manifest_path.resolve()),
-        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-        "bytes": manifest_path.stat().st_size,
+        "sha256": hashlib.sha256(proof["manifest_bytes"]).hexdigest(),
+        "bytes": len(proof["manifest_bytes"]),
         "media_type": "application/json",
     }
     all_descriptors = [*descriptor_by_path.values(), manifest_descriptor]
@@ -3696,7 +3868,10 @@ def _validate_canonical_protein_design_identity(
                 f"canonical protein_design metadata candidate {candidate_id!r} "
                 f"has an invalid {field}"
             )
-    if row["source_format"] not in {"pdb", "mmcif"}:
+    if (row["source_format"] not in {"pdb", "mmcif"}
+            or Path(row["producer_output_key"]).suffix.lower() not in (
+                {".pdb"} if row["source_format"] == "pdb" else {".cif", ".mmcif"}
+            )):
         raise FrustraMPNNPersistenceError(
             f"canonical protein_design metadata candidate {candidate_id!r} "
             "has an invalid source_format"
@@ -3728,13 +3903,22 @@ def _validate_canonical_protein_design_identity(
 def _prevalidate_published_protein_design_metadata(
     output_path: Path, *, parent_job_id: str
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]] | None:
-    """Preflight a complete disabled-path canonical CSV before any ORM mutation."""
+    """Preflight canonical primary CSVs, without imposing that schema on legacy CSVs."""
 
     csv_path = output_path / "results" / "all_designs.csv"
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, [])
+        # Normalize only for detecting a claim. The strict reader below rejects
+        # ambiguous/noncanonical headers before trusting any authority.
+        normalized_header = [field.strip().casefold() for field in header]
+        if not any(
+            _canonical_protein_design_claim({field: value})
+            for row in reader for field, value in zip(normalized_header, row)
+        ):
+            return None
     _fieldnames, raw_rows = _read_strict_authoritative_csv_rows(csv_path)
     claims = [_canonical_protein_design_claim(row) for row in raw_rows]
-    if not any(claims):
-        return None
     if not raw_rows or not all(claims):
         raise FrustraMPNNPersistenceError(
             "canonical protein_design metadata cannot mix canonical and historical rows"
@@ -3776,6 +3960,7 @@ def _protein_design_projection_values(
     description = row.get("description", "")
     values: dict[str, Any] = {
         "name": description if description != "" else design.name,
+        "producer_model_id": row.get("producer_method"),
         "backbone_id": (
             parse_backbone_id(description)
             if isinstance(description, str) and description != ""
@@ -3826,6 +4011,24 @@ def _assert_protein_design_metadata_replay(
         raise FrustraMPNNPersistenceError(
             "canonical protein_design metadata replay contradicts persisted Design fields"
         )
+
+
+async def _validate_protein_design_primary_rows(
+    session: AsyncSession,
+    job_id: str,
+    metadata: Mapping[str, dict[str, Any]],
+    physical_paths: Mapping[str, str],
+) -> None:
+    rows = list((await session.execute(select(Design).where(
+        Design.job_id == job_id, Design.source_stage.is_(None),
+    ))).scalars())
+    if {str(row.id) for row in rows} != set(metadata):
+        raise FrustraMPNNPersistenceError("canonical primary Design candidate set conflicts with publication")
+    for row in rows:
+        if row.pdb_path != physical_paths[str(row.id)]:
+            raise FrustraMPNNPersistenceError("canonical primary Design source path conflicts with publication")
+        _assert_protein_design_metadata_replay(row, metadata[str(row.id)])
+    session.info.setdefault("protein_design_primary_prevalidated", set()).add(job_id)
 
 
 async def _ingest_explicit_frustrampnn_results(
@@ -4023,9 +4226,8 @@ async def _ingest_explicit_frustrampnn_results(
         if ":" not in producer_stage or not all(
             part.strip() for part in producer_stage.split(":", 1)
         ):
-            # Pre-Phase-5 canonical bundles already attach to a Design seeded by
-            # the parent ingester. Only typed parent-candidate authority opts in
-            # to deterministic precreation; Phase 7 removes the compatibility path.
+            # Historical bundles retain their explicit source-Design-ID join.
+            # Modern typed candidates additionally bind native producer identity.
             continue
         expected_candidate_id = deterministic_candidate_id(
             parent_job_id=str(current_job.id),
@@ -4076,65 +4278,52 @@ async def _ingest_explicit_frustrampnn_results(
         else {}
     )
 
-    # The deterministic Design rows then become visible to canonical
-    # persistence through one explicit flush.
+    # Primary rows are already flushed by the caller; components only attach
+    # to those native owners and cannot synthesize replacement projections.
     existing_results: dict[str, FrustraMPNNResult | None] = {}
     for _root, _terminal, bundle in validated_candidates:
         invocation_id = bundle.manifest["invocation_id"]
         existing_results[invocation_id] = await session.get(
             FrustraMPNNResult, (str(current_job.id), invocation_id)
         )
-    designs_to_add: list[Design] = []
-    for candidate_id, candidate_key, source_path, _bundle in parent_designs:
-        design = await session.get(Design, candidate_id)
-        if design is not None:
-            if design.job_id != str(current_job.id) or design.pdb_path != os.fspath(source_path):
-                raise FrustraMPNNPersistenceError(
-                    "FrustraMPNN deterministic Design identity conflicts with persisted authority"
-                )
-            existing_result = existing_results[_bundle.manifest["invocation_id"]]
-            if existing_result is not None and _bundle.request["parent_workflow_id"] == "protein_design":
-                metadata_row = protein_metadata[candidate_id]
-                if not _strict_canonical_json_equal(
-                    existing_result.parent_metadata_json, metadata_row
-                ):
-                    raise FrustraMPNNPersistenceError(
-                        "canonical protein_design metadata replay conflicts with immutable metadata snapshot"
-                    )
-                _assert_protein_design_metadata_replay(design, metadata_row)
-            continue
-        designs_to_add.append(
-            Design(
-                id=candidate_id,
-                job_id=str(current_job.id),
-                name=candidate_key,
-                pdb_path=os.fspath(source_path),
-                source_stage="frustrampnn_candidate",
-                source_stage_family=str(_bundle.request["parent_workflow_id"]),
-                source_stage_mode=str(
-                    _bundle.request["source_artifact"]["producer_stage"]
-                ),
-                artifact_class=(
-                    "designed_structure"
-                    if _bundle.request["parent_workflow_id"] == "protein_design"
-                    else "predicted_structure"
-                ),
-                created_at=datetime.utcnow(),
-            )
+    primary_designs: dict[str, Design] = {}
+    for candidate_id, _candidate_key, _source_path, bundle in parent_designs:
+        source = bundle.request["source_artifact"]
+        design = await _exact_design_link(
+            session,
+            source_artifact_id=source.get("artifact_id"),
+            source_artifact_sha256=source["sha256"],
+            normalized_source_sha256=bundle.request.get("normalized_pdb_sha256", source["sha256"]),
+            parent_job_id=str(current_job.id),
+            parent_workflow_id=bundle.request["parent_workflow_id"],
+            candidate_id=candidate_id,
+            source_artifact=source,
+            producer_provenance=bundle.request.get("producer_provenance"),
         )
+        if design is None:
+            raise FrustraMPNNPersistenceError("FrustraMPNN candidate lacks its native primary Design")
+        from services.core_protein_scientific_contract import revision_for_job
+        if getattr(current_job, 'model_id', None) == 'boltz2' and revision_for_job(current_job) == 1:
+            from services.boltz_scientific_consumer import verified_boltz_design
+            producer = bundle.request.get('producer_provenance') or {}
+            selected = await verified_boltz_design(design, session)
+            if (any(producer.get(key) != value for key, value in selected['block']['producer'].items())
+                    or producer.get('original_source_sha256') != selected['artifacts']['structure']['sha256']):
+                raise FrustraMPNNPersistenceError('FrustraMPNN native Boltz producer binding differs')
+        primary_designs[candidate_id] = design
+        existing_result = existing_results[bundle.manifest["invocation_id"]]
+        if existing_result is not None and candidate_id in protein_metadata:
+            metadata_row = protein_metadata[candidate_id]
+            if not _strict_canonical_json_equal(existing_result.parent_metadata_json, metadata_row):
+                raise FrustraMPNNPersistenceError(
+                    "canonical protein_design metadata replay conflicts with immutable metadata snapshot"
+                )
+            _assert_protein_design_metadata_replay(design, metadata_row)
 
     created = 0
     try:
-        session.add_all(designs_to_add)
-        if designs_to_add:
-            await session.flush()
         for candidate_id, row in protein_metadata.items():
-            design = await session.get(Design, candidate_id)
-            if design is None:
-                raise FrustraMPNNPersistenceError(
-                    "canonical protein_design metadata references a missing Design"
-                )
-            _enrich_protein_design_from_metadata(design, row)
+            _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
         for root, terminal, bundle in validated_candidates:
             invocation_id = bundle.manifest["invocation_id"]
             await ingest_frustrampnn_result_bundle(
@@ -4267,6 +4456,7 @@ async def _ingest_rfd3_generation_manifest(
                 id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}")),
                 job_id=job.id,
                 name=candidate["candidate_id"],
+                producer_model_id="rfd3",
                 pdb_path=structure["resolved_path"],
                 json_path=metadata["resolved_path"],
                 lineage_root_job_id=job.lineage_root_job_id or job.id,
@@ -4332,13 +4522,467 @@ async def _ingest_rfd3_generation_manifest(
     return len(manifest["candidates"])
 
 
+async def _ingest_protenix_primary_publications(
+    job: Job, output_root: Path, session: AsyncSession,
+) -> None:
+    """Bind existing native Designs to exact published producer keys and bytes."""
+    from .core_protein_result_contract import _artifact, validate_candidate_accounting
+
+    def artifact(raw: str) -> tuple[dict[str, Any], bytes]:
+        return _artifact(output_root, os.fspath(_stage_path(raw, output_root)))
+
+    publications = sorted((output_root / "run/protenix/producer").glob("*/publication.json"))
+    if not publications:
+        return  # Historical primary imports retain their existing compatibility gate.
+    rows = list((await session.execute(select(Design).where(
+        Design.job_id == str(job.id), Design.source_stage.is_(None),
+    ))).scalars())
+    rows_by_path: dict[Path, list[Design]] = {}
+    for row in rows:
+        if row.pdb_path:
+            path = Path(row.pdb_path)
+            rows_by_path.setdefault((path if path.is_absolute() else output_root / path).resolve(), []).append(row)
+    prepared: dict[str, tuple[Design, dict[str, Any], dict[str, Any]]] = {}
+    inventory = []
+    seen_keys: set[str] = set()
+    for publication_path in publications:
+        publication_artifact, raw = artifact(str(publication_path))
+        publication = json.loads(raw)
+        if (publication.get("schema_name") != "structure_producer_publication"
+                or publication.get("schema_version") != 1):
+            raise RuntimeError("Protenix native publication schema is invalid")
+        descriptor = publication["producer_manifest"]
+        manifest_artifact, manifest_raw = artifact(descriptor["relative_path"])
+        if manifest_artifact["sha256"] != descriptor["sha256"]:
+            raise RuntimeError("Protenix original producer manifest hash mismatch")
+        manifest = json.loads(manifest_raw)
+        if (manifest.get("schema_name") not in {"structure_producer_candidates", "sequence_structure_producer_candidates"}
+                or manifest.get("schema_version") != 1 or not isinstance(manifest.get("candidates"), list)):
+            raise RuntimeError("Protenix original producer candidate schema is invalid")
+        candidates = {item["producer_output_key"]: item for item in manifest["candidates"]}
+        bindings = publication.get("bindings")
+        if (len(candidates) != len(manifest["candidates"]) or not candidates or not isinstance(bindings, list)
+                or len(bindings) != len(candidates) or {item["producer_output_key"] for item in bindings} != set(candidates)):
+            raise RuntimeError("Protenix native publication candidate set is incomplete or duplicated")
+        inventory.append({"publication": publication_artifact, "producer_manifest": manifest_artifact})
+        for binding in bindings:
+            key = binding["producer_output_key"]
+            candidate = candidates[key]
+            if key in seen_keys or candidate.get("producer_method") != "protenix":
+                raise RuntimeError("Protenix native producer identity is foreign or duplicated")
+            seen_keys.add(key)
+            structure, structure_bytes = artifact(binding["published_relative_path"])
+            if (structure["sha256"] != binding["sha256"] or len(structure_bytes) != binding["size_bytes"]
+                    or structure["sha256"] != candidate["producer_artifact_sha256"]
+                    or binding["source_format"] != candidate["source_format"]):
+                raise RuntimeError("Protenix native structure identity differs from original producer")
+            matches = rows_by_path.get(Path(structure["path"]).resolve(), [])
+            if len(matches) != 1:
+                raise RuntimeError("Protenix publication must match exactly one primary Design path")
+            design = matches[0]
+            if design.name in prepared:
+                raise RuntimeError("Protenix primary Design identity is duplicated")
+            metrics, _ = artifact(design.json_path)
+            artifacts = {"structure": structure, "metrics": metrics}
+            provenance = design.provenance if isinstance(design.provenance, dict) else {}
+            prior = provenance.get("native_producer")
+            if prior is not None and not _strict_canonical_json_equal(prior, candidate):
+                raise RuntimeError("Protenix immutable native producer replay conflicts")
+            confidence = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
+            prior_artifacts = confidence.get("core_protein_candidate_artifacts")
+            if prior_artifacts is not None and not _strict_canonical_json_equal(prior_artifacts, artifacts):
+                raise RuntimeError("Protenix immutable native artifact replay conflicts")
+            prepared[design.name] = (design, candidate, artifacts)
+    summary = validate_candidate_accounting(
+        stage_id="protenix", requested_count=None, generated_ids=list(prepared),
+        dispositions=[{"candidate_id": name, "disposition": "selected"} for name in prepared],
+        expected_publication_ids=list(prepared), persisted_ids=[row.name for row in rows],
+    )
+    prior_inventory = (job.provenance or {}).get("protenix_primary_publication")
+    if prior_inventory is not None and not _strict_canonical_json_equal(prior_inventory, inventory):
+        raise RuntimeError("Protenix native publication inventory replay conflicts")
+    for design, candidate, artifacts in prepared.values():
+        design.producer_model_id = candidate["producer_method"]
+        design.provenance = {**(design.provenance or {}), "native_producer": candidate}
+        design.confidence_metrics = {**(design.confidence_metrics or {}), "core_protein_candidate_artifacts": artifacts}
+    job.provenance = {**(job.provenance or {}), "protenix_primary_publication": inventory,
+                      "core_protein_candidate_publication": {
+                          "summary": summary, "manifest": inventory[0]["publication"],
+                          "candidates": {name: value[2] for name, value in prepared.items()},
+                      }}
+
+
+async def ingest_component_projection(
+    job: Job,
+    output_dir: str,
+    session: AsyncSession,
+    *,
+    expected_context: dict | None = None,
+) -> list[Job]:
+    """Project executed logical children, never schedule or certify their science.
+
+    The caller owns the generation write fence, verified return manifest and DB
+    transaction. Local callers bind the launch-owned context; remote callers must
+    supply their verified context, not trust identities from the returned file.
+    Native snapshots/requests/references are retained byte-semantically unchanged.
+    Only derived storage bindings point at the received generation.
+    """
+    from pathlib import PurePosixPath
+    from component_runtime import ComponentRequest, ResultReference, SourceIdentity
+
+    session.info.setdefault('component_projection_verified', {}).pop(str(job.id), None)
+    root = Path(output_dir)
+    root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+    root = root.resolve()
+    provenance = dict(job.provenance or {})
+    context_path = provenance.get('component_context_path')
+    if expected_context is None and not job.execution_target_id and context_path:
+        from scripts.lib.component_adapter import current_generation_context
+        context = json.loads(Path(context_path).read_bytes())
+        state_path = Path(context.get('root_state_path', str(Path(context_path).with_suffix('.state.json'))))
+        state = json.loads(state_path.read_bytes())
+        current_context = current_generation_context(context, state)
+        expected_context = {**current_context,
+                            'current_plan_sha256': current_context['plan_sha256'],
+                            'plan_sha256': context['plan_sha256'],
+                            'generation': state.get('generation', 0)}
+        # The current native generation owns its immutable sidecar, while all
+        # reference/storage bindings remain relative to the original attempt root.
+        root = Path(context['artifact_root']).resolve(strict=True)
+        native_root = Path(expected_context['parent']['output_dir']).resolve(strict=True)
+        locator = (native_root / '.bms-components.json').relative_to(root).as_posix()
+        expected_context = {**expected_context, 'projection_relative_path': locator}
+    locator = (expected_context or {}).get('projection_relative_path', '.bms-components.json')
+    if type(locator) is not str or '\\' in locator or '\x00' in locator:
+        raise ValueError('invalid component projection locator')
+    locator_path = PurePosixPath(locator)
+    if (locator_path.is_absolute() or '..' in locator_path.parts
+            or locator_path.as_posix() != locator or locator_path.name != '.bms-components.json'):
+        raise ValueError('component projection locator escapes attempt')
+    path = root / locator
+    if not path.resolve().is_relative_to(root):
+        raise ValueError('component projection locator escapes attempt')
+    if not path.exists() and not path.is_symlink():
+        if expected_context is not None:
+            raise ValueError('executed component workflow has no projection publication')
+        return []
+    if expected_context is None:
+        raise ValueError('component projection requires launch/return identity authority')
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('component projection must be a regular published file')
+    raw = path.read_bytes()
+    if expected_context.get('projection_sha256') and hashlib.sha256(raw).hexdigest() != expected_context['projection_sha256']:
+        raise ValueError('component projection manifest digest conflicts')
+    envelope = json.loads(raw)
+    if not isinstance(envelope, dict) or envelope.get('schema_name') != 'bms.component-projection.v1':
+        raise ValueError('unsupported component projection')
+    keys = ('root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity',
+            'plan_sha256', 'current_plan_sha256', 'generation')
+    for key in keys:
+        if key not in expected_context or envelope.get(key) != expected_context[key]:
+            raise ValueError(f'component projection {key} binding conflicts')
+    if (envelope['root_job_id'] != str(job.id)
+            or envelope['target_id'] != (job.execution_target_id or 'local')
+            or type(envelope['generation']) is not int or envelope['generation'] < 0
+            or not envelope['attempt_id'] or not envelope['lease_id']):
+        raise ValueError('component projection root/attempt/placement conflicts')
+    SourceIdentity(**envelope['source_identity'])
+    root_state = envelope.get('root_state')
+    if (not isinstance(root_state, dict) or root_state.get('quiescent') is not True
+            or root_state.get('state') not in {'completed', 'failed', 'cancelled', 'paused'}
+            or root_state.get('generation', 0) != envelope['generation']):
+        raise ValueError('component publication lacks quiescent generation evidence')
+    for key in ('plan_sha256', 'current_plan_sha256'):
+        if (type(envelope[key]) is not str or len(envelope[key]) != 64
+                or any(char not in '0123456789abcdef' for char in envelope[key])):
+            raise ValueError(f'invalid component {key} digest')
+    edge = root_state.get('continuation_edge')
+    if envelope['generation'] == 0:
+        if edge is not None or envelope['current_plan_sha256'] != envelope['plan_sha256']:
+            raise ValueError('initial component generation changed its original plan')
+    elif not isinstance(edge, dict) or edge.get('plan_sha256') != envelope['current_plan_sha256']:
+        raise ValueError('component current plan lacks its authenticated generation edge')
+    if job.execution_target_id and (
+        envelope['attempt_id'] != job.remote_attempt_id
+        or envelope['source_identity'] != {'revision': job.execution_source_revision, 'tree': job.execution_source_tree}
+    ):
+        raise ValueError('component projection differs from current remote execution')
+
+    def contained(relative: str, *, directory: bool = False) -> Path:
+        if type(relative) is not str or '\\' in relative or '\x00' in relative:
+            raise ValueError('invalid component publication path')
+        pure = PurePosixPath(relative)
+        if not relative or pure.is_absolute() or '..' in pure.parts or pure.as_posix() != relative:
+            raise ValueError('component publication path escapes generation')
+        candidate = root / relative
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_relative_to(root) or (not resolved.is_dir() if directory else not resolved.is_file()):
+            raise ValueError('component publication binding is not contained')
+        return resolved
+
+    rows = envelope.get('components')
+    if not isinstance(rows, list):
+        raise ValueError('component projection requires an exact child set')
+    prepared = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('invalid component projection row')
+        request = ComponentRequest.capture(**row['request'])
+        identity = request.component_id
+        if row.get('component_id') != identity or identity in prepared or identity == str(job.id):
+            raise ValueError('duplicate or conflicting deterministic component identity')
+        state = row.get('state')
+        if state not in {'execution_finished', 'completed', 'failed', 'cancelled'}:
+            raise ValueError('only quiescent executed children may be projected')
+        failure_receipt = row.get('failure_receipt')
+        if failure_receipt is not None and (state != 'failed' or not isinstance(failure_receipt, dict)):
+            raise ValueError('component failure receipt requires its failed child')
+        snapshot = row.get('native_parent')
+        if not isinstance(snapshot, dict):
+            raise ValueError('executed child has no compiler-bound native snapshot')
+        if (snapshot.get('id') != identity or snapshot.get('parent_job_id') != request.parent_job_id
+                or snapshot.get('child_stage') != request.stage
+                or (snapshot.get('model_id'), snapshot.get('mode')) != (request.payload['model_id'], request.payload['mode'])
+                or snapshot.get('execution_target_id') != job.execution_target_id
+                or not isinstance(snapshot.get('params'), dict)
+                or not isinstance(snapshot.get('provenance'), dict)):
+            raise ValueError('component compiled snapshot identity conflicts')
+        output = contained(row['output_relative_path'], directory=True)
+        # Compiler output identity is stable independently of its host binding.
+        native_output = PurePosixPath(snapshot['output_dir'])
+        if (tuple(native_output.parts[-2:]) != ('components', identity.replace(':', '-'))
+                or row['output_relative_path'] != '/'.join(native_output.parts[-2:])):
+            raise ValueError('component compiler output identity conflicts')
+        if expected_context.get('artifact_root') and native_output != (
+            PurePosixPath(expected_context['artifact_root']) / row['output_relative_path']
+        ):
+            raise ValueError('component native output differs from original attempt root')
+        result = row.get('result')
+        if result is not None and not isinstance(result, dict):
+            raise ValueError('invalid native component result')
+        result = result or {}
+        detail = result.get('result', {})
+        if not isinstance(detail, dict) or detail.get('output_dir', snapshot['output_dir']) != snapshot['output_dir']:
+            raise ValueError('component result output differs from compiled output')
+        references = result.get('references', [])
+        if not isinstance(references, list) or (state == 'completed' and not references):
+            raise ValueError('native completion requires its sealed artifact references')
+        for reference in references:
+            native = ResultReference(**reference)
+            if native.component_id != identity:
+                raise ValueError('foreign component result reference')
+            contained(native.relative_path)
+            native.resolve(root)
+        immutable = dict(request=request.to_dict(), native_parent=snapshot,
+                         root_job_id=envelope['root_job_id'], attempt_id=envelope['attempt_id'],
+                         target_id=envelope['target_id'], source_identity=envelope['source_identity'])
+        prepared[identity] = (row, request, snapshot, output, immutable)
+    # All parents must be in this export or be this attempt's previously imported
+    # child. Topological insertion rejects foreign parents and cycles before flush.
+    ordered = []
+    pending = dict(prepared)
+    known = {str(job.id)}
+    while pending:
+        ready = [identity for identity, item in pending.items() if item[1].parent_job_id in known]
+        if not ready:
+            raise ValueError('component export has missing parents or cyclic lineage')
+        for identity in ready:
+            ordered.append((identity, pending.pop(identity)))
+            known.add(identity)
+
+    children = []
+    for identity, (row, request, snapshot, output, immutable) in ordered:
+        child = await session.get(Job, identity)
+        control = dict(immutable, state=row['state'], result=row.get('result'),
+                       generation=envelope['generation'], lease_id=envelope['lease_id'],
+                       plan_sha256=envelope['plan_sha256'], current_plan_sha256=envelope['current_plan_sha256'],
+                       failure_receipt=row.get('failure_receipt'), projection_sha256=hashlib.sha256(raw).hexdigest(),
+                       output_relative_path=row['output_relative_path'],
+                       projection_relative_path=locator, artifact_root=str(root), error=row.get('error'))
+        if child is not None:
+            prior = (child.provenance or {}).get('component_projection')
+            if (not isinstance(prior, dict) or any(prior.get(key) != value for key, value in immutable.items())
+                    or child.parent_job_id != request.parent_job_id or child.params != snapshot['params']
+                    or child.model_id != snapshot['model_id'] or child.mode != snapshot['mode']
+                    or child.execution_target_id != job.execution_target_id):
+                raise ValueError('component projection would overwrite historical identity/settings')
+            if (prior.get('state') != row['state'] or prior.get('result') != row.get('result')
+                    or prior.get('lease_id') != envelope['lease_id']
+                    or prior.get('plan_sha256') != envelope['plan_sha256']
+                    or prior.get('error') != row.get('error')
+                    or (prior.get('generation') == envelope['generation']
+                        and prior.get('projection_sha256') != control['projection_sha256'])
+                    or ('failure_receipt' in prior and prior['failure_receipt'] != row.get('failure_receipt'))):
+                raise ValueError('component projection would rewrite sealed execution history')
+            # Backfill only authenticated receipt evidence omitted by older
+            # importers; never replace existing receipt or artifact custody.
+            receipt = row.get('failure_receipt')
+            prior_receipt = (child.provenance or {}).get('failure_receipt')
+            if prior_receipt is not None and prior_receipt != receipt:
+                raise ValueError('component native failure receipt conflicts on replay')
+            if 'failure_receipt' not in prior:
+                child.provenance = {**dict(child.provenance or {}),
+                    'component_projection': {**prior, 'failure_receipt': receipt},
+                    **({'failure_receipt': receipt} if receipt is not None else {})}
+            if row['state'] in {'failed', 'cancelled'}:
+                child.completed_at = child.completed_at or datetime.utcnow()
+                if child.error_message is None:
+                    child.error_message = str(row.get('error') or '')
+            # Retained good rows keep their original artifact custody and native
+            # completion state when a retry publication also includes history.
+            children.append(child)
+            continue
+        failed = row['state'] in {'failed', 'cancelled'}
+        native_provenance = dict(snapshot['provenance'])
+        native_provenance.pop('failure_receipt', None)
+        if row.get('failure_receipt') is not None:
+            native_provenance['failure_receipt'] = row['failure_receipt']
+        child = Job(id=identity, name=str(request.payload.get('name') or f'{job.name}: {request.stage}'),
+                    model_id=snapshot['model_id'], mode=snapshot['mode'], params=snapshot['params'],
+                    parent_job_id=request.parent_job_id, lineage_root_job_id=job.lineage_root_job_id or str(job.id),
+                    child_stage=request.stage, output_dir=str(output), child_output_dir=str(output),
+                    status=row['state'] if failed else 'paused', queue_status=row['state'] if failed else 'paused',
+                    paused=not failed, assigned_gpu=None, pinned_gpu=None, max_retries=0,
+                    completed_at=datetime.utcnow() if failed else None,
+                    error_message=str(row.get('error') or '') if failed else None,
+                    current_stage='Component failed' if failed else 'Native validation pending',
+                    execution_target_id=job.execution_target_id, remote_attempt_id=job.remote_attempt_id,
+                    execution_source_revision=envelope['source_identity']['revision'],
+                    execution_source_tree=envelope['source_identity']['tree'],
+                    execution_bundle_sha256=job.execution_bundle_sha256,
+                    provenance={**native_provenance, 'component_projection': control})
+        session.add(child)
+        children.append(child)
+    await session.flush()
+    if job.model_id == 'molecular_dynamics' and job.mode == 'simulate':
+        from services.md.state import reconcile_component_projection
+        await reconcile_component_projection(session, job, children)
+    session.info.setdefault('component_projection_verified', {})[str(job.id)] = [str(child.id) for child in children]
+    return children
+
+
+async def _ingest_public_sequence_results(job: Job, output_path: Path, session: AsyncSession) -> int:
+    """Project the native selected set, not a recursive scan of raw model files."""
+    from scripts.sequence_design_results import load_result_index, SequenceDesignResultError
+
+    index, candidates, index_sha = load_result_index(output_path, job.model_id, job.mode)
+    selected = {row['name']: (row, metadata) for row, metadata in candidates if row['selected']}
+    existing_rows = (await session.execute(select(Design).where(
+        Design.job_id == job.id, Design.source_stage.is_(None)))).scalars().all()
+    existing = {row.name: row for row in existing_rows}
+    if len(existing) != len(existing_rows) or not set(existing) <= set(selected):
+        raise SequenceDesignResultError('Existing sequence rows disagree with native selected membership')
+    for name, row in existing.items():
+        if (row.provenance or {}).get('sequence_design_native_index_sha256') != index_sha:
+            raise SequenceDesignResultError('Sequence import replay has a different native source')
+
+    context = _job_stage_context(job)
+    lineage_cache = {}
+    created = 0
+    for name, (candidate, native_metrics) in selected.items():
+        if name in existing:
+            continue
+        structure = output_path / candidate['filtered_structure_path']
+        metrics = output_path / candidate['filtered_metrics_path']
+        lineage = await _resolve_parent_design_lineage(session, context, name, cache=lineage_cache)
+        fields = _design_lineage_fields(context, lineage,
+            artifact_class_override='sequence_designed_complex')
+        fields.update(artifact_schema_version=1, review_profile_id='sequence_design_v1',
+                      review_contract_source='native_sequence_collection')
+        # Never infer pLDDT/PAE or antibody roles from native sequence-model
+        # B-factors. Keep native scores and their original payload unchanged.
+        provenance = {
+            **context.get('provenance', {}),
+            'model_id': job.model_id, 'mode': job.mode,
+            'artifact_class': 'sequence_designed_complex', 'result_set': 'sequence_designs',
+            'stage_family': job.model_id, 'stage_mode': job.mode,
+            'stage_settings': index['settings'],
+            'sequence_design_source': index['source'],
+            'sequence_design_native_index_sha256': index_sha,
+            'sequence_design_candidate': candidate,
+            'sequence_design_counts': {'unfiltered': index['unfiltered_count'],
+                                       'selected': index['selected_count']},
+            'structure_path': str(structure),
+        }
+        session.add(Design(
+            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms:sequence-design:{job.id}:{name}')),
+            job_id=job.id, name=name, pdb_path=str(structure), json_path=str(metrics),
+            stage_family=job.model_id, stage_mode=job.mode, producer_model_id=job.model_id, **fields,
+            provenance=provenance, confidence_metrics={job.model_id: native_metrics},
+            mpnn_score=safe_float(native_metrics.get('score')) if job.model_id == 'proteinmpnn' else None,
+            fampnn_psce=safe_float(native_metrics.get('fampnn_avg_psce')) if job.model_id == 'fampnn' else None,
+            is_favorite=False, created_at=datetime.utcnow(),
+        ))
+        created += 1
+    return created
+
+
 async def ingest_job_results(
-    job_id: str, 
-    output_dir: str, 
+    job_id: str,
+    output_dir: str,
     session: AsyncSession,
     epitope_residues: Optional[list] = None,
     *,
     commit: bool = True,
+) -> int:
+    """Import native results atomically, or join a caller-owned transaction.
+
+    With commit=False the caller owns both commit and rollback, including after
+    partial writes. Native prevalidation failures must not discard its pending work.
+    """
+    session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
+    current_job = None
+    try:
+        with session.no_autoflush:
+            current_job = await session.get(Job, job_id)
+        model_id = str(current_job.model_id or "").strip().lower() if current_job else ""
+        # Bind native full-root aggregate evidence before any candidate mutation.
+        # Interactive stage publications legitimately have no closeout yet.
+        closeout = None
+        if current_job is not None:
+            from services.result_contracts import antibody_pipeline_closeout
+            native_root = Path(output_dir)
+            native_root = (resolve_runtime_data_path(native_root) if native_root.is_absolute()
+                           else get_data_root() / output_dir)
+            closeout = antibody_pipeline_closeout(current_job, native_root)
+        # Native primary owners publish full scientific projections first. Component
+        # results attach to those rows; they must never replace primary ingestion.
+        count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
+            job_id, output_dir, session, epitope_residues,
+        )
+        await session.flush()
+        # CM owns its exact reference-set join inside its native bundle transaction.
+        if model_id != "conformational_mapping":
+            output_path = Path(output_dir)
+            output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
+                           else get_data_root() / output_dir)
+            if model_id == "protenix":
+                await _ingest_protenix_primary_publications(current_job, output_path, session)
+            component_count = await _ingest_explicit_frustrampnn_results(
+                current_job, output_path, session, commit=False,
+            )
+            if model_id == "frustrampnn":
+                count = component_count or 0
+        if closeout is not None and current_job is not None:
+            current_job.provenance = {**(current_job.provenance or {}),
+                                      "antibody_pipeline_result": closeout}
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
+        return count
+    except Exception:
+        session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
+        if commit:
+            await session.rollback()
+        raise
+
+
+async def _ingest_job_results(
+    job_id: str,
+    output_dir: str,
+    session: AsyncSession,
+    epitope_residues: Optional[list] = None,
 ) -> int:
     """
     Parse pipeline outputs and populate Design table.
@@ -4360,19 +5004,32 @@ async def ingest_job_results(
     else:
         output_path = get_data_root() / output_dir
 
-    job_result = await session.execute(select(Job).where(Job.id == job_id))
-    current_job = job_result.scalar_one_or_none()
-    is_conformational_mapping = bool(
-        current_job and str(current_job.model_id or "").strip().lower() == "conformational_mapping"
-    )
-    canonical_count = await _ingest_explicit_frustrampnn_results(
-        current_job,
-        output_path,
-        session,
-        commit=commit and not is_conformational_mapping,
-    )
-    if canonical_count is not None and not is_conformational_mapping:
-        return canonical_count
+    with session.no_autoflush:
+        job_result = await session.execute(select(Job).where(Job.id == job_id))
+        current_job = job_result.scalar_one_or_none()
+    if current_job is not None:
+        from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
+        retain_filter_stages(current_job, prepare_filter_stages(current_job, output_path))
+    if _is_esmfold2_job(current_job):
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            return await ingest_esmfold2_results(
+                job_id, output_path, session, current_job, commit=False, remove_stage_reviews=True,
+            )
+
+    if current_job and current_job.model_id in {'boltzgen', 'boltzgen_child'}:
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            from services.boltzgen_candidate_publication import ingest
+            return await ingest(current_job, output_path, session, commit=False)
+
+    # Preserve specialized terminal owners above; ordinary marked Boltz must
+    # validate its entire declared publication before generic cleanup/autoflush.
+    if current_job and current_job.model_id == 'boltz2' and current_job.mode in {'predict', 'complex'}:
+        from services.core_protein_scientific_contract import revision_for_job
+        if revision_for_job(current_job) == 1:
+            from services.boltz_scientific_persistence import ingest_verified_boltz
+            return await ingest_verified_boltz(current_job, output_path, session, commit=False)
 
     if not output_path.exists():
         print(f"[Ingester] Output dir not found: {output_path}")
@@ -4385,19 +5042,20 @@ async def ingest_job_results(
         and str(current_job.model_id or "").strip().lower() == "protein_modification_experimental"
         and str(current_job.mode or "").strip().lower() == "shape_blueprint"
     ):
-        return await _ingest_shape_result_manifest(current_job, output_path, session, commit=commit)
+        return await _ingest_shape_result_manifest(current_job, output_path, session, commit=False)
     if (
         current_job
         and str(current_job.model_id or "").strip().lower() == "protein_modification_experimental"
         and str(current_job.mode or "").strip().lower() == "de_novo_design"
         and str(_parse_job_params(current_job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
     ):
-        return await _ingest_rfd3_generation_manifest(current_job, output_path, session, commit=commit)
+        return await _ingest_rfd3_generation_manifest(current_job, output_path, session, commit=False)
     if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
-        return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
+        return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=False)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
-        canonical_request_id = str(current_job.lineage_root_job_id or job_id)
-        cm_request = await get_cm_request(session, canonical_request_id)
+        cm_request = (await session.execute(select(ConformationalMappingRequest).where(
+            ConformationalMappingRequest.job_id == str(current_job.id),
+        ))).scalar_one_or_none()
         if cm_request is None:
             raise ConformationalPersistenceError("canonical job has no typed request record")
         if str(cm_request.job_id) != str(current_job.id):
@@ -4664,9 +5322,16 @@ async def ingest_job_results(
             cm_request,
             bundle=bundle,
             result_root=result_root,
-            commit=commit,
+            commit=False,
         )
         return len(ensemble["candidates"])
+    # These newly connected public callers have one native, byte-bound
+    # sequence-only collection. Do not treat preparation files, retained raw
+    # samples, rejected candidates or unrelated confidence JSONs as results.
+    from scripts.sequence_design_results import MODES as public_sequence_modes
+    if current_job.mode in public_sequence_modes.get(current_job.model_id, set()):
+        return await _ingest_public_sequence_results(current_job, output_path, session)
+
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     
@@ -4709,11 +5374,11 @@ async def ingest_job_results(
     )
 
     if _is_confornets_job(current_job):
-        return await ingest_confornets_results(job_id, output_path, session, current_job, commit=commit)
+        return await ingest_confornets_results(job_id, output_path, session, current_job, commit=False)
 
     if _is_esmfold2_job(current_job):
-        return await ingest_esmfold2_results(job_id, output_path, session, current_job, commit=commit)
-    
+        return await ingest_esmfold2_results(job_id, output_path, session, current_job, commit=False)
+
     # Only try to process CSV if it exists
     if csv_path.exists():
         # Check if designs already ingested for this job
@@ -4724,6 +5389,10 @@ async def ingest_job_results(
             ).limit(1)
         )
         if existing.scalar_one_or_none():
+            if canonical_metadata:
+                await _validate_protein_design_primary_rows(
+                    session, job_id, canonical_metadata, canonical_physical_paths,
+                )
             print(f"[Ingester] Designs already ingested for job {job_id}")
             return 0
         
@@ -4801,6 +5470,7 @@ async def ingest_job_results(
                     ) or str(uuid.uuid4())
                     design = Design(
                         id=design_id,
+                        producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
                         job_id=job_id,
                         name=design_name,
                         pdb_path=str(structure_path) if structure_path else None,
@@ -4903,8 +5573,6 @@ async def ingest_job_results(
                     session.add(design)
                     designs_created += 1
             
-            if commit:
-                await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs for job {job_id}")
             
         except FrustraMPNNPersistenceError:
@@ -4913,28 +5581,30 @@ async def ingest_job_results(
         except Exception as e:
             print(f"[Ingester] Error ingesting results: {e}")
             await session.rollback()
-            # Don't return 0 here, let it fall through to valid loose file check if CSV failed partial?
-            # Or return 0? Standard flow usually returns if error.
-            # But let's allow fallback if designs_created is still 0
-            pass
+            raise
     
     if designs_created == 0 and str(current_job.mode or "").strip().lower() == "maturation_child":
         print(f"[Ingester] No CSV designs for maturation child {job_id}. Trying published PPIFlow results...")
-        designs_created = await ingest_published_maturation_structures(job_id, output_path, session, current_job=current_job)
+        designs_created = await ingest_published_maturation_structures(job_id, output_path, session, current_job=current_job, commit=False)
 
     if designs_created == 0:
         print(f"[Ingester] No CSV designs for job {job_id}. Trying collected PPIFlow parent outputs...")
-        designs_created = await ingest_collected_ppiflow_structures(job_id, output_path, session, current_job=current_job)
+        designs_created = await ingest_collected_ppiflow_structures(job_id, output_path, session, current_job=current_job, commit=False)
 
     if designs_created == 0:
         print("[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
-        designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job)
+        designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job, commit=False)
 
     # Post-ingestion: Attach supplementary metrics from pipeline stages
     if designs_created > 0:
-        await ingest_screening_data(job_id, output_path, session)
-        await ingest_maturation_data(job_id, output_path, session)
+        await ingest_screening_data(job_id, output_path, session, commit=False)
+        await ingest_maturation_data(job_id, output_path, session, commit=False)
 
+    if canonical_metadata:
+        await session.flush()
+        await _validate_protein_design_primary_rows(
+            session, job_id, canonical_metadata, canonical_physical_paths,
+        )
     return designs_created
 
 
@@ -4942,6 +5612,8 @@ async def ingest_screening_data(
     job_id: str,
     output_path: Path,
     session: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Backfill contact-distance metrics onto existing Design rows.
@@ -5062,7 +5734,7 @@ async def ingest_screening_data(
                           f"contacts={safe_int(row.get('epitope_contact_count'))}, "
                           f"min_dist={safe_float(row.get('epitope_min_distance'))}")
 
-    if updated_count > 0:
+    if updated_count > 0 and commit:
         await session.commit()
         print(f"[Ingester] Updated {updated_count} designs with screening contact metrics")
 
@@ -5223,6 +5895,43 @@ def _coerce_optional_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def _verify_maturation_comparison_binding(design: "Design", job: "Job", score_data: Dict[str, Any]) -> None:
+    """Verify existing producer sidecars against persisted candidate/source paths.
+
+    Name matching locates a score, but is not comparison authority. Never use a
+    score-supplied path or digest to select the reference or request to verify.
+    """
+    import hashlib
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    if design.job_id != job.id:
+        raise ValueError("comparison ingress requires the design's owning Job")
+    if "comparisons" not in score_data:
+        comparison_fields = (
+            "rmsd_backbone", "selected_rmsd_backbone", "nonselected_rmsd_backbone",
+            "primary_loop_rmsd", "comparison_request_sha256",
+        )
+        if any(score_data.get(key) is not None for key in comparison_fields):
+            raise ValueError("maturation comparison evidence missing for full-domain metrics")
+        return
+    try:
+        candidate_path = Path(design.pdb_path)
+        candidate = candidate_path.read_bytes()
+        reference = Path(design.source_pdb_path).read_bytes()
+        request_bytes = Path(str(candidate_path) + ".comparison.json").read_bytes()
+        request = canonical_json_loads(request_bytes)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("missing or invalid maturation comparison binding artifacts") from exc
+    if not isinstance(request, dict) or not isinstance(score_data["comparisons"], dict):
+        raise ValueError("invalid maturation comparison binding")
+    for role, snapshot in (("candidate", candidate), ("reference", reference)):
+        digest = hashlib.sha256(snapshot).hexdigest()
+        if score_data.get(role + "_sha256") != digest or request.get(role + "_sha256") != digest:
+            raise ValueError(f"maturation comparison {role} identity mismatch")
+    if score_data.get("comparison_request_sha256") != hashlib.sha256(request_bytes).hexdigest():
+        raise ValueError("maturation comparison request identity mismatch")
+
+
 def _apply_ppiflow_score_fields(design: "Design", score_data: Dict[str, Any]) -> bool:
     changed = False
     scalar_fields = {
@@ -5242,6 +5951,38 @@ def _apply_ppiflow_score_fields(design: "Design", score_data: Dict[str, Any]) ->
         "ppiflow_objective_mode": str(score_data.get("objective_mode")).strip().lower() if score_data.get("objective_mode") not in (None, "") else None,
         "ppiflow_objective_score": _coerce_optional_float(score_data.get("objective_score")),
     }
+    # A comparison record owns its full-domain value. Never replace an
+    # unavailable full-domain result with a bare RMSD or its matched subset.
+    comparisons = score_data.get("comparisons")
+    if isinstance(comparisons, dict):
+        from services.scientific_artifacts import resolve_json_value
+
+        confidence = copy.deepcopy(resolve_json_value(getattr(design, "confidence_metrics", None)) or {})
+        confidence["maturation_comparisons"] = copy.deepcopy(comparisons)
+        confidence["maturation_comparison_request_sha256"] = score_data.get("comparison_request_sha256")
+        if confidence != getattr(design, "confidence_metrics", None):
+            design.confidence_metrics = confidence
+            changed = True
+        for field_name, domain in (
+            ("maturation_rmsd", "whole_binder"),
+            ("maturation_selected_rmsd", "selected"),
+            ("maturation_nonselected_rmsd", "nonselected"),
+            ("ppiflow_primary_loop_rmsd", score_data.get("primary_loop")),
+        ):
+            record = comparisons.get(domain, {})
+            complete = (
+                isinstance(record, dict) and record.get("reason") is None
+                and record.get("reference_coverage") == 1.0
+                and record.get("candidate_coverage") == 1.0
+                and type(record.get("matched_count")) is int and record["matched_count"] > 0
+                and record.get("expected_reference_count") == record["matched_count"]
+                and record.get("expected_candidate_count") == record["matched_count"]
+                and record.get("unmatched_reference") == []
+                and record.get("unmatched_candidate") == []
+                and not record.get("subset")
+                and type(record.get("value")) in (int, float)
+            )
+            scalar_fields[field_name] = _coerce_optional_float(record.get("value")) if complete else None
     for field_name, new_value in scalar_fields.items():
         if getattr(design, field_name, None) != new_value:
             setattr(design, field_name, new_value)
@@ -5343,10 +6084,93 @@ def _inherit_source_design_metrics(
     return changed
 
 
+def _persist_ppiflow_rank_evidence(
+    design: "Design", job: "Job", *, score_snapshot: bytes, score_path: Path,
+) -> None:
+    """Bind the existing maturation scorer's raw Rosetta result, never invent iPTM.
+
+    score_maturation.py hashes the exact candidate snapshot consumed by PyRosetta
+    and emits the configured InterfaceAnalyzerMover interface. The owning design
+    supplies the primary-document mapping. Filename matching only locates the
+    sidecar: its candidate SHA must also match the persisted structure bytes.
+
+    The current maturation workflow does not run a scalar-iPTM producer. Neither
+    validator labels, inherited scalars nor AF3 pairwise CSV fields establish the
+    same-coordinate/same-interface join. Keep that input absent until an actual
+    producer-bound source exists; do not create another scoring stage here.
+    """
+    import hashlib
+    from services.core_protein_scientific_contract import revision_for_job
+    from services.frustrampnn.contracts import canonical_json_loads
+    from services.design_metrics import build_ppiflow_rank_envelope
+
+    if revision_for_job(job) != 1:
+        return
+    if design.job_id != job.id:
+        raise ValueError("rank ingress requires the design's owning Job")
+    payload = canonical_json_loads(score_snapshot)
+    if not isinstance(payload, dict):
+        raise ValueError("invalid maturation score document")
+    score = payload.get("score_data", payload)
+    if not isinstance(score, dict):
+        raise ValueError("invalid maturation score document")
+    source_hash = hashlib.sha256(score_snapshot).hexdigest()
+    try:
+        structure_hash = hashlib.sha256(Path(design.pdb_path).read_bytes()).hexdigest()
+    except (OSError, TypeError):
+        structure_hash = None
+    binding = {"candidate_id": design.name, "document_id": "primary",
+               "structure_sha256": structure_hash}
+    # before_flush externalizes confidence in-place; a non-expiring identity
+    # map can still hold that reference even after a subsequent ORM query.
+    # Merge verified artifact content, never add payload fields to a reference.
+    from services.scientific_artifacts import resolve_json_value
+
+    confidence = dict(resolve_json_value(design.confidence_metrics) or {})
+    # Never retain prior/unverified rank inputs across an ingress generation.
+    inputs: Dict[str, Any] = {}
+    interface = score.get("rosetta_interface_id")
+    if score.get("rosetta_interface_score") is not None:
+        inputs["rosetta_interface_score"] = {
+            **binding, "structure_sha256": score.get("candidate_sha256"),
+            "value": score["rosetta_interface_score"], "interface_id": interface,
+            "source_sha256": source_hash, "artifact_path": str(score_path),
+            "source_field": "rosetta_interface_score",
+            "producer_version": "biomodstack_ppiflow_maturation_v1",
+            "unit": score.get("rosetta_interface_score_unit"),
+            "metric_kind": ("raw_interface_score" if
+                score.get("rosetta_interface_analyzer_used") is True
+                and score.get("rosetta_interface_score_direction") == "more_negative_is_better"
+                and score.get("objective_formula_version") == "biomodstack_ppiflow_maturation_v1"
+                else "unverified_interface_score"),
+        }
+        # Preserve aliases before normalization so disagreements cannot disappear.
+        for key in ("rosetta_interface_score", "rosetta_interface_dg"):
+            confidence.pop(key, None)
+            if key in score:
+                confidence[key] = score[key]
+    confidence["ppiflow_rank_binding"] = binding
+    confidence["ppiflow_rank_inputs"] = inputs
+    design.confidence_metrics = confidence
+    descriptor = {
+        "metric_key": "ppiflow_paper_rank_score", "unit": "composite_score",
+        "direction": "higher_is_better",
+        "scope": interface if isinstance(interface, str) and interface.strip() else "unresolved_interface",
+        "producer_version": "ppiflow-result-v1", "derivation_version": "paper-rank-v1",
+    }
+    confidence["ppiflow_rank_metric"] = build_ppiflow_rank_envelope(
+        design, descriptor=descriptor, expected_source={
+            "artifact_sha256": source_hash, "candidate_id": design.name, "document_id": "primary",
+        })
+    design.confidence_metrics = dict(confidence)
+
+
 async def ingest_maturation_data(
     job_id: str,
     output_path: Path,
-    session: AsyncSession
+    session: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Parse PPIFlow maturation score JSONs and update matching designs.
@@ -5392,6 +6216,8 @@ async def ingest_maturation_data(
     updated_count = 0
     job_result = await session.execute(select(Job).where(Job.id == job_id))
     current_job = job_result.scalar_one_or_none()
+    from services.core_protein_scientific_contract import revision_for_job
+    strict_maturation = revision_for_job(current_job) == 1
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
     geometry_applied_design_ids: set[str] = set()
@@ -5445,8 +6271,15 @@ async def ingest_maturation_data(
 
         try:
             import json as json_mod
-            data = json_mod.loads(json_path.read_text())
+            score_snapshot = json_path.read_bytes()
+            if strict_maturation:
+                from services.frustrampnn.contracts import canonical_json_loads
+                data = canonical_json_loads(score_snapshot)
+            else:
+                data = json_mod.loads(score_snapshot)
         except Exception as e:
+            if strict_maturation:
+                raise ValueError(f"invalid marked maturation JSON: {json_path}") from e
             print(f"[Ingester] Error parsing maturation JSON {json_path}: {e}")
             continue
         score_data = data.get("score_data") if isinstance(data, dict) and isinstance(data.get("score_data"), dict) else data
@@ -5461,7 +6294,11 @@ async def ingest_maturation_data(
             )
         )
         design = result.scalar_one_or_none()
-        
+
+        # New-contract evidence belongs only to this Job's candidate. Never
+        # hydrate a historical parent/sibling through the legacy name fallback.
+        if not design and strict_maturation:
+            continue
         if not design:
             import sqlalchemy as sa
             # 1. Broaden search to include batch family and iteration source lineage
@@ -5501,7 +6338,13 @@ async def ingest_maturation_data(
         if not design:
             continue
         
+        if strict_maturation:
+            _verify_maturation_comparison_binding(design, current_job, score_data)
         _apply_ppiflow_score_fields(design, score_data)
+        if strict_maturation:
+            _persist_ppiflow_rank_evidence(
+                design, current_job, score_snapshot=score_snapshot, score_path=json_path,
+            )
 
         if epitope_residues and design.id not in geometry_applied_design_ids:
             try:
@@ -5659,7 +6502,7 @@ async def ingest_maturation_data(
         
         updated_count += 1
     
-    if updated_count > 0:
+    if updated_count > 0 and commit:
         await session.commit()
         print(f"[Ingester] Updated {updated_count} designs with maturation metrics")
     
@@ -5671,6 +6514,8 @@ async def ingest_published_maturation_structures(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Backfill completed maturation-child outputs directly from published PDBs.
@@ -5780,6 +6625,7 @@ async def ingest_published_maturation_structures(
             json_path=str(fam_json_path) if fam_json_path else None,
             backbone_id=parse_backbone_id(design_name),
             **_design_lineage_fields(job_context, lineage),
+            producer_model_id="ppiflow",
             stage_family=job_context.get("stage_family") or "ppiflow",
             stage_mode=job_context.get("stage_mode") or "maturation",
             selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -5806,7 +6652,7 @@ async def ingest_published_maturation_structures(
         existing_names.add(design_name)
         created += 1
 
-    if created > 0:
+    if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Backfilled {created} published maturation structures for job {job_id}")
 
@@ -5837,6 +6683,8 @@ async def ingest_collected_ppiflow_structures(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """
     Ingest stage-only parent jobs that publish collected PPIFlow outputs under
@@ -5939,6 +6787,7 @@ async def ingest_collected_ppiflow_structures(
                     or job_context.get("artifact_class")
                 ),
             ),
+            producer_model_id="ppiflow",
             stage_family="ppiflow",
             stage_mode=ingested_stage_mode,
             selected_loop_scope=job_context.get("selected_loop_scope"),
@@ -5965,7 +6814,7 @@ async def ingest_collected_ppiflow_structures(
         existing_names.add(design_name)
         created += 1
 
-    if created > 0:
+    if created > 0 and commit:
         await session.commit()
         print(f"[Ingester] Backfilled {created} collected PPIFlow structures for job {job_id}")
 
@@ -5978,6 +6827,8 @@ async def ingest_loose_files(
     output_path: Path,
     session: AsyncSession,
     current_job: Optional[Job] = None,
+    *,
+    commit: bool = True,
 ) -> int:
     """Ingest designs from individual JSON/PDB files (fallback)."""
     
@@ -6068,8 +6919,11 @@ async def ingest_loose_files(
     
     designs_created = 0
     
-    # Track ingested names to avoid duplicates
-    ingested_names = set()
+    # Replay uses the same job/name identity as discovery within one import.
+    ingested_names = set((await session.execute(
+        select(Design.name).where(Design.job_id == job_id, Design.source_stage.is_(None))
+    )).scalars())
+    metric_results_found = False
     
     print(f"[Ingester DEBUG] Search paths: {[str(p) for p in search_paths]}")
 
@@ -6107,6 +6961,7 @@ async def ingest_loose_files(
                     continue
                 
                 if design_name in ingested_names:
+                    metric_results_found = True
                     continue
                 
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
@@ -6256,6 +7111,7 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(structure_path),
                     json_path=str(json_file) if json_file else (str(fam_json_path) if fam_json_path.exists() else None),
+                    producer_model_id="boltz2",
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
@@ -6328,6 +7184,7 @@ async def ingest_loose_files(
                 design_name = json_file.stem.replace("_summary_confidences", "")
                 
                 if design_name in ingested_names:
+                    metric_results_found = True
                     continue
                 
                 # Look for corresponding structure file (RF3 outputs .cif not .pdb)
@@ -6417,6 +7274,7 @@ async def ingest_loose_files(
                     stage_mode=job_context.get("stage_mode"),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
+                    producer_model_id="rf3",
                     
                     # Metrics
                     plddt_overall=safe_float(plddt),
@@ -6485,6 +7343,7 @@ async def ingest_loose_files(
                         structure_path = candidate
 
                 if design_name in ingested_names:
+                    metric_results_found = True
                     continue
 
                 # Legacy format: confidence.json in per-sample subdir
@@ -6610,6 +7469,7 @@ async def ingest_loose_files(
                     stage_mode=(metrics.get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=job_context.get("provenance", {}),
+                    producer_model_id="protenix",
                     **_geometry_design_fields(geometry_fields),
 
                     plddt_overall=safe_float(plddt),
@@ -6657,7 +7517,7 @@ async def ingest_loose_files(
                 print(f"[Ingester] Error parsing Protenix file {json_file}: {e}")
                 
     # If still no designs, try just finding raw structures (e.g. valid job but missing metadata)
-    if designs_created == 0:
+    if designs_created == 0 and not metric_results_found:
         print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
         # Determine job type for model-specific ingestion logic
@@ -6724,6 +7584,9 @@ async def ingest_loose_files(
                 # For oligo jobs: B-factors contain NA-MPNN design confidence (not pLDDT)
                 # Extract them but label correctly
                 bfactor_avg, residue_bfactors = extract_plddt_from_pdb(structure_path)
+                lineage = await _resolve_parent_design_lineage(
+                    session, job_context, design_name, cache=lineage_cache,
+                )
                 
                 # Look up NA-MPNN metrics for this design
                 overall_confidence = None
@@ -6912,6 +7775,7 @@ async def ingest_loose_files(
                     stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
+                    producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
                     
@@ -6955,14 +7819,14 @@ async def ingest_loose_files(
                 designs_created += 1
                 ingested_names.add(design_name)
 
-    if designs_created > 0:
+    if designs_created > 0 and commit:
         try:
             await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs from loose files for job {job_id}")
         except Exception as e:
             print(f"[Ingester] Error committing loose files: {e}")
             await session.rollback()
-            return 0
+            raise
             
     return designs_created
 
@@ -7046,7 +7910,7 @@ def find_pdb_path(
     if (
         not filename
         or Path(filename).name != filename
-        or Path(filename).suffix.lower() != ".pdb"
+        or Path(filename).suffix.lower() not in ({".pdb", ".cif", ".mmcif"} if raw_key else {".pdb"})
     ):
         raise FrustraMPNNPersistenceError(
             "protein_design published structure identity is unsafe"

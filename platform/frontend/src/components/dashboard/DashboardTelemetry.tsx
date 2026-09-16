@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchExecutionTargets } from '../../lib/api';
+import { fetchExecutionTargets, type Job } from '../../lib/api';
+import { RemotePreloadPanel } from './RemotePreloadPanel';
 import { InfraLiveTelemetry } from '../InfraLiveTelemetry';
 import { RemoteGpuTelemetry } from '../RemoteGpuTelemetry';
 
@@ -30,7 +31,7 @@ const readTelemetrySizePreference = (): TelemetryPanelSize => {
     return 'standard';
 };
 
-export function DashboardTelemetry() {
+export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'model_id' | 'name'>[] }) {
     const [telemetrySize, setTelemetrySize] = useState<TelemetryPanelSize>('standard');
     const [scope, setScope] = useState<TelemetryScope>('local');
     const targetsQuery = useQuery({
@@ -39,9 +40,12 @@ export function DashboardTelemetry() {
         refetchInterval: 5_000,
         retry: false,
     });
-    const activeVastTarget = targetsQuery.isError
-        ? undefined
-        : targetsQuery.data?.data.find((target) => target.active && target.state === 'ready');
+    const [selectedTargetId, setSelectedTargetId] = useState<string>('');
+    const activeTargets = targetsQuery.isError ? []
+        : (targetsQuery.data?.data ?? []).filter((target) => target.active);
+    const activeVastTarget = selectedTargetId
+        ? activeTargets.find((target) => target.id === selectedTargetId)
+        : activeTargets.length === 1 ? activeTargets[0] : undefined;
     const activeVastLabel = activeVastTarget?.name?.trim() || (
         activeVastTarget ? `Instance ${activeVastTarget.provider_instance_id}` : 'Active Vast'
     );
@@ -120,40 +124,54 @@ export function DashboardTelemetry() {
                     )}
                 </div>
 
-                {scope !== 'vast' && (
-                    <div className="flex items-center gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-muted)]">
-                            Panel Size
-                        </span>
-                        <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1">
-                            {TELEMETRY_SIZE_OPTIONS.map((option) => {
-                                const active = telemetrySize === option.value;
-                                return (
-                                    <button
-                                        key={option.value}
-                                        type="button"
-                                        onClick={() => setTelemetrySizePreference(option.value)}
-                                        className={`min-w-9 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                                            active
-                                                ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
-                                                : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
-                                        }`}
-                                        style={active ? {
-                                            backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-tertiary))',
-                                        } : undefined}
-                                        title={option.title}
-                                    >
-                                        {option.label}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
+                {activeTargets.length > 0 && (
+                    <label className="text-xs text-[var(--text-secondary)]">
+                        Telemetry worker
+                        <select aria-label="Telemetry worker" value={activeVastTarget?.id ?? ''}
+                            onChange={(event) => setSelectedTargetId(event.target.value)}
+                            className="ml-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
+                            <option value="" disabled>Select a worker</option>
+                            {activeTargets.map((target) => <option key={target.id} value={target.id}>
+                                {target.name?.trim() || `Instance ${target.provider_instance_id}`} · {target.id}
+                            </option>)}
+                        </select>
+                    </label>
                 )}
+                <div className="flex items-center gap-2">
+                    <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-muted)]">
+                        Panel Size
+                    </span>
+                    <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1">
+                        {TELEMETRY_SIZE_OPTIONS.map((option) => {
+                            const active = telemetrySize === option.value;
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => setTelemetrySizePreference(option.value)}
+                                    className={`min-w-9 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                        active
+                                            ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
+                                            : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                    }`}
+                                    style={active ? {
+                                        backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-tertiary))',
+                                    } : undefined}
+                                    title={option.title}
+                                >
+                                    {option.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
             </div>
 
+            {activeVastTarget && (scope === 'vast' || scope === 'combined') && (
+                <RemotePreloadPanel key={activeVastTarget.id} target={activeVastTarget} jobs={jobs} onChanged={() => targetsQuery.refetch()} />
+            )}
             {scope === 'local' && localTelemetry}
-            {scope === 'vast' && <RemoteGpuTelemetry />}
+            {scope === 'vast' && activeVastTarget && <RemoteGpuTelemetry key={`telemetry:${activeVastTarget.id}`} executionTargetId={activeVastTarget.id} dashboardSize={telemetrySize} />}
             {scope === 'combined' && activeVastTarget && (
                 <div className="space-y-5" data-bms-telemetry-combined="true">
                     <section className="space-y-3">
@@ -166,7 +184,7 @@ export function DashboardTelemetry() {
                         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                             Vast · {activeVastLabel}
                         </h2>
-                        <RemoteGpuTelemetry />
+                        <RemoteGpuTelemetry key={`telemetry:${activeVastTarget.id}`} executionTargetId={activeVastTarget.id} dashboardSize={telemetrySize} />
                     </section>
                 </div>
             )}

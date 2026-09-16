@@ -1,30 +1,72 @@
 """Operator API for attaching an already-running execution target."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
+    PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
+    WorkflowProvisionSelection, WorkflowProvisionRequest,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
+    HFAssetLinkStatus,
+    HFAssetLinkCheckRequest,
 )
 from services.remote_execution.targets import (
     ExecutionTargetError,
-    activate_target,
     active_remote_telemetry,
     deactivate_target,
-    list_targets,
+    list_targets, get_target, observed_artifact_inventory,
     refresh_vast_targets,
 )
+
+from services.remote_execution.managed_inventory import ManagedInventory, project_inventory
 
 router = APIRouter()
 
 
+@router.get('/providers/huggingface', response_model=HFAssetLinkStatus)
+async def hf_asset_link_status():
+    """Deployment-owned config only. No cloud calls, keys or capability URLs."""
+    from services.remote_execution.hf_assets import readiness
+    return readiness()
+
+
+@router.post('/providers/huggingface/check', response_model=HFAssetLinkStatus)
+async def check_hf_asset_link(request: HFAssetLinkCheckRequest | None = None):
+    """Explicit read-only private-bucket authentication; never upload or rent."""
+    from services.remote_execution.hf_assets import check_connection
+    return await check_connection()
+
+
+@router.get('/{execution_target_id}/runtime-inventory', response_model=ManagedInventory | None)
+async def runtime_inventory(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return project_inventory(await get_target(session, execution_target_id))
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory)
+async def refresh_runtime_inventory(execution_target_id: str, http_request: Request,
+                                    session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, 'preload_controller', None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail='Preload service is unavailable')
+    try:
+        return await controller.refresh_inventory(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("", response_model=list[ExecutionTargetResponse])
 async def execution_targets(session: AsyncSession = Depends(get_session)):
-    return await list_targets(session)
+    try:
+        return await list_targets(session)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post(
@@ -38,13 +80,17 @@ async def refresh_vast_inventory(session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/activate", response_model=ExecutionTargetResponse)
+@router.post("/activate", response_model=ExecutionTargetResponse, status_code=202)
 async def activate_execution_target(
     request: ExecutionTargetActivateRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return await activate_target(session, request)
+        controller = getattr(http_request.app.state, "attachment_controller", None)
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Attachment service is unavailable")
+        return await controller.attach(session, request)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -60,6 +106,91 @@ async def deactivate_execution_target(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/{execution_target_id}/preload", response_model=ExecutionTargetResponse, status_code=202)
+async def preload_execution_target(
+    execution_target_id: str,
+    request: PreloadRequest,
+    http_request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/provision/catalog", response_model=list[ProvisionSelection])
+async def provision_catalog():
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry
+    return [ProvisionSelection(kind=kind, model_id=model_id)
+        for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
+        for model_id in sorted(models)
+        if get_registry().get_model(model_id) is not None]
+
+
+@router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)
+async def preview_provision(execution_target_id: str, request: ProvisionSelection | WorkflowProvisionSelection,
+                            http_request: Request, session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.preview(session, execution_target_id, request, http_request=http_request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision", response_model=ExecutionTargetResponse, status_code=202)
+async def provision_execution_target(execution_target_id: str, request: ProvisionRequest | WorkflowProvisionRequest,
+                                      http_request: Request, session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request, http_request=http_request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision/{operation_id}/cancel", response_model=ExecutionTargetResponse, status_code=202)
+async def cancel_provision(execution_target_id: str, operation_id: str, http_request: Request,
+                           session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.cancel(session, execution_target_id, operation_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision/{operation_id}/retry", response_model=ExecutionTargetResponse, status_code=202)
+async def retry_provision(execution_target_id: str, operation_id: str,
+                          request: ProvisionRequest | WorkflowProvisionRequest, http_request: Request,
+                          session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request, retry_operation_id=operation_id, http_request=http_request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{execution_target_id}/artifact-inventory", response_model=ObservedArtifactInventory | None)
+async def artifact_inventory(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return observed_artifact_inventory(await get_target(session, execution_target_id))
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/active/telemetry")
-async def execution_target_telemetry(session: AsyncSession = Depends(get_session)):
-    return await active_remote_telemetry(session)
+async def execution_target_telemetry(
+    session: AsyncSession = Depends(get_session), since: str | None = None,
+    execution_target_id: str | None = None,
+):
+    return await active_remote_telemetry(session, since, execution_target_id)

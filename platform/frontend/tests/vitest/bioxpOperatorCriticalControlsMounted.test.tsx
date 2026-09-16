@@ -7,6 +7,8 @@ const state = vi.hoisted(() => ({
     admissionData: null as null | Record<string, unknown>,
     invokeCalls: [] as Array<Record<string, unknown>>,
     invokeMock: null as null | Record<string, unknown>,
+    stopCalls: [] as Array<Record<string, unknown>>,
+    stopMock: null as null | Record<string, unknown>,
     catalog: {
         data: {
             machine_serial: '206',
@@ -65,13 +67,18 @@ const action = (
 vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpOperatorControlCatalog: () => state.catalog,
     useBioXpOperatorDashboard: () => state.dashboard,
-    useBioXpOperatorActionHistory: () => ({ data: { receipts: [] }, error: null }),
+    useBioXpOperatorActionHistory: () => ({ data: { items: [], next_cursor: null, limit: 100 }, error: null }),
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionArgs = args;
         state.admissionData ??= { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
         return state.admissionData;
     },
-    useInvokeBioXpOperatorAction: () => {
+    useInvokeBioXpOperatorAction: (lane = 'normal') => {
+        if (lane === 'stop') {
+            state.stopMock ??= { data: undefined, error: null, isPending: false,
+                mutate: (payload: Record<string, unknown>) => state.stopCalls.push(payload), reset: vi.fn() };
+            return state.stopMock;
+        }
         state.invokeMock ??= {
             data: undefined,
             error: null,
@@ -128,6 +135,8 @@ beforeEach(() => {
     state.admissionData = null;
     state.invokeCalls = [];
     state.invokeMock = null;
+    state.stopCalls = [];
+    state.stopMock = null;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -139,6 +148,47 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP operator critical and exhaustive controls', () => {
+    it('uses plain headings without generation counters and retains raw source evidence', async () => {
+        await act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
+        expect(container.querySelector('h2')?.textContent).toBe('Advanced Controls');
+        expect([...container.querySelectorAll('dt')].map(node => node.textContent)).not.toEqual(expect.arrayContaining(['ownership generation', 'BMS generation', 'OEM source']));
+        expect(container.textContent).toContain('Controller source');
+        expect(container.textContent).toContain('OEM source'); // unchanged robot-published source_anchor
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(state.stopCalls).toHaveLength(0);
+    });
+
+    it.each(['stop', 'emergency'])('submits published %s during a held normal action and retains both receipts', async (safety) => {
+        state.catalog.data.actions = [
+            { ...action('normal-motion', 'Normal motion', 'motion', '/motion/gripper/open'), safety_class: 'motion' },
+            { ...action('addressed-stop', 'Addressed Stop', 'motion', '/motion/oem/x/stop'), safety_class: safety },
+        ];
+        const render = async () => act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
+        await render();
+        const run = () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Run exactly this action')!;
+        await act(async () => run().click());
+        expect(state.invokeCalls).toHaveLength(1);
+        state.invokeMock!.isPending = true;
+        await render();
+        expect(run().disabled).toBe(true);
+        await act(async () => (container.querySelector('[data-action-id="addressed-stop"]') as HTMLButtonElement).click());
+        expect(run().disabled).toBe(false);
+        await act(async () => run().click());
+        expect(state.stopCalls).toEqual([{ actionId: 'addressed-stop', connectionGeneration: 1, ownershipGeneration: 2, inputs: {} }]);
+        expect(state.invokeCalls).toHaveLength(1);
+        state.stopMock!.data = { action_id: 'addressed-stop', command_id: 'stop-receipt', status: 'completed' };
+        await render();
+        expect(container.querySelector('[data-testid="advanced-stop-receipt"]')?.textContent).toContain('stop-receipt');
+        expect(state.invokeMock!.isPending).toBe(true);
+        state.invokeMock!.data = { action_id: 'normal-motion', command_id: 'normal-receipt', status: 'interrupted' };
+        state.invokeMock!.isPending = false;
+        await render();
+        expect(container.textContent).toContain('normal-receipt');
+        expect(container.textContent).toContain('stop-receipt');
+        state.stopMock!.isPending = true;
+        await render();
+        expect(run().disabled).toBe(true);
+    });
     it('keeps critical controls pinned while every primitive remains grouped and submits only the action contract', async () => {
         await act(async () => {
             root.render(<BioXpOperatorControlTabs generation={2637337272774657} connected />);

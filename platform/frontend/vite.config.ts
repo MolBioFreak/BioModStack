@@ -157,6 +157,10 @@ export default defineConfig(({ mode }) => ({
       'react-plotly.js',
     ],
     esbuildOptions: {
+      // NODE_ENV selects non-profiling React even in Vite development mode.
+      // Also remove unreachable branches: DevTools checks function source for
+      // React's dead-code sentinel, which plain dependency bundling preserves.
+      minifySyntax: process.env.NODE_ENV === 'production',
       loader: {
         '.js': 'jsx',
       },

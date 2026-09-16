@@ -363,6 +363,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate constraints for Antibody Sequence Design"
     )
+    parser.add_argument("--require_role_provenance", action="store_true")
+    parser.add_argument("--prepared_dir")
     parser.add_argument("--input_dir", required=True, 
                         help="Directory containing PDB files")
     parser.add_argument("--out_fampnn", required=True, 
@@ -517,6 +519,30 @@ def main():
                 f"using inferred chains {effective_antibody_chains}"
             )
 
+        if args.require_role_provenance:
+            from antibody_fampnn_provenance import read_export
+            proof = read_export(pdb)
+            if proof is None:
+                raise ValueError('missing source-bound antibody role provenance')
+            def role_chain(role):
+                chains = {v.split(':')[0] for v in proof['roles'][role]}
+                if len(chains) > 1:
+                    raise ValueError('ambiguous native antibody role')
+                return next(iter(chains)) if chains else None
+            heavy, light = role_chain('heavy'), role_chain('light')
+            if heavy is None:
+                raise ValueError('native antibody heavy role required')
+            effective_antibody_chains = [heavy] + ([light] if light else [])
+            cdr_dict = {loop: [int(v.split(':')[1]) for v in values]
+                        for loop, values in proof['loops'].items()}
+            if loop_override and loop_override != cdr_dict:
+                raise ValueError('unverified CDR override cannot replace native loop provenance')
+            # Existing owner prefers actual native labels over stale original
+            # chain-position requests (loop lengths may have changed).
+            cdr_override_by_chain = {}
+            if not any(cdr_dict.values()):
+                raise ValueError('missing native CDR membership')
+
         # Check if we found any CDR labels or override positions
         has_cdr_labels = any(len(v) > 0 for v in cdr_dict.values()) or bool(cdr_override_by_chain)
         
@@ -584,6 +610,12 @@ def main():
             lock_antibody_framework=lock_antibody_framework,
         )
         
+        if args.require_role_provenance:
+            from antibody_fampnn_provenance import record_constraints
+            record_constraints(pdb, Path(args.prepared_dir) / (pdb_name + '.fampnn_prep.json'),
+                fixed_residues, design_mode, selected_loops, protect_tetrad,
+                lock_antibody_framework, lock_target_chains)
+
         designable_counts = {}
         for chain in effective_antibody_chains:
             if chain not in chains_data:

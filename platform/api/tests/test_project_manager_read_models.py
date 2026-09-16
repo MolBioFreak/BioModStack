@@ -24,6 +24,7 @@ from experiment_models import (
     ExperimentDomainAdapterReceipt,
     ExperimentExternalEntityReceipt,
     ExperimentLineageEdge,
+    ExperimentLaunchContext,
     ExperimentResearchRecord,
     ExperimentResource,
     ExperimentRevision,
@@ -43,7 +44,11 @@ from experiment_services import (
 )
 from routers.project_manager import router as project_manager_router
 from services.global_experiments.adapters import registry
-from services.global_experiments.launch_contexts import create_launch_context
+from services.global_experiments.launch_contexts import (
+    LaunchContextError,
+    context_document,
+    create_launch_context,
+)
 from services.global_experiments.read_models import _head_summary, build_project_manager_read_model
 from services.ngs_molbio_preparation_authority import (
     _hierarchy_revision_reference_ids,
@@ -1193,16 +1198,36 @@ async def test_attachment_lineage_result_note_and_activity_pages_are_truthful_an
             f"/projects/{project.id}?focus={global_experiment.id}"
             f"&selected=external_entity_receipt%3A{selected_receipt}"
         )
-        launch_context = await create_launch_context(
-            session,
+        # Pagination/reopening must preserve historical display context, not
+        # issue a retired v1 launcher capability.
+        launch_context = ExperimentLaunchContext(
+            launch_context_id="historical-pagination-context",
+            contract_version="1",
             project_id=project.id,
             global_experiment_id=global_experiment.id,
             domain_experiment_id=domain.id,
             workflow_id=None,
             workflow_revision_id=None,
+            source_receipt_id=selected_receipt,
             return_uri=return_uri,
+            state="expired",
+            issued_at="2026-08-09T13:00:00Z",
+            expires_at="2026-08-09T14:00:00Z",
         )
-        assert launch_context.return_uri == return_uri
+        session.add(launch_context)
+        await session.commit()
+        await session.refresh(launch_context)
+        assert context_document(launch_context)["return_uri"] == return_uri
+        with pytest.raises(LaunchContextError, match="display-only"):
+            await create_launch_context(
+                session,
+                project_id=project.id,
+                global_experiment_id=global_experiment.id,
+                domain_experiment_id=domain.id,
+                workflow_id=None,
+                workflow_revision_id=None,
+                return_uri=return_uri,
+            )
         assert {
             item["resource_id"] for item in pages["notes"]["items"]
         }.isdisjoint({item["resource_id"] for item in second_pages["notes"]["items"]})
@@ -1415,6 +1440,7 @@ async def _add_retry_attempts(session, *, project_id: str, run: ExperimentWorkfl
                 resource_id="run-attempt-failed",
                 workspace_id=project_id,
                 workflow_run_id=run.resource_id,
+                preparation_id=run.preparation_id,
                 attempt_number=1,
                 scheduler_job_id="canonical-job-failed",
                 state="failed",
@@ -1430,6 +1456,7 @@ async def _add_retry_attempts(session, *, project_id: str, run: ExperimentWorkfl
                 resource_id="run-attempt-completed",
                 workspace_id=project_id,
                 workflow_run_id=run.resource_id,
+                preparation_id=run.preparation_id,
                 attempt_number=2,
                 scheduler_job_id="canonical-job-completed",
                 state="completed",
@@ -1522,7 +1549,7 @@ async def test_each_workflow_run_is_one_canonical_run_and_retry_attempts_are_not
             "receipt_id": "binding-receipt-completed",
             "output_receipt_ids": [],
             "adapter_id": "test.adapter.v1",
-            "available_actions": ["view_lineage"],
+            "available_actions": ["view_lineage", "clone"],
             "canonical_surface": None,
             "canonical_surfaces": [],
             "attempts": [

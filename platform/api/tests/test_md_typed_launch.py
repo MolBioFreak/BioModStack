@@ -83,6 +83,58 @@ def _intent(starting_structures, *, launch_context_id: str | None = None):
     )
 
 
+@pytest.mark.asyncio
+async def test_native_provision_plan_preserves_settings_input_identity_without_writes(monkeypatch, tmp_path):
+    import json
+    from starlette.requests import Request
+    from services import nextflow
+    from routers import molecular_dynamics as md
+    from services.remote_execution import bundle, cache
+    from services.remote_execution.contracts import WorkflowProvisionSelection
+    from component_runtime import SelectedExecutionPlan
+    from types import SimpleNamespace
+    monkeypatch.setenv("BMS_FEATURE_MOLECULAR_DYNAMICS", "1")
+    monkeypatch.setattr(md, "get_chemistry_catalog", lambda: _Catalog())
+    monkeypatch.setattr(bundle, "current_source_identity", lambda: ("a" * 40, "b" * 40))
+    monkeypatch.setattr(cache, "current_source_identity", lambda: ("a" * 40, "b" * 40))
+    def forbidden(*args, **kwargs):
+        pytest.fail("dependency-only provisioning must not resolve biology, compile commands or create Jobs")
+    monkeypatch.setattr(md, "resolve_source", forbidden)
+    monkeypatch.setattr(nextflow, "compile_workflow_provision_request", forbidden)
+    monkeypatch.setattr(nextflow, "compile_nextflow_invocation", forbidden)
+    request = Request({"type": "http", "headers": []})
+    payload = {"workflow_type": "molecular_dynamics", "request": {
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": _intent_payload()}}
+    selection = WorkflowProvisionSelection(kind="workflow", workflow_request=payload)
+    plan = await nextflow.compile_native_workflow_provision_request(selection.workflow_request, request, _UnusedSession())
+    assert isinstance(plan, SelectedExecutionPlan) and not hasattr(plan, "command")
+    assert plan.dependency_closure_complete
+    assert json.loads(plan.requested_json) == {**_intent_payload(),
+        "execution_target_id": None, "execution_policy": {"remote_result_policy": "manual"}}
+    bindings = json.loads(plan.native_parameters_json)["input_bindings"]
+    assert bindings[0]["expected_sha256"] == ONE_AKI_SHA256
+    assert not list(tmp_path.iterdir())
+    seen = []
+    def assets(model, mode, params, *, include_support, selected_plan):
+        assert selected_plan is plan
+        seen.append(selected_plan)
+        return []
+    monkeypatch.setattr(cache, "_runtime_assets", assets)
+    target = SimpleNamespace(id="worker", host="worker", port=22, username="root", remote_root="/worker", host_key_sha256="e"*64)
+    preview, _ = cache.independent_preview(selection, target, compiled_plan=plan)
+    assert seen == [plan] and preview.plan_sha256 == plan.plan_sha256
+    payload["request"]["intent"]["expected_source_sha256"] = "f" * 64
+    changed = WorkflowProvisionSelection(kind="workflow", workflow_request=payload)
+    changed_plan = await nextflow.compile_native_workflow_provision_request(changed.workflow_request, request, _UnusedSession())
+    assert changed_plan.plan_sha256 != plan.plan_sha256
+    with pytest.raises(ValueError, match="authenticated"):
+        await nextflow.compile_native_workflow_provision_request(selection.workflow_request, None, _UnusedSession())
+    monkeypatch.setattr(cache, "current_source_identity", lambda: ("c"*40, "b"*40))
+    with pytest.raises(ValueError, match="source identity changed"):
+        cache.independent_preview(selection, target, compiled_plan=plan)
+    assert seen == [plan]
+
+
 def test_requested_settings_are_closed_required_finite_and_cross_bounded() -> None:
     starting_structures = importlib.import_module("services.md.starting_structures")
 
@@ -1480,7 +1532,7 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         ExperimentRunAttempt,
     )
     from routers import jobs
-    from services import gpu_orchestrator, ngs_molbio_capabilities
+    from services import gpu_orchestrator
     from sqlalchemy import func, select
 
     store = project_context_preview_store
@@ -1525,33 +1577,6 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
         leaf_calls.append(f"materialize:{job_id}")
         return {**params, "md_job_spec": compiled}
 
-    source_pin = json.loads(
-        (
-            API_ROOT / "config" / "ngs_molbio" / "source_pin_v1.json"
-        ).read_text(encoding="utf-8")
-    )
-    candidate_source_authorities = {}
-    verification_receipt = json.loads(
-        (
-            API_ROOT.parents[1]
-            / "docs"
-            / "reports"
-            / "ngs-molbio-phase-n0-verification-v1.json"
-        ).read_text(encoding="utf-8")
-    )
-    candidate_rows = [
-        *source_pin["authorities"],
-        *verification_receipt["payload_files"],
-    ]
-    for row in candidate_rows:
-        candidate_path = API_ROOT.parents[1] / row["path"]
-        candidate_bytes = candidate_path.read_bytes()
-        candidate_source_authorities[row["path"]] = {
-            "path": row["path"],
-            "size_bytes": len(candidate_bytes),
-            "sha256": hashlib.sha256(candidate_bytes).hexdigest(),
-        }
-
     monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _model_id: None)
     monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _action: None)
     monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
@@ -1559,11 +1584,6 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
     monkeypatch.setattr(jobs, "normalize_md_job_spec", normalize)
     monkeypatch.setattr(jobs, "materialize_md_job_spec", materialize)
     monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(
-        ngs_molbio_capabilities,
-        "_runtime_overlay_authorities",
-        lambda _receipt=None: candidate_source_authorities,
-    )
 
     response = store["client"].post(
         "/api/molecular-dynamics/launch",

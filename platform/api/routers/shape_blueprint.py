@@ -9,7 +9,7 @@ import struct
 from typing import cast
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
@@ -18,9 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from paths import get_data_root
 from routers import jobs as jobs_router
-from schemas import JobCreate
+from schemas import ExecutionPolicy, JobCreate
 from services.shape_geometry import MAX_MESH_BYTES, ShapeGeometryError
-from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request
+from services.shape_requests import ShapeRequestError, SubmittedShapeRequest, materialize_shape_request, sequence_settings_definition
 from services.shape_resources import AdmittedGeometry, admit_mesh_geometry
 
 
@@ -41,6 +41,16 @@ _UNIT_TO_ANGSTROM = {
 
 def _feature_enabled() -> bool:
     return os.getenv("BMS_SHAPE_BLUEPRINT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@router.get("/sequence-settings/{engine}")
+async def get_sequence_settings(engine: str, sequence_count: int = Query(default=1, ge=1, le=8)) -> dict[str, object]:
+    if not _feature_enabled():
+        raise HTTPException(status_code=404, detail="Shape Blueprint is disabled")
+    try:
+        return sequence_settings_definition(engine, sequence_count)
+    except ShapeRequestError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
@@ -215,6 +225,17 @@ async def get_geometry_points(geometry_id: str, session: AsyncSession = Depends(
     )
 
 
+def _assert_execution_replay(job: Job, submitted: SubmittedShapeRequest) -> None:
+    # Reusing science must not silently reuse another placement or opt into return.
+    # Current target readiness is irrelevant to replaying an existing request.
+    if (job.execution_target_id != submitted.execution_target_id
+            or ExecutionPolicy.from_params(job.params) != submitted.execution_policy):
+        raise HTTPException(status_code=409, detail={
+            "code": "request_execution_conflict",
+            "message": "This request ID has a different target or return policy; use a new client_request_id.",
+        })
+
+
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
 async def submit_shape_request(
     submitted: SubmittedShapeRequest,
@@ -245,11 +266,14 @@ async def submit_shape_request(
         existing_job = await session.get(Job, request_row.job_id)
         if existing_job is None:
             raise HTTPException(status_code=409, detail="Shape request references a missing job")
+        _assert_execution_replay(existing_job, submitted)
         return {
             "request_id": staged.request_id,
             "request_sha256": staged.request_sha256,
             "job_id": existing_job.id,
             "job_status": existing_job.status,
+            "execution_target_id": existing_job.execution_target_id,
+            "execution_policy": ExecutionPolicy.from_params(existing_job.params).model_dump(mode="json"),
             "reused": True,
         }
 
@@ -261,6 +285,8 @@ async def submit_shape_request(
                 model_id=staged.model_id,
                 mode=staged.mode,
                 params=staged.launch_params,
+                execution_target_id=submitted.execution_target_id,
+                execution_policy=submitted.execution_policy,
                 pinned_gpu=None,
                 parent_job_id=None,
                 child_stage=None,
@@ -284,11 +310,14 @@ async def submit_shape_request(
         existing_job = await session.get(Job, deterministic_job_id)
         if request_row is None or request_row.job_id != deterministic_job_id or existing_job is None:
             raise HTTPException(status_code=409, detail="Shape request creation is still in progress")
+        _assert_execution_replay(existing_job, submitted)
         return {
             "request_id": staged.request_id,
             "request_sha256": staged.request_sha256,
             "job_id": existing_job.id,
             "job_status": existing_job.status,
+            "execution_target_id": existing_job.execution_target_id,
+            "execution_policy": ExecutionPolicy.from_params(existing_job.params).model_dump(mode="json"),
             "reused": True,
         }
     return {
@@ -296,5 +325,7 @@ async def submit_shape_request(
         "request_sha256": staged.request_sha256,
         "job_id": job_response.id,
         "job_status": str(job_response.status),
+        "execution_target_id": job_response.execution_target_id,
+        "execution_policy": job_response.execution_policy.model_dump(mode="json"),
         "reused": False,
     }

@@ -54,6 +54,40 @@ test('large governed BAM avoids unsafe automatic browser allocation', () => {
     }
 });
 
+test('automatic full-source budget keeps small BAMs and routes dense AAZ to bounded presentation', () => {
+    const budget = 16 * 1024 * 1024;
+    for (const size of [5_000_000, budget]) {
+        assert.deepEqual(alignmentTrackAutoLoadDisposition(size), { autoLoad: true, reason: null });
+        assert.equal(resolveBrowserAlignmentTrackSource({
+            jobId: 'job-a', sessionId: 'session-a', alignmentUrl: '/source.bam',
+            alignmentIndexUrl: '/source.bam.bai', alignmentSizeBytes: size,
+        })?.kind, 'full');
+    }
+    assert.equal(alignmentTrackAutoLoadDisposition(budget + 1).autoLoad, false);
+
+    // Observed AAZ source size; receipt below is synthetic, not live performance evidence.
+    const input = {
+        jobId: 'job-a', sessionId: 'session-a', alignmentUrl: '/source.bam',
+        alignmentIndexUrl: '/source.bam.bai', alignmentSizeBytes: 67_380_607,
+    };
+    assert.equal(alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad, false);
+    assert.equal(resolveBrowserAlignmentTrackSource(input), null,
+        'do not send the full BAM to IGV while the asynchronous presentation is pending');
+    const presentation = presentationFixture();
+    const preview = resolveBrowserAlignmentTrackSource({ ...input, presentation })!;
+    assert.equal(preview.kind, 'preview');
+    assert.equal(preview.selectedReadCount, 2000);
+    assert.equal(buildAlignmentTrackConfig(preview, 420).url, presentation.preview.bam.url);
+    assert.equal(buildAlignmentTrackConfig(preview, 420).showCoverage, false);
+    assert.deepEqual(preview.fullSourceDownload, { url: '/source.bam', sizeBytes: 67_380_607 });
+
+    const locusSlice = locusFixture();
+    const locus = resolveBrowserAlignmentTrackSource({ ...input, presentation, locusSlice })!;
+    assert.equal(locus.kind, 'locus', 'explicit detailed locus still overrides automatic preview');
+    assert.equal(buildAlignmentTrackConfig(locus, 420).url, locusSlice.bam.url);
+    assert.deepEqual(locus.fullSourceDownload, preview.fullSourceDownload);
+});
+
 test('track sources keep browser presentation separate from full-source download authority', () => {
     const full = resolveBrowserAlignmentTrackSource({
         jobId: 'job-a',
@@ -666,4 +700,49 @@ test('canonical FASTQ-QC renders the scientific report before collapsed technica
     assert.ok(technicalDetails > resultPanel);
     assert.match(source, /<details open=\{!isCanonicalFastqQcRun\}/u);
     assert.equal((source.match(/<OntFastqQcResultPanel/g) || []).length, 1);
+});
+
+
+test('replacement acknowledges only the recovered source dialog and retains swallowed viewport failures', async () => {
+    const oldTrack = { type: 'alignment', config: { url: '/preview/bam' } };
+    const newTrack = { type: 'alignment', config: { url: '/slice/bam' } };
+    const removed: unknown[] = [];
+    let acknowledgements = 0;
+    const dialog = {
+        body: { textContent: 'Error accessing resource /preview/bam status: 409' },
+        errorHeadline: { textContent: 'ERROR' },
+        container: { style: { display: 'flex' } },
+        ok: { click: () => { acknowledgements++; dialog.container.style.display = 'none'; } },
+    };
+    const alert = { dialog, present: (reason: unknown) => {
+        dialog.body.textContent = (reason as Error).message;
+        dialog.container.style.display = 'flex';
+    } };
+    const browser = { alert, findTracks: () => [oldTrack], loadTrack: async () => newTrack,
+        removeTrack: (track: unknown) => { removed.push(track); } };
+    await replaceAlignmentTrackTransactionally(browser, newTrack.config, () => true);
+    assert.equal(acknowledgements, 1);
+    assert.deepEqual(removed, [oldTrack]);
+    removed.length = 0;
+    dialog.body.textContent = 'Error accessing resource /preview/bam status: 409';
+    dialog.container.style.display = 'flex';
+    const failure = new Error('Error accessing resource /slice/bam status: 409');
+    browser.loadTrack = async () => { alert.present(failure); return newTrack; };
+    await assert.rejects(replaceAlignmentTrackTransactionally(browser, newTrack.config, () => true), failure);
+    assert.deepEqual(removed, [newTrack]);
+    assert.equal(dialog.container.style.display, 'flex');
+    assert.equal(acknowledgements, 1);
+    browser.loadTrack = async () => newTrack;
+    browser.findTracks = () => [];
+    await replaceAlignmentTrackTransactionally(browser, { url: '/different-locus/bam' }, () => true);
+    assert.equal(acknowledgements, 2);
+    dialog.body.textContent = 'Error accessing resource /unrelated/coverage status: 409';
+    dialog.container.style.display = 'flex';
+    browser.loadTrack = async () => {
+        alert.present(new Error('Error accessing resource /unrelated/coverage status: 409'));
+        return newTrack;
+    };
+    await replaceAlignmentTrackTransactionally(browser, newTrack.config, () => true);
+    assert.equal(acknowledgements, 2);
+    assert.equal(dialog.container.style.display, 'flex');
 });

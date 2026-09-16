@@ -34,14 +34,15 @@ from services.ont_ngs_reconciliation import (
 from services.sequence_qc_manifest import VERIFICATION_SCHEMA, load_sequence_qc_manifest
 from services.resource_usage_evidence import (
     GLOBAL_RESOURCE_ADMISSION_PARAM,
+    RESOURCE_USAGE_RECEIPT_SCHEMA,
+    RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
+    REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA,
     ResourceUsageEvidenceError,
     validate_producer_resource_usage_receipt,
 )
 
 _MAX_TABLE_BYTES = 10 * 1024 * 1024
-_MAX_COVERAGE_ROWS = 100_000
 _MAX_COVERAGE_POINTS = 2_048
-_MAX_READ_LENGTH_ROWS = 1_000_000
 _READ_LENGTH_BIN_COUNT = 50
 _REQUIRED_STAGES = ("fastq_align", "dimer_qc", "fastq_qc", "construct_verification")
 _SUMMARY_METRIC_KEYS = frozenset({
@@ -115,23 +116,10 @@ def _require_persisted_package_authority(
             "input_mode": "fastq",
             "reference_sequence_sha256": reference_sequence_sha256,
             "source_fastq_sha256": source_fastq_sha256,
-            "resource_evidence_status": "accepted",
             "sequence_qc_manifest_sha256": sequence_qc_manifest_sha256,
             "construct_verification_manifest_sha256": construct_verification_manifest_sha256,
             **observed,
         }
-        receipt_digest = authority.get("resource_usage_receipt_sha256")
-        receipts = _validated_resource_receipts(job)
-        if (
-            not isinstance(receipt_digest, str)
-            or len(receipt_digest) != 64
-            or not any(
-                receipt.get("complete") is True
-                and receipt.get("receipt_sha256") == receipt_digest
-                for receipt in receipts
-            )
-        ):
-            raise OntNgsResultError("persisted terminal resource receipt does not match result authority")
     else:
         reconciliation = provenance.get("ont_fastq_qc_reconciliation_v1")
         authority = reconciliation if isinstance(reconciliation, dict) else {}
@@ -173,6 +161,28 @@ def _require_persisted_package_authority(
 
 
 def _execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, Any]:
+    # Telemetry cannot revoke access to otherwise valid scientific results.
+    from services.resource_usage_evidence import ResourceUsageEvidenceError
+
+    try:
+        return _accepted_execution_resources(job, authority)
+    except (OntNgsResultError, ResourceUsageEvidenceError, ValueError, TypeError, KeyError):
+        params = job.params if isinstance(job.params, dict) else {}
+        return {
+            "evidence_status": "unavailable",
+            "receipt_schema": None, "receipt_id": None, "receipt_sha256": None,
+            "run_attempt_id": None, "execution_invocation_id": None, "outcome": None,
+            "admitted_cpu_threads": None, "observed_memory_peak_bytes": None,
+            "observed_pids_peak": None, "gpu_index": None, "gpu_uuid": None,
+            "admitted_vram_bytes": None, "accelerator_applicability": "not_applicable",
+            "dorado_invoked": False,
+            "reason": "Resource-use observations are unavailable; scientific results remain available.",
+            "scheduler_gpu_assignment": job.assigned_gpu,
+            "configured_dorado_device_ignored": params.get("dorado_device"),
+        }
+
+
+def _accepted_execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, Any]:
     params = job.params if isinstance(job.params, dict) else {}
     status = authority.get("resource_evidence_status")
     common = {
@@ -218,20 +228,24 @@ def _execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, An
     admission = receipt.get("admission")
     observed = receipt.get("observed")
     accounting = observed.get("accounting") if isinstance(observed, dict) else None
+    remote_observation = receipt.get("schema") == REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA
     invocation_id = execution.get("invocation_id") if isinstance(execution, dict) else None
     required_text = (
         receipt.get("schema"),
         receipt.get("admission_id"),
         receipt.get("run_attempt_id"),
-        invocation_id,
-    )
+    ) + (() if remote_observation else (invocation_id,))
     cpu_threads = admission.get("cpu_threads") if isinstance(admission, dict) else None
     gpu_index = admission.get("gpu_index") if isinstance(admission, dict) else None
     gpu_uuid = admission.get("gpu_uuid") if isinstance(admission, dict) else None
-    memory_peak = accounting.get("memory_peak_bytes") if isinstance(accounting, dict) else None
-    pids_peak = accounting.get("pids_peak") if isinstance(accounting, dict) else None
+    memory_peak = accounting.get("sampled_tree_peak_rss_bytes" if remote_observation else "memory_peak_bytes") if isinstance(accounting, dict) else None
+    pids_peak = accounting.get("sampled_peak_processes" if remote_observation else "pids_peak") if isinstance(accounting, dict) else None
+    dispatch = receipt.get("dispatch", admission)
     if (
-        receipt.get("schema") != "bms.workflow-resource-usage.v1"
+        receipt.get("schema") not in {RESOURCE_USAGE_RECEIPT_SCHEMA, RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA, REMOTE_RESOURCE_USAGE_RECEIPT_SCHEMA}
+        or not isinstance(dispatch, Mapping)
+        or dispatch.get("gpu_index") is not None
+        or dispatch.get("gpu_uuid") is not None
         or receipt.get("complete") is not True
         or receipt.get("outcome") != "completed"
         or not all(isinstance(value, str) and value for value in required_text)
@@ -242,7 +256,7 @@ def _execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, An
         or type(memory_peak) is not int
         or memory_peak < 0
         or type(pids_peak) is not int
-        or pids_peak < 1
+        or pids_peak < 0
         or gpu_index is not None
         or gpu_uuid is not None
         or job.assigned_gpu is not None
@@ -264,7 +278,11 @@ def _execution_resources(job: Job, authority: Mapping[str, Any]) -> dict[str, An
         "gpu_uuid": None,
         "admitted_vram_bytes": 0,
         **common,
-        "reason": "Accepted CPU-only producer resource-use receipt",
+        "reason": (
+            "Accepted CPU-only remote subreaper observation; memory/PID peaks are sampled process-tree values, "
+            "not hard cgroup/device containment evidence"
+            if remote_observation else "Accepted CPU-only producer resource-use receipt"
+        ),
         "scheduler_gpu_assignment": None,
         "configured_dorado_device_ignored": None,
     }
@@ -338,10 +356,22 @@ def validate_ont_fastq_qc_result_contract(value: dict[str, Any]) -> None:
     artifacts = value["artifacts"]
     present_count = sum(item["state"] == "present" for item in artifacts)
     unavailable_count = len(artifacts) - present_count
+    pagination = value.get("pagination", {})
+    for name, rows in (("artifacts", artifacts), ("variants", value["verification"]["variants"])):
+        page = pagination.get(name)
+        if page is not None:
+            end = page["offset"] + page["count"]
+            if (page["count"] != len(rows) or end > page["total"]
+                    or page["next_offset"] != (end if end < page["total"] else None)):
+                raise OntNgsResultError(f"{name} pagination is inconsistent")
+    artifact_total = pagination.get("artifacts", {}).get("total", len(artifacts))
+    complete_inventory = len(artifacts) == artifact_total
     if (
-        authority["declared_artifact_count"] != len(artifacts)
-        or authority["present_artifact_count"] != present_count
-        or authority["unavailable_artifact_count"] != unavailable_count
+        authority["declared_artifact_count"] != artifact_total
+        or authority["declared_artifact_count"] != authority["present_artifact_count"] + authority["unavailable_artifact_count"]
+        or present_count > authority["present_artifact_count"]
+        or unavailable_count > authority["unavailable_artifact_count"]
+        or (complete_inventory and (authority["present_artifact_count"] != present_count or authority["unavailable_artifact_count"] != unavailable_count))
     ):
         raise OntNgsResultError("artifact counts are inconsistent")
 
@@ -415,7 +445,7 @@ def validate_ont_fastq_qc_result_contract(value: dict[str, Any]) -> None:
         raise OntNgsResultError("reference identity is inconsistent across the result")
 
     variants = value["verification"]["variants"]
-    if verification_summary["variant_count"] != len(variants):
+    if verification_summary["variant_count"] != pagination.get("variants", {}).get("total", len(variants)):
         raise OntNgsResultError("variant count is inconsistent")
     if any(not _variant_interval_is_valid(variant, reference_length) for variant in variants):
         raise OntNgsResultError("variant interval is invalid")
@@ -520,61 +550,72 @@ def _load_metric_table(path: Path, expected_keys: frozenset[str]) -> dict[str, i
     return metrics
 
 
+def _stream_table_rows(handle: Any, digest: Any):
+    handle.seek(0)
+
+    def lines():
+        for raw in handle:
+            digest.update(raw)
+            yield raw.decode("utf-8")
+
+    return csv.DictReader(lines(), delimiter="\t")
+
+
 def _load_coverage(
     path: Path,
     *,
     construction_attestation: dict[str, Any] | None = None,
     construction_validated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    raw = _read_bytes(path, path.name)
+    # Two streaming passes preserve the exact envelope without a raw-row budget.
+    handle = ngs_alignment_sessions._open_regular_file_no_symlinks(path)
     try:
-        reader = csv.DictReader(raw.decode("utf-8").splitlines(), delimiter="\t")
-        rows: list[dict[str, int | str]] = []
-        reference_name: str | None = None
-        previous_position = 0
-        for index, row in enumerate(reader):
-            if index >= _MAX_COVERAGE_ROWS:
-                raise OntNgsResultError("coverage table exceeds the row limit")
+        first_digest = hashlib.sha256()
+        reference_name = None
+        row_count = 0
+        minimum_point = None
+        for index, row in enumerate(_stream_table_rows(handle, first_digest)):
             reference = row.get("reference")
             position = int(str(row.get("position") or ""))
             depth = int(str(row.get("depth") or ""))
-            if (
-                not reference
-                or position < 1
-                or depth < 0
-                or position != index + 1
-                or (reference_name is not None and reference != reference_name)
-                or position <= previous_position
-            ):
-                raise ValueError
+            if not reference or position != index + 1 or depth < 0 or (reference_name is not None and reference != reference_name):
+                raise ValueError("invalid coverage row")
             reference_name = reference
-            previous_position = position
-            rows.append({"reference": reference, "position_1based": position, "depth": depth})
-    except (UnicodeDecodeError, csv.Error, ValueError) as exc:
+            row_count += 1
+            point = {"reference": reference, "position_1based": position, "depth": depth}
+            if minimum_point is None or depth < minimum_point["depth"]:
+                minimum_point = point
+        if minimum_point is None:
+            raise OntNgsResultError("coverage table is empty")
+        source_digest = first_digest.hexdigest()
+        bucket_width = max(1, math.ceil(row_count / (_MAX_COVERAGE_POINTS // 2)))
+        points = []
+        low = high = None
+        second_digest = hashlib.sha256()
+        second_count = 0
+        for index, row in enumerate(_stream_table_rows(handle, second_digest)):
+            point = {"reference": row["reference"], "position_1based": int(row["position"]), "depth": int(row["depth"])}
+            if index % bucket_width == 0:
+                if low is not None:
+                    points.extend(sorted({low["position_1based"]: low, high["position_1based"]: high}.values(), key=lambda item: item["position_1based"]))
+                low = high = point
+            else:
+                if point["depth"] < low["depth"]:
+                    low = point
+                if point["depth"] > high["depth"]:
+                    high = point
+            second_count += 1
+        if low is not None:
+            points.extend(sorted({low["position_1based"]: low, high["position_1based"]: high}.values(), key=lambda item: item["position_1based"]))
+        if second_count != row_count or second_digest.hexdigest() != source_digest:
+            raise OntNgsResultError("coverage table changed while it was read")
+    except (UnicodeDecodeError, csv.Error, ValueError, KeyError) as exc:
         raise OntNgsResultError("coverage table is invalid") from exc
-    if not rows:
-        raise OntNgsResultError("coverage table is empty")
-
-    minimum_point = min(
-        rows,
-        key=lambda item: (int(item["depth"]), int(item["position_1based"])),
-    )
-    bucket_width = max(1, math.ceil(len(rows) / (_MAX_COVERAGE_POINTS // 2)))
-    points: list[dict[str, int | str]] = []
-    for offset in range(0, len(rows), bucket_width):
-        bucket = rows[offset:offset + bucket_width]
-        low = min(bucket, key=lambda item: (int(item["depth"]), int(item["position_1based"])))
-        high = max(bucket, key=lambda item: (int(item["depth"]), -int(item["position_1based"])))
-        extrema = {
-            int(low["position_1based"]): low,
-            int(high["position_1based"]): high,
-        }
-        points.extend(sorted(extrema.values(), key=lambda item: int(item["position_1based"])))
-    if len(points) > _MAX_COVERAGE_POINTS:
-        raise OntNgsResultError("coverage projection exceeds its point bound")
+    finally:
+        handle.close()
     projection = {
         "method": "minmax_envelope_v1",
-        "source_row_count": len(rows),
+        "source_row_count": row_count,
         "maximum_point_count": _MAX_COVERAGE_POINTS,
         "bucket_width_rows": bucket_width,
         "minimum_depth": int(minimum_point["depth"]),
@@ -601,8 +642,8 @@ def _load_coverage(
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest(),
-            "source_row_count": len(rows),
-            "source_rows_sha256": hashlib.sha256(raw).hexdigest(),
+            "source_row_count": row_count,
+            "source_rows_sha256": source_digest,
             "validated_at": normalized.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "validator": "bms.ngs.fastq-qc-result-construction-validator.v1",
         }
@@ -616,11 +657,11 @@ def _load_coverage(
         }
         if set(construction_attestation) != expected_keys:
             raise OntNgsResultError("coverage construction attestation keys are invalid")
-        source_rows_sha256 = hashlib.sha256(raw).hexdigest()
+        source_rows_sha256 = source_digest
         if (
             construction_attestation.get("validator") != "bms.ngs.fastq-qc-result-construction-validator.v1"
             or construction_attestation.get("source_rows_sha256") != source_rows_sha256
-            or construction_attestation.get("source_row_count") != len(rows)
+            or construction_attestation.get("source_row_count") != row_count
             or not isinstance(construction_attestation.get("validated_at"), str)
             or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", construction_attestation["validated_at"])
         ):
@@ -635,40 +676,37 @@ def _load_coverage(
 
 
 def _load_read_length_histogram(path: Path) -> dict[str, Any]:
-    raw = _read_bytes(path, path.name)
+    handle = ngs_alignment_sessions._open_regular_file_no_symlinks(path)
     try:
-        reader = csv.DictReader(raw.decode("utf-8").splitlines(), delimiter="\t")
-        lengths: list[int] = []
-        for index, row in enumerate(reader):
-            if index >= _MAX_READ_LENGTH_ROWS:
-                raise OntNgsResultError("read-length table exceeds the row limit")
+        maximum = 0
+        row_count = 0
+        first_digest = hashlib.sha256()
+        for row in _stream_table_rows(handle, first_digest):
             length = int(str(row.get("length_bp") or ""))
             if length < 0:
-                raise ValueError
-            lengths.append(length)
-    except (UnicodeDecodeError, csv.Error, ValueError) as exc:
+                raise ValueError("negative read length")
+            maximum = max(maximum, length)
+            row_count += 1
+        width = max(1, math.ceil((maximum + 1) / _READ_LENGTH_BIN_COUNT))
+        counts = [0] * _READ_LENGTH_BIN_COUNT
+        second_digest = hashlib.sha256()
+        second_count = 0
+        for row in _stream_table_rows(handle, second_digest):
+            length = int(row["length_bp"])
+            if length < 0:
+                raise ValueError("negative read length")
+            counts[min(length // width, _READ_LENGTH_BIN_COUNT - 1)] += 1
+            second_count += 1
+        if second_count != row_count or first_digest.digest() != second_digest.digest():
+            raise OntNgsResultError("read-length table changed while it was read")
+    except (UnicodeDecodeError, csv.Error, ValueError, KeyError) as exc:
         raise OntNgsResultError("read-length table is invalid") from exc
-    if not lengths:
-        raise OntNgsResultError("read-length table is empty")
-
-    maximum = max(lengths)
-    width = max(1, math.ceil((maximum + 1) / _READ_LENGTH_BIN_COUNT))
-    counts = [0] * _READ_LENGTH_BIN_COUNT
-    for length in lengths:
-        counts[min(length // width, _READ_LENGTH_BIN_COUNT - 1)] += 1
-    bins = [
-        {
-            "start_bp": index * width,
-            "end_bp_exclusive": (index + 1) * width,
-            "read_count": count,
-        }
-        for index, count in enumerate(counts)
-    ]
+    finally:
+        handle.close()
     return {
-        "method": "fixed_width_v1",
-        "source_row_count": len(lengths),
-        "bin_width_bp": width,
-        "bins": bins,
+        "method": "fixed_width_v1", "source_row_count": row_count, "bin_width_bp": width,
+        "bins": [{"start_bp": index * width, "end_bp_exclusive": (index + 1) * width, "read_count": count}
+                 for index, count in enumerate(counts)],
     }
 
 
@@ -697,7 +735,7 @@ def _verification_projection(verification_manifest: dict[str, Any]) -> dict[str,
         raise OntNgsResultError("construct-verification decision projection is invalid") from exc
 
 
-def _build_file_projection(job: Job) -> dict[str, Any]:
+def _build_file_projection(job: Job, **pagination) -> dict[str, Any]:
     """Pin one result-root inode across the complete reopen projection."""
 
     root = resolve_persisted_job_result_root(job)
@@ -715,12 +753,42 @@ def _build_file_projection(job: Job) -> dict[str, Any]:
         identity = os.fstat(descriptor)
         if not stat.S_ISDIR(identity.st_mode):
             raise OntNgsResultError("persisted result root is not a directory")
-        return _build_file_projection_from_pinned_root(job, Path(f"/proc/self/fd/{descriptor}"))
+        return _build_file_projection_from_pinned_root(job, Path(f"/proc/self/fd/{descriptor}"), **pagination)
     finally:
         os.close(descriptor)
 
 
-def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, Any]:
+def _page_result_collections(projection: dict[str, Any], *, variant_offset: int = 0, artifact_offset: int = 0, page_size: int = 64, collection: str = "all") -> dict[str, Any]:
+    """Response limits bound a page, never the underlying scientific result."""
+    if not 0 <= page_size <= 256 or min(variant_offset, artifact_offset) < 0 or collection not in {"all", "variants", "artifacts"}:
+        raise OntNgsResultError("invalid result pagination")
+    collections = {"variants": projection["verification"]["variants"], "artifacts": projection["artifacts"]}
+    offsets = {"variants": variant_offset, "artifacts": artifact_offset}
+    if any(offsets[name] > len(rows) for name, rows in collections.items()):
+        raise OntNgsResultError("result page offset exceeds its collection")
+    result = {**projection, "verification": dict(projection["verification"])}
+    counts = {name: min(page_size, len(rows) - offsets[name]) if collection in ("all", name) else 0 for name, rows in collections.items()}
+    while True:
+        result["pagination"] = {}
+        for name, rows in collections.items():
+            start, count = offsets[name], counts[name]
+            end = start + count
+            page = rows[start:end]
+            if name == "variants":
+                result["verification"]["variants"] = page
+            else:
+                result[name] = page
+            result["pagination"][name] = {"offset": start, "count": count, "total": len(rows), "next_offset": end if end < len(rows) else None}
+        if len(json.dumps(result, separators=(",", ":"), allow_nan=False).encode("utf-8")) <= 256 * 1024:
+            return result
+        reducible = [name for name, count in counts.items() if count > 1]
+        if not reducible:
+            raise OntNgsResultError("result detail exceeds a response page; request page_size=0 for the summary and download native artifacts")
+        name = max(reducible, key=lambda item: len(json.dumps(result["verification"]["variants"] if item == "variants" else result[item])))
+        counts[name] = max(1, counts[name] // 2)
+
+
+def _build_file_projection_from_pinned_root(job: Job, root: Path, **pagination) -> dict[str, Any]:
     try:
         canonical_fastq = is_ont_fastq_qc_job(job)
     except OntNgsCompletionError as exc:
@@ -787,17 +855,19 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
     ):
         raise OntNgsResultError("construct verification source FASTQ authority is invalid")
 
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    integrity = provenance.get("result_integrity")
+    inventory = integrity.get("artifacts") if isinstance(integrity, dict) else None
     package_internal = ngs_alignment_sessions.build_ngs_package_artifacts(
         str(job.id),
         source_reference_sha256=manifest_reference_sha256,
         workflow_id="ont_fastq_qc",
         input_mode="fastq",
         source_input_path=source_input_path,
+        published_artifacts=inventory,
         job_output_dir=root,
         pinned_root_descriptor=True,
     )
-    if len(package_internal) > 256:
-        raise OntNgsResultError("NGS package artifact inventory exceeds its bound")
     package_artifacts = [
         {key: value for key, value in descriptor.items() if key not in {"_path", "relative_path"}}
         for descriptor in package_internal
@@ -814,15 +884,18 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
         reference_sequence_sha256=manifest_reference_sha256,
         source_fastq_sha256=source_fastq_sha256,
     )
-    governed_alignment_sessions = ngs_alignment_sessions.build_alignment_sessions(
-        str(job.id),
-        source_reference_sha256=manifest_reference_sha256,
-        package_artifact_set_sha256=package_authority["artifact_set_sha256"],
-        workflow_id="ont_fastq_qc",
-        input_mode="fastq",
-        job_output_dir=root,
-        pinned_root_descriptor=True,
-    )
+    try:
+        governed_alignment_sessions = ngs_alignment_sessions.build_alignment_sessions(
+            str(job.id),
+            source_reference_sha256=manifest_reference_sha256,
+            package_artifact_set_sha256=package_authority["artifact_set_sha256"],
+            workflow_id="ont_fastq_qc",
+            input_mode="fastq",
+            job_output_dir=root,
+            pinned_root_descriptor=True,
+        )
+    except ngs_alignment_sessions.AlignmentSessionError:
+        governed_alignment_sessions = []
     alignment_sessions = [
         {
             "session_id": session["session_id"],
@@ -881,11 +954,12 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
         "stages": _stages(job),
         "execution_resources": _execution_resources(job, persisted_package_authority),
     }
+    projection = _page_result_collections(projection, **pagination)
     validate_ont_fastq_qc_result_contract(projection)
     return projection
 
 
-async def build_ont_fastq_qc_result(job: Job) -> dict[str, Any]:
+async def build_ont_fastq_qc_result(job: Job, *, variant_offset: int = 0, artifact_offset: int = 0, page_size: int = 64, collection: str = "all") -> dict[str, Any]:
     from starlette.concurrency import run_in_threadpool
 
-    return await run_in_threadpool(_build_file_projection, job)
+    return await run_in_threadpool(_build_file_projection, job, variant_offset=variant_offset, artifact_offset=artifact_offset, page_size=page_size, collection=collection)

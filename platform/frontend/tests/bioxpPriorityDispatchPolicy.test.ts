@@ -25,7 +25,7 @@ test('operator assessment completion upserts history and refreshes admission dep
     const body = hookBody('useAssessBioXpOperatorAction', 'usePlanBioXpOemFullLifecycle');
     assert.doesNotMatch(body, /useRefreshMutation/);
     assert.doesNotMatch(body, /onSuccess: async/);
-    assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
+    assert.match(body, /updateBioXpHistoryCaches\(queryClient, variables.connectionGeneration, receipt\)/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
 });
 
@@ -39,7 +39,7 @@ test('operator polling budget retains only bounded dashboard freshness', () => {
     assert.doesNotMatch(catalog, /refetchInterval:/);
     assert.match(dashboard, /refetchInterval: enabled && connectionGeneration > 0 \? 15_000 : false/);
     assert.doesNotMatch(admission, /refetchInterval:/);
-    assert.doesNotMatch(history, /refetchInterval:/);
+    assert.match(history, /refetchInterval:.*receipts.some\(bioXpReceiptIsNonTerminal\) \? 1000 : false/);
     assert.doesNotMatch(camera, /refetchInterval:/);
 });
 

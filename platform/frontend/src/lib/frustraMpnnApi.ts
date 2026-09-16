@@ -817,16 +817,16 @@ interface FrustraMpnnSummaryCommon {
     threshold_policy_sha256: string;
 }
 
-export interface FrustraMpnnHistoricalSummaryV1 extends FrustraMpnnSummaryCommon {
-    schema_version: 1;
-    configuration_id: 'frustrampnn_global_v1';
+export interface FrustraMpnnConfigurationSummary extends FrustraMpnnSummaryCommon {
+    schema_version: number;
+    configuration_id: string;
     configuration_sha256: string;
     threshold_policy: { id: 'frustrampnn_class_v1'; high_max: number; minimal_min: number };
 }
 
-export interface FrustraMpnnSummaryV2 extends FrustraMpnnSummaryCommon {
-    schema_version: 2;
-    execution_configuration_id: 'frustrampnn_execution_configuration_v2';
+export interface FrustraMpnnExecutionSummary extends FrustraMpnnSummaryCommon {
+    schema_version: number;
+    execution_configuration_id: string;
     execution_configuration_sha256: string;
     requested_settings_sha256: string;
     effective_settings_sha256: string;
@@ -838,23 +838,8 @@ export interface FrustraMpnnSummaryV2 extends FrustraMpnnSummaryCommon {
     threshold_policy: { mode: 'canonical' | 'custom'; high_max: number; minimal_min: number };
 }
 
-export interface FrustraMpnnSummaryV3 extends FrustraMpnnSummaryCommon {
-    schema_version: 3;
-    execution_configuration_id: 'frustrampnn_execution_configuration_v3';
-    execution_configuration_sha256: string;
-    requested_settings_sha256: string;
-    effective_settings_sha256: string;
-    runtime_identity_sha256: string;
-    source_artifact_sha256: string;
-    structure_map_sha256: string;
-    normalized_pdb_sha256: string;
-    threshold_policy_id: 'frustrampnn_class_v1';
-    threshold_policy: { mode: 'canonical' | 'custom'; high_max: number; minimal_min: number };
-}
+export type FrustraMpnnSummary = FrustraMpnnConfigurationSummary | FrustraMpnnExecutionSummary;
 
-export type FrustraMpnnSummary = FrustraMpnnHistoricalSummaryV1 | FrustraMpnnSummaryV2 | FrustraMpnnSummaryV3;
-
-export type FrustraMpnnAuthorityVersion = 'v3' | 'v2' | 'historical_v1';
 export type FrustraMpnnMissingField =
     | 'settings_sha256'
     | 'effective_settings_sha256'
@@ -866,7 +851,7 @@ export type FrustraMpnnMissingField =
 
 export interface FrustraMpnnEffectiveSettingsProjection {
     schema_name: 'frustrampnn_effective_settings';
-    schema_version: 1 | 2;
+    schema_version: number;
     requested_settings: FrustraMpnnRequestedSettings;
     settings_value_origin: 'bms_default' | 'operator_request';
     resolved_chains: Array<{
@@ -1011,7 +996,7 @@ export interface FrustraMpnnRankedAlternative extends FrustraMpnnStatisticsResid
 
 export interface FrustraMpnnStatisticsAnalysisReceipt {
     schema_name: 'frustrampnn_statistics_analysis_receipt';
-    schema_version: 1;
+    schema_version: number;
     analysis_id: string;
     core_artifact_id: string;
     core_bundle_relative_path: string;
@@ -1020,7 +1005,7 @@ export interface FrustraMpnnStatisticsAnalysisReceipt {
     formula_version: string;
     policy_version: string;
     package_version: string;
-    statistics_schema_version: 2;
+    statistics_schema_version: number;
     attempt_count: number;
 }
 
@@ -1036,7 +1021,7 @@ export interface FrustraMpnnStatisticsAnalysis {
     formula_version: string;
     policy_version: string;
     package_version: string;
-    schema_version: 1;
+    schema_version: number;
     artifact_sha256: string | null;
     statistics_sha256: string | null;
     diagnostic: string | null;
@@ -1044,7 +1029,7 @@ export interface FrustraMpnnStatisticsAnalysis {
 
 export interface FrustraMpnnStatistics {
     schema_name: 'frustrampnn_statistics';
-    schema_version: 1 | 2;
+    schema_version: number;
     hash_semantics: 'sha256(rfc8785(document_without_top_level_statistics_sha256))';
     invocation_id: string;
     parent_job_id: string;
@@ -1063,20 +1048,20 @@ export interface FrustraMpnnStatistics {
     execution_plan_sha256: string;
     comparison_compatibility_id: string;
     statistics_sha256: string;
-    structure_map: { schema_name: 'frustrampnn_structure_map'; schema_version: 1; sha256: string };
-    output_contract_version: '2.0' | '3.0';
+    structure_map: { schema_name: 'frustrampnn_structure_map'; schema_version: number; sha256: string };
+    output_contract_version: string;
     analysis_receipt?: FrustraMpnnStatisticsAnalysisReceipt;
     canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY';
     comparison_compatibility_basis: {
         schema_name: 'frustrampnn_comparison_compatibility_basis';
-        schema_version: 2;
+        schema_version: number;
         raw_score_semantics: {
             model: { checkpoint_id: string; checkpoint_sha256: string };
             tool: { tool_id: string; tool_version: string };
-            capability: { schema_name: 'frustrampnn_capability_inventory'; schema_version: 1; content_sha256: string };
-            output_schema: { component_id: 'frustrampnn'; component_contract_version: '2.0'; landscape_schema_name: 'frustrampnn_landscape'; landscape_schema_version: 2; score_field: 'score' };
+            capability: { schema_name: 'frustrampnn_capability_inventory'; schema_version: number; content_sha256: string };
+            output_schema: { component_id: 'frustrampnn'; component_contract_version: string; landscape_schema_name: 'frustrampnn_landscape'; landscape_schema_version: number; score_field: 'score' };
             canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY';
-            normalization: { normalizer_version: string; identity_authority: string; identity_domain: string; selected_source_model: number; altloc_policy: string; normalization_policy_id: 'frustrampnn_structure_normalizer'; normalization_policy_version: 1 };
+            normalization: { normalizer_version: string; identity_authority: string; identity_domain: string; selected_source_model: number; altloc_policy: string; normalization_policy_id: 'frustrampnn_structure_normalizer'; normalization_policy_version: number };
         };
         classification_policy: { policy_id: string; policy_sha256: string; policy: { mode: 'canonical' | 'custom'; high_max: number; minimal_min: number } };
     };
@@ -1118,19 +1103,16 @@ export interface FrustraMpnnResultListItem {
     manifest_sha256: string;
     summary_sha256: string;
     created_at: string;
-    authority_version: FrustraMpnnAuthorityVersion;
     availability: boolean;
     statistics_available: boolean;
     missing_fields: FrustraMpnnMissingField[];
     settings_sha256: string | null;
     effective_settings_sha256: string | null;
-    effective_settings_json: FrustraMpnnEffectiveSettingsProjection | null;
     capability_inventory_sha256: string | null;
     statistics_sha256: string | null;
-    statistics_json: FrustraMpnnStatistics | null;
     comparison_compatibility_id: string | null;
     status: FrustraMpnnTerminalStatus;
-    component_contract_version: '1.0' | '2.0' | '3.0';
+    component_contract_version: string;
     runtime_identity: FrustraMpnnRuntimeIdentity;
     runtime_identity_sha256: string | null;
     gpu_provenance: FrustraMpnnGpuProvenance | null;
@@ -1139,6 +1121,7 @@ export interface FrustraMpnnResultListItem {
 }
 
 export interface FrustraMpnnResultDetail extends FrustraMpnnResultListItem {
+    effective_settings_json: FrustraMpnnEffectiveSettingsProjection | null;
     summary: FrustraMpnnSummary;
     terminal_result: FrustraMpnnTerminalResult;
     execution_receipt: FrustraMpnnExecutionReceiptProjection | null;
@@ -1156,7 +1139,6 @@ export interface FrustraMpnnStatisticsResponse {
     parent_job_id: string;
     candidate_id: string;
     invocation_id: string;
-    authority_version: FrustraMpnnAuthorityVersion;
     availability: boolean;
     missing_fields: FrustraMpnnMissingField[];
     settings_sha256: string | null;
@@ -1164,7 +1146,6 @@ export interface FrustraMpnnStatisticsResponse {
     effective_settings_json: FrustraMpnnEffectiveSettingsProjection | null;
     capability_inventory_sha256: string | null;
     statistics_sha256: string | null;
-    statistics_json: FrustraMpnnStatistics | null;
     comparison_compatibility_id: string | null;
     statistics: FrustraMpnnStatistics | null;
 }
@@ -1270,8 +1251,8 @@ export interface FrustraMpnnArtifactList {
 
 export type FrustraMpnnArtifactIdentity = Pick<
     FrustraMpnnArtifact,
-    'role' | 'media_type' | 'schema_name' | 'schema_version'
->;
+    'role' | 'media_type' | 'schema_name'
+> & { schema_version?: number | null };
 
 export const selectFrustraMpnnArtifactByIdentity = (
     items: readonly FrustraMpnnArtifact[],
@@ -1281,7 +1262,7 @@ export const selectFrustraMpnnArtifactByIdentity = (
         item.role === identity.role
         && item.media_type === identity.media_type
         && item.schema_name === identity.schema_name
-        && item.schema_version === identity.schema_version
+        && (identity.schema_version === undefined || item.schema_version === identity.schema_version)
     ));
     if (matches.length > 1) {
         throw new Error(`FrustraMPNN artifact identity is ambiguous for role ${identity.role}`);
@@ -1353,7 +1334,11 @@ export interface FrustraMpnnComparisonSide {
 }
 
 export interface FrustraMpnnComparisonRow {
-    residue_key: { entity_instance_id: string; auth_asym_id: string; auth_seq_id: number; insertion_code: string };
+    residue_key: {
+        entity_instance_id: string; auth_asym_id: string; auth_seq_id: number; insertion_code: string;
+        source_entity_id?: string | null; label_asym_id?: string | null;
+        sequence_index?: number | null; wt?: string | null;
+    };
     sequence_index: number | null;
     mutation_aa: string;
     wt: string | null;
@@ -1577,9 +1562,13 @@ const parsePersistedRequestedSettingsProjection = (
     const payload = fmClosedProjection(
         wire,
         label,
-        keys,
+        [...keys, 'batching_enabled', 'structures_per_job'],
         keys,
     );
+    if (historical && (
+        ('batching_enabled' in payload && payload.batching_enabled !== false)
+        || ('structures_per_job' in payload && payload.structures_per_job !== 1)
+    )) throw new Error(`${label} v1 batching defaults are invalid`);
     if (payload.settings_value_origin !== 'bms_default' && payload.settings_value_origin !== 'operator_request') {
         throw new Error(`${label}.settings_value_origin is invalid`);
     }
@@ -1619,7 +1608,6 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
     ] as const;
     const payload = fmClosedProjection(value, 'effective_settings', keys, keys);
     if (payload.schema_name !== 'frustrampnn_effective_settings'
-        || (payload.schema_version !== 1 && payload.schema_version !== 2)
         || payload.normalization_policy_id !== 'frustrampnn_structure_normalizer'
         || payload.normalization_policy_version !== 1
         || payload.threshold_policy_id !== 'frustrampnn_class_v1') {
@@ -1676,13 +1664,12 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
         };
     });
     const valueSourceKeys = [
-        ...(payload.schema_version === 2 ? ['batching_enabled', 'structures_per_job'] : []),
         'protein_selection', 'source_structure', 'classification_policy',
     ];
     const valueSources = fmClosedProjection(
         payload.value_sources,
         'effective_settings.value_sources',
-        valueSourceKeys,
+        ['batching_enabled', 'structures_per_job', 'protein_selection', 'source_structure', 'classification_policy'],
         valueSourceKeys,
     );
     const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'regions', 'residues'], ['mode', 'entities', 'residues']);
@@ -1694,7 +1681,7 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
     );
     return {
         schema_name: 'frustrampnn_effective_settings',
-        schema_version: payload.schema_version,
+        schema_version: fmInteger(payload.schema_version, 'effective_settings.schema_version', 1),
         requested_settings: parsePersistedRequestedSettingsProjection(payload.requested_settings, 'effective_settings.requested_settings'),
         settings_value_origin: settingsValueOrigin,
         resolved_chains: resolvedChains,
@@ -1712,10 +1699,10 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             normalized_pdb_sha256: fmSha256(resolution.normalized_pdb_sha256, 'effective_settings.resolution_identity.normalized_pdb_sha256'),
         },
         value_sources: {
-            batching_enabled: payload.schema_version === 1
+            batching_enabled: valueSources.batching_enabled === undefined
                 ? settingsValueOrigin
                 : fmValueOrigin(valueSources.batching_enabled, 'effective_settings.value_sources.batching_enabled'),
-            structures_per_job: payload.schema_version === 1
+            structures_per_job: valueSources.structures_per_job === undefined
                 ? settingsValueOrigin
                 : fmValueOrigin(valueSources.structures_per_job, 'effective_settings.value_sources.structures_per_job'),
             protein_selection: {
@@ -2104,7 +2091,7 @@ const parseStatisticsResidueIdentity = (value: unknown, label: string): FrustraM
 const parseStatisticsBasis = (value: unknown): FrustraMpnnStatistics['comparison_compatibility_basis'] => {
     const label = 'statistics.comparison_compatibility_basis';
     const payload = fmClosedProjection(value, label, ['schema_name', 'schema_version', 'raw_score_semantics', 'classification_policy'], ['schema_name', 'schema_version', 'raw_score_semantics', 'classification_policy']);
-    if (payload.schema_name !== 'frustrampnn_comparison_compatibility_basis' || payload.schema_version !== 2) throw new Error(`${label} schema identity is invalid`);
+    if (payload.schema_name !== 'frustrampnn_comparison_compatibility_basis') throw new Error(`${label} schema identity is invalid`);
     const raw = fmClosedProjection(payload.raw_score_semantics, `${label}.raw_score_semantics`, ['model', 'tool', 'capability', 'output_schema', 'canonical_amino_acid_order', 'normalization'], ['model', 'tool', 'capability', 'output_schema', 'canonical_amino_acid_order', 'normalization']);
     const model = fmClosedProjection(raw.model, `${label}.raw_score_semantics.model`, ['checkpoint_id', 'checkpoint_sha256'], ['checkpoint_id', 'checkpoint_sha256']);
     const tool = fmClosedProjection(raw.tool, `${label}.raw_score_semantics.tool`, ['tool_id', 'tool_version'], ['tool_id', 'tool_version']);
@@ -2113,23 +2100,22 @@ const parseStatisticsBasis = (value: unknown): FrustraMpnnStatistics['comparison
     const normalization = fmClosedProjection(raw.normalization, `${label}.raw_score_semantics.normalization`, ['normalizer_version', 'identity_authority', 'identity_domain', 'selected_source_model', 'altloc_policy', 'normalization_policy_id', 'normalization_policy_version'], ['normalizer_version', 'identity_authority', 'identity_domain', 'selected_source_model', 'altloc_policy', 'normalization_policy_id', 'normalization_policy_version']);
     const classification = fmClosedProjection(payload.classification_policy, `${label}.classification_policy`, ['policy_id', 'policy_sha256', 'policy'], ['policy_id', 'policy_sha256', 'policy']);
     const policy = fmClosedProjection(classification.policy, `${label}.classification_policy.policy`, ['mode', 'high_max', 'minimal_min'], ['mode', 'high_max', 'minimal_min']);
-    if (capability.schema_name !== 'frustrampnn_capability_inventory' || capability.schema_version !== 1
-        || output.component_id !== 'frustrampnn' || output.component_contract_version !== '2.0'
-        || output.landscape_schema_name !== 'frustrampnn_landscape' || output.landscape_schema_version !== 2
+    if (capability.schema_name !== 'frustrampnn_capability_inventory'
+        || output.component_id !== 'frustrampnn'
+        || output.landscape_schema_name !== 'frustrampnn_landscape'
         || output.score_field !== 'score' || raw.canonical_amino_acid_order !== 'ACDEFGHIKLMNPQRSTVWY'
         || normalization.normalization_policy_id !== 'frustrampnn_structure_normalizer'
-        || normalization.normalization_policy_version !== 1
         || (policy.mode !== 'canonical' && policy.mode !== 'custom')) throw new Error(`${label} contains an invalid closed identity`);
     const highMax = fmFinite(policy.high_max, `${label}.classification_policy.policy.high_max`);
     const minimalMin = fmFinite(policy.minimal_min, `${label}.classification_policy.policy.minimal_min`);
     if (policy.mode === 'canonical' && (highMax !== -1 || minimalMin !== 0.58)) throw new Error(`${label} canonical policy thresholds are invalid`);
     return {
-        schema_name: 'frustrampnn_comparison_compatibility_basis', schema_version: 2,
+        schema_name: 'frustrampnn_comparison_compatibility_basis', schema_version: fmInteger(payload.schema_version, `${label}.schema_version`, 1),
         raw_score_semantics: {
             model: { checkpoint_id: fmString(model.checkpoint_id, `${label}.raw_score_semantics.model.checkpoint_id`), checkpoint_sha256: fmSha256(model.checkpoint_sha256, `${label}.raw_score_semantics.model.checkpoint_sha256`) },
             tool: { tool_id: fmString(tool.tool_id, `${label}.raw_score_semantics.tool.tool_id`), tool_version: fmString(tool.tool_version, `${label}.raw_score_semantics.tool.tool_version`) },
-            capability: { schema_name: 'frustrampnn_capability_inventory', schema_version: 1, content_sha256: fmSha256(capability.content_sha256, `${label}.raw_score_semantics.capability.content_sha256`) },
-            output_schema: { component_id: 'frustrampnn', component_contract_version: '2.0', landscape_schema_name: 'frustrampnn_landscape', landscape_schema_version: 2, score_field: 'score' },
+            capability: { schema_name: 'frustrampnn_capability_inventory', schema_version: fmInteger(capability.schema_version, `${label}.raw_score_semantics.capability.schema_version`, 1), content_sha256: fmSha256(capability.content_sha256, `${label}.raw_score_semantics.capability.content_sha256`) },
+            output_schema: { component_id: 'frustrampnn', component_contract_version: fmString(output.component_contract_version, `${label}.raw_score_semantics.output_schema.component_contract_version`), landscape_schema_name: 'frustrampnn_landscape', landscape_schema_version: fmInteger(output.landscape_schema_version, `${label}.raw_score_semantics.output_schema.landscape_schema_version`, 1), score_field: 'score' },
             canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY',
             normalization: {
                 normalizer_version: fmString(normalization.normalizer_version, `${label}.raw_score_semantics.normalization.normalizer_version`),
@@ -2137,7 +2123,7 @@ const parseStatisticsBasis = (value: unknown): FrustraMpnnStatistics['comparison
                 identity_domain: fmString(normalization.identity_domain, `${label}.raw_score_semantics.normalization.identity_domain`),
                 selected_source_model: fmInteger(normalization.selected_source_model, `${label}.raw_score_semantics.normalization.selected_source_model`, 1),
                 altloc_policy: fmString(normalization.altloc_policy, `${label}.raw_score_semantics.normalization.altloc_policy`),
-                normalization_policy_id: 'frustrampnn_structure_normalizer', normalization_policy_version: 1,
+                normalization_policy_id: 'frustrampnn_structure_normalizer', normalization_policy_version: fmInteger(normalization.normalization_policy_version, `${label}.raw_score_semantics.normalization.normalization_policy_version`, 1),
             },
         },
         classification_policy: {
@@ -2172,14 +2158,12 @@ const parseStatisticsAnalysisReceipt = (value: unknown): FrustraMpnnStatisticsAn
         'statistics_schema_version', 'attempt_count',
     ] as const;
     const payload = fmClosedProjection(value, 'statistics.analysis_receipt', keys, keys);
-    if (payload.schema_name !== 'frustrampnn_statistics_analysis_receipt'
-        || payload.schema_version !== 1
-        || payload.statistics_schema_version !== 2) {
+    if (payload.schema_name !== 'frustrampnn_statistics_analysis_receipt') {
         throw new Error('statistics.analysis_receipt schema identity is invalid');
     }
     return {
         schema_name: 'frustrampnn_statistics_analysis_receipt',
-        schema_version: 1,
+        schema_version: fmInteger(payload.schema_version, 'statistics.analysis_receipt.schema_version', 1),
         analysis_id: fmString(payload.analysis_id, 'statistics.analysis_receipt.analysis_id'),
         core_artifact_id: fmString(payload.core_artifact_id, 'statistics.analysis_receipt.core_artifact_id'),
         core_bundle_relative_path: fmString(payload.core_bundle_relative_path, 'statistics.analysis_receipt.core_bundle_relative_path'),
@@ -2188,7 +2172,7 @@ const parseStatisticsAnalysisReceipt = (value: unknown): FrustraMpnnStatisticsAn
         formula_version: fmString(payload.formula_version, 'statistics.analysis_receipt.formula_version'),
         policy_version: fmString(payload.policy_version, 'statistics.analysis_receipt.policy_version'),
         package_version: fmString(payload.package_version, 'statistics.analysis_receipt.package_version'),
-        statistics_schema_version: 2,
+        statistics_schema_version: fmInteger(payload.statistics_schema_version, 'statistics.analysis_receipt.statistics_schema_version', 1),
         attempt_count: fmInteger(payload.attempt_count, 'statistics.analysis_receipt.attempt_count', 1),
     };
 };
@@ -2209,7 +2193,6 @@ export const parseFrustraMpnnStatisticsAnalysis = (
     if (payload.state !== 'queued' && payload.state !== 'running' && payload.state !== 'completed' && payload.state !== 'failed') {
         throw new Error('statistics analysis state is invalid');
     }
-    if (payload.schema_version !== 1) throw new Error('statistics analysis schema_version is invalid');
     return {
         analysis_id: fmString(payload.analysis_id, 'statistics analysis.analysis_id'),
         parent_job_id: expectedParentJobId,
@@ -2222,7 +2205,7 @@ export const parseFrustraMpnnStatisticsAnalysis = (
         formula_version: fmString(payload.formula_version, 'statistics analysis.formula_version'),
         policy_version: fmString(payload.policy_version, 'statistics analysis.policy_version'),
         package_version: fmString(payload.package_version, 'statistics analysis.package_version'),
-        schema_version: 1,
+        schema_version: fmInteger(payload.schema_version, 'statistics analysis.schema_version', 1),
         artifact_sha256: fmOptionalSha256(payload.artifact_sha256, 'statistics analysis.artifact_sha256'),
         statistics_sha256: fmOptionalSha256(payload.statistics_sha256, 'statistics analysis.statistics_sha256'),
         diagnostic: fmNullableString(payload.diagnostic, 'statistics analysis.diagnostic'),
@@ -2240,22 +2223,17 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         'per_mutation_amino_acid', 'per_chain', 'per_entity', 'native_vs_alternative',
         'contiguous_native_class_regions', 'ranked_non_native_alternatives', 'class_burden',
     ] as const;
-    const rawPayload = fmRecord(value, 'statistics');
-    const schemaVersion = rawPayload.schema_version;
-    const keys = schemaVersion === 2 ? [...baseKeys, 'analysis_receipt'] as const : baseKeys;
-    const payload = fmClosedProjection(rawPayload, 'statistics', keys, keys);
-    const outputContractVersion = payload.output_contract_version;
+    const payload = fmClosedProjection(value, 'statistics', [...baseKeys, 'analysis_receipt'], baseKeys);
+    const schemaVersion = fmInteger(payload.schema_version, 'statistics.schema_version', 1);
+    const outputContractVersion = fmString(payload.output_contract_version, 'statistics.output_contract_version');
     if (payload.schema_name !== 'frustrampnn_statistics'
-        || (schemaVersion !== 1 && schemaVersion !== 2)
         || payload.hash_semantics !== 'sha256(rfc8785(document_without_top_level_statistics_sha256))'
-        || (schemaVersion === 1 && outputContractVersion !== '2.0')
-        || (schemaVersion === 2 && outputContractVersion !== '3.0')
         || payload.canonical_amino_acid_order !== 'ACDEFGHIKLMNPQRSTVWY') throw new Error('statistics schema identity is invalid');
-    const analysisReceipt = schemaVersion === 2
+    const analysisReceipt = payload.analysis_receipt !== undefined
         ? parseStatisticsAnalysisReceipt(payload.analysis_receipt)
         : undefined;
     const structureMap = fmClosedProjection(payload.structure_map, 'statistics.structure_map', ['schema_name', 'schema_version', 'sha256'], ['schema_name', 'schema_version', 'sha256']);
-    if (structureMap.schema_name !== 'frustrampnn_structure_map' || structureMap.schema_version !== 1) throw new Error('statistics.structure_map schema identity is invalid');
+    if (structureMap.schema_name !== 'frustrampnn_structure_map') throw new Error('statistics.structure_map schema identity is invalid');
     const distributions = fmClosedProjection(payload.distributions, 'statistics.distributions', ['overall', 'native', 'non_native'], ['overall', 'native', 'non_native']);
     const burdens = fmClosedProjection(payload.class_burden, 'statistics.class_burden', ['all', 'native', 'non_native'], ['all', 'native', 'non_native']);
     const nativeAlternative = fmClosedProjection(payload.native_vs_alternative, 'statistics.native_vs_alternative', ['native_mean', 'alternative_mean', 'alternative_minus_native', 'denominators', 'missingness_reasons'], ['native_mean', 'alternative_mean', 'alternative_minus_native', 'denominators', 'missingness_reasons']);
@@ -2330,8 +2308,8 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         capability_inventory_byte_sha256: fmSha256(payload.capability_inventory_byte_sha256, 'statistics.capability_inventory_byte_sha256'), configuration_sha256: fmSha256(payload.configuration_sha256, 'statistics.configuration_sha256'),
         runtime_identity_sha256: fmSha256(payload.runtime_identity_sha256, 'statistics.runtime_identity_sha256'), classification_policy_sha256: fmSha256(payload.classification_policy_sha256, 'statistics.classification_policy_sha256'),
         execution_plan_sha256: fmSha256(payload.execution_plan_sha256, 'statistics.execution_plan_sha256'), comparison_compatibility_id: fmSha256(payload.comparison_compatibility_id, 'statistics.comparison_compatibility_id'),
-        statistics_sha256: fmSha256(payload.statistics_sha256, 'statistics.statistics_sha256'), structure_map: { schema_name: 'frustrampnn_structure_map', schema_version: 1, sha256: fmSha256(structureMap.sha256, 'statistics.structure_map.sha256') },
-        output_contract_version: outputContractVersion as '2.0' | '3.0',
+        statistics_sha256: fmSha256(payload.statistics_sha256, 'statistics.statistics_sha256'), structure_map: { schema_name: 'frustrampnn_structure_map', schema_version: fmInteger(structureMap.schema_version, 'statistics.structure_map.schema_version', 1), sha256: fmSha256(structureMap.sha256, 'statistics.structure_map.sha256') },
+        output_contract_version: outputContractVersion,
         ...(analysisReceipt ? { analysis_receipt: analysisReceipt } : {}),
         canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY', comparison_compatibility_basis: parseStatisticsBasis(payload.comparison_compatibility_basis),
         support: parseStatisticsSupport(payload.support, 'statistics.support'),
@@ -2358,13 +2336,13 @@ const RESULT_ITEM_KEYS = [
     'invocation_id', 'parent_job_id', 'parent_workflow_id', 'candidate_id', 'operator_label',
     'source_identity', 'design_id',
     'requiredness', 'source_artifact_id', 'source_artifact_sha256', 'request_sha256',
-    'manifest_sha256', 'summary_sha256', 'created_at', 'authority_version', 'availability',
+    'manifest_sha256', 'summary_sha256', 'created_at', 'availability',
     'statistics_available', 'missing_fields', 'settings_sha256', 'effective_settings_sha256',
-    'effective_settings_json', 'capability_inventory_sha256', 'statistics_sha256',
-    'statistics_json', 'comparison_compatibility_id', 'status', 'component_contract_version',
+    'capability_inventory_sha256', 'statistics_sha256',
+    'comparison_compatibility_id', 'status', 'component_contract_version',
     'runtime_identity', 'runtime_identity_sha256', 'gpu_provenance', 'failure_class', 'reopen_destination',
 ] as const;
-const RESULT_DETAIL_KEYS = [...RESULT_ITEM_KEYS, 'summary', 'terminal_result', 'execution_receipt'] as const;
+const RESULT_DETAIL_KEYS = [...RESULT_ITEM_KEYS, 'effective_settings_json', 'summary', 'terminal_result', 'execution_receipt'] as const;
 const MISSING_FIELDS = new Set<FrustraMpnnMissingField>([
     'settings_sha256', 'effective_settings_sha256', 'effective_settings_json',
     'capability_inventory_sha256', 'statistics_sha256', 'statistics_json',
@@ -2372,19 +2350,16 @@ const MISSING_FIELDS = new Set<FrustraMpnnMissingField>([
 ]);
 
 const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultListItem => {
-    const payload = fmClosedProjection(value, 'FrustraMPNN result', detail ? RESULT_DETAIL_KEYS : RESULT_ITEM_KEYS, detail ? RESULT_DETAIL_KEYS : RESULT_ITEM_KEYS);
-    const authority = payload.authority_version;
-    if (authority !== 'v3' && authority !== 'v2' && authority !== 'historical_v1') throw new Error('result authority_version is invalid');
+    // Retained wire documents may include deep fields; only detail settings are consumed.
+    const payload = fmClosedProjection(value, 'FrustraMPNN result', [...RESULT_DETAIL_KEYS, 'statistics_json', 'authority_version'], detail ? RESULT_DETAIL_KEYS : RESULT_ITEM_KEYS);
     const status = payload.status;
     if (status !== 'succeeded' && status !== 'failed' && status !== 'not_run') throw new Error('result status is invalid');
-    const contract = payload.component_contract_version;
-    if (contract !== '1.0' && contract !== '2.0' && contract !== '3.0') throw new Error('result component contract is invalid');
+    const contract = fmString(payload.component_contract_version, 'result.component_contract_version');
     if (!Array.isArray(payload.missing_fields)) throw new Error('result missing_fields must be an array');
     const missingFields = payload.missing_fields.map((field) => {
         if (!MISSING_FIELDS.has(field as FrustraMpnnMissingField)) throw new Error(`result missing_fields contains unsupported field ${String(field)}`);
         return field as FrustraMpnnMissingField;
     });
-    const statistics = payload.statistics_json === null ? null : parseFrustraMpnnStatistics(payload.statistics_json);
     const reopen = fmClosedProjection(payload.reopen_destination, 'result.reopen_destination', ['surface', 'params'], ['surface', 'params']);
     if (reopen.surface !== 'frustrampnn-workbench') throw new Error('result reopen surface is invalid');
     const reopenParams = fmClosedProjection(reopen.params, 'result.reopen_destination.params', ['job_id', 'invocation_id'], ['job_id', 'invocation_id']);
@@ -2409,16 +2384,13 @@ const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultList
         manifest_sha256: fmSha256(payload.manifest_sha256, 'result.manifest_sha256'),
         summary_sha256: fmSha256(payload.summary_sha256, 'result.summary_sha256'),
         created_at: fmString(payload.created_at, 'result.created_at'),
-        authority_version: authority,
         availability: fmBoolean(payload.availability, 'result.availability'),
         statistics_available: fmBoolean(payload.statistics_available, 'result.statistics_available'),
         missing_fields: missingFields,
         settings_sha256: fmOptionalSha256(payload.settings_sha256, 'result.settings_sha256'),
         effective_settings_sha256: fmOptionalSha256(payload.effective_settings_sha256, 'result.effective_settings_sha256'),
-        effective_settings_json: payload.effective_settings_json === null ? null : parseFrustraMpnnEffectiveSettingsProjection(payload.effective_settings_json),
         capability_inventory_sha256: fmOptionalSha256(payload.capability_inventory_sha256, 'result.capability_inventory_sha256'),
         statistics_sha256: fmOptionalSha256(payload.statistics_sha256, 'result.statistics_sha256'),
-        statistics_json: statistics,
         comparison_compatibility_id: fmOptionalSha256(payload.comparison_compatibility_id, 'result.comparison_compatibility_id'),
         status,
         component_contract_version: contract,
@@ -2464,19 +2436,19 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         'native_slot_fractions', 'complete_landscape_counts', 'complete_landscape_fractions',
         'support_by_entity_chain', 'threshold_policy', 'threshold_policy_sha256',
     ] as const;
-    const v1Keys = [...commonKeys, 'configuration_id', 'configuration_sha256'] as const;
-    const v2Keys = [
+    const executionBound = 'execution_configuration_sha256' in payload;
+    const configurationKeys = [...commonKeys, 'configuration_id', 'configuration_sha256'] as const;
+    const executionKeys = [
         ...commonKeys, 'execution_configuration_id', 'execution_configuration_sha256',
         'requested_settings_sha256', 'effective_settings_sha256', 'runtime_identity_sha256',
         'source_artifact_sha256', 'structure_map_sha256', 'normalized_pdb_sha256', 'threshold_policy_id',
     ] as const;
     if (
         payload.schema_name !== 'frustrampnn_summary'
-        || (payload.schema_version !== 1 && payload.schema_version !== 2 && payload.schema_version !== 3)
     ) {
         throw new Error('result summary schema identity is invalid');
     }
-    fmClosedProjection(payload, 'result.summary', payload.schema_version === 1 ? v1Keys : v2Keys, payload.schema_version === 1 ? v1Keys : v2Keys);
+    fmClosedProjection(payload, 'result.summary', !executionBound ? configurationKeys : executionKeys, !executionBound ? configurationKeys : executionKeys);
     const residue = fmClosedProjection(payload.residue_support, 'result.summary.residue_support', ['expected', 'mapped', 'scoreable', 'excluded', 'ambiguous'], ['expected', 'mapped', 'scoreable', 'excluded', 'ambiguous']);
     const slots = fmClosedProjection(payload.slot_support, 'result.summary.slot_support', ['expected', 'observed', 'scoreable'], ['expected', 'observed', 'scoreable']);
     const missingnessWire = fmRecord(payload.missingness_by_reason, 'result.summary.missingness_by_reason');
@@ -2484,48 +2456,48 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
     for (const [reason, count] of Object.entries(missingnessWire)) {
         missingness[fmString(reason, 'result.summary missingness reason')] = fmInteger(count, `result.summary.missingness_by_reason.${reason}`, 1);
     }
-    if (payload.schema_version !== 1 && Object.keys(missingness).length !== 0) throw new Error('current result summary missingness must be empty');
+    if (executionBound && Object.keys(missingness).length !== 0) throw new Error('current result summary missingness must be empty');
     if (!Array.isArray(payload.support_by_entity_chain)) throw new Error('result.summary.support_by_entity_chain must be an array');
-    if (payload.schema_version !== 1 && payload.support_by_entity_chain.length < 1) throw new Error('result.summary.support_by_entity_chain must contain at least one chain');
+    if (executionBound && payload.support_by_entity_chain.length < 1) throw new Error('result.summary.support_by_entity_chain must contain at least one chain');
     const support = payload.support_by_entity_chain.map((item, index) => {
         const label = `result.summary.support_by_entity_chain[${index}]`;
         const row = fmClosedProjection(item, label, ['entity_instance_id', 'auth_asym_id', 'expected_residues', 'mapped_residues', 'scoreable_residues', 'expected_slots', 'observed_slots', 'scoreable_slots'], ['entity_instance_id', 'auth_asym_id', 'expected_residues', 'mapped_residues', 'scoreable_residues', 'expected_slots', 'observed_slots', 'scoreable_slots']);
         return {
             entity_instance_id: fmString(row.entity_instance_id, `${label}.entity_instance_id`),
             auth_asym_id: fmString(row.auth_asym_id, `${label}.auth_asym_id`),
-            expected_residues: fmInteger(row.expected_residues, `${label}.expected_residues`, payload.schema_version !== 1 ? 1 : 0),
-            mapped_residues: fmInteger(row.mapped_residues, `${label}.mapped_residues`, payload.schema_version !== 1 ? 1 : 0),
-            scoreable_residues: fmInteger(row.scoreable_residues, `${label}.scoreable_residues`, payload.schema_version !== 1 ? 1 : 0),
-            expected_slots: fmInteger(row.expected_slots, `${label}.expected_slots`, payload.schema_version !== 1 ? 20 : 0),
-            observed_slots: fmInteger(row.observed_slots, `${label}.observed_slots`, payload.schema_version !== 1 ? 20 : 0),
-            scoreable_slots: fmInteger(row.scoreable_slots, `${label}.scoreable_slots`, payload.schema_version !== 1 ? 20 : 0),
+            expected_residues: fmInteger(row.expected_residues, `${label}.expected_residues`, executionBound ? 1 : 0),
+            mapped_residues: fmInteger(row.mapped_residues, `${label}.mapped_residues`, executionBound ? 1 : 0),
+            scoreable_residues: fmInteger(row.scoreable_residues, `${label}.scoreable_residues`, executionBound ? 1 : 0),
+            expected_slots: fmInteger(row.expected_slots, `${label}.expected_slots`, executionBound ? 20 : 0),
+            observed_slots: fmInteger(row.observed_slots, `${label}.observed_slots`, executionBound ? 20 : 0),
+            scoreable_slots: fmInteger(row.scoreable_slots, `${label}.scoreable_slots`, executionBound ? 20 : 0),
         };
     });
     const policyLabel = 'result.summary.threshold_policy';
-    const policy = payload.schema_version === 1
+    const policy = !executionBound
         ? fmClosedProjection(payload.threshold_policy, policyLabel, ['id', 'high_max', 'minimal_min'], ['id', 'high_max', 'minimal_min'])
         : fmClosedProjection(payload.threshold_policy, policyLabel, ['mode', 'high_max', 'minimal_min'], ['mode', 'high_max', 'minimal_min']);
-    if (payload.schema_version === 1 && policy.id !== 'frustrampnn_class_v1') throw new Error('v1 result summary threshold policy is invalid');
-    if (payload.schema_version === 1 && (fmFinite(policy.high_max, `${policyLabel}.high_max`) !== -1 || fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) !== 0.58)) throw new Error('v1 result summary threshold_policy values are invalid');
-    if (payload.schema_version !== 1 && policy.mode !== 'canonical' && policy.mode !== 'custom') throw new Error('current result summary threshold policy is invalid');
+    if (!executionBound && policy.id !== 'frustrampnn_class_v1') throw new Error('v1 result summary threshold policy is invalid');
+    if (!executionBound && (fmFinite(policy.high_max, `${policyLabel}.high_max`) !== -1 || fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) !== 0.58)) throw new Error('v1 result summary threshold_policy values are invalid');
+    if (executionBound && policy.mode !== 'canonical' && policy.mode !== 'custom') throw new Error('current result summary threshold policy is invalid');
     const common = {
         schema_name: 'frustrampnn_summary' as const,
-        schema_version: payload.schema_version,
+        schema_version: fmInteger(payload.schema_version, 'result.summary.schema_version', 1),
         target_id: fmString(payload.target_id, 'result.summary.target_id'),
         parent_job_id: fmString(payload.parent_job_id, 'result.summary.parent_job_id'),
         candidate_id: fmString(payload.candidate_id, 'result.summary.candidate_id'),
         landscape_sha256: fmSha256(payload.landscape_sha256, 'result.summary.landscape_sha256'),
         residue_support: {
-            expected: fmInteger(residue.expected, 'result.summary.residue_support.expected', payload.schema_version !== 1 ? 1 : 0),
-            mapped: fmInteger(residue.mapped, 'result.summary.residue_support.mapped', payload.schema_version !== 1 ? 1 : 0),
-            scoreable: fmInteger(residue.scoreable, 'result.summary.residue_support.scoreable', payload.schema_version !== 1 ? 1 : 0),
+            expected: fmInteger(residue.expected, 'result.summary.residue_support.expected', executionBound ? 1 : 0),
+            mapped: fmInteger(residue.mapped, 'result.summary.residue_support.mapped', executionBound ? 1 : 0),
+            scoreable: fmInteger(residue.scoreable, 'result.summary.residue_support.scoreable', executionBound ? 1 : 0),
             excluded: fmInteger(residue.excluded, 'result.summary.residue_support.excluded', 0),
             ambiguous: fmInteger(residue.ambiguous, 'result.summary.residue_support.ambiguous', 0),
         },
         slot_support: {
-            expected: fmInteger(slots.expected, 'result.summary.slot_support.expected', payload.schema_version !== 1 ? 20 : 0),
-            observed: fmInteger(slots.observed, 'result.summary.slot_support.observed', payload.schema_version !== 1 ? 20 : 0),
-            scoreable: fmInteger(slots.scoreable, 'result.summary.slot_support.scoreable', payload.schema_version !== 1 ? 20 : 0),
+            expected: fmInteger(slots.expected, 'result.summary.slot_support.expected', executionBound ? 20 : 0),
+            observed: fmInteger(slots.observed, 'result.summary.slot_support.observed', executionBound ? 20 : 0),
+            scoreable: fmInteger(slots.scoreable, 'result.summary.slot_support.scoreable', executionBound ? 20 : 0),
         },
         missingness_by_reason: missingness,
         native_slot_counts: parseSummaryCounts(payload.native_slot_counts, 'result.summary.native_slot_counts'),
@@ -2533,16 +2505,15 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         complete_landscape_counts: parseSummaryCounts(payload.complete_landscape_counts, 'result.summary.complete_landscape_counts'),
         complete_landscape_fractions: parseSummaryFractions(payload.complete_landscape_fractions, 'result.summary.complete_landscape_fractions'),
         support_by_entity_chain: support,
-        threshold_policy: payload.schema_version === 1
+        threshold_policy: !executionBound
             ? { id: 'frustrampnn_class_v1' as const, high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) }
             : { mode: policy.mode as 'canonical' | 'custom', high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) },
         threshold_policy_sha256: fmSha256(payload.threshold_policy_sha256, 'result.summary.threshold_policy_sha256'),
     };
-    if (payload.schema_version === 1) return {
+    if (!executionBound) return {
         ...common,
-        schema_version: 1,
         threshold_policy: { id: 'frustrampnn_class_v1' as const, high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) },
-        configuration_id: (() => { if (payload.configuration_id !== 'frustrampnn_global_v1') throw new Error('v1 result summary configuration is invalid'); return 'frustrampnn_global_v1' as const; })(),
+        configuration_id: fmString(payload.configuration_id, 'result.summary.configuration_id'),
         configuration_sha256: fmSha256(payload.configuration_sha256, 'result.summary.configuration_sha256'),
     };
     const current = {
@@ -2557,12 +2528,7 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         normalized_pdb_sha256: fmSha256(payload.normalized_pdb_sha256, 'result.summary.normalized_pdb_sha256'),
         threshold_policy_id: (() => { if (payload.threshold_policy_id !== 'frustrampnn_class_v1') throw new Error('current result summary threshold policy id is invalid'); return 'frustrampnn_class_v1' as const; })(),
     };
-    if (payload.schema_version === 2) {
-        if (payload.execution_configuration_id !== 'frustrampnn_execution_configuration_v2') throw new Error('v2 result summary execution configuration is invalid');
-        return { ...current, schema_version: 2, execution_configuration_id: 'frustrampnn_execution_configuration_v2' };
-    }
-    if (payload.execution_configuration_id !== 'frustrampnn_execution_configuration_v3') throw new Error('v3 result summary execution configuration is invalid');
-    return { ...current, schema_version: 3, execution_configuration_id: 'frustrampnn_execution_configuration_v3' };
+    return { ...current, execution_configuration_id: fmString(payload.execution_configuration_id, 'result.summary.execution_configuration_id') };
 };
 
 const parseTerminalResultProjection = (value: unknown): FrustraMpnnTerminalResult => {
@@ -2652,6 +2618,7 @@ export const parseFrustraMpnnResultDetail = (value: unknown): FrustraMpnnResultD
     const common = parseResultItem(payload, true);
     return {
         ...common,
+        effective_settings_json: payload.effective_settings_json === null ? null : parseFrustraMpnnEffectiveSettingsProjection(payload.effective_settings_json),
         summary: parseFrustraMpnnSummary(payload.summary),
         terminal_result: parseTerminalResultProjection(payload.terminal_result),
         execution_receipt: payload.execution_receipt === null ? null : parseExecutionReceiptProjection(payload.execution_receipt),
@@ -2676,10 +2643,24 @@ const STATISTICS_RESPONSE_KEYS = [
     'statistics_json', 'comparison_compatibility_id', 'statistics',
 ] as const;
 
+// Compare duplicate wire aliases by content, independent of object key order.
+const statisticsWireEqual = (left: unknown, right: unknown): boolean => {
+    if (left === right) return true;
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+    if (Array.isArray(left) !== Array.isArray(right)) return false;
+    const a = left as Record<string, unknown>;
+    const b = right as Record<string, unknown>;
+    return Object.keys(a).length === Object.keys(b).length
+        && Object.keys(a).every((key) => Object.hasOwn(b, key) && statisticsWireEqual(a[key], b[key]));
+};
+
 export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnStatisticsResponse => {
-    const payload = fmClosedProjection(value, 'FrustraMPNN statistics response', STATISTICS_RESPONSE_KEYS, STATISTICS_RESPONSE_KEYS);
-    const authority = payload.authority_version;
-    if (authority !== 'v3' && authority !== 'v2' && authority !== 'historical_v1') throw new Error('statistics authority_version is invalid');
+    const payload = fmClosedProjection(value, 'FrustraMPNN statistics response', STATISTICS_RESPONSE_KEYS, STATISTICS_RESPONSE_KEYS.filter((key) => key !== 'statistics' && key !== 'statistics_json' && key !== 'authority_version'));
+    if (!('statistics' in payload) && !('statistics_json' in payload)) throw new Error('statistics response is missing statistics');
+    if ('statistics' in payload && 'statistics_json' in payload && !statisticsWireEqual(payload.statistics, payload.statistics_json)) {
+        throw new Error('statistics response aliases conflict');
+    }
+    const statistics = 'statistics' in payload ? payload.statistics : payload.statistics_json;
     if (!Array.isArray(payload.missing_fields)) throw new Error('statistics missing_fields must be an array');
     const missingFields = payload.missing_fields.map((field) => {
         if (!MISSING_FIELDS.has(field as FrustraMpnnMissingField)) throw new Error(`statistics missing_fields contains unsupported field ${String(field)}`);
@@ -2690,7 +2671,6 @@ export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnS
         parent_job_id: fmString(payload.parent_job_id, 'statistics parent_job_id'),
         candidate_id: fmString(payload.candidate_id, 'statistics candidate_id'),
         invocation_id: fmString(payload.invocation_id, 'statistics invocation_id'),
-        authority_version: authority,
         availability: fmBoolean(payload.availability, 'statistics availability'),
         missing_fields: missingFields,
         settings_sha256: fmOptionalSha256(payload.settings_sha256, 'statistics settings_sha256'),
@@ -2698,9 +2678,8 @@ export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnS
         effective_settings_json: payload.effective_settings_json === null ? null : parseFrustraMpnnEffectiveSettingsProjection(payload.effective_settings_json),
         capability_inventory_sha256: fmOptionalSha256(payload.capability_inventory_sha256, 'statistics capability_inventory_sha256'),
         statistics_sha256: fmOptionalSha256(payload.statistics_sha256, 'statistics statistics_sha256'),
-        statistics_json: payload.statistics_json === null ? null : parseFrustraMpnnStatistics(payload.statistics_json),
         comparison_compatibility_id: fmOptionalSha256(payload.comparison_compatibility_id, 'statistics comparison_compatibility_id'),
-        statistics: payload.statistics === null ? null : parseFrustraMpnnStatistics(payload.statistics),
+        statistics: statistics === null ? null : parseFrustraMpnnStatistics(statistics),
     };
 };
 
@@ -2920,12 +2899,17 @@ const parseComparisonSide = (value: unknown, label: string): FrustraMpnnComparis
 };
 
 const parseComparisonResidueKey = (value: unknown, label: string): FrustraMpnnComparisonRow['residue_key'] => {
-    const payload = fmClosedProjection(value, label, ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'], ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code']);
+    const required = ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'];
+    const payload = fmClosedProjection(value, label, [...required, 'source_entity_id', 'label_asym_id', 'sequence_index', 'wt'], required);
     return {
         entity_instance_id: fmString(payload.entity_instance_id, `${label}.entity_instance_id`),
         auth_asym_id: fmString(payload.auth_asym_id, `${label}.auth_asym_id`),
         auth_seq_id: fmInteger(payload.auth_seq_id, `${label}.auth_seq_id`),
         insertion_code: fmString(payload.insertion_code, `${label}.insertion_code`, true),
+        ...('source_entity_id' in payload ? { source_entity_id: fmSchemaNullableString(payload.source_entity_id, `${label}.source_entity_id`) } : {}),
+        ...('label_asym_id' in payload ? { label_asym_id: fmSchemaNullableString(payload.label_asym_id, `${label}.label_asym_id`) } : {}),
+        ...('sequence_index' in payload ? { sequence_index: payload.sequence_index === null ? null : fmInteger(payload.sequence_index, `${label}.sequence_index`, 1) } : {}),
+        ...('wt' in payload ? { wt: fmSchemaNullableString(payload.wt, `${label}.wt`) } : {}),
     };
 };
 
@@ -3140,8 +3124,8 @@ export interface FrustraMpnnGuidancePlan {
     region: {
         region_type: 'residue_set' | 'sequence_span' | 'pocket' | 'interface' | 'contact_set' | 'loop' | 'domain' | 'mapped_region';
         requested_residues: Array<{ entity_instance_id: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
-        resolved_residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
-        unresolved_residues: Array<{ auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
+        resolved_residues: Array<{ entity_instance_id?: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
+        unresolved_residues: Array<{ entity_instance_id?: string | null; auth_asym_id: string; auth_seq_id: number; insertion_code: string }>;
         region_sha256: string;
         mapping_method: string | null;
         source_artifact_sha256: string | null;
@@ -3708,8 +3692,7 @@ export const parseFrustraMpnnStructureMap = (value: unknown): FrustraMpnnStructu
         'normalizer_version', 'model_ready_sequence', 'model_ready_sequence_sha256', 'excluded_records', 'rows',
     ] as const;
     const payload = fmClosedProjection(value, label, keys, keys);
-    if (payload.schema_name !== 'frustrampnn_structure_map' || payload.schema_version !== 1
-        || payload.normalizer_version !== 'frustrampnn_structure_normalizer_v1') {
+    if (payload.schema_name !== 'frustrampnn_structure_map') {
         throw new Error(`${label} schema identity is invalid`);
     }
     if (payload.source_format !== 'pdb' && payload.source_format !== 'mmcif') throw new Error(`${label}.source_format is invalid`);
@@ -3790,7 +3773,7 @@ export const parseFrustraMpnnStructureMap = (value: unknown): FrustraMpnnStructu
     });
     return {
         schema_name: 'frustrampnn_structure_map',
-        schema_version: 1,
+        schema_version: fmInteger(payload.schema_version, `${label}.schema_version`, 1),
         target_id: fmString(payload.target_id, `${label}.target_id`),
         parent_job_id: fmString(payload.parent_job_id, `${label}.parent_job_id`),
         candidate_id: fmString(payload.candidate_id, `${label}.candidate_id`),
@@ -3803,7 +3786,7 @@ export const parseFrustraMpnnStructureMap = (value: unknown): FrustraMpnnStructu
         normalized_pdb_sha256: fmSha256(payload.normalized_pdb_sha256, `${label}.normalized_pdb_sha256`),
         selected_source_model: fmInteger(payload.selected_source_model, `${label}.selected_source_model`, 1),
         altloc_policy: altlocPolicy,
-        normalizer_version: 'frustrampnn_structure_normalizer_v1',
+        normalizer_version: fmString(payload.normalizer_version, `${label}.normalizer_version`),
         model_ready_sequence: modelReadySequence,
         model_ready_sequence_sha256: fmSha256(payload.model_ready_sequence_sha256, `${label}.model_ready_sequence_sha256`),
         excluded_records: excludedRecords,
@@ -3987,12 +3970,11 @@ export const parseFrustraMpnnGuidance = (value: unknown): FrustraMpnnGuidancePla
     if (!Array.isArray(region.requested_residues) || !Array.isArray(region.resolved_residues) || !Array.isArray(region.unresolved_residues)) throw new Error(`${label}.region residue collections must be arrays`);
     const parseRegionResidue = (item: unknown, index: number, collection: 'requested_residues' | 'resolved_residues' | 'unresolved_residues') => {
         const itemLabel = `${label}.region.${collection}[${index}]`;
-        const residueKeys = collection === 'requested_residues'
-            ? ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'] as const
-            : ['auth_asym_id', 'auth_seq_id', 'insertion_code'] as const;
-        const row = fmClosedProjection(item, itemLabel, residueKeys, residueKeys);
+        const residueKeys = ['entity_instance_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code'] as const;
+        const required = collection === 'requested_residues' ? residueKeys : ['auth_asym_id', 'auth_seq_id', 'insertion_code'];
+        const row = fmClosedProjection(item, itemLabel, residueKeys, required);
         return {
-            ...(collection === 'requested_residues' ? { entity_instance_id: fmSchemaNullableString(row.entity_instance_id, `${itemLabel}.entity_instance_id`) } : {}),
+            ...('entity_instance_id' in row ? { entity_instance_id: fmSchemaNullableString(row.entity_instance_id, `${itemLabel}.entity_instance_id`) } : {}),
             auth_asym_id: fmString(row.auth_asym_id, `${itemLabel}.auth_asym_id`),
             auth_seq_id: fmInteger(row.auth_seq_id, `${itemLabel}.auth_seq_id`),
             insertion_code: (() => {

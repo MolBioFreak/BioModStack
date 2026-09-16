@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ProjectTreeNode } from '../../lib/projectManager';
 import { displayLabel } from './projectManagerState';
 
@@ -11,14 +11,9 @@ interface ProjectTreeProps {
 
 export function ProjectTree({ nodes, selectedNodeKey, onSelect, onClose }: ProjectTreeProps) {
     const [query, setQuery] = useState('');
-    const [expanded, setExpanded] = useState<Set<string>>(() => new Set(nodes.filter((node) => node.node_type !== 'virtual_folder').map((node) => node.node_key)));
-    useEffect(() => {
-        setExpanded((current) => {
-            const next = new Set(current);
-            for (const node of nodes) if (node.node_type !== 'virtual_folder') next.add(node.node_key);
-            return next;
-        });
-    }, [nodes]);
+    // Store only explicit choices; refreshed/new nodes retain sensible defaults.
+    const [expansion, setExpansion] = useState<Record<string, boolean>>({});
+    const expanded = useMemo(() => new Set(nodes.filter((node) => expansion[node.node_key] ?? node.node_type !== 'virtual_folder').map((node) => node.node_key)), [nodes, expansion]);
     const nodeByKey = useMemo(() => new Map(nodes.map((node) => [node.node_key, node])), [nodes]);
     const visible = useMemo(() => {
         const needle = query.trim().toLowerCase();
@@ -43,11 +38,7 @@ export function ProjectTree({ nodes, selectedNodeKey, onSelect, onClose }: Proje
         return depth;
     };
     const toggle = (node: ProjectTreeNode) => {
-        setExpanded((current) => {
-            const next = new Set(current);
-            if (next.has(node.node_key)) next.delete(node.node_key); else next.add(node.node_key);
-            return next;
-        });
+        setExpansion((current) => ({ ...current, [node.node_key]: !expanded.has(node.node_key) }));
         if (node.node_type === 'virtual_folder') onSelect(node.node_key);
     };
 

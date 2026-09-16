@@ -44,7 +44,7 @@ def validate_bundle(
 ) -> dict:
     request = _load_json(request_path)
     manifest = _load_json(manifest_path)
-    if request.get("schema") != "bms_shape_design_request_v1":
+    if request.get("schema") != "bms_shape_design_request_v2":
         raise ValueError("unsupported Shape request schema")
     if manifest.get("schema") != "bms_shape_canonical_geometry_v1":
         raise ValueError("unsupported Shape geometry manifest schema")

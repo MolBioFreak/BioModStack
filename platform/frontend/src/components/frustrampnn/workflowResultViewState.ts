@@ -17,9 +17,8 @@ export const parseWorkflowResultViewState = (
 ): WorkflowResultViewState => {
     const params = new URLSearchParams(search);
     const requestedModel = params.get('result_model')?.trim().toLowerCase() ?? '';
-    const model = availability.availableModelIds.includes(requestedModel)
-        ? requestedModel
-        : availability.primaryModelId;
+    // An explicit URL is selection authority even when its model has no rows.
+    const model = requestedModel || availability.primaryModelId;
     const scope: FrustraMpnnResultScope = model === 'frustrampnn'
         && params.get('frustrampnn_scope') === 'whole-experiment'
         ? 'whole-experiment'

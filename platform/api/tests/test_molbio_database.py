@@ -219,6 +219,7 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "0005_authoritative_import_batches",
             "0006_project_plasmid_metadata",
             "0007_restriction_digest_results",
+            "0008_revision_digest_index",
         ]
         async with engine.connect() as connection:
             foreign_keys = (await connection.execute(text("PRAGMA foreign_keys"))).scalar_one()
@@ -229,14 +230,17 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
         assert busy_timeout == 30000
         health = await molbio_health(engine=engine)
         restriction_digest = health.pop("restriction_digest")
+        assert health.pop("check_mode") == "deep"
+        assert health.pop("integrity_checks_run") is True
+        assert health.pop("database_schema_presence_current") is True
         assert health == {
             "owner": "molbio",
             "database_kind": "sqlite",
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 7,
-            "latest_migration": "0007_restriction_digest_results",
+            "migration_count": 8,
+            "latest_migration": "0008_revision_digest_index",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
@@ -245,9 +249,11 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "sequence_parent_foreign_key_current": True,
             "sequence_parent_cycle_count": 0,
         }
-        from readiness import _restriction_digest_readiness_is_exact
-
-        assert _restriction_digest_readiness_is_exact(restriction_digest) is True
+        assert restriction_digest["ready"] is True
+        assert restriction_digest["status"] == "ready"
+        assert restriction_digest["resource_policy"]
+        assert restriction_digest["migration"]
+        assert len(restriction_digest["resource_policy_sha256"]) == 64
     finally:
         await engine.dispose()
 
@@ -313,13 +319,14 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(api_main, "collect_runtime_readiness", deterministic_readiness)
 
-    async def healthy():
+    async def healthy(*, deep):
+        assert deep is False
         return {
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 7,
-            "latest_migration": "0007_restriction_digest_results",
+            "migration_count": 8,
+            "latest_migration": "0008_revision_digest_index",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
@@ -332,9 +339,10 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_main, "molbio_health", healthy)
     payload = await api_main.health_check()
     assert payload["status"] == "healthy"
-    assert payload["molbio"]["latest_migration"] == "0007_restriction_digest_results"
+    assert payload["molbio"]["latest_migration"] == "0008_revision_digest_index"
 
-    async def degraded():
+    async def degraded(*, deep):
+        assert deep is False
         return {
             "status": "degraded",
             "quick_check": "ok",
@@ -675,7 +683,7 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
     try:
         await init_molbio_db(engine=engine)
         assert (await get_applied_molbio_migrations(engine=engine))[-1] == (
-            "0007_restriction_digest_results"
+            "0008_revision_digest_index"
         )
     finally:
         await engine.dispose()

@@ -61,7 +61,6 @@ export function MetricLegendPanel({ layer, visible = true, opacity = 1, onVisibi
                 {descriptor.semantics && <><dt>Semantics</dt><dd>{descriptor.semantics}</dd></>}
                 {descriptor.formula && <><dt>Formula</dt><dd className="font-mono">{descriptor.formula}</dd></>}
                 <dt>Source</dt><dd>{descriptor.provenance.source}</dd>
-                {descriptor.provenance.sourceVersion && <><dt>Version</dt><dd>{descriptor.provenance.sourceVersion}</dd></>}
                 {descriptor.provenance.workflowId && <><dt>Workflow</dt><dd>{descriptor.provenance.workflowId}</dd></>}
                 {descriptor.provenance.jobId && <><dt>Job</dt><dd>{descriptor.provenance.jobId}</dd></>}
                 {descriptor.provenance.artifactId && <><dt>Artifact</dt><dd>{descriptor.provenance.artifactId}</dd></>}

@@ -546,8 +546,73 @@ def verify_managed_reference_snapshot(
         raise ValueError("managed reference snapshot digest mismatch before consumption")
 
 
+def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve ordinary uploaded FASTQ bytes via the existing immutable snapshot owner.
+
+    Instrument/barcode/external inputs already have their own governed custody and
+    are not reclassified here. This only serves the ordinary submitted-path lane.
+    """
+    result = dict(params)
+    provenance = result.get("ont_input_provenance")
+    if (result.get("ont_input_mode") != "fastq" or not isinstance(provenance, Mapping)
+            or provenance.get("source") != "submitted_path"):
+        raise ValueError("ordinary FASTQ custody requires submitted-path input authority")
+    source = _canonical_absolute_path(result.get("fastq_path"))
+    root = _canonical_absolute_path(get_inputs_dir())
+    if source is None or root is None:
+        raise ValueError("ordinary FASTQ source path is invalid")
+    descriptor = _open_runtime_snapshot(source, root, label="ordinary FASTQ")
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+    finally:
+        os.close(descriptor)
+    snapshot = publish_immutable_launch_snapshot(
+        source, source_root=root, family="ont_fastq_launch_snapshots",
+        authority_id=uuid4().hex, expected_sha256=digest.hexdigest(),
+        expected_size_bytes=size, suffix=".fastq.gz" if source.name.endswith(".gz") else ".fastq",
+    )
+    result["fastq_path"] = str(snapshot)
+    result["ont_input_provenance"] = {
+        **dict(provenance), "path": str(snapshot), "source": "managed_fastq_launch_snapshot",
+        "submitted_path": str(source), "sha256": digest.hexdigest(), "size_bytes": size,
+    }
+    return result
+
+
+def verify_fastq_launch_custody(params: Mapping[str, Any]) -> None:
+    provenance = params.get("ont_input_provenance")
+    if not isinstance(provenance, Mapping) or provenance.get("source") != "managed_fastq_launch_snapshot":
+        return
+    path = _canonical_absolute_path(params.get("fastq_path"))
+    root = _canonical_absolute_path(get_inputs_dir() / "ont_fastq_launch_snapshots")
+    expected_sha256 = provenance.get("sha256")
+    expected_size = provenance.get("size_bytes")
+    if (path is None or root is None or provenance.get("path") != str(path)
+            or provenance.get("mode") != "fastq" or params.get("ont_input_mode") != "fastq"
+            or not isinstance(expected_sha256, str) or len(expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_sha256)
+            or type(expected_size) is not int or expected_size < 1):
+        raise ValueError("managed FASTQ launch custody is invalid")
+    descriptor = _open_runtime_snapshot(path, root, label="managed FASTQ")
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+    finally:
+        os.close(descriptor)
+    if digest.hexdigest() != expected_sha256 or size != expected_size:
+        raise ValueError("managed FASTQ launch custody bytes changed")
+
+
 def verify_launch_input_snapshots(params: Mapping[str, Any]) -> None:
     """Apply the shared final-boundary validation to every immutable input family."""
 
     verify_instrument_artifact_snapshot(params)
     verify_managed_reference_snapshot(params)
+    verify_fastq_launch_custody(params)

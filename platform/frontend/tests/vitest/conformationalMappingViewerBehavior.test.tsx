@@ -4,8 +4,9 @@ import { test } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 
+import { CmEvidencePage } from '../../src/components/conformationalMapping/CmEvidencePage.js';
 import { ConformationalMappingViewer } from '../../src/components/conformationalMapping/ConformationalMappingViewer.js';
 import type { CmResults } from '../../src/components/conformationalMapping/conformationalMappingApi.js';
 import { CANONICAL_AMINO_ACIDS } from '../../src/components/conformationalMapping/conformationalMappingSemantics.js';
@@ -92,6 +93,9 @@ const mount = async (
     candidateCount: number,
     backend: ProducerBackend = 'protenix_v2_ensemble',
     frustraDataShape: FrustraDataShape = 'global',
+    search = '',
+    unavailable: boolean | 'contradictory-candidate' = false,
+    mutateResults?: (value: CmResults) => void,
 ) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     const captured: Array<{ primary: string; overlays: Array<{ id: string; structureUrl: string }> }> = [];
@@ -100,21 +104,44 @@ const mount = async (
         return <div data-workbench="stub" data-primary={props.structureUrl} data-overlays={JSON.stringify(props.overlayStructures || [])} />;
     };
     const frustraCaptured: Array<{ jobId: string; invocationId?: string }> = [];
+    let locationSearch = '';
+    let locationPath = '';
+    let go: ReturnType<typeof useNavigate>;
+    const LocationProbe = () => { const location = useLocation(); locationSearch = location.search; locationPath = location.pathname; go = useNavigate(); return null; };
     const legacyLandscapeRequests: Array<{ candidateId: string; offset: number; limit: number }> = [];
-    const FrustraWorkbench = (props: { job: { id: string }; preferredInvocationId?: string }) => {
+    const FrustraWorkbench = (props: { job: { id: string }; preferredInvocationId?: string; scope?: string; onScopeChange?: (scope: string) => void; onOpenJob: (id: string) => void }) => {
         frustraCaptured.push({ jobId: props.job.id, invocationId: props.preferredInvocationId });
-        return <div data-frustra-workbench="stub" data-job-id={props.job.id} data-invocation-id={props.preferredInvocationId} />;
+        return <div data-frustra-workbench="stub" data-job-id={props.job.id} data-invocation-id={props.preferredInvocationId} data-scope={props.scope}><button onClick={() => props.onScopeChange?.('whole-experiment')}>Test whole experiment</button><button onClick={() => props.onOpenJob('child-job')}>Test child route</button></div>;
     };
     const services = {
         getStatus: async () => ({
-            request_id: 'request-viewer', status: 'completed', job_id: 'retry-job', job_status: 'completed',
+            request_id: 'request-viewer', backend, status: 'completed', job_id: 'retry-job', job_status: 'completed',
             result_contract_id: backend === 'confornets' ? 'conformational_mapping_confornets_v1' : 'conformational_mapping_protenix_v1', retry_eligible: false,
             progress: { phase: 'completed', completed_coordinates: candidateCount, expected_coordinates: candidateCount },
             failure_receipt: null,
         } as never),
         getProgress: async () => ({ progress: { phase: 'completed', completed_coordinates: candidateCount, expected_coordinates: candidateCount } } as never),
         getFailureReceipts: async () => [],
-        getResults: async () => results(candidateCount, backend, frustraDataShape),
+        getResults: async () => {
+            if (unavailable === true) throw new Error('ancillary artifact unavailable');
+            const value = results(candidateCount, backend, frustraDataShape);
+            if (unavailable === 'contradictory-candidate') value.artifacts[0].sha256 = sha('f');
+            mutateResults?.(value);
+            return value;
+        },
+        getStateAnalysis: async () => {
+            if (!unavailable) throw new Error('no normalized state projection in fixture');
+            return {
+                request_id: 'request-viewer', analysis_id: `cm_state_landscape_analysis_${'a'.repeat(32)}`,
+                authority: { content_sha256: sha('a'), source_ensemble_sha256: sha('b'), source_landscape_sha256: sha('c'), source_structure_map_sha256: sha('d'), comparison_sha256: sha('e'), formula_version: 'cm_state_landscape_analysis_v1', formula_sha256: sha('f'), policy_sha256: sha('1') },
+                comparison: { mode: 'pairwise', target_id: 'target-a', scope: 'all_within_target', reference_backend_coordinates: null, reference_candidate_id: null },
+                counts: { pairs: 1, rows: 0, exclusions: 0 }, pairs: [{ pair_id: 'candidate-1__candidate-2', candidate_a_id: 'candidate-1', candidate_b_id: 'candidate-2' }], artifact: null,
+            };
+        },
+        getStateAnalysisRows: async () => ({
+            request_id: 'request-viewer', selected_analysis_id: `cm_state_landscape_analysis_${'a'.repeat(32)}`, offset: 0, limit: 50,
+            applied_filters: { pair_id: 'candidate-1__candidate-2', candidate_id: null, entity_instance_id: null, auth_asym_id: null, sequence_start: null, sequence_end: null }, next_offset: null, rows: [],
+        }),
         getLandscape: async (_requestId: string, candidateId: string, offset: number, limit: number) => {
             legacyLandscapeRequests.push({ candidateId, offset, limit });
             if (frustraDataShape === 'legacy_refetch_error' && legacyLandscapeRequests.length > 1) {
@@ -145,14 +172,122 @@ const mount = async (
     let renderer: ReactTestRenderer;
     await act(async () => {
         renderer = create(
-            <MemoryRouter><QueryClientProvider client={client}>
+            <MemoryRouter initialEntries={[`/designs/retry-job${search}`]}><LocationProbe /><QueryClientProvider client={client}>
                 <ConformationalMappingViewer requestId="request-viewer" services={services as never} Workbench={Workbench as never} FrustraWorkbench={FrustraWorkbench as never} />
             </QueryClientProvider></MemoryRouter>,
         );
     });
     await flush();
-    return { renderer: renderer!, client, captured, frustraCaptured, legacyLandscapeRequests };
+    return { renderer: renderer!, client, captured, frustraCaptured, legacyLandscapeRequests, search: () => locationSearch, pathname: () => locationPath, go: (to: number | string) => go(to as never) };
 };
+
+for (const fault of ['missing', 'invalid', 'foreign-source'] as const) {
+    test(`candidate ${fault} mapping is local; siblings and native downloads survive`, async () => {
+        const mounted = await mount(2, 'protenix_v2_ensemble', 'global', '', false, (value) => {
+            const mapping = value.records.find((record) => record.type === 'structure_map' && record.key === 'candidate-2')!;
+            if (fault === 'missing') {
+                value.records = value.records.filter((record) => record !== mapping);
+                value.section_errors = [{ type: 'structure_map', key: 'candidate-2', status: 'unavailable', detail: 'Mapping unavailable' }];
+            } else if (fault === 'invalid') mapping.payload!.candidate_id = 'foreign-candidate';
+            else mapping.payload!.original_cif_sha256 = sha('f');
+        });
+        assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-1$/);
+        const click = async (label: string) => {
+            await act(async () => mounted.renderer.root.findAllByType('button').find((node) => text(node) === label)!.props.onClick());
+            await flush();
+        };
+        await act(async () => mounted.go('/designs/retry-job?cm_candidate_id=candidate-2'));
+        await flush();
+        await click('Residue mapping');
+        assert.match(text(mounted.renderer.root), /Selected candidate mapping unavailable/);
+        assert.doesNotMatch(text(mounted.renderer.root), /Structure-map identity and residue mapping/);
+        assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-2$/);
+        await click('Downloads');
+        assert.equal(mounted.renderer.root.findAllByType('a').filter((node) => /\/artifacts\/artifact-/.test(node.props.href)).length, 2);
+        assert.doesNotMatch(text(mounted.renderer.root), /Canonical result validation failed closed/);
+        await act(async () => mounted.renderer.unmount());
+        mounted.client.clear();
+    });
+}
+
+for (const fault of ['foreign-request', 'invalid-ensemble'] as const) {
+    test(`root ${fault} remains fenced`, async () => {
+        const mounted = await mount(2, 'protenix_v2_ensemble', 'global', '', false, (value) => {
+            if (fault === 'foreign-request') value.request_id = 'other-request';
+            else value.records[0].payload!.source_snapshot_sha256 = 'not-a-hash';
+        });
+        assert.match(text(mounted.renderer.root), /Canonical result validation failed closed/);
+        assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+        await act(async () => mounted.renderer.unmount());
+        mounted.client.clear();
+    });
+}
+
+test('evidence paging replaces bounded rows, resets identity, and fences late/foreign/error pages', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const artifact = { artifact_id: 'support-artifact', owner_kind: 'conformational_mapping', owner_id: 'request', role: 'support', schema_id: 'cm_support', schema_version: 1, content_sha256: sha('b'), size_bytes: 10000, row_count: 205, relative_path: 'support.json', media_type: 'application/json' };
+    const record = { type: 'support', key: 'first', sha256: sha('a'), artifact };
+    const calls: Array<[string, string, number, number]> = [];
+    let release: (() => void) | undefined;
+    let hold = false;
+    let fault = '';
+    const getPage = async (requestId: string, type: string, key: string, collection: string, offset = 0, limit = 100) => {
+        calls.push([requestId, key, offset, limit]);
+        if (hold) await new Promise<void>((resolve) => { release = resolve; });
+        if (fault === 'error') throw new Error('Evidence storage unavailable');
+        const total = key === 'empty' ? 0 : 205;
+        return { request_id: fault === 'foreign' ? 'foreign' : requestId, record_type: type, record_key: key, sha256: record.sha256,
+            artifact: fault === 'artifact' ? { ...artifact, content_sha256: sha('c') } : artifact,
+            collection, key: collection, offset: fault === 'offset' ? offset + 1 : offset, limit, total_count: total,
+            next_offset: offset + limit < total ? offset + limit : null,
+            rows: Array.from({ length: Math.min(limit, Math.max(0, total - offset)) }, (_, index) => ({ identity: `${key}-row-${offset + index}`, score: null })),
+        } as never;
+    };
+    const view = (requestId = 'request', key = 'first') => <QueryClientProvider client={client}><CmEvidencePage requestId={requestId} record={{ ...record, key }} collection="records" label="Support evidence" getPage={getPage} /></QueryClientProvider>;
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(view()); });
+    await flush();
+    const click = async (label: string) => {
+        await act(async () => renderer.root.findAllByType('button').find((node) => text(node) === label)!.props.onClick());
+        await flush();
+    };
+    assert.match(text(renderer!.root), /100 loaded · 205 total · rows 1–100/);
+    await click('Next page');
+    assert.match(text(renderer!.root), /rows 101–200/);
+    assert.equal(renderer!.root.findAllByType('td').some((node) => text(node) === 'first-row-0'), false);
+    await click('Next page');
+    assert.match(text(renderer!.root), /5 loaded · 205 total · rows 201–205/);
+    assert.equal(renderer!.root.findAllByType('button').find((node) => text(node) === 'Next page')!.props.disabled, true);
+    await click('Previous page');
+    assert.match(text(renderer!.root), /rows 101–200/);
+    hold = true;
+    await act(async () => { renderer!.update(view('request', 'delayed')); });
+    await flush();
+    hold = false;
+    await act(async () => { renderer!.update(view('new-request', 'second')); });
+    await flush();
+    assert.match(text(renderer!.root), /rows 1–100/);
+    await act(async () => release!());
+    await flush();
+    assert.doesNotMatch(text(renderer!.root), /delayed-row/);
+    assert.match(text(renderer!.root), /second-row-0/);
+    await act(async () => { renderer!.update(view('new-request', 'empty')); });
+    await flush();
+    assert.match(text(renderer!.root), /0 loaded · 0 total/);
+    assert.match(text(renderer!.root), /No records in this collection/);
+    for (const mode of ['foreign', 'artifact', 'offset', 'error']) {
+        fault = mode;
+        await act(async () => { renderer!.update(view('new-request', mode)); });
+        await flush();
+        assert.equal(renderer!.root.findAllByProps({ role: 'alert' }).length, 1);
+        assert.equal(renderer!.root.findAllByType('tbody').length, 0);
+    }
+    assert.ok(calls.every((call) => call[3] === 100));
+    assert.ok(calls.some((call) => call[2] === 200));
+    assert.deepEqual(calls.find((call) => call[1] === 'second'), ['new-request', 'second', 0, 100]);
+    await act(async () => renderer!.unmount());
+    client.clear();
+});
 
 test('mounted viewer manages governed alternative overlays across candidate cardinalities', async () => {
     const two = await mount(2);
@@ -307,4 +442,51 @@ test('mounted historical FrustraMPNN view suppresses retained data after a faile
     assert.doesNotMatch(text(mounted.renderer.root), /Landscape provenance identity/i);
     await act(async () => mounted.renderer.unmount());
     mounted.client.clear();
+});
+
+
+test('CM exact URL invocation, candidate handoff, experiment scope, history and canonical child context', async () => {
+    const context = '&workspace_id=p&global_experiment_id=g&domain_experiment_id=d&global_experiment_revision_id=gr&domain_revision_id=dr';
+    const mounted = await mount(3, 'confornets', 'global', '?frustrampnn_invocation_id=frustrampnn:retry-job:candidate-2' + context);
+    const click = async (label: string) => { await act(async () => mounted.renderer.root.findAllByType('button').find(n => text(n) === label)!.props.onClick()); await flush(); };
+    assert.equal(mounted.renderer.root.findByProps({ 'data-frustra-workbench': 'stub' }).props['data-invocation-id'], 'frustrampnn:retry-job:candidate-2');
+    await click('Test whole experiment');
+    assert.match(mounted.search(), /frustrampnn_scope=whole-experiment/);
+    await click('ConforNets data');
+    assert.match(mounted.renderer.root.findByProps({ 'data-workbench': 'stub' }).props['data-primary'], /artifact-2$/);
+    await act(async () => mounted.renderer.root.findAllByType('button').find(n => text(n).includes('Candidate 3'))!.props.onClick());
+    await click('FrustraMPNN data');
+    assert.equal(new URLSearchParams(mounted.search()).get('frustrampnn_invocation_id'), 'frustrampnn:retry-job:candidate-3');
+    await act(async () => mounted.go(-1)); await flush();
+    assert.equal(new URLSearchParams(mounted.search()).get('cm_candidate_id'), 'candidate-3');
+    await act(async () => mounted.go(1)); await flush();
+    await click('Test child route');
+    assert.equal(mounted.pathname(), '/designs/child-job');
+    assert.match(mounted.search(), /global_experiment_revision_id=gr/);
+    assert.equal(new URLSearchParams(mounted.search()).has('frustrampnn_invocation_id'), false);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+test('CM exact native workbench remains addressable when the ancillary shell request fails', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?result_model=frustrampnn&frustrampnn_invocation_id=frustrampnn:retry-job:candidate-2', true);
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-frustra-workbench': 'stub' }).length, 1);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /ancillary artifact unavailable/);
+    assert.match(text(mounted.renderer.root), /State-landscape|State landscape|State analysis/i);
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+test('CM unavailable exact candidate never substitutes the first candidate', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?result_model=confornets&cm_candidate_id=missing');
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /exact requested candidate is unavailable/);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
+});
+
+
+test('CM contradictory selected candidate digest fails closed without substituting coordinates', async () => {
+    const mounted = await mount(2, 'confornets', 'global', '?cm_candidate_id=candidate-1', 'contradictory-candidate');
+    assert.equal(mounted.renderer.root.findAllByProps({ 'data-workbench': 'stub' }).length, 0);
+    assert.match(mounted.renderer.root.findAllByProps({ role: 'alert' }).map(text).join(' '), /validation failed closed/);
+    await act(async () => mounted.renderer.unmount()); mounted.client.clear();
 });

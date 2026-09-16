@@ -10,12 +10,18 @@ import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
+import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { RemoteResultsPrompt } from './RemoteResultsPrompt';
+import { RemoteDiagnosticsPrompt } from './RemoteDiagnosticsPrompt';
+import { remoteResultsState } from './remoteResultsState';
 
 interface DockingResult {
     name: string;
     path: string;
+    artifact_path: string;
+    format: 'sdf' | 'pdb';
     absolute_path: string;
     confidence: number | null;
     affinity: number | null;
@@ -51,7 +57,7 @@ export function JobDetailPage() {
         refetchInterval: (query) => {
             const job = query.state.data;
             // Keep polling if job is running
-            return job?.status === 'running' || job?.status === 'queued' ? jobPollingInterval(3000, query) : false;
+            return job?.status === 'running' || job?.status === 'queued' || (job && remoteResultsState(job)) ? jobPollingInterval(3000, query) : false;
         },
     });
 
@@ -64,10 +70,11 @@ export function JobDetailPage() {
         job?.mode === 'md';
     const isConformationalMappingJob = job?.model_id === 'conformational_mapping' ||
         job?.model_id === 'confornets_experimental';
+    const isRFD3GenerationJob = isRFD3GenerationResultJob(job);
     const isNgsResultJob = job ? isNgsJob(job) : false;
 
     // Fetch docking results
-    const { data: dockingData, isLoading: dockingLoading } = useQuery({
+    const { data: dockingData, isLoading: dockingLoading, error: dockingError } = useQuery<{ sdfs: DockingResult[] }>({
         queryKey: ['docking-results', jobId],
         queryFn: async () => {
             const res = await fetch(`/api/jobs/${jobId}/docking-results`);
@@ -85,7 +92,7 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob,
+        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob && !isRFD3GenerationJob,
     });
 
     const poses = dockingData?.sdfs || [];
@@ -113,6 +120,10 @@ export function JobDetailPage() {
         );
     }
 
+    if (isRFD3GenerationJob) {
+        return <Navigate replace to={`/designs/${job.id}${location.search}`} />;
+    }
+
     if (isNgsResultJob) {
         return <Navigate replace to={ngsResultHref(job.id, location.search)} />;
     }
@@ -137,6 +148,8 @@ export function JobDetailPage() {
             </Link>
 
             {/* Job Header */}
+            <RemoteResultsPrompt job={job} />
+            <RemoteDiagnosticsPrompt job={job} />
             <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6 mb-6">
                 <div className="flex items-center justify-between mb-4">
                     <h1 className="text-2xl font-bold text-white">{job.name}</h1>
@@ -220,6 +233,8 @@ export function JobDetailPage() {
                             <div className="flex items-center justify-center py-8">
                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
                             </div>
+                        ) : dockingError ? (
+                            <div role="alert" className="text-red-300">Docking results could not be loaded: {dockingError.message}</div>
                         ) : poses.length > 0 ? (
                             <div>
                                 {/* Pose Selector */}
@@ -236,8 +251,8 @@ export function JobDetailPage() {
                                                 ? (pose.affinity !== null ? `(${pose.affinity.toFixed(1)} kcal/mol)` : '')
                                                 : (pose.confidence !== null ? `(conf: ${pose.confidence.toFixed(2)})` : '');
                                             return (
-                                                <option key={idx} value={idx}>
-                                                    {pose.name} {scoreLabel}
+                                                <option key={pose.artifact_path} value={idx}>
+                                                    {pose.engine} · {pose.complex_name ?? pose.ligand ?? ''} · {pose.name} {scoreLabel}
                                                 </option>
                                             );
                                         })}
@@ -251,8 +266,8 @@ export function JobDetailPage() {
                                 <div className="bg-slate-900/50 rounded-xl overflow-hidden">
                                     {currentSdf ? (
                                         <MolstarViewer
-                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.name}`}
-                                            format="pdb"
+                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.artifact_path.split('/').map(encodeURIComponent).join('/')}`}
+                                            format={currentSdf.format}
                                             height={500}
                                             backgroundColor="#0f172a"
                                             alphafoldView={false}

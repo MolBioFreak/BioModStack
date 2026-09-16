@@ -7,6 +7,8 @@ import json
 import shutil
 from pathlib import Path
 
+from child_job_utils import component_runtime_enabled, complete_native_collection
+
 
 def resolve_dest_name(path: Path, job_idx: int) -> Path:
     """Preserve the original filename unless it collides."""
@@ -36,6 +38,8 @@ def is_final_ppiflow_pdb(path: Path) -> bool:
 def candidate_output_dirs(raw_output_dir):
     raw = str(raw_output_dir)
     candidates = [Path(raw)]
+    if component_runtime_enabled():
+        return candidates
     if raw.startswith("/var/lib/biomodstack/"):
         candidates.append(Path("/mnt/BioModStack") / raw.removeprefix("/var/lib/biomodstack/"))
     if raw.startswith("/mnt/BioModStack/"):
@@ -51,13 +55,15 @@ def candidate_output_dirs(raw_output_dir):
     return ordered
 
 
-def collect_files(output_dirs, patterns, subdirs, predicate=None):
+def collect_files(output_dirs, patterns, subdirs, predicate=None, accepted=None):
     collected = []
     seen_names = set()
     for job_idx, output_dir in enumerate(output_dirs):
         dir_candidates = candidate_output_dirs(output_dir)
         dir_path = next((candidate for candidate in dir_candidates if candidate.exists()), None)
         if dir_path is None:
+            if component_runtime_enabled():
+                raise FileNotFoundError(f"Completed child output directory is missing: {output_dir}")
             print(f"Warning: Output dir not found: {output_dir} (checked: {[str(c) for c in dir_candidates]})")
             continue
 
@@ -75,6 +81,8 @@ def collect_files(output_dirs, patterns, subdirs, predicate=None):
                     if not dest.exists():
                         shutil.copy2(path, dest)
                         collected.append(str(dest))
+                        if accepted is not None:
+                            accepted[str(output_dir)].append(path)
                         seen_names.add(path.name)
                         print(f"Collected: {path} -> {dest}")
     return collected
@@ -91,6 +99,7 @@ def main():
         data = json.load(f)
 
     output_dirs = data.get("child_output_dirs", [])
+    accepted = {str(d): [] for d in output_dirs}
 
     search_subdirs = [
         "run/ppiflow/results",
@@ -103,6 +112,7 @@ def main():
         output_dirs,
         patterns=["*ppiflow*.pdb"],
         subdirs=search_subdirs,
+        accepted=accepted,
         predicate=is_final_ppiflow_pdb,
     )
 
@@ -118,18 +128,21 @@ def main():
             "*.json",
         ],
         subdirs=search_subdirs,
+        accepted=accepted,
     )
 
     txts = collect_files(
         output_dirs,
         patterns=["*_cdr_positions.txt", "*_ppiflow_positions.txt", "fixed_positions.txt"],
         subdirs=search_subdirs,
+        accepted=accepted,
     )
 
     csvs = collect_files(
         output_dirs,
         patterns=["*.csv"],
         subdirs=search_subdirs,
+        accepted=accepted,
     )
 
     manifest = {
@@ -146,6 +159,9 @@ def main():
         "count_csvs": len(csvs),
         "count_scores": len(jsons),
     }
+
+    manifest["component_collection"] = complete_native_collection(
+        data, accepted, authority="scripts/collect_maturation_outputs.py:collect_files")
 
     with open(args.manifest, "w") as f:
         json.dump(manifest, f, indent=2)

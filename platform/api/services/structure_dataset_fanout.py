@@ -17,6 +17,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job
+from component_runtime import partition_ordered
 
 PayloadT = TypeVar("PayloadT")
 FANOUT_PROVENANCE_KEY = "structure_dataset_fanout_v1"
@@ -145,9 +146,9 @@ async def _fan_out_structure_dataset_locked(
     plan_bytes = _canonical_bytes(plan)
     fanout_id = hashlib.sha256(plan_bytes).hexdigest()
     effective_structures_per_job = structures_per_job if batching_enabled else 1
-    expected_count = (
-        len(members) + effective_structures_per_job - 1
-    ) // effective_structures_per_job
+    groups = partition_ordered(members, batching_enabled=batching_enabled,
+                               structures_per_job=structures_per_job)
+    expected_count = len(groups)
     expected_child_ids = [_child_id(fanout_id, ordinal) for ordinal in range(expected_count)]
 
     async def reconcile_exact_replay() -> StructureDatasetFanoutResult | None:
@@ -233,12 +234,7 @@ async def _fan_out_structure_dataset_locked(
 
     created: list[Job] = []
     try:
-        for ordinal, start in enumerate(
-            range(0, len(members), effective_structures_per_job)
-        ):
-            batch_members = tuple(
-                members[start : start + effective_structures_per_job]
-            )
+        for ordinal, batch_members in enumerate(groups):
             batch = StructureDatasetBatch(
                 ordinal=ordinal,
                 child_job_id=expected_child_ids[ordinal],

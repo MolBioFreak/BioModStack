@@ -41,6 +41,7 @@ import {
     SHARED_POWER_CONTROL_QUERY_KEY,
 } from './infraTelemetryQueryKeys';
 import {
+    api,
     fetchFanControl,
     fetchPowerControl,
     setFanControl,
@@ -128,7 +129,7 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
         ?? import.meta.env.BASE_URL
         ?? '/';
     const surfaceLabel = resolveUiSurfaceLabel({
-        viteDev: Boolean(import.meta.env.DEV),
+        viteDev: import.meta.env.MODE === 'development',
         electronShell: Boolean(window.biomodstack?.getShellContext),
         cordovaShell: Boolean(window.cordova),
     });
@@ -153,11 +154,11 @@ const SHOW_DEV_FEATURES_KEY = 'show_dev_features';
 function readShowDevFeatures(): boolean {
     try {
         return resolveShowDevFeaturesDefault(
-            Boolean(import.meta.env.DEV),
+            import.meta.env.MODE === 'development',
             localStorage.getItem(SHOW_DEV_FEATURES_KEY),
         );
     } catch {
-        return Boolean(import.meta.env.DEV);
+        return import.meta.env.MODE === 'development';
     }
 }
 
@@ -1730,11 +1731,27 @@ function PowerControlMenu() {
     );
 }
 
-function MSAServerSettingsMenu() {
+const MSA_MENU_QUERY_KEY = ['msa-server-menu'] as const;
+
+function useMSAMenuResource(endpoint: string, enabled: boolean) {
+    return useQuery({
+        queryKey: [...MSA_MENU_QUERY_KEY, endpoint],
+        queryFn: ({ signal }) => api.get<UntypedApiValue>(endpoint, { signal, timeout: 10000 }).then(({ data }) => data),
+        enabled,
+        refetchInterval: 10000,
+        refetchOnWindowFocus: false,
+        retry: false,
+    });
+}
+
+export function MSAServerSettingsMenu() {
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState<string | null>(null);
-    const [status, setStatus] = useState<UntypedApiValue>(null);
-    const [availableGpus, setAvailableGpus] = useState<Array<{ index: number; name: string; memory_total_mb?: number }>>([]);
+    const queryClient = useQueryClient();
+    const { data: status, dataUpdatedAt: statusUpdatedAt } = useMSAMenuResource('/api/msa/server/status', isOpen);
+    const { data: savedSettings, dataUpdatedAt: settingsUpdatedAt } = useMSAMenuResource('/api/msa/server/settings', isOpen);
+    const { data: gpuCatalog } = useMSAMenuResource('/api/gpu/gpus', isOpen);
+    const availableGpus: Array<{ index: number; name: string; memory_total_mb?: number }> = Array.isArray(gpuCatalog?.gpus) ? gpuCatalog.gpus : [];
     const [settings, setSettings] = useState({
         include_envdb_on_start: false,
         auto_stop_idle_enabled: false,
@@ -1742,48 +1759,22 @@ function MSAServerSettingsMenu() {
         pinned_gpu_id: null as number | null,
     });
 
-    const fetchState = async () => {
-        try {
-            const [statusRes, settingsRes, gpuRes] = await Promise.all([
-                fetch('/api/msa/server/status'),
-                fetch('/api/msa/server/settings'),
-                fetch('/api/gpu/gpus'),
-            ]);
-
-            if (statusRes.ok) {
-                const statusData = await statusRes.json();
-                setStatus(statusData);
-                if (statusData?.settings) {
-                    setSettings((prev) => ({ ...prev, ...statusData.settings }));
-                }
-            }
-
-            if (settingsRes.ok) {
-                const settingsData = await settingsRes.json();
-                if (settingsData?.settings) {
-                    setSettings((prev) => ({ ...prev, ...settingsData.settings }));
-                }
-            }
-
-            if (gpuRes.ok) {
-                const gpuData = await gpuRes.json();
-                if (Array.isArray(gpuData?.gpus)) {
-                    setAvailableGpus(gpuData.gpus);
-                }
-            }
-        } catch (error) {
-            console.error('Failed to fetch MSA server state:', error);
+    useEffect(() => {
+        if (status?.settings || savedSettings?.settings) {
+            setSettings((prev) => ({ ...prev, ...status?.settings, ...savedSettings?.settings }));
         }
-    };
+    }, [status?.settings, savedSettings?.settings, statusUpdatedAt, settingsUpdatedAt]);
 
     useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
-        fetchState();
-        const interval = setInterval(fetchState, 10000);
-        return () => clearInterval(interval);
-    }, [isOpen]);
+        if (!isOpen) return;
+        return () => { void queryClient.cancelQueries({ queryKey: MSA_MENU_QUERY_KEY }); };
+    }, [isOpen, queryClient]);
+
+    const fetchState = async () => {
+        // Refresh after mutations must replace older reads; closed menus stay idle.
+        await queryClient.cancelQueries({ queryKey: MSA_MENU_QUERY_KEY });
+        await queryClient.invalidateQueries({ queryKey: MSA_MENU_QUERY_KEY });
+    };
 
     const saveSettings = async (patch: Partial<typeof settings>) => {
         const next = { ...settings, ...patch };

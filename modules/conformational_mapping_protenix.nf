@@ -1,5 +1,23 @@
 nextflow.enable.dsl = 2
 
+// Resolve on the host before container selection, including resumed preflight
+// outputs. Only small reference/receipt files cross the task staging boundary.
+def resolveProtenixSharedImage(preflight, storeRoot, python, codeRoot) {
+    def command = [python.toString(), "${codeRoot}/scripts/prepare_runtime_image_attestation.py".toString(),
+        '--resolve-reference', '--store-root', storeRoot.toString(),
+        '--registry', preflight.resolve('request/cm_runtime_registry_v1.json').toString(),
+        '--reference', preflight.resolve('runtime-image-reference.json').toString(),
+        '--receipt', preflight.resolve('runtime-image-receipt.json').toString()]
+    def process = new ProcessBuilder(command).start()
+    def stdout = new StringBuffer()
+    def stderr = new StringBuffer()
+    process.waitForProcessOutput(stdout, stderr)
+    if (process.exitValue() != 0) {
+        throw new IllegalStateException("Protenix shared image verification failed: ${stderr}")
+    }
+    return stdout.toString().trim()
+}
+
 process PrepareProtenixExecution {
     tag "cm-protenix-preflight:${request_id}"
     stageInMode 'copy'
@@ -12,6 +30,7 @@ process PrepareProtenixExecution {
 
     script:
     def image_path = params.protenix_container_path ?: "${params.container_dir}/protenix.sif"
+    def image_store = params.runtime_image_store ?: System.getenv('BMS_RUNTIME_IMAGE_STORE') ?: "${params.container_dir}/.image-store"
     """
     #!/bin/bash
     set -euo pipefail
@@ -21,13 +40,12 @@ process PrepareProtenixExecution {
     test -f "\$REQUEST"
     test -f "\$REQUEST_ROOT/cm_complex_snapshots_v1.json"
     test -f "\$REGISTRY"
-    mkdir -p protenix_preflight/execution-snapshot
     mkdir -p protenix_preflight/request
     cp -a "\$REQUEST_ROOT"/. protenix_preflight/request/
 
     ${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py \
       --image "${image_path}" --registry "\$REGISTRY" \
-      --snapshot protenix_preflight/runtime-image.sif \
+      --store-root "${image_store}" --reference protenix_preflight/runtime-image-reference.json \
       --receipt protenix_preflight/runtime-image-receipt.json
     ${params.api_python} ${params.code_root}/scripts/prepare_protenix_execution_snapshot.py \
       --registry "\$REGISTRY" --weights-root "${params.protenix_weights}" \
@@ -41,11 +59,30 @@ process CanonicalProtenixEnsemble {
     tag "cm-protenix:${request_id}"
     label 'Protenix'
     label 'gpu'
-    container { "${preflight}/runtime-image.sif" }
+    container { runtime_image }
+    containerOptions {
+        def object_dir = new File(runtime_image.toString()).parent
+        "${task.ext.containerOptions ?: ''} --bind ${object_dir}:${object_dir}:ro"
+    }
     stageInMode 'copy'
 
+    // This is host-side: validate again immediately before Apptainer starts,
+    // and expose the same shared object read-only for in-container remeasurement.
+    beforeScript {
+        def store = params.runtime_image_store ?: System.getenv('BMS_RUNTIME_IMAGE_STORE') ?: "${params.container_dir}/.image-store"
+        """
+        ${params.api_python} ${params.code_root}/scripts/prepare_runtime_image_attestation.py \
+          --resolve-reference --store-root "${store}" \
+          --registry "${preflight_source}/request/cm_runtime_registry_v1.json" \
+          --reference "${preflight_source}/runtime-image-reference.json" \
+          --receipt "${preflight_source}/runtime-image-receipt.json" \
+          --executing-image "${runtime_image}" >/dev/null || exit 1
+
+        """
+    }
+
     input:
-    tuple val(request_id), path(preflight)
+    tuple val(request_id), path(preflight), val(runtime_image), val(preflight_source)
 
     output:
     tuple val(request_id), path('canonical_protenix'), emit: canonical
@@ -53,6 +90,7 @@ process CanonicalProtenixEnsemble {
     path 'canonical_protenix/cm_ensemble_v1.json', emit: ensemble_manifest
 
     script:
+    def image_store = params.runtime_image_store ?: System.getenv('BMS_RUNTIME_IMAGE_STORE') ?: "${params.container_dir}/.image-store"
     """
     #!/bin/bash
     set -euo pipefail
@@ -68,6 +106,15 @@ process CanonicalProtenixEnsemble {
     test -f "\$REGISTRY"
     test -f "\$IMAGE_RECEIPT"
     test -f "\$EXECUTION_RECEIPT"
+
+    RUNTIME_IMAGE="${runtime_image}"
+    EXECUTING_IMAGE="\${BMS_EXECUTING_IMAGE:-\${APPTAINER_CONTAINER:-\${SINGULARITY_CONTAINER:-}}}"
+    test -n "\$EXECUTING_IMAGE"
+    python3 ${params.code_root}/scripts/prepare_runtime_image_attestation.py \
+      --resolve-reference --store-root "${image_store}" --registry "\$REGISTRY" \
+      --reference "\$PREFLIGHT/runtime-image-reference.json" --receipt "\$IMAGE_RECEIPT" \
+      --executing-image "\$EXECUTING_IMAGE" >/dev/null
+    test "\$EXECUTING_IMAGE" = "\$RUNTIME_IMAGE"
 
     mkdir -p native_protenix/runtime native_protenix/predictions
     cp "\$IMAGE_RECEIPT" native_protenix/runtime/runtime-image-receipt.json
@@ -139,9 +186,10 @@ PY
     mkdir -p "protenix_runtime_weights/\$(dirname "\$CHECKPOINT_REL")"
     cp --reflink=auto "\$CHECKPOINT_SNAPSHOT" "protenix_runtime_weights/\$CHECKPOINT_REL"
     export PROTENIX_ROOT_DIR="\$PWD/protenix_runtime_weights"
-    export XDG_CACHE_HOME="\$PROTENIX_ROOT_DIR/common"
-    export TRITON_CACHE_DIR="\$PROTENIX_ROOT_DIR/triton"
-    export MPLCONFIGDIR="\$PROTENIX_ROOT_DIR/matplotlib"
+    # Installed weights/common data are immutable; generated caches are task-owned.
+    export XDG_CACHE_HOME="\$PWD/.protenix_cache"
+    export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
     export PYTHONNOUSERSITE=1 PIP_NO_USER=1
 
     EXTRA=()
@@ -150,8 +198,25 @@ PY
       STEPS="\$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_policy"]["n_step"])' "\$REQUEST")"
       EXTRA+=(--cycle "\$CYCLES" --step "\$STEPS")
     fi
+    # Preserve the original request-derived input/composition audit. Hydrate a
+    # separate native input, through the same declared controller service.
+    PROTENIX_INPUT=prepared_protenix/protenix_input.json
+    if [ "\$USE_RNA_MSA" = true ]; then
+      printf '%s\\n' 'CM RNA-MSA is unsupported by the hosted protein-MSA artifact contract' >&2
+      exit 1
+    fi
+    if [ "\$USE_MSA" = true ]; then
+      python3 ${params.code_root}/scripts/prepare_protenix_msa.py \
+        --generated-service protenix:generated_msa \
+        --input_json "\$PROTENIX_INPUT" \
+        --output_json native_protenix/runtime/msa-input.json \
+        --out_dir native_protenix/runtime/msa-prepared \
+        --report_json native_protenix/runtime/msa-prepared/msa-report.json \
+        --backend "${params.msa_provider}"
+      PROTENIX_INPUT=native_protenix/runtime/msa-input.json
+    fi
     COMMAND_ARGS=(
-      --input prepared_protenix/protenix_input.json
+      --input "\$PROTENIX_INPUT"
       --out_dir native_protenix/predictions
       --model_name protenix-v2 --seeds "\$SEEDS" --sample "\$SAMPLES"
       --use_default_params "\$USE_DEFAULT"
@@ -185,7 +250,10 @@ PY
   {"semantic_role":"execution_snapshot_receipt","relative_path":"runtime/execution-snapshot-receipt.json"}
 ]
 JSON
-    RUNTIME_IMAGE="\$PREFLIGHT/runtime-image.sif"
+    python3 ${params.code_root}/scripts/prepare_runtime_image_attestation.py \
+      --resolve-reference --store-root "${image_store}" --registry "\$REGISTRY" \
+      --reference "\$PREFLIGHT/runtime-image-reference.json" --receipt "\$IMAGE_RECEIPT" \
+      --executing-image "\$EXECUTING_IMAGE" >/dev/null
     test -f "\$RUNTIME_IMAGE"
     python3 ${params.code_root}/scripts/attest_protenix_runtime.py \
       --registry "\$REGISTRY" --image-receipt "\$IMAGE_RECEIPT" \
@@ -209,7 +277,11 @@ workflow CONFORMATIONAL_MAPPING_PROTENIX {
 
     main:
     PrepareProtenixExecution(request_tuples)
-    CanonicalProtenixEnsemble(PrepareProtenixExecution.out.prepared)
+    prepared_images = PrepareProtenixExecution.out.prepared.map { request_id, preflight ->
+        def store = params.runtime_image_store ?: System.getenv('BMS_RUNTIME_IMAGE_STORE') ?: "${params.container_dir}/.image-store"
+        tuple(request_id, preflight, resolveProtenixSharedImage(preflight, store, params.api_python, params.code_root), preflight.toString())
+    }
+    CanonicalProtenixEnsemble(prepared_images)
 
     emit:
     canonical = CanonicalProtenixEnsemble.out.canonical

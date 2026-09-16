@@ -1,5 +1,21 @@
 # ONT FASTQ-QC Result Recovery and Browser Closure SOW
 
+> **2026-09-10 operator-authorized contract correction:** Scientific completion is
+> independent of resource telemetry, experiment-bookkeeping completeness and
+> derived viewer readiness. Package inventories are role/identity based, not fixed
+> 36/34/2 templates. Artifact requests authorize the Job/project and validate the
+> requested bytes without rebuilding the whole result. Original FASTQ identity
+> is captured at publication; its later availability is not a derived-result
+> access gate. Supported aliases normalize before identity comparison. Stage
+> output membership is order-independent. Cache and display budgets do not cap
+> valid scientific file sizes or raw table row counts. Historical acceptance
+> examples below remain descriptive evidence, not new-run admission rules.
+> **Result-display correction:** FAIL/REVIEW and unevaluated checks remain readable
+> with sparse/error-only metrics, null unavailable measurements and additive
+> evidence. Neither success-only metric fields, fixed stage output counts, missing
+> artifacts nor unrelated cross-source row counts are result-display prerequisites.
+
+
 **Status:** Controlling implementation and acceptance specification
 **Date:** 2026-08-20
 **Parent specification:** `docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md`
@@ -175,7 +191,7 @@ Every timestamp in these contracts is UTC RFC 3339 with a terminal `Z`. A timezo
 
 JSON Schema owns structural validation. Two closed semantic validators own rules that Draft 2020-12 cannot express:
 
-- `bms.ngs.fastq-qc-result-construction-validator.v1` runs only in the backend while the complete producer rows, manifests, persisted authority, and bounded projection are available. It proves source-row contiguity, full-source extrema, histogram construction, package authority, required-artifact completeness, resource-evidence coherence, and every wire invariant. It emits `coverage.construction_attestation` with exactly `validator`, `source_rows_sha256`, `source_row_count`, `projection_sha256`, and `validated_at`.
+- `bms.ngs.fastq-qc-result-construction-validator.v1` runs only in the backend while the complete producer rows, manifests, persisted authority, and bounded projection are available. It proves source-row contiguity, full-source extrema, histogram construction, package identity and the applicable wire invariants. Scientific measurements, missing artifacts and unavailable resource observations retain their producer states rather than becoming result-display prerequisites. It emits `coverage.construction_attestation` with exactly `validator`, `source_rows_sha256`, `source_row_count`, `projection_sha256`, and `validated_at`.
 - `bms.ngs.fastq-qc-result-wire-validator.v1` runs at backend serialization, the FastAPI response boundary, the TypeScript parser, and exact-fixture gates. It validates the bounded response only. It recomputes `projection_sha256` over RFC 8785 canonical JSON of the complete `coverage` object with `construction_attestation` omitted, requires the attested row count to equal `source_row_count`, validates projected point order and reported extrema within the bounded points, and enforces rules 1 through 20. Only full-source extrema and omitted-row correctness in rule 5 remain construction-only and are accepted through the construction attestation.
 
 The `x-bms-cross-field-invariants` array is synchronized with both validators and does not count as enforcement. An invocation boundary must run the validator whose evidence domain it possesses. No browser validator may claim to inspect omitted source rows.
@@ -211,7 +227,7 @@ Before publication, the backend must verify scientific and hierarchy authority:
 
 Caller-supplied Project, Experiment, sample, reference, or principal identifiers are selectors only. They cannot establish authority. A Job that is separately readable but foreign to the displayed Project/Experiment chain must be rejected or shown only after all foreign context is cleared.
 
-Capability issuance and rotation must bind an immutable digest of this hierarchy. Every governed result, manifest, session, artifact, report, and read request must validate both the exact Job capability and its hierarchy-binding digest. A stale, foreign, degraded, deleted, or mismatched hierarchy fails closed with a typed denial.
+Experiment-associated results retain their frozen lineage as provenance. Reads require the exact Job capability and authenticated operator or owning-project authority; standalone Jobs do not require experiment/state/sample membership records. Reading or rotating credentials must not rebuild the experiment graph or result projection. An invalid capability or unauthorized principal still fails closed.
 
 Required negatives cover non-owner, non-operator, cross-Project, cross-Global-Experiment, cross-Domain-Experiment, wrong state revision, wrong member receipt, wrong sample revision, wrong reference revision, guessed Job ID, and rotation against each foreign binding.
 
@@ -221,41 +237,45 @@ Manifest, table, report, reference, BAM, index, managed source input, and downlo
 
 ### AUTH-5: Bounded projection
 
-`GET /api/jobs/{job_id}/ngs-result` must return a versioned exact-key contract bounded to:
+`GET /api/jobs/{job_id}/ngs-result` returns a versioned exact-key response. These are per-response bounds, not limits on the complete scientific result:
 
-- 256 artifact descriptors;
+- up to 256 artifact descriptors and 256 normalized variants per requested page;
 - two alignment sessions;
 - 2,048 coverage points;
 - 256 KiB encoded JSON.
+
+`page_size` is 0..256 (default 64); zero returns the scientific summary independently. `collection=all|variants|artifacts`, `variant_offset`, and `artifact_offset` select detail pages. `pagination.variants` and `pagination.artifacts` report exact `offset`, `count`, full `total`, and nullable `next_offset`. A nonterminal zero-row summary page has `next_offset=offset`; loading that detail uses a positive page size. Pages may be smaller than requested to satisfy the byte limit. Full aggregate counts and original manifest/package identity remain unchanged across pages. The browser fetches the summary first, loads independent detail pages on request, rejects cross-result pages, and preserves the summary and previous valid page if another page fails. Large native output remains available through governed downloads; neither a large variant set nor a large artifact inventory invalidates completion.
 
 Coverage reduction must use `minmax_envelope_v1` over one strict, single-contig, ascending 1-based source row per reference position. `bucket_width_rows = max(1, ceil(source_row_count / 1024))`. Each source-order bucket emits its earliest tied minimum and earliest tied maximum, removes a duplicate when both extrema occupy one coordinate, and orders emitted points by coordinate. It adds no synthetic endpoint, does not wrap the circular reference, and rejects repeated coordinates, a second contig, or noncanonical order. The projection must include `maximum_point_count=2048`, source count, bucket width, depth basis, depth unit, earliest global-minimum coordinate/value, tie policy, endpoint policy, and circular policy. The frontend must label this bounded envelope and its `samtools depth -aa` deletion-excluding basis.
 
 The envelope minimum is not interchangeable with construct-verification support depth. For retry3, the envelope owns 24,840 at position 3516. The coverage/read-support decision checks own 49,126 at position 5570 from the separate per-base support table. Both use producer values and explicit units.
 
-The normative wire definition is `schemas/ngs/ont_fastq_qc_result_v1.schema.json`. It uses `additionalProperties: false` at every fixed object layer and freezes required keys, field-specific types and units, enum values, nullability, order rules, cardinality, URL/hash/ID syntax, state-discriminated artifact and session branches, stage output counts, closed decision-check metrics and purposes, closed threshold-profile values, and normalized variant coordinates. The expected-reference screen requires `screen_basis=expected_reference_mapping_only` and `organism_identity_claimed=false`. Schema-valid payloads cannot substitute contamination, taxonomy, purity, or off-target claims.
+The normative wire definition is `schemas/ngs/ont_fastq_qc_result_v1.schema.json`. Fixed identity/routing envelopes retain typed keys, URL/hash/ID syntax, state-discriminated artifacts and sessions, closed threshold-profile settings and normalized variant coordinates. Decision metrics are optional and additive: a failed, unavailable or unevaluated calculation can expose only an error or a subset of observations. Preserve null unavailable measurements and their original reasons; never invent zero, a success-only field, a measurement or a PASS verdict. The API validates declared measurement types when present; the browser displays the provided safe JSON evidence and units rather than duplicating scientific validation or exact prose/metric inventories. Purpose and unit-map wording is not a scientific-result acceptance gate. Where present, the expected-reference screen remains `screen_basis=expected_reference_mapping_only` and `organism_identity_claimed=false`; it does not establish taxonomy, purity or off-target absence.
 
-The construction and wire validators must reject every applicable one of these cross-field failures:
+Histograms describe their own length-filtered source population, which may be empty. They are not required to equal all input/aligned reads. Coverage-envelope depth and decision-support depth are distinct populations. The UI preserves their labels and does not block a whole report on cross-population equality. An unavailable artifact may retain its planned disposition/extension, but has no artifact ID, URL, observed digest, size, media type or range capability. It remains visibly unavailable without hiding other artifacts or changing the verdict.
 
-1. artifact count disagreement with the artifact array or state counts;
+The construction and wire boundaries enforce the following applicable rules; display-only absences remain local to their evidence or action:
+
+1. artifact total disagreement with the full authority/state counts, page count disagreement with the returned artifact array, or inconsistent offsets/next offsets;
 2. an artifact URL whose Job ID or final opaque route segment differs from its owning object's Job ID or `artifact_id`, or whose `artifact_id` equals the file SHA-256;
 3. alignment readiness that disagrees with the session list;
 4. non-contiguous histogram bins or a histogram total that differs from its source count;
 5. coverage points with a foreign reference, nonascending coordinate, wrong bucket width, wrong projected extrema, wrong reported global minimum, malformed construction attestation, or a projection digest mismatch; the construction validator additionally rejects omitted-source-row extrema or row-order errors;
 6. reference name, length, topology, normalized-sequence digest, or FASTA-byte identity disagreement across authority, summary, alignment, verification, coverage, and viewer session data;
-7. a variant count that differs from the normalized variant array;
+7. a summary variant count that differs from the full variant total, or a page count that differs from its returned normalized variant array;
 8. a variant record or affected interval that violates `vcf_left_anchored_v1`, the declared kind, or linear 1-based bounds;
 9. a stage set or order different from the four canonical stages;
 10. encoded compact UTF-8 JSON above 262,144 bytes;
 11. any non-finite number;
-12. a completed accepted result that contains `missing_required` artifact state;
+12. `missing_required` or `not_produced` artifacts remain visible as unavailable; they do not blank an otherwise readable completed result;
 13. a historical or accepted resource-evidence branch with incoherent receipt fields.
-14. any artifact whose source, kind, scientific role, media type, disposition, filename extension, or display order differs from the exact UI-5 row at that array position;
-15. any artifact display order that is duplicated, gapped, nonascending, or different from the contiguous 1..artifact-count sequence.
-16. any completed stage whose status or output count differs from complete 5/6/8/6 in canonical order;
-17. a result session summary that differs from the governed list, lacks a ready primary first, or places anything except one optional dimer-candidates session second;
+14. artifact source/kind/role/type fields follow the descriptor schema, not a frozen historical table position; unavailable artifacts may retain harmless planned type hints but cannot expose a download;
+15. invalid artifact display-order values; page-local indices do not replace the full inventory ordering.
+16. stage status and output counts are displayed as recorded; missing receipts and counts other than historical 5/6/8/6 do not gate the report;
+17. a result session summary that differs from its governed session; missing optional presentations do not prevent scientific result access;
 18. a threshold-profile digest that differs from SHA-256 over UTF-8 canonical JSON using sorted keys, comma/colon separators, and `allow_nan=false` for the exact `values` object, or outer version/calibration/public-accuracy metadata that differs from those values;
 19. a PASS verdict unless every check passes, all aggregate and row reason-code arrays are empty, every threshold is satisfied, `automatic_pass_eligible=true`, and `public_accuracy_validated=true`; any review/fail check or nonempty reason array requires REVIEW or FAIL as producer-defined;
-20. an artifact denominator other than the exact 36 positional rows, count other than 36/34/2, or an `artifact_set_sha256` that does not recompute through AUTH-8.
+20. artifact counts inconsistent with the declared descriptor states, or an `artifact_set_sha256` that does not recompute through AUTH-8. The historical 36/34/2 inventory is not a fixed cardinality requirement.
 
 Backend construction must pass the canonical complete-source fixture. Backend serialization and frontend parsing must pass the same canonical bounded wire fixture and one adversarial fixture per wire invariant. A construction-only adversarial case is tested only at construction boundaries and must carry no fabricated browser-side proof.
 
@@ -282,7 +302,7 @@ Fresh terminalization and normal result reopen use `bms.ngs.package-authority.v1
 
 This algorithm produces retry3 digest `e122e032836df10c0d7e1756fb5ea00d5e65384c6cf942c1f684c155b3a57650`. The denominator is 36 semantic descriptors, with 34 present and 2 unavailable. It is distinct from the 25 terminal stage-output paths.
 
-The persisted authority also binds workflow, input mode, normalized reference digest, source FASTQ digest, both manifest digests, and the three artifact counts. Fresh Jobs carry this authority in specialized `result_integrity`. Retry3 carries the same fields in the additive reconciliation receipt while preserving its historical generic `result_integrity`. Reopen and every governed route fail before disclosure if persisted authority and observed package bytes differ.
+The persisted authority also binds workflow, input mode, normalized reference digest, source FASTQ digest, both manifest digests, and the three artifact counts. Fresh Jobs carry this authority in specialized `result_integrity`. Retry3 carries the same fields in the additive reconciliation receipt while preserving its historical generic `result_integrity`. Scientific publication verifies the package once and records its descriptor inventory. Artifact delivery validates the requested identity/bytes and Job/project authorization; unrelated missing files, telemetry, preview state or chart construction do not deny otherwise valid requested artifacts.
 
 For FASTQ mode, `fastq_qc/qc_manifest.json` is the only sequence-QC manifest authority. `qc_manifest.json` at the result root is not a fallback because it can carry another contract.
 
@@ -317,7 +337,7 @@ Each stage owns one exact ordered suffix list below the Job result root:
 | `fastq_qc` | `fastq_qc/read_lengths.tsv`, `fastq_qc/fastq_qc_summary.tsv`, `fastq_qc/fastq_alignment_stats.tsv`, `fastq_qc/fastq_coverage.tsv`, `fastq_qc/per_base_support.tsv`, `fastq_qc/qc_manifest.json`, `fastq_qc/igv_report.html`, `fastq_qc/fastq_consensus.fasta` | 8 |
 | `construct_verification` | `verification/qc_manifest.json`, `verification/verification_summary.tsv`, `verification/variants.vcf`, `verification/per_base_metrics.tsv`, `verification/evidence.html`, `verification/topology_evidence.json` | 6 |
 
-The output order, stage ownership, suffix, and cardinality are normative. No path may occur under two stages. Missing, extra, swapped-stage, duplicate, wrong-prefix, or reordered outputs fail completion and reconciliation.
+Stage ownership, required output membership and suffixes are normative. No path may occur under two stages. Missing required, swapped-stage, duplicate or wrong-prefix outputs fail validation. A permutation of the same correct stage-owned outputs is accepted; array order is presentation, not scientific authority.
 
 ### LIFE-3: Persisted stage mirrors
 
@@ -351,7 +371,7 @@ Canonical FASTQ-QC completion must not call generic design ingestion, create des
 
 ### LIFE-9: Producer resource evidence before fresh success
 
-For a fresh `ont_fastq_qc` execution, the transient execution owner must finish a complete `bms.workflow-resource-usage.v1` receipt after the process exits. Nextflow validates and attaches that receipt to Job params before ONT completion preparation. The resource receipt, package authority, lifecycle mirrors, and terminal Job state publish in the same guarded terminal CAS. Missing, incomplete, malformed, or uncommitted resource evidence prevents `completed` publication.
+For a fresh `ont_fastq_qc` execution, validate and attach resource observations when a complete producer receipt is available. Missing or unusable observations are explicitly `unavailable`, with null observed metrics, and do not prevent scientific completion or result access. Available receipts, scientific package authority, lifecycle mirrors and terminal state still publish through the guarded terminal CAS. Preview generation is demand-driven and cannot block scientific completion.
 
 `execution_resources` is a closed state-discriminated result object:
 
@@ -608,7 +628,7 @@ Group descriptors in ascending `display_order`. Each descriptor carries closed `
 | 35 | `construct_verification_input` | `source_reads_fastq` | `source_input` | `application/octet-stream` | `attachment` |
 | 36 | `input_mode` | `signal_data` | `optional_evidence` | `null` | `none` |
 
-The result schema closes every enum and requires unique contiguous `display_order` values 1 through 36. Repeated `kind=log` rows remain distinct by order and digest. Frontend grouping preserves first role occurrence and ascending display order within each role. Present artifacts show kind, size, abbreviated digest, and source. The package-authority digest excludes these presentation fields as defined by AUTH-8.
+The result schema closes the semantic enums and reports display ordering independently of artifact validity; the inventory cardinality follows the selected workflow output, not a fixed 36-row template. Repeated `kind=log` rows remain distinct by order and digest. Frontend grouping preserves first role occurrence and ascending display order within each role. Present artifacts show kind, size, abbreviated digest, and source. The package-authority digest excludes these presentation fields as defined by AUTH-8.
 
 The exact filename-extension map is: `json` for both manifests, track config, and source-read provenance; `fasta` for reference, consensus, and observed consensus; `fai` for reference and consensus indexes; `tsv` for summary, read lengths, alignment stats, coverage, per-base support, report-sites TSV, verification summary, and per-base metrics; `log` for consensus log and both log rows; `bam`; `bai`; `bedgraph` for coverage depth, position gradient, GC content, GC z-score, split-read density, and soft-clip density; `bed` for junction hotspots and report-sites BED; `html` for both reports; `vcf` for normalized variants; and `fastq.gz` for source reads. Modified bases and signal data are unavailable and use null extension.
 

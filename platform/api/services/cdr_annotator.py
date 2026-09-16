@@ -6,6 +6,7 @@ to annotate antibody designs with CDR region information.
 """
 
 import subprocess
+from scripts.lib.container_runtime import container_executable
 import tempfile
 import json
 from pathlib import Path
@@ -839,7 +840,7 @@ print(json.dumps(output))
             "-c",
             inner_script,
         ]
-        cmd = ["apptainer", "exec"]
+        cmd = [container_executable("apptainer"), "exec"]
         if selected_runtime.mode == "gpu" and selected_runtime.gpu_id is not None:
             cmd.extend(
                 [

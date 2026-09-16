@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from services.scientific_artifacts.query import artifact_query
+
 import hashlib
 import httpx
 import json
@@ -14,14 +16,23 @@ import tempfile
 import uuid
 import copy
 import stat
+import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Mapping, Sequence, cast
 from urllib.parse import urlsplit
 
+# Use the publisher's existing release authority and no-follow CAS verifier.
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.runtime_image_lifecycle import load_state, object_path
+from lib.shared_runtime_images import verify_image
+
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 from sqlalchemy import Text, cast as sql_cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +50,7 @@ from paths import (
     get_container_dir,
     get_weights_root,
 )
-from services.conformational_mapping.contracts import candidate_id, canonical_sha256, validate_schema
+from services.conformational_mapping.contracts import FeaturePolicy, candidate_id, canonical_sha256, validate_schema
 from services.conformational_mapping.import_stager import (
     ImportStagingError,
     RegisteredArtifact,
@@ -83,6 +94,7 @@ from services.conformational_mapping.request_builder import (
     materialize_trusted_internal_request,
     validate_materialized_coordinate_plan,
     validate_request_params,
+    validate_request_controls,
 )
 from services.conformational_mapping.rcsb_source import (
     RcsbSourceError,
@@ -98,13 +110,12 @@ from services.scientific_artifacts import (
     resolve_json_envelope_fields,
     resolve_json_value,
 )
+from schemas import ExecutionPolicy
+from services.remote_execution.targets import ExecutionTargetError, submission_target_fields
 from services.job_control import cancel_job_lineage
 from services.frustrampnn import runtime as _frustrampnn_runtime
-from services.frustrampnn.settings import (
-    FrustraMPNNRequestedSettings,
-    default_settings as default_frustrampnn_settings,
-    validate_complete_requested_settings,
-)
+# Preserve SubmitRequest imports for existing native callers.
+from services.workflow_request_types import NativeWorkflowDependencyRequest, SubmitRequest
 
 
 router = APIRouter(prefix="/api/conformational-mapping", tags=["conformational-mapping"])
@@ -210,42 +221,6 @@ def _bind_analysis_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
     return canonical
 
 
-class SubmitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=255)
-    notes: str = Field(default="", max_length=4000)
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
-    backend: Literal["protenix_v2_ensemble", "confornets", "external_import"]
-    ordered_seeds: list[int] = Field(min_length=1)
-    samples_per_seed: int = Field(ge=1, le=100)
-    feature_policy: dict[str, Any]
-    runtime_policy: dict[str, Any]
-    analysis_policy: dict[str, Any]
-    registered_snapshot_id: str | None = None
-    # The wire name stays plural for compatibility with the launcher contract.
-    # External import is nevertheless singular in authority: exactly one item
-    # is accepted by this bounded collection.
-    registered_artifact_ids: list[str] = Field(default_factory=list, max_length=1)
-    registered_sequence_id: str | None = None
-    registered_reference_ids: list[str] = Field(default_factory=list, max_length=2)
-    registered_checkpoint_id: str | None = None
-    registered_config_id: str | None = None
-    registered_transfer_id: str | None = None
-    confornets: dict[str, Any] | None = None
-    state_landscape_comparison: dict[str, Any] | None = None
-    frustrampnn_settings: FrustraMPNNRequestedSettings = Field(
-        default_factory=default_frustrampnn_settings
-    )
-
-    @field_validator("frustrampnn_settings", mode="before")
-    @classmethod
-    def _complete_frustrampnn_settings(
-        cls, value: Any,
-    ) -> FrustraMPNNRequestedSettings:
-        return validate_complete_requested_settings(value)
-
-
 class RcsbSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -326,7 +301,7 @@ class HandoffRequest(BaseModel):
     source_row_key: str
     substitution: str = Field(min_length=1, max_length=1)
     structure_map_key: str
-    feature_policy: dict[str, Any]
+    feature_policy: Annotated[dict[str, Any], WithJsonSchema(FeaturePolicy.model_json_schema())]
     resampling_settings: dict[str, Any]
     expected_source_hashes: dict[str, str]
 
@@ -361,6 +336,20 @@ _CM_VRAM_ESTIMATE_MB = {
     "confornets": 16_000,
     "protenix_v2_ensemble": 24_000,
 }
+def _cm_placement_projection(job: Job | None) -> dict[str, Any]:
+    return {
+        "execution_target_id": job.execution_target_id if job else None,
+        "execution_policy": ExecutionPolicy.from_params(job.params if job else {}).model_dump(),
+    }
+
+
+async def _cm_target_fields(session: AsyncSession, target_id: str | None, *, parent_job: Job | None = None) -> dict[str, Any]:
+    try:
+        return await submission_target_fields(session, target_id, parent_job=parent_job)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[str, int]:
     sequence_length = 0
     for target in request_payload["targets"]:
@@ -373,8 +362,10 @@ def _cm_job_admission(backend: str, request_payload: Mapping[str, Any]) -> dict[
             for entity in target.get("entities", [])
             if entity.get("entity_type") == "protein"
         )
+    from native_components import cm_gpu_requirements
+    requirements = cm_gpu_requirements(dict(request_payload))
     return {
-        "vram_estimate_mb": _CM_VRAM_ESTIMATE_MB[backend],
+        "vram_estimate_mb": requirements.get("gpu_memory_mb") or _CM_VRAM_ESTIMATE_MB[backend],
         "sequence_length": sequence_length or 300,
     }
 
@@ -697,26 +688,42 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _server_confornets_identity() -> dict[str, str]:
-    image_name = os.environ.get("BMS_CM_CONFORNETS_CONTAINER_PATH", "").strip()
-    configured_image = (
-        Path(image_name)
-        if image_name
-        else get_container_dir() / "confornets-canonical.sif"
-    )
-    if configured_image.is_symlink():
-        raise HTTPException(
-            status_code=503, detail="canonical ConforNets image selector may not be a symlink"
-        )
+def _registered_image_digest(selector: str) -> str:
+    """Select approved release bytes, never promote an arbitrary path hash.
+
+    The existing shared-store release manifests (including their legacy env
+    projection) are the only installation authority. Explicit selectors may pin
+    a retained release; defaults select the current lane. This is read-only:
+    discovery neither publishes images nor upgrades historical references.
+    """
+    root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+                or get_container_dir() / ".image-store")
+    configured = os.environ.get(selector, "").strip()
     try:
-        image = configured_image.resolve(strict=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=503, detail="canonical ConforNets image is not installed"
-        ) from exc
-    if not image.is_file() or image.is_symlink():
-        raise HTTPException(status_code=503, detail="canonical ConforNets image is not installed")
-    digest = _sha256_path(image)
+        if not root.is_absolute():
+            raise ValueError("runtime image store must be absolute")
+        state = load_state(root)
+        if configured:
+            candidates = [release["images"][selector]
+                          for release in state["releases"].values()
+                          if selector in release["images"]
+                          and release["images"][selector]["path"] == configured]
+            if not candidates:
+                raise ValueError("configured image is not a retained managed reference")
+            image = candidates[0]
+        else:
+            lane = os.environ.get("BMS_RUNTIME_IMAGE_LANE", "production")
+            image = state["releases"][state["current"][lane]]["images"][selector]
+        path = object_path(root, image["sha256"])
+        if str(path) != image["path"]:
+            raise ValueError("managed image path differs from shared store")
+        return verify_image(path, image["sha256"])["sha256"]
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail=f"registered runtime image is unavailable: {selector}") from exc
+
+
+def _server_confornets_identity() -> dict[str, str]:
+    digest = _registered_image_digest("BMS_CM_CONFORNETS_CONTAINER_PATH")
     return {
         "backend_version": "canonical-4df561a",
         "backend_commit": "4df561a1fbd0fd2b9c7a230fa62957a837d9f72d",
@@ -728,7 +735,7 @@ def _server_confornets_identity() -> dict[str, str]:
     }
 
 
-async def _ensure_managed_confornets_checkpoint(
+async def _read_managed_confornets_checkpoint(
     session: AsyncSession,
 ) -> ConformationalMappingSource | None:
     """Expose one server-owned checkpoint identity without accepting a host path."""
@@ -770,7 +777,15 @@ async def _ensure_managed_confornets_checkpoint(
         immutable=True,
         created_at=datetime.utcnow(),
     )
-    session.add(managed)
+    return managed
+
+
+async def _ensure_managed_confornets_checkpoint(
+    session: AsyncSession,
+) -> ConformationalMappingSource | None:
+    managed = await _read_managed_confornets_checkpoint(session)
+    if managed is not None:
+        session.add(managed)
     return managed
 
 
@@ -778,7 +793,7 @@ async def _managed_checkpoint_for_submission(
     session: AsyncSession,
     requested_source_id: str | None,
 ) -> ConformationalMappingSource:
-    managed = await _ensure_managed_confornets_checkpoint(session)
+    managed = await _read_managed_confornets_checkpoint(session)
     if managed is None:
         raise HTTPException(status_code=503, detail="installed managed checkpoint is unavailable")
     if requested_source_id != managed.source_id:
@@ -804,15 +819,15 @@ def _runtime_registry(backend: str) -> dict[str, Any]:
             "analysis_runtime": analysis_runtime, **_server_confornets_identity(),
         }
     if backend == "protenix_v2_ensemble":
-        image = get_container_dir() / "protenix.sif"
+        digest = _registered_image_digest("BMS_PROTENIX_CONTAINER_PATH")
         checkpoint = get_weights_root() / "protenix" / "checkpoint" / "protenix-v2.pt"
-        if not image.is_file() or image.is_symlink() or not checkpoint.is_file() or checkpoint.is_symlink():
+        if not checkpoint.is_file() or checkpoint.is_symlink():
             raise HTTPException(status_code=503, detail="registered Protenix runtime is unavailable")
         return {
             "schema_name": "cm_runtime_registry", "schema_version": 1,
             "backend_version": "protenix-v2", "backend_commit": "c3bfc365b3e1341a11935eddfe7bfdc308092147",
             "runtime_identity": "installed-protenix-v2", "model_id": "protenix-v2",
-            "container_digest": f"sha256:{_sha256_path(image)}",
+            "container_digest": f"sha256:{digest}",
             "checkpoint_sha256": _sha256_path(checkpoint),
             "checkpoint_relative_path": "checkpoint/protenix-v2.pt",
             "analysis_runtime": analysis_runtime,
@@ -1951,15 +1966,27 @@ def _confornets_snapshot(
     return snapshot
 
 
-@router.post("/requests", status_code=201)
-async def submit_request(
-    body: SubmitRequest,
-    request: Request,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-):
-    principal_id = _mutation_principal(request)
-    await _ensure_managed_confornets_checkpoint(session)
+@dataclass
+class _NormalizedCmSubmission:
+    params: dict[str, Any]
+    request_fields: dict[str, Any]
+    import_sources: list[ConformationalMappingSource]
+    confor_sources: list[ConformationalMappingSource]
+    snapshot_source: ConformationalMappingSource | None
+    sequence_source: ConformationalMappingSource | None
+    snapshots: list[Any]
+    checkpoint_source: ConformationalMappingSource | None
+    references: list[ConformationalMappingSource]
+    config_source: ConformationalMappingSource | None
+    transfer_source: ConformationalMappingSource | None
+
+
+async def _normalize_cm_submission(
+    body: SubmitRequest, principal_id: str, session: AsyncSession,
+) -> _NormalizedCmSubmission:
+    """Shared read-only controls/source ACL binding before submission writes."""
+    checkpoint_source = config_source = transfer_source = None
+    references: list[ConformationalMappingSource] = []
     params: dict[str, Any] = {
         "backend": body.backend,
         "ordered_seeds": body.ordered_seeds,
@@ -2001,7 +2028,6 @@ async def submit_request(
             or len({snapshot.get("target_id") for snapshot in snapshots}) != len(snapshots)
         ):
             raise HTTPException(status_code=422, detail="registered snapshot order or target identity is invalid")
-        snapshot_payload = snapshots
         params["targets"] = [
             {"target_id": snapshot["target_id"], "target_order": index}
             for index, snapshot in enumerate(snapshots)
@@ -2114,6 +2140,67 @@ async def submit_request(
         ),
     }
 
+    try:
+        validated = validate_request_controls(params)
+    except ConformationalMappingRequestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _NormalizedCmSubmission(
+        params, validated.request_fields, import_sources, confor_sources,
+        snapshot_source, sequence_source, snapshots, checkpoint_source, references,
+        config_source, transfer_source,
+    )
+
+
+async def normalize_cm_provision_request(
+    body: SubmitRequest, request: Request, session: AsyncSession,
+) -> NativeWorkflowDependencyRequest:
+    """Normalize the real unsaved CM submission without registering/staging it."""
+    principal_id = _mutation_principal(request)
+    with session.no_autoflush:
+        normalized = await _normalize_cm_submission(body, principal_id, session)
+    effective = normalized.request_fields
+    sources = [*normalized.import_sources, *normalized.confor_sources]
+    if normalized.snapshot_source is not None:
+        sources.append(normalized.snapshot_source)
+    bindings = tuple({
+        "role": source.source_kind,
+        "source_ref": {"kind": "cm_registered_source", "id": source.source_id},
+        "sha256": source.content_sha256,
+        "size_bytes": source.size_bytes,
+        "required": True,
+        "state": "declared",
+    } for source in sources)
+    return NativeWorkflowDependencyRequest(
+        model_id="conformational_mapping", mode="map",
+        requested_params=body.model_dump(mode="json"),
+        effective_params={"cm_request": copy.deepcopy(effective)},
+        entrypoint="workflows/conformational_mapping.nf",
+        input_bindings=bindings,
+    )
+
+
+@router.post("/requests", status_code=201)
+async def submit_request(
+    body: SubmitRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    principal_id = _mutation_principal(request)
+    normalized = await _normalize_cm_submission(body, principal_id, session)
+    if normalized.checkpoint_source is not None:
+        session.add(normalized.checkpoint_source)
+    params = normalized.params
+    import_sources = normalized.import_sources
+    confor_sources = normalized.confor_sources
+    snapshot_source = normalized.snapshot_source
+    sequence_source = normalized.sequence_source
+    snapshots = normalized.snapshots
+    checkpoint_source = normalized.checkpoint_source
+    references = normalized.references
+    config_source = normalized.config_source
+    transfer_source = normalized.transfer_source
+
     request_id = (
         str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:cm:submit:{principal_id}:{body.idempotency_key}"))
         if body.idempotency_key else str(uuid.uuid4())
@@ -2129,6 +2216,7 @@ async def submit_request(
         return {
             "request_id": existing_request.request_id, "job_id": existing_request.job_id,
             "status": existing_request.status, "backend": existing_request.backend,
+            **_cm_placement_projection(existing_job),
             "request_sha256": existing_request.request_sha256,
             "coordinate_plan_sha256": existing_request.coordinate_plan_sha256,
             "expected_cardinality": existing_request.coordinate_plan_json["expected_cardinality"],
@@ -2148,6 +2236,7 @@ async def submit_request(
                 encoding="utf-8",
             )
         if confor_sources:
+            assert checkpoint_source is not None
             staged_assets = stage_registered_assets(
                 [_registered(source) for source in confor_sources],
                 principal_id=principal_id, destination_root=root / "registered",
@@ -2242,8 +2331,10 @@ async def submit_request(
         token, token_digest = issue_request_capability()
         job = Job(
             id=request_id, name=body.name.strip(), status="queued", model_id="conformational_mapping",
-            mode="map", params=materialized.launch_params, output_dir=str(root), queue_status="queued",
-            **_cm_job_admission(body.backend, {"targets": analysis_targets}),
+            mode="map", params={**materialized.launch_params, "remote_result_policy": body.execution_policy.remote_result_policy},
+            output_dir=str(root), queue_status="queued",
+            **await _cm_target_fields(session, body.execution_target_id),
+            **_cm_job_admission(body.backend, {**request_payload, "targets": analysis_targets}),
             lineage_root_job_id=request_id, stage_family="conformational_mapping", stage_mode=body.backend,
             provenance={
                 "cm_request_sha256": request_payload["request_sha256"],
@@ -2268,6 +2359,7 @@ async def submit_request(
         )
         return {
             "request_id": request_id, "job_id": request_id, "status": "queued",
+            **_cm_placement_projection(job),
             "backend": body.backend, "request_sha256": request_payload["request_sha256"],
             "coordinate_plan_sha256": coordinate_plan["coordinate_plan_sha256"],
             "expected_cardinality": coordinate_plan["expected_cardinality"],
@@ -2350,6 +2442,7 @@ async def request_status(
     return {
         "request_id": record.request_id, "job_id": record.job_id, "backend": record.backend,
         "status": status, "job_status": job.status if job else None,
+        **_cm_placement_projection(job),
         "progress": progress, "failure_receipt": failure_receipt,
         "retry_eligible": status in {"failed", "cancelled"},
         "result_contract_id": record.result_contract_id,
@@ -2516,6 +2609,7 @@ async def launch_resampling(
                 "request_id": child_request_id, "job_id": existing.job_id,
                 "source_request_id": request_id, "pair_id": pair["pair_id"],
                 "status": existing.status, "idempotent_retry": True,
+                **_cm_placement_projection(await session.get(Job, existing.job_id)),
             }
         wt_target_id = f"{snapshot['target_id']}:wt"
         mutant_target_id = f"{snapshot['target_id']}:mutant:{handoff['mutation_set_id'][:12]}"
@@ -2562,7 +2656,9 @@ async def launch_resampling(
         job = Job(
             id=child_request_id, name=f"CM resampling {handoff['mutation_set_string']}",
             status="queued", model_id="conformational_mapping", mode="map",
-            params=materialized.launch_params, output_dir=str(root), queue_status="queued",
+            params={**materialized.launch_params, "remote_result_policy": ExecutionPolicy.from_params(source_job.params).remote_result_policy},
+            output_dir=str(root), queue_status="queued",
+            **await _cm_target_fields(session, source_job.execution_target_id, parent_job=source_job),
             **_cm_job_admission("protenix_v2_ensemble", request_payload),
             parent_job_id=source_job.id, lineage_root_job_id=source_job.lineage_root_job_id or source_job.id,
             stage_family="conformational_mapping", stage_mode="resampling",
@@ -2586,6 +2682,7 @@ async def launch_resampling(
         response_payload = {
             "request_id": child_request_id, "job_id": child_request_id,
             "source_request_id": request_id, "pair_id": pair["pair_id"],
+            **_cm_placement_projection(job),
             "status": "queued", "idempotent_retry": False,
         }
         return response_payload
@@ -2652,8 +2749,10 @@ def _clean_retry_launch_params(
 ) -> dict[str, Any]:
     """Build clean-attempt launch parameters without accepting old work state."""
 
-    cleaned = dict(params)
+    from services.execution_ownership import release_scheduler_gpu_assignment
+    cleaned = release_scheduler_gpu_assignment(dict(params))
     for key in (
+        "gpu_id", "pinned_gpus", "bcp_gpu_ids",
         "resume_work_dir",
         "work_dir",
         "nextflow_work_dir",
@@ -2972,6 +3071,9 @@ async def retry_request(
         attempt_root_created = True
         retry_params = _clean_retry_launch_params(dict(job.params or {}), attempt_root=attempt_root)
         provenance = dict(job.provenance or {})
+        # The prior Job retains its attempt evidence; the retry must acquire its own lease.
+        for key in ("remote_execution_assignment", "remote_execution_receipt"):
+            provenance.pop(key, None)
         provenance.update(
             {
                 "cm_retry_parent_job_id": job.id,
@@ -2987,6 +3089,7 @@ async def retry_request(
             model_id=job.model_id,
             mode=job.mode,
             params=retry_params,
+            **await _cm_target_fields(session, job.execution_target_id, parent_job=job),
             output_dir=str(attempt_root),
             queue_status="queued",
             batch_id=job.batch_id,
@@ -3042,6 +3145,7 @@ async def retry_request(
         "job_id": retry_job.id,
         "status": "queued",
         "retry_count": retry_count,
+        **_cm_placement_projection(retry_job),
         "parent_job_id": job.id,
     }
 
@@ -3127,28 +3231,30 @@ def _bounded_cm_record_payload(
         }, {}, artifact
 
     root = artifact_root()
-    payload = resolve_json_envelope_fields(reference, keys=fields, root=root)
-    pages: dict[str, dict[str, Any]] = {}
-    for collection in collections:
-        initial_limit = (
-            _CM_RESULT_INITIAL_PAGE_SIZE
-            if (row.record_type == "analysis" and collection == "results")
-            or row.record_type == "structure_map"
-            else 1
-        )
-        page = query_json_envelope_page(
-            reference,
-            key=collection,
-            offset=0,
-            limit=initial_limit,
-            root=root,
-            max_limit=_CM_RESULT_PAGE_SIZE,
-        )
-        payload[collection] = page["rows"] if initial_limit > 1 else []
-        descriptor = _cm_page_descriptor(page)
-        if initial_limit == 1 and page["total_count"]:
-            descriptor["next_offset"] = 0
-        pages[collection] = descriptor
+    with artifact_query(reference, root=root) as query:
+        payload = resolve_json_envelope_fields(reference, keys=fields, root=root, query=query)
+        pages: dict[str, dict[str, Any]] = {}
+        for collection in collections:
+            initial_limit = (
+                _CM_RESULT_INITIAL_PAGE_SIZE
+                if (row.record_type == "analysis" and collection == "results")
+                or row.record_type == "structure_map"
+                else 1
+            )
+            page = query_json_envelope_page(
+                reference,
+                key=collection,
+                offset=0,
+                limit=initial_limit,
+                root=root,
+                max_limit=_CM_RESULT_PAGE_SIZE,
+                query=query,
+            )
+            payload[collection] = page["rows"] if initial_limit > 1 else []
+            descriptor = _cm_page_descriptor(page)
+            if initial_limit == 1 and page["total_count"]:
+                descriptor["next_offset"] = 0
+            pages[collection] = descriptor
     return payload, pages, artifact
 
 
@@ -3192,13 +3298,24 @@ async def request_results(
             )
         )
     ).scalars().all()
-    try:
-        result_records = [_cm_record_response(row) for row in rows]
-    except (OSError, ScientificArtifactError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail="CM scientific result artifact is unavailable or invalid") from exc
+    result_records = []
+    section_errors = []
+    for row in rows:
+        try:
+            result_records.append(_cm_record_response(row))
+        except (OSError, ScientificArtifactError, TypeError, ValueError):
+            # An unreadable record is not absence and is never projected as valid
+            # science. Independent normalized state and exact Frustra readbacks
+            # retain their own identity/authority checks.
+            section_errors.append({
+                "type": row.record_type, "key": row.record_key,
+                "status": "unavailable",
+                "detail": "CM scientific result artifact is unavailable or invalid",
+            })
     return {
         "request_id": request_id, "result_contract_id": record.result_contract_id,
         "records": result_records,
+        "section_errors": section_errors,
         "artifacts": [
             {
                 "artifact_id": item.artifact_id, "candidate_id": item.candidate_id,

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-    type BioXpOperatorActionReceipt,
+
     type BioXpOperatorActionSpec,
     type BioXpOperatorHistoryReceipt,
+    type BioXpOperatorRecordedReceipt,
     bioXpErrorText,
 
     useBioXpOperatorActionHistory,
@@ -13,6 +14,8 @@ import {
     useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
+import { bioXpReceiptFailureText, bioXpReceiptIsMoveTimeoutReport, bioXpReceiptStatusText } from '../lib/bioxpEvidencePresentation';
+import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 
 type Pane = 'primitive' | 'meta' | 'logs';
 type ReceiptBoundObservation = {
@@ -114,7 +117,10 @@ function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprint
     return JSON.stringify(value);
 }
 
-function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
+function ReceiptCard({ receipt, generation = 0, connected = false }: {
+    receipt: BioXpOperatorRecordedReceipt | BioXpOperatorHistoryReceipt; generation?: number; connected?: boolean;
+}) {
+    if ('history' in receipt) return <BioXpHistoryReceiptCard receipt={receipt} generation={generation} connected={connected} />;
     const actionId = 'action_id' in receipt
         ? receipt.action_id
         : 'schema' in receipt
@@ -123,14 +129,14 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
     const status = 'status' in receipt ? receipt.status : 'schema' in receipt ? 'recorded' : receipt.outcome;
     const machineAssessment = 'machine_assessment' in receipt ? receipt.machine_assessment : 'unverified';
     const operatorAssessment = 'operator_assessment' in receipt ? receipt.operator_assessment : null;
-    const terminalPass = machineAssessment === 'pass' || operatorAssessment === 'pass';
-    const terminalFail = machineAssessment === 'fail' || operatorAssessment === 'fail';
+    const report = bioXpReceiptIsMoveTimeoutReport(receipt);
+    const terminalPass = !report && (machineAssessment === 'pass' || operatorAssessment === 'pass');
+    const terminalFail = !report && (machineAssessment === 'fail' || operatorAssessment === 'fail');
     const commandId = 'command_id' in receipt
         ? receipt.command_id
         : 'receipt_id' in receipt
             ? receipt.receipt_id
             : 'legacy unindexed record';
-    const ownershipGeneration = 'ownership_generation' in receipt ? receipt.ownership_generation : 'unknown';
     const remoteAcknowledged = 'remote_acknowledged' in receipt
         ? receipt.remote_acknowledged
         : 'truth' in receipt
@@ -146,14 +152,14 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
     const stageReceipts = 'stage_receipts' in receipt ? receipt.stage_receipts : [];
     const response = 'response' in receipt ? receipt.response : null;
     return (
-        <article className={`rounded border p-3 text-xs ${terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
+        <article className={`rounded border p-3 text-xs ${report ? 'border-amber-700/60' : terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
             <div className="flex flex-wrap justify-between gap-2">
                 <span className="font-mono text-cyan-200">{actionId}</span>
-                <span>{status} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
+                <span>{bioXpReceiptStatusText(receipt, status)} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
             </div>
-            <p className="mt-1 font-mono text-slate-400">{commandId} · generation {ownershipGeneration}</p>
+            <p className="mt-1 font-mono text-slate-400">{commandId}</p>
             <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
-            {'error' in receipt && receipt.error && <p className="mt-1 text-red-300">{receipt.error}</p>}
+            {bioXpReceiptFailureText(receipt) && <p className={report ? "mt-1 text-amber-300" : "mt-1 text-red-300"}>{bioXpReceiptFailureText(receipt)}</p>}
             {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
             {stageReceipts.length > 0 && (
                 <details className="mt-2"><summary>Stage receipts ({stageReceipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(stageReceipts, null, 2)}</pre></details>
@@ -165,23 +171,28 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
     );
 }
 
-function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): receipt is BioXpOperatorActionReceipt {
-    return 'schema_version' in receipt && receipt.schema_version === 'bioxp.operator_action_receipt.v1';
+function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): boolean {
+    return receipt.history.source === 'direct' && receipt.history.source_schema === 'bioxp.operator_action_receipt.v1';
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
+    const [pane, setPane] = useState<Pane>('primitive');
+    const historyPagination = useBioXpHistoryPagination(connected ? generation : 0, 100);
     const dashboardQuery = useBioXpOperatorDashboard(generation, connected);
     const catalogQuery = useBioXpOperatorControlCatalog(
         generation,
         connected,
         dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
     );
-    const historyQuery = useBioXpOperatorActionHistory(generation, connected);
+    const historyQuery = useBioXpOperatorActionHistory(generation, connected, 100, pane === 'logs' ? historyPagination.cursor : null);
     const invoke = useInvokeBioXpOperatorAction();
+    // Published stop/emergency actions retain their own request and receipt owner.
+    // Same catalog route/admission; no new transport or queue policy.
+    const interrupt = useInvokeBioXpOperatorAction('stop');
     const assess = useAssessBioXpOperatorAction();
     const resetInvoke = invoke.reset;
+    const resetInterrupt = interrupt.reset;
 
-    const [pane, setPane] = useState<Pane>('primitive');
     const [confirmation, setConfirmation] = useState<ActionConfirmation | null>(null);
     const [operatorObservation, setOperatorObservation] = useState<ReceiptBoundObservation>({ receiptCommandId: null, authorityKey: '', note: '' });
     const [subsystemFilter, setSubsystemFilter] = useState<PrimitiveGroup>('all');
@@ -245,7 +256,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
     const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
-        ? invoke.data ?? authoritativeHistory.receipts.find(isCurrentActionReceipt)
+        ? invoke.data ?? authoritativeHistory.items.find(isCurrentActionReceipt)
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
     const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
@@ -256,6 +267,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         && (latestReceipt.action_id.startsWith('oem.x.') || latestReceipt.action_id.startsWith('oem.xy.'));
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
+    const selectedSubmissionPending = isSafetyInterrupt ? interrupt.isPending : invoke.isPending || interrupt.isPending;
     const isExactXzAction = selected?.action_id.startsWith('oem.x.') === true
         || selected?.action_id.startsWith('oem.z.') === true;
     const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true
@@ -277,8 +289,9 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
     useEffect(() => {
         resetInvoke();
+        resetInterrupt();
         setOperatorObservation({ receiptCommandId: null, authorityKey: '', note: '' });
-    }, [connected, generation, resetInvoke]);
+    }, [connected, generation, resetInvoke, resetInterrupt]);
     useEffect(() => {
         setOperatorObservation((current) => current.receiptCommandId === latestReceiptCommandId && current.authorityKey === assessmentAuthorityKey
             ? current
@@ -299,7 +312,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     }, [groupedBrowseActions, selected?.action_id]);
 
     const run = () => {
-        if (!selected) return;
+        if (!selected || !connected || !actionEnabled || !sourceAuthorityAllowsAction || selectedSubmissionPending) return;
         setLocalError(null);
         try {
             const normalized = normalizeInput(selected, inputs);
@@ -316,7 +329,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 setLocalError('Explicit confirmation is required for this exact governed action and authority.');
                 return;
             }
-            invoke.mutate({
+            (isSafetyInterrupt ? interrupt : invoke).mutate({
                 actionId: selected.action_id,
                 connectionGeneration: generation,
                 ownershipGeneration: authoritativeCatalog?.ownership_generation ?? 0,
@@ -378,8 +391,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         <section className="rounded-xl border border-cyan-800/60 bg-slate-950/70 p-4" data-bioxp-operator-control-tabs>
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h2 className="text-lg font-semibold">OEM Route Control Plane</h2>
-                    <p className="text-sm text-slate-400">Robot-owned action catalog; one tab and one auditable receipt per action. Meta actions execute only robot-owned stage sequences.</p>
+                    <h2 className="text-lg font-semibold">Advanced Controls</h2>
+                    <p className="text-sm text-slate-400">Select a control to view its inputs and results. Multi-step actions follow the robot’s defined sequence.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" className={paneClass(pane === 'primitive')} onClick={() => setPane('primitive')}>Individual Controls</button>
@@ -389,20 +402,19 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             </div>
 
             {authoritativeCatalog && (
-                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+                <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
                     <div><dt className="text-slate-500">machine</dt><dd>{authoritativeCatalog.machine_serial}</dd></div>
                     <div><dt className="text-slate-500">actions</dt><dd>{authoritativeCatalog.actions.length}</dd></div>
                     <div><dt className="text-slate-500">source authority</dt><dd>{String(authoritativeCatalog.source_authority_verified)}</dd></div>
-                    <div><dt className="text-slate-500">ownership generation</dt><dd>{authoritativeCatalog.ownership_generation}</dd></div>
-                    <div><dt className="text-slate-500">BMS generation</dt><dd>{generation}</dd></div>
                 </dl>
             )}
             {contractError && <p className="mt-3 text-sm text-red-300">Catalog unavailable: {contractError}</p>}
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(authoritativeHistory?.receipts ?? []).map((receipt, index) => <ReceiptCard key={'command_id' in receipt ? receipt.command_id : 'receipt_id' in receipt ? receipt.receipt_id : `legacy-unindexed-${index}`} receipt={receipt} />)}
-                    {authoritativeHistory?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
+                    {(authoritativeHistory?.items ?? []).map((receipt) => <BioXpHistoryReceiptCard key={`${generation}:${receipt.command_id}`} receipt={receipt} generation={generation} connected={connected} />)}
+                    {authoritativeHistory?.items.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts on this page.</p>}
+                    <BioXpHistoryPager pagination={historyPagination} nextCursor={authoritativeHistory?.next_cursor ?? null} disabled={!connected || historyQuery.isFetching || historyQuery.isError} />
                 </div>
             ) : (
                 <>
@@ -491,7 +503,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                             <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                                 <div><dt className="text-slate-500">Robot route</dt><dd className="font-mono">{selected.informational_method} {selected.informational_path}</dd></div>
                                 <div><dt className="text-slate-500">Timeout</dt><dd>{selected.timeout_seconds}s</dd></div>
-                                <div className="sm:col-span-2"><dt className="text-slate-500">OEM source</dt><dd>{selected.source_anchor ?? 'No source anchor published'}</dd></div>
+                                <div className="sm:col-span-2"><dt className="text-slate-500">Controller source</dt><dd>{selected.source_anchor ?? 'No source anchor published'}</dd></div>
                             </dl>
                             {selected.stages.length > 0 && <p className="mt-2 text-xs text-slate-400">Stages: {selected.stages.join(' → ')}</p>}
                             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -529,7 +541,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                                     I confirm this exact governed action and its published machine scope.
                                 </label>
                             )}
-                            <button type="button" disabled={!connected || !actionEnabled || invoke.isPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
+                            <button type="button" disabled={!connected || !actionEnabled || selectedSubmissionPending || !sourceAuthorityAllowsAction || (selected.requires_confirmation && !confirmationMatchesCurrentAction)} onClick={run} className={`mt-4 rounded px-4 py-2 font-semibold disabled:opacity-35 ${selected.safety_class === 'emergency' ? 'bg-red-700' : selected.safety_class === 'motion' ? 'bg-amber-700' : 'bg-cyan-700'}`}>Run exactly this action</button>
                             {!actionEnabled && <p className="mt-2 text-sm text-amber-200">Blocked: {disabledReason}</p>}
                         </article>
                     )}
@@ -537,6 +549,10 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
             )}
 
             {actionError && <p className="mt-3 text-sm text-red-300">{actionError}</p>}
+            {connected && interrupt.error && <p role="alert" className="mt-3 text-sm text-red-300">Stop request: {bioXpErrorText(interrupt.error)}</p>}
+            {connected && interrupt.data && <div data-testid="advanced-stop-receipt" className="mt-4"><ReceiptCard receipt={interrupt.data} /></div>}
+            {interrupt.error && <p role="alert" className="mt-3 text-sm text-red-300">Stop request: {bioXpErrorText(interrupt.error)}</p>}
+            {connected && interrupt.data && <section data-testid="advanced-stop-receipt" className="mt-4"><h3>Independent Stop receipt</h3><ReceiptCard receipt={interrupt.data} /></section>}
             {awaitingXObservationReceiptId && pane !== 'logs' && (
                 <section className="mt-4 rounded border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100" data-x-provider-observation-required>
                     <h3 className="font-semibold">Provider-owned X observation required</h3>
@@ -545,11 +561,11 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                 </section>
             )}
             {latestReceipt && pane !== 'logs' && latestUsesProviderObservation && (
-                <div className="mt-4"><ReceiptCard receipt={latestReceipt} /></div>
+                <div className="mt-4"><ReceiptCard receipt={latestReceipt} generation={generation} connected={connected} /></div>
             )}
             {latestReceipt && pane !== 'logs' && !latestUsesProviderObservation && (
                 <div className="mt-4 space-y-3">
-                    <ReceiptCard receipt={latestReceipt} />
+                    <ReceiptCard receipt={latestReceipt} generation={generation} connected={connected} />
                     <label className="block text-sm text-slate-300">
                         Your physical observation
                         <textarea value={operatorObservation.receiptCommandId === latestReceiptCommandId ? operatorObservation.note : ''} onChange={(event) => setOperatorObservation({ receiptCommandId: latestReceiptCommandId, authorityKey: assessmentAuthorityKey, note: event.target.value })} rows={3} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2" placeholder="Describe the observed machine state. Operator observation must remain attached to the robot-owned receipt." />

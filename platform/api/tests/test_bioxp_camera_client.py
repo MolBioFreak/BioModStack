@@ -96,6 +96,7 @@ def test_camera_client_uses_only_fixed_routes_and_bounded_timeouts():
     transport = CameraTransport(handler)
     client = BioXpRobotClient(target(), transport=transport)
 
+    client._monotonic_clock = lambda: 100.0
     status = asyncio.run(client.camera_status())
     latest = asyncio.run(client.camera_latest())
     snapshot = asyncio.run(client.camera_snapshot())

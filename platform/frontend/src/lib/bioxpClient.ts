@@ -1,6 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
+import { bioXpProviderFailure } from './bioxpEvidencePresentation';
+import { bioXpErrorBodyPreview, boundedBioXpText as boundedOperatorText } from './bioxpErrorPreview';
 
 export interface BioXpConnectionSnapshot {
     configured: boolean;
@@ -167,6 +170,40 @@ export interface BioXpOperatorDashboardAxis {
     physical_position_verified?: false | null;
 }
 
+export interface BioXpOperatorDashboardXPreparationAttempt {
+    ok: boolean;
+    observed_generation: number;
+    board_lifecycle_generation: number | null;
+    board_preparation_verified: boolean;
+    initialize_without_motion_verified: boolean;
+    board_lifecycle_reused?: boolean;
+    physical_motion: false;
+    motor_output_state: 'unknown';
+    motor_torque_verified: false;
+    receipt: BioXpJsonValue;
+    axis: 'x';
+    source_method?: 'ClassControlInterface.initializeMotorsWithoutMotion' | null;
+    reference_state?: 'desynced' | null;
+    source_anchor: 'ClassControlInterface.initializeMotorsWithoutMotion:3187-3195';
+    source_exact: false;
+    initializer_source_exact: true;
+    literal_switch_mask_writes: [];
+}
+
+export interface BioXpOperatorDashboardXPreparationRejection {
+    ok: false;
+    observed_generation: number;
+    physical_motion: false;
+    blocker: 'ownership_generation_changed_before_preparation';
+    axis: 'x';
+    source_method?: 'ClassControlInterface.initializeMotorsWithoutMotion' | null;
+    reference_state?: 'desynced' | null;
+    source_anchor: 'ClassControlInterface.initializeMotorsWithoutMotion:3187-3195';
+    source_exact: false;
+    initializer_source_exact: true;
+    literal_switch_mask_writes: [];
+}
+
 export interface BioXpOperatorDashboardXAxis {
     status: BioXpOperatorDashboardAxis | null;
     provider: {
@@ -185,6 +222,7 @@ export interface BioXpOperatorDashboardXAxis {
             reference_state?: string;
             generation?: number | null;
             board_lifecycle_generation?: number | null;
+            prepared_receipt?: BioXpOperatorDashboardXPreparationAttempt | BioXpOperatorDashboardXPreparationRejection | null;
             awaiting_observation_receipt_id?: string | null;
             last_failure?: unknown;
             latest_receipt?: Record<string, unknown> | null;
@@ -237,11 +275,13 @@ export interface BioXpOperatorDashboard {
     operation: { state: string | null; reason: string | null };
     enclosure: { door_closed: boolean | null; latch_closed: boolean | null };
     axes: BioXpOperatorDashboardAxis[];
-    x_axis: BioXpOperatorDashboardXAxis;
+    x_axis: BioXpOperatorDashboardXAxis | null;
     z_axis: {
         status: BioXpOperatorDashboardAxis | null;
         provider: {
             bound?: boolean;
+            current_minimum_steps?: 500 | 65000 | null;
+            target_preview?: { requested_position_steps: number; effective_position_steps: number | null } | null;
             board?: 4;
             motor?: 1;
             state?: string;
@@ -262,9 +302,9 @@ export interface BioXpOperatorDashboard {
         snapshot_freshness: Record<string, unknown>;
         last_failure: unknown;
         authority: string;
-    };
+    } | null;
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
-    pipettes: BioXpPipettes;
+    pipettes: BioXpPipettes | null;
     snapshot: { snapshot_id: string | null; freshness: { state?: string; age_s?: number | null; fresh_for_s?: number | null }; collection_triggered: false };
     successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
@@ -298,8 +338,25 @@ export interface BioXpOperatorReceiptFailureDetailV2 {
     reference_state: string;
 }
 
+export type BioXpJsonValue = null | boolean | number | string | BioXpJsonValue[] | { [key: string]: BioXpJsonValue };
+
+export interface BioXpOperatorInterruptEvidenceV2 {
+    source_call_completed: boolean | null;
+    source_return_ok: boolean | null;
+    first_stop_acknowledged?: boolean | null;
+    second_stop_acknowledged?: boolean | null;
+    controller_stop_acknowledged: boolean | null;
+    controller_terminal_state_verified: boolean | null;
+    physical_effect_verified: false;
+    persistence_state: string;
+    details: BioXpJsonValue;
+}
+
 export interface BioXpOperatorReceiptV2 {
+    xy_failure?: Record<string, BioXpJsonValue> | null;
+    z_move?: { requested_position_steps?: number | null; effective_position_steps?: number | null; before_position_steps?: number | null; after_position_steps?: number | null; target_clamped?: boolean | null; [key: string]: unknown } | null;
     schema_version: 'bioxp.operator_action_receipt.v2';
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
     command_id: string;
     action_id: string;
     status: BioXpOperatorReceiptV2Status;
@@ -328,6 +385,7 @@ export interface BioXpOperatorReceiptV2 {
 export type BioXpReceiptScalarV2 = number | string | boolean | null;
 
 export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
+    source_receipt?: Record<string, unknown> | null;
     canonical_inputs: Record<string, unknown>;
     requested_values: Record<string, BioXpReceiptScalarV2>;
     effective_values: Record<string, BioXpReceiptScalarV2>;
@@ -339,7 +397,7 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
     transitions: Array<{
         transition_id: string;
         from_status: BioXpOperatorReceiptV2Status | null;
-        to_status: BioXpOperatorReceiptV2Status;
+        to_status: BioXpOperatorReceiptV2Status | 'reconciled';
         at: number;
         reason: string | null;
     }>;
@@ -347,9 +405,37 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
         target: string;
         target_label: string | null;
         source_branch: string | null;
+        resolved_location_id: number | null;
+        destination_catalog_revision: string | null;
+        position_table_revision: string | null;
+        authority_snapshot_digest: string | null;
+        complete_authority_digest: string | null;
+        plan_digest: string | null;
+        source_anchors: string[];
+        delivery_attempted: boolean | null;
+        controller_command_acknowledged: boolean | null;
         controller_completion_verified: boolean | null;
+        hardware_postcondition_verified: boolean | null;
         semantic_state_committed: boolean | null;
         physical_observation_verified: boolean | null;
+        recovery_resolution?: {
+            command_id: string;
+            decision_id: string;
+            semantic_state_revision: number;
+            transition_sequence: number;
+        } | null;
+        transition_revision: number | null;
+        ambiguity_state: 'none' | 'failed' | 'ambiguous' | 'recovery_required' | null;
+        stages: Array<{
+            order: number;
+            operation: string;
+            source_anchor: string;
+            resources: string[];
+            arguments: Record<string, unknown>;
+            dependencies: number[];
+            terminal_state: 'planned' | 'completed' | 'failed' | 'ambiguous' | 'stopped' | 'aborted';
+            terminal_evidence: unknown | null;
+        }>;
     } | null;
 }
 
@@ -411,9 +497,9 @@ export interface BioXpOperatorCommandQueueV2 {
     items: BioXpOperatorQueueItemV2[];
 }
 
-export interface BioXpOperatorActionHistoryV2 {
+export interface BioXpOperatorActionHistory {
     schema_version: 'bioxp.operator_action_history.v2';
-    items: BioXpOperatorReceiptV2[];
+    items: BioXpOperatorHistoryReceipt[];
     next_cursor: string | null;
     limit: number;
 }
@@ -425,27 +511,29 @@ export interface BioXpOperatorDashboardV2 {
     board4: BioXpBoard4AuthorityV2;
     y_axis: BioXpYAxisV2;
     active_commands: BioXpOperatorReceiptV2[];
-    command_queue: BioXpOperatorCommandQueueV2;
+    command_queue?: BioXpOperatorCommandQueueV2 | null;
     latest_receipts: BioXpOperatorReceiptV2[];
     telemetry: BioXpOperatorDashboard | null;
     deck?: {
         current_location: string | null;
-        current_well: string | null;
-        position_table_revision: string;
-        destination_catalog_revision: string;
+        current_well: number | null;
+        position_table_revision: string | null;
+        destination_catalog_revision: string | null;
         semantic_state_revision: number;
-        ownership_generation: number;
-        expected_board_epoch_by_board: Record<string, number>;
-        destinations: BioXpDeckDestinationV1[];
+        ambiguity_state: 'none' | 'recovery_required';
     } | null;
 }
 
 export interface BioXpDeckDestinationV1 {
-    key: string;
+    target: string;
     label: string;
     aliases: string[];
+    location_id: number;
     branch_kind: 'ordinary' | 'barcode' | 'park';
-    camera_offset_supported: boolean;
+    camera_offset_option: boolean;
+    source_anchors: string[];
+    enabled: boolean;
+    disabled_reason: string | null;
 }
 
 export interface BioXpOperatorControlCatalogV2 {
@@ -454,15 +542,16 @@ export interface BioXpOperatorControlCatalogV2 {
     actions: Array<{
         action_id: string;
         request_schema_version: 'bioxp.operator_action_request.v2' | 'bioxp.operator_interrupt_request.v1';
-        response_schema_version: 'bioxp.operator_action_receipt.v2' | 'bioxp.operator_interrupt_receipt.v1';
+        response_schema_version: 'bioxp.operator_action_receipt.v2';
         interrupt: boolean;
         enabled: boolean;
         disabled_reason: string | null;
         destination_catalog_revision?: string | null;
         position_table_revision?: string | null;
-        required_board_ids?: Array<4 | 5> | null;
+        required_boards?: Array<4 | 5> | null;
         expected_board_epoch_by_board?: Record<string, number> | null;
-        destinations?: BioXpDeckDestinationV1[] | null;
+        required_references?: Array<'x' | 'y' | 'z' | 'g'> | null;
+        destination_options?: BioXpDeckDestinationV1[] | null;
     }>;
 }
 
@@ -536,6 +625,7 @@ export interface BioXpPipetteReceipt {
     created_at: string;
     operation: string;
     truth: {
+        semantic_query_response_verified: boolean;
         delivery_verified: boolean;
         controller_acknowledged: boolean;
         completion_verified: boolean;
@@ -571,7 +661,6 @@ export interface BioXpPipettes {
     channels: BioXpPipetteChannel[];
     channel_count: 4;
     live_query_performed: false;
-    liquid_mutation_enabled: boolean;
     allow_to_stop: boolean;
     last_error: { channel: 0 | 1 | 2 | 3; error_code: number; source: 'ClassPipetteCollection.handlePipetteMessage' } | null;
     last_group_transaction: Record<string, unknown> | null;
@@ -595,6 +684,7 @@ export interface BioXpPipetteReadbackChannel {
 }
 
 export interface BioXpPipetteReadback {
+    hardware_truth_level: 'hardware_query';
     ok: boolean;
     semantic_ok: boolean;
     available: boolean;
@@ -724,6 +814,8 @@ export interface BioXpOperatorActionSpec {
     disabled_reason: string | null;
     dependencies: BioXpOperatorDependency[];
     requires_confirmation: boolean;
+    /** Robot-owned presentation age, not a client-side admission token. */
+    snapshot_freshness?: { state: string; age_s: number | null; fresh_for_s: number | null } | null;
     timeout_seconds: number;
     required_provider_capability: string | null;
     inputs: BioXpOperatorInputSpec[];
@@ -751,7 +843,7 @@ export interface BioXpOperatorActionReceipt {
     action_id: string;
     kind: BioXpOperatorActionKind;
     safety_class: BioXpOperatorSafetyClass;
-    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'failed' | 'blocked' | 'rejected' | 'reconciliation_required';
+    status: 'acknowledged' | 'admission_pending' | 'queued' | 'completed' | 'observed' | 'failed' | 'blocked' | 'rejected' | 'reconciliation_required';
     idempotency_key: string;
     idempotency_replay_enabled: boolean;
     ownership_generation: number;
@@ -772,6 +864,7 @@ export interface BioXpOperatorActionReceipt {
     physical_outcome: string | null;
     persistence_fallback: Record<string, unknown> | null;
     machine_assessment: 'pass' | 'fail' | 'unverified';
+    completion_class?: string | null;
     operator_assessment: 'pass' | 'fail' | null;
     operator_note: string | null;
     operator_assessment_idempotency_key: string | null;
@@ -787,6 +880,51 @@ export interface BioXpOperatorActionReceipt {
     error: string | null;
     stage_receipts: Record<string, unknown>[];
 }
+
+export interface BioXpOperatorSourceIdentity {
+    robot_identity: string;
+    release_id: string;
+    source_manifest_sha256: string;
+    source_aggregate_sha256: string;
+    release_verified: boolean;
+    registry_sha256: string;
+    evidence_lock_sha256: string;
+    evidence_lock_identity_verified: boolean;
+}
+
+export interface BioXpOperatorRecordedActionReceipt extends Omit<BioXpOperatorActionReceipt, 'status'> {
+    status: BioXpOperatorActionReceipt['status'] | 'outcome_unknown';
+    completion_ambiguous: boolean;
+    completion_verified: boolean;
+    delivery_verified: boolean;
+    hardware_postcondition_verified: boolean;
+    hardware_precondition_verified: boolean;
+    reconciliation_required: boolean;
+    retry_forbidden: boolean;
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+}
+
+export interface BioXpOperatorLiveSourceActionReceipt extends BioXpOperatorActionReceipt {
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+}
+
+export interface BioXpOperatorLiveTimeoutActionReceipt extends Omit<BioXpOperatorActionReceipt, 'status'> {
+    status: 'outcome_unknown';
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+    automatic_retry: false;
+    physical_outcome: 'ambiguous';
+    completion_ambiguous: true;
+    reconciliation_required: true;
+    retry_forbidden: true;
+}
+
+export type BioXpOperatorLiveActionReceipt = BioXpOperatorActionReceipt
+    | BioXpOperatorLiveSourceActionReceipt
+    | BioXpOperatorRecordedActionReceipt
+    | BioXpOperatorLiveTimeoutActionReceipt;
 
 export interface BioXpOperatorLegacyReconciliationReceipt {
     action_id: string;
@@ -831,15 +969,24 @@ export interface BioXpOperatorLegacyUnindexedPipetteReceipt {
     stage_receipts: Record<string, unknown>[];
 }
 
-export type BioXpOperatorHistoryReceipt =
-    | BioXpOperatorActionReceipt
+export type BioXpOperatorRecordedReceipt =
+    | BioXpOperatorLiveActionReceipt
     | BioXpPipetteReceipt
     | BioXpOperatorLegacyReconciliationReceipt
     | BioXpOperatorLegacyUnindexedPipetteReceipt;
 
-export interface BioXpOperatorActionHistory {
-    schema_version: 'bioxp.operator_action_history.v1';
-    receipts: BioXpOperatorHistoryReceipt[];
+export interface BioXpOperatorHistoryReceipt extends BioXpOperatorReceiptV2 {
+    history: {
+        source: 'direct' | 'retained';
+        source_schema: string | null;
+        recorded_status: string;
+        remote_acknowledged: boolean | null;
+        controller_acknowledged: boolean | null;
+        controller_terminal_state_verified: boolean | null;
+        machine_assessment: 'pass' | 'fail' | 'unverified' | null;
+        operator_assessment: 'pass' | 'fail' | null;
+        operator_note: string | null;
+    };
 }
 
 export function bioXpOperatorGenerationPayload(
@@ -916,11 +1063,124 @@ export interface BioXpJobListResponse {
     jobs: BioXpJob[];
 }
 
-export interface BioXpProtocolSubmissionResponse {
-    job: BioXpJob;
-    delivery_attempted: false;
-    robot_compatible: null;
+// Live workflows use robot custody; BioXpJob above remains offline history only.
+export type BioXpWorkflowPhase = 'queued' | 'preparing' | 'starting' | 'executing' | 'waiting' | 'waking' | 'epilogue' | 'cleanup' | 'reconciling' | 'terminal';
+export type BioXpWorkflowGate = 'ordinary_pause' | 'deferred_pause' | 'delaypoint' | 'review' | 'error_hold';
+export type BioXpWorkflowAction =
+    | { action: 'pause'; mode: 'ordinary' | 'deferred' }
+    | { action: 'wake'; gate_id: string }
+    | { action: 'continue'; gate: 'ordinary_pause' | 'deferred_pause' | 'delaypoint'; gate_id: string }
+    | { action: 'safe_stop' | 'abort' };
+export interface BioXpWorkflowState {
+    command_id: string;
+    phase: BioXpWorkflowPhase;
+    gate: BioXpWorkflowGate | null;
+    gate_id: string | null;
+    source_occurrence_id: string | null;
+    requested_control: BioXpWorkflowAction | null;
+    last_control_id: string | null;
+    reached_control_id: string | null;
+    held_reason: string | null;
+    child_command_ids: string[];
 }
+export interface BioXpWorkflowCommand {
+    command_id: string;
+    idempotency_key: string;
+    ownership_generation: number;
+    state_version: number;
+    status: 'queued' | 'dispatched' | 'interrupting' | 'completed' | 'failed' | 'interrupted' | 'cleared' | 'ambiguous' | 'rejected';
+    terminal: boolean;
+    status_path: string;
+}
+export interface BioXpWorkflowSourceWell {
+    content: string | null;
+    volume: number;
+    capacity: number;
+    empty: boolean;
+    zone_index: number | null;
+}
+export interface BioXpWorkflowSourceTray {
+    tray_id: string;
+    location: number;
+    wells: BioXpWorkflowSourceWell[];
+    tip_type: number | null;
+    tray_empty: boolean | null;
+    strip_color: string | null;
+}
+export interface BioXpWorkflowSourceModel {
+    logical_tip_present: boolean | null;
+    carried_plate_present: boolean | null;
+    allow_to_stop: boolean | null;
+    trays: Record<string, BioXpWorkflowSourceTray>;
+    strips: BioXpWorkflowSourceTray[];
+    tip_trays: BioXpWorkflowSourceTray[];
+    pressure_baseline: number[];
+    pressure_history: number[][];
+    fluid_name: string | null;
+    tip_zone_index: number | null;
+    old_tip_well: string | null;
+}
+export interface BioXpWorkflowJob {
+    job_id: string;
+    status: string;
+    command?: BioXpWorkflowCommand | null;
+    operator?: { manual_review_required: boolean; pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+    execution?: {
+        dry_run: boolean;
+        runtime_state: {
+            completed: boolean;
+            current_stage_id: string | null;
+            stage_states: Record<string, { current_action_id: string | null; pause_marker_action_id: string | null }>;
+            workflow?: BioXpWorkflowState | null;
+            source_model?: BioXpWorkflowSourceModel;
+        };
+    };
+}
+export interface BioXpWorkflowInput {
+    source_type: 'native' | 'oem_xml';
+    document?: Record<string, unknown> | null;
+    xml_path?: string | null;
+    live_execution?: Record<string, unknown> | null;
+    live_execution_ack?: boolean;
+    operator_id?: string | null;
+    physical_console_verified?: boolean;
+    deck_manifest?: Record<string, unknown> | null;
+    preflight?: Record<string, unknown> | null;
+    artifact_refs?: string[];
+    snapshot_refs?: string[];
+}
+export type BioXpWorkflowSubmission = BioXpWorkflowInput & {
+    expected_connection_generation: number;
+    idempotency_key: string;
+    dry_run: false;
+};
+export interface BioXpWorkflowBinding {
+    expected_connection_generation: number;
+    expected_ownership_generation: number;
+    command_id: string;
+    idempotency_key: string;
+}
+export type BioXpWorkflowControlRequest = BioXpWorkflowBinding & BioXpWorkflowAction;
+export interface BioXpWorkflowControlResponse {
+    control_command_id: string;
+    idempotency_key: string;
+    command_id: string;
+    job_id: string;
+    ownership_generation: number;
+    state_version: number;
+    accepted: boolean;
+    reached: boolean;
+    phase: BioXpWorkflowPhase;
+    gate: BioXpWorkflowGate | null;
+    gate_id: string | null;
+    status_path: string;
+}
+export type BioXpWorkflowReviewRequest = BioXpWorkflowBinding & {
+    reviewer: string;
+    note?: string | null;
+    stage_id: string;
+    action_id: string | null;
+};
 
 
 export interface BioXpOemFullLifecycleProvider {
@@ -1216,40 +1476,35 @@ function cameraImageFromResponse(response: {
     }
     return { blob: response.data, etag, sha256, connectionGeneration };
 }
-const OPERATOR_DETAIL_LIMIT = 2_048;
 
-const TRUNCATED_SUFFIX = '…[truncated]';
-
-function boundedOperatorText(value: string, limit = OPERATOR_DETAIL_LIMIT): string {
-    const normalized = value.trim();
-    if (normalized.length <= limit) return normalized;
-    return `${normalized.slice(0, Math.max(0, limit - TRUNCATED_SUFFIX.length))}${TRUNCATED_SUFFIX}`;
-}
-
-function nestedOperatorDetail(value: unknown, depth = 0): string | null {
-    if (depth > 8 || value === null || value === undefined) return null;
+function nestedOperatorDetail(value: unknown, depth = 0, budget = { remaining: 128 }): string | null {
+    if (--budget.remaining < 0 || depth > 8 || value === null || value === undefined) return null;
     if (typeof value === 'string') return boundedOperatorText(value) || null;
     if (Array.isArray(value)) {
-        const normalized = value.map((entry) => {
+        const normalized = value.slice(0, 16).map((entry) => {
             if (entry && typeof entry === 'object' && 'msg' in entry) {
                 const item = entry as { loc?: unknown; msg?: unknown };
-                const location = Array.isArray(item.loc) ? item.loc.map(String).join('.') : '';
+                const location = Array.isArray(item.loc) ? item.loc.slice(0, 16).map((part) => typeof part === 'string' ? boundedOperatorText(part, 128) : typeof part === 'number' ? String(part) : '?').join('.') : '';
                 const message = typeof item.msg === 'string'
-                    ? item.msg
-                    : nestedOperatorDetail(item.msg, depth + 1);
+                    ? boundedOperatorText(item.msg)
+                    : nestedOperatorDetail(item.msg, depth + 1, budget);
                 return message ? (location ? `${location}: ${message}` : message) : null;
             }
-            return nestedOperatorDetail(entry, depth + 1);
+            return nestedOperatorDetail(entry, depth + 1, budget);
         }).filter((entry): entry is string => Boolean(entry));
         const joined = normalized.length ? normalized.join('; ') : null;
         return joined ? boundedOperatorText(joined) : null;
     }
     if (typeof value !== 'object') return null;
     const record = value as Record<string, unknown>;
-    for (const key of ['detail', 'error', 'message', 'reason', 'block_reason', 'startup_error']) {
+    for (const key of ['detail', 'message', 'reason', 'block_reason', 'startup_error', 'error']) {
         if (key in record) {
-            const found = nestedOperatorDetail(record[key], depth + 1);
-            if (found) return found;
+            const found = nestedOperatorDetail(record[key], depth + 1, budget);
+            if (found) {
+                const code = typeof record.code === 'string' ? record.code
+                    : typeof record.error === 'string' ? record.error : null;
+                return code && code !== found ? boundedOperatorText(`${found} (${boundedOperatorText(code)})`) : found;
+            }
         }
     }
     return null;
@@ -1259,10 +1514,10 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
 export interface BioXpErrorPresentation {
     status: number | null;
     summary: string;
+    /** Bounded selected-field preview, not a complete JSON evidence export. */
     rawJson: string;
 }
 
-const OPERATOR_ERROR_BODY_LIMIT = 8_192;
 
 export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
     const response = error && typeof error === 'object' && 'response' in error
@@ -1271,25 +1526,20 @@ export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
     const status = typeof response?.status === 'number' && Number.isInteger(response.status)
         ? response.status
         : null;
-    const summary = nestedOperatorDetail(
+    const summary = bioXpProviderFailure(response?.data) ?? nestedOperatorDetail(
         response?.data && typeof response.data === 'object' && 'detail' in response.data
             ? (response.data as { detail?: unknown }).detail
             : response?.data,
     ) ?? (
         error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
             ? boundedOperatorText(error.message)
-            : String(error ?? 'Unknown error')
+            : typeof error === 'string' ? boundedOperatorText(error) : 'Unknown error'
     );
-    let rawJson: string;
-    try {
-        rawJson = JSON.stringify(response?.data ?? null, null, 2);
-    } catch {
-        rawJson = String(response?.data ?? null);
-    }
+    const rawJson = bioXpErrorBodyPreview(response?.data ?? null);
     return {
         status,
         summary,
-        rawJson: boundedOperatorText(rawJson, OPERATOR_ERROR_BODY_LIMIT),
+        rawJson,
     };
 }
 
@@ -1310,14 +1560,23 @@ export const useBioXpOperatorControlCatalog = (
     connectionGeneration: number,
     enabled = true,
     lifecycleState?: string | null,
-) => useQuery({
-    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null],
-    queryFn: async () => (
-        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog')
+    zTargetSteps?: number,
+) => useQuery<BioXpOperatorControlCatalog>({
+    queryKey: [...operatorCatalogKey, connectionGeneration, enabled, lifecycleState ?? null, zTargetSteps],
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[operatorCatalogKey.length] === connectionGeneration ? previous : undefined,
+    // This catalog also owns live gripper/door availability, not just labels.
+    // An expired cached response triggers a refresh on the robot; read again
+    // rather than leaving every remaining manual control disabled indefinitely.
+    queryFn: async ({ signal }) => (
+        await api.get<BioXpOperatorControlCatalog>('/api/bioxp/operator-controls/catalog', { signal, timeout: 12_000, params: Number.isInteger(zTargetSteps) ? { z_target_steps: zTargetSteps } : undefined })
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: (query) => enabled && connectionGeneration > 0
+        ? query.state.data?.actions.some(action => action.disabled_reason === 'cached_projection_stale') ? 1_000 : 5_000
+        : false,
+    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({
@@ -1348,13 +1607,24 @@ export const useBioXpOperatorControlCatalogV2 = (
     enabled = true,
     authorityVersion: string | null = null,
 ) => useQuery({
-    queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled, authorityVersion],
-    queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
+    // Poll enablement is not an observation identity. Retain same-generation
+    // display data through a transient status error without admitting motion.
+    queryKey: [...operatorV2CatalogKey, connectionGeneration, authorityVersion],
+    // A stalled read must not leave Loading forever. Cancellation applies only
+    // to this read, never to a dispatched robot action. Keep the existing 15 s
+    // authority expiry and single catalog/dashboard owner.
+    queryFn: async ({ signal }) => (await api.get<BioXpOperatorControlCatalogV2>(
+        '/api/bioxp/operator-controls/v2/catalog', { signal, timeout: 12_000 },
+    )).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 10_000 : false,
+    // The robot serves the preceding cached projection while refreshing it.
+    // Poll inside its 15 s expiry instead of consuming 10 s on each side.
+    refetchInterval: (query) => enabled && connectionGeneration > 0
+        ? Date.now() - (query.state.data?.dashboard.generated_at ?? 0) * 1000 >= 10_000 ? 1_000 : 5_000
+        : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1382,6 +1652,9 @@ export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV
             || !/^[A-Z0-9][A-Z0-9_]*$/.test(request.inputs.target)
             || typeof request.inputs.camera_offset !== 'boolean') {
             throw new Error('Deck movement inputs must contain target and camera_offset only');
+        }
+        if (request.inputs.camera_offset && ['LOC_PARK', 'LOC_TC_BARCODE', 'LOC_RC_BARCODE'].includes(request.inputs.target)) {
+            throw new Error('Optional camera offset is only valid for ordinary deck destinations');
         }
     }
     if ((request.action_id === 'oem.x.move_steps' || request.action_id === 'oem.y.move_steps' || request.action_id === 'oem.z.move_steps')
@@ -1425,7 +1698,7 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
@@ -1482,17 +1755,20 @@ export interface BioXpOperatorInterruptReceiptV1 {
 const useInvokeBioXpOperatorActionV2Mutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        // Physical submissions must never inherit a retry/offline replay policy.
+        gcTime: 0,
+        retry: false,
+        networkMode: 'always',
         mutationFn: async ({ request }: { request: BioXpOperatorActionV2Request }) => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;
-            return (
-                await api.post<BioXpOperatorReceiptV2>(
-                    `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`,
-                    body,
-                )
-            ).data;
+            const path = `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`;
+            return (await (actionId === 'oem.deck.move_to_location'
+                ? api.post<BioXpOperatorReceiptV2>(path, body, { timeout: 12000 })
+                : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
-        onSettled: () => {
+        onSettled: (_receipt, _error, variables) => {
+            void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
@@ -1501,8 +1777,104 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
-// Deck and generic axis actions intentionally own separate mutation state.
-export const useInvokeBioXpDeckActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
+export interface BioXpDeckSubmission {
+    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' }>;
+    state: 'submitting' | 'accepted' | 'uncertain' | 'rejected' | 'not_sent';
+    commandId?: string;
+    receipt?: BioXpOperatorReceiptV2;
+    error?: unknown;
+}
+
+// Short HTTP admission custody only. Nothing waits for physical completion,
+// persists across reload, retries a POST, or claims unsent work is robot queued.
+export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
+    const mutation = useInvokeBioXpOperatorActionV2Mutation();
+    const [submissions, setSubmissions] = useState<BioXpDeckSubmission[]>([]);
+    const scope = useRef({ generation, active });
+    scope.current = { generation, active };
+    const sending = useRef<string | null>(null);
+    const pending = submissions.find(item => item.request.expected_connection_generation === generation
+        && (item.state === 'submitting' || item.state === 'uncertain'));
+    const lookup = useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'request', generation, pending?.request.idempotency_key],
+        enabled: active && pending?.state === 'uncertain',
+        retry: false,
+        queryFn: async ({ signal }) => {
+            const receipt = (await api.get<BioXpOperatorReceiptV2>(
+                `/api/bioxp/operator-controls/v2/requests/${encodeURIComponent(pending!.request.idempotency_key)}`,
+                { signal, timeout: 12000, params: { expected_connection_generation: generation } },
+            )).data;
+            if (receipt.action_id !== pending!.request.action_id || !receipt.command_id)
+                throw new Error('Command request identity mismatch; admission remains uncertain');
+            return receipt;
+        },
+        // Including 404: the original admission may still be in flight.
+        refetchInterval: 2000,
+        gcTime: 0,
+    });
+    const update = (key: string, changes: Partial<BioXpDeckSubmission>) =>
+        setSubmissions(items => items.map(item => item.request.idempotency_key === key ? { ...item, ...changes } : item));
+    useEffect(() => {
+        if (!active) return;
+        if (pending?.state === 'uncertain' && lookup.data) {
+            update(pending.request.idempotency_key, { state: 'accepted', receipt: lookup.data, error: undefined });
+        }
+    }, [active, pending, lookup.data]);
+    useEffect(() => {
+        // Never resume unsent requests after connection replacement/disconnect.
+        setSubmissions(items => items.map(item => item.state === 'submitting'
+            && (!active || item.request.expected_connection_generation !== generation)
+            ? { ...item, state: sending.current === item.request.idempotency_key ? 'uncertain' : 'not_sent' } : item));
+    }, [active, generation]);
+    useEffect(() => {
+        if (!active || pending?.state !== 'submitting' || sending.current !== null) return;
+        const request = pending.request;
+        const key = request.idempotency_key;
+        sending.current = key;
+        void mutation.mutateAsync({ request }).then(receipt => {
+            sending.current = null;
+            if (scope.current.generation !== generation || !scope.current.active) {
+                update(key, { state: 'uncertain', commandId: receipt?.command_id });
+                return;
+            }
+            if (receipt == null || receipt.action_id !== request.action_id || !receipt.command_id) {
+                update(key, { state: 'uncertain', error: new Error('Invalid admission receipt') });
+            } else update(key, { state: 'accepted', receipt });
+        }, error => {
+            sending.current = null;
+            if (scope.current.generation !== generation || !scope.current.active) {
+                update(key, { state: 'uncertain', error, commandId: bioXpPostDispatchCommandIdentity(error)?.commandId });
+                return;
+            }
+            const status = (error as { response?: { status?: number } })?.response?.status;
+            // Only explicit client/validation refusals settle non-admission.
+            const rejected = status != null && status >= 400 && status < 500 && status !== 408;
+            update(key, { state: rejected ? 'rejected' : 'uncertain', error,
+                commandId: bioXpPostDispatchCommandIdentity(error)?.commandId });
+        });
+    }, [active, generation, pending, mutation.mutateAsync]);
+    return {
+        ...mutation,
+        submissions,
+        retire: (key: string, receipt: BioXpOperatorReceiptV2) => {
+            if (!receipt.terminal || receipt.status === 'ambiguous' || receipt.completion_class === 'recovery_required') return;
+            setSubmissions(items => {
+                const settled = items.find(item => item.request.idempotency_key === key
+                    && item.state === 'accepted' && item.receipt?.command_id === receipt.command_id);
+                // Exact terminal GET transfers presentation custody to canonical history.
+                return settled ? items.filter(item => item !== settled) : items;
+            });
+        },
+        submit: (request: BioXpOperatorActionV2Request) => {
+            if (!active || request.expected_connection_generation !== generation || request.action_id !== 'oem.deck.move_to_location') return;
+            assertBioXpOperatorActionV2Request(request);
+            // Capture values, not the mutable picker; no admission batch gate.
+            const captured = { ...request, inputs: { ...request.inputs },
+                expected_board_epoch_by_board: { ...request.expected_board_epoch_by_board } };
+            setSubmissions(items => [...items, { request: captured, state: 'submitting' }]);
+        },
+    };
+};
 
 export interface BioXpPostDispatchCommandIdentity {
     commandId: string;
@@ -1534,17 +1906,19 @@ export const bioXpPostDispatchCommandIdentity = (error: unknown): BioXpPostDispa
 export const useInterruptBioXpOperatorActionV1 = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: async ({ actionId, request }: { actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all'; request: BioXpOperatorInterruptV1Request }) => {
+        mutationFn: async ({ actionId, request }: { actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all'; request: BioXpOperatorInterruptV1Request }) => {
             assertCanonicalBoardEpochMap(request.observed_board_epoch_by_board);
             return (
-                await api.post<BioXpOperatorInterruptReceiptV1>(
+                await api.post<BioXpOperatorReceiptV2>(
                     `/api/bioxp/operator-controls/v2/interrupts/${encodeURIComponent(actionId)}`,
                     request,
                 )
             ).data;
         },
-        onSuccess: () => {
+        onSettled: () => {
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
+            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
+            void queryClient.invalidateQueries({ queryKey: operatorHistoryKey });
         },
     });
 };
@@ -1554,23 +1928,51 @@ export const BIOXP_V2_PENDING_COMPLETION_CLASS = 'issued_pending' as const;
 export const bioXpReceiptV2IsNonTerminal = (receipt: BioXpOperatorReceiptV2 | null | undefined): boolean =>
     receipt !== null && receipt !== undefined && receipt.terminal !== true;
 
+/** Validate the additive native decision; it never changes historical outcome. */
+export const bioXpDeckRecoveryResolution = (receipt: BioXpOperatorReceiptDetailV2 | undefined) => {
+    const value = receipt?.deck_movement?.recovery_resolution;
+    if (value == null) return null;
+    if (typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join(',') !== 'command_id,decision_id,semantic_state_revision,transition_sequence'
+        || typeof value.command_id !== 'string' || value.command_id.length < 1 || value.command_id.length > 160
+        || typeof value.decision_id !== 'string' || value.decision_id.length < 1 || value.decision_id.length > 160
+        || !Number.isSafeInteger(value.semantic_state_revision) || value.semantic_state_revision < 1
+        || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
+        || value.command_id !== receipt?.command_id || receipt.terminal !== true
+        || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
+        || !['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
+        throw new Error('Invalid deck recovery resolution');
+    }
+    return value;
+};
+
+export const decodeBioXpReceiptDetailV2 = (receipt: BioXpOperatorReceiptDetailV2, commandId: string) => {
+    if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
+    bioXpDeckRecoveryResolution(receipt);
+    return receipt;
+};
+
 export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
 ) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-    queryFn: async () => (
+    queryFn: async ({ signal }) => decodeBioXpReceiptDetailV2((
         await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
-            { params: { detail: true } },
+            { signal, timeout: 12000, params: { detail: true } },
         )
-    ).data,
+    ).data, commandId ?? ''),
     enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
     refetchInterval: (query) => {
+        // A failed read is not a terminal command outcome. Keep reconciling
+        // this identity at a slower cadence; never resubmit the action.
+        if (query.state.error) return 2_000;
         if (!query.state.data) return 500;
+        if (query.state.data.status === 'ambiguous' || query.state.data.completion_class === 'recovery_required') return 2_000;
         return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
     },
     refetchIntervalInBackground: false,
@@ -1598,19 +2000,29 @@ export const useBioXpOperatorMethodV1 = (
     methodId: string | null,
     connectionGeneration: number,
     enabled = true,
-) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
-    queryFn: async () => (
-        await api.get<BioXpOperatorMethodV1>(
-            `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
-        )
-    ).data,
-    enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
-    refetchIntervalInBackground: false,
-});
+) => {
+    const queryClient = useQueryClient();
+    return useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
+        queryFn: async () => {
+            const method = (await api.get<BioXpOperatorMethodV1>(
+                `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
+            )).data;
+            if (method.method_id !== methodId) throw new Error('XY method identity mismatch; outcome remains unresolved');
+            if (bioXpMethodV1IsTerminal(method)) {
+                void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, connectionGeneration] });
+                void queryClient.invalidateQueries({ queryKey: [...operatorV2DashboardKey, connectionGeneration] });
+                void queryClient.invalidateQueries({ queryKey: [...operatorV2CatalogKey, connectionGeneration] });
+            }
+            return method;
+        },
+        enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
+        gcTime: 0,
+        retry: false,
+        refetchInterval: (query) => query.state.data && bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
+        refetchIntervalInBackground: false,
+    });
+};
 
 export const useBioXpOperatorCommandV2 = (
     commandId: string | null,
@@ -1630,14 +2042,270 @@ export const useBioXpOperatorCommandV2 = (
     refetchInterval: (query) => bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false,
     refetchIntervalInBackground: false,
 });
-export const useReadBioXpPipetteReadback = () => useMutation({
-    mutationFn: async (request: BioXpPipetteReadbackRequest) => (
-        await api.post<BioXpPipetteReadback>(
-            '/api/bioxp/operator-controls/pipettes/readback',
-            request,
-        )
-    ).data,
-});
+type BioXpDirectLiquidKind = 'readback' | 'application_plan';
+type BioXpDirectLiquidRequest = BioXpPipetteReadbackRequest | BioXpPipetteApplicationPlanRequest;
+type BioXpDirectLiquidResult = BioXpPipetteReadback | BioXpPipetteApplicationPlan;
+export type BioXpDirectLiquidSubmission = Readonly<{
+    requestKind: BioXpDirectLiquidKind;
+    idempotencyKey: string;
+    request: Readonly<BioXpDirectLiquidRequest & { home_z_after?: boolean }>;
+    expectedConnectionGeneration: number;
+}>;
+export interface BioXpDirectLiquidLookup {
+    schema: 'bioxp.direct-liquid.lookup.v1';
+    request_kind: BioXpDirectLiquidKind;
+    idempotency_key: string;
+    lookup_state: 'unknown' | 'pending' | 'incomplete' | 'resolved' | 'conflict' | 'unavailable';
+    reason: 'identity_not_found' | 'nonterminal' | 'outcome_unresolved' | 'receipt_incomplete' | 'identity_scope_conflict' | 'store_unavailable' | 'stored_binding_invalid' | null;
+    retry_forbidden: true;
+    live_query_performed: false;
+    record: null | {
+        command_id: string; pipette_operation_id: string | null; canonical_request_sha256: string;
+        operation: string; entrypoint_id: string; caller_class: string; control_class: string; action_id: string;
+        command_status: string; pipette_status: string | null; outcome: string | null; failure_code: string | null;
+        ownership_generation: number; connection_generation: number | null;
+        requested_inputs: BioXpDirectLiquidSubmission['request']; result: BioXpDirectLiquidResult | null;
+    };
+}
+
+const directLiquidNormalize = (kind: BioXpDirectLiquidKind, request: BioXpDirectLiquidRequest) => (
+    kind === 'readback' ? { include_data: false, ...request } : { home_z_after: true, ...request }
+);
+const directLiquidEqual = (a: object, b: object) => {
+    // All expected request maps are flat scalars; never stringify unknown values.
+    const expected = Object.entries(b);
+    return Object.keys(a).length === expected.length && expected.every(([key, value]) =>
+        Object.hasOwn(a, key) && (a as Record<string, unknown>)[key] === value);
+};
+
+// Runtime checks for the existing public direct-liquid DTOs only. Private POST
+// envelope metadata is neither required nor learned as browser authority.
+const directLiquidObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const directLiquidString = (v: unknown, max: number, min = 0): v is string => typeof v === 'string' && v.length >= min && v.length <= max;
+const directLiquidStrings = (v: unknown, max: number, min = 0): v is string[] => Array.isArray(v) && v.length >= min && v.length <= max && v.every(x => typeof x === 'string');
+const directLiquidKeys = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).every(k => keys.includes(k));
+const directLiquidInteger = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+const directLiquidNullableString = (v: unknown, max: number) => v === null || directLiquidString(v, max, 1);
+
+function directLiquidResultValid(v: unknown, s: BioXpDirectLiquidSubmission): v is BioXpDirectLiquidResult {
+    if (!directLiquidObject(v) || !directLiquidString(v.receipt_id, 32, 32) || !/^[0-9a-f]{32}$/.test(v.receipt_id)
+        || typeof v.ok !== 'boolean' || !directLiquidObject(v.receipt_truth)) return false;
+    const truth = v.receipt_truth;
+    const truthBooleans = ['semantic_query_response_verified', 'delivery_verified', 'controller_acknowledged',
+        'completion_verified', 'hardware_precondition_verified', 'hardware_postcondition_verified'];
+    if (!directLiquidKeys(truth, [...truthBooleans, 'physical_effect_verified', 'physical_effect_claim_suppressed'])
+        || !truthBooleans.every(k => typeof truth[k] === 'boolean')
+        || truth.physical_effect_verified !== false || truth.physical_effect_claim_suppressed !== true) return false;
+    if (s.requestKind === 'readback') {
+        return typeof v.semantic_ok === 'boolean' && typeof v.available === 'boolean'
+            && typeof v.include_data === 'boolean' && 'include_data' in s.request && v.include_data === s.request.include_data
+            && v.hardware_truth_level === 'hardware_query' && v.live_query_performed === true
+            && v.truth_source === 'live_hardware_queries' && v.channel_count === 4
+            && v.oem_source_anchor === 'ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData'
+            && ['delivery_verified', 'controller_acknowledged', 'completion_verified', 'hardware_postcondition_verified', 'physical_effect_verified'].every(k => v[k] === false)
+            && Array.isArray(v.channels_constructed_unconditionally) && v.channels_constructed_unconditionally.length === 4
+            && v.channels_constructed_unconditionally.every((id, i) => id === i)
+            && Array.isArray(v.channels) && v.channels.length === 4 && v.channels.every((c, i) => directLiquidObject(c)
+                && directLiquidKeys(c, ['channel', 'semantic_ok', 'firmware', 'status', 'tip', 'pressure', 'data'])
+                && c.channel === i && typeof c.semantic_ok === 'boolean'
+                && directLiquidObject(c.firmware) && directLiquidObject(c.status) && directLiquidObject(c.tip)
+                && (c.pressure === null || directLiquidObject(c.pressure))
+                && (v.include_data ? directLiquidObject(c.data) : c.data === null));
+    }
+    const request = s.request;
+    if (!('operation' in request) || v.operation !== request.operation || v.mode !== 'plan_only'
+        || !['execution_admitted', 'motion_commanded', 'liquid_mutation_commanded', 'controller_acknowledged',
+            'completion_verified', 'physical_effect_verified', 'state_reconciled'].every(k => v[k] === false)
+        || !directLiquidObject(v.requested_inputs) || (v.effective_inputs !== undefined && v.effective_inputs !== null)) return false;
+    const expected = request.operation === 'load_tip'
+        ? { tip_tray: request.tip_tray, tip_well: request.tip_well, tip_type: request.tip_type, tip_location: request.tip_location, home_z_after: request.home_z_after }
+        : request.operation === 'detect_fluid' ? { fluid_class: request.fluid_class }
+            : request.operation === 'plunger_up' ? { direction: 'up' }
+                : request.operation === 'plunger_down' ? { direction: 'down' } : {};
+    if (!directLiquidEqual(v.requested_inputs, expected)
+        || !Array.isArray(v.steps) || v.steps.length < 1 || v.steps.length > 32
+        || !v.steps.every(step => directLiquidObject(step)
+            && directLiquidKeys(step, ['action', 'mutates', 'location_id', 'wire_command', 'current', 'owner'])
+            && directLiquidString(step.action, 240, 1) && typeof step.mutates === 'boolean'
+            && typeof step.owner === 'string' && ['deck', 'gantry', 'z', 'pressure', 'pipette', 'machine_state'].includes(step.owner)
+            && ['location_id', 'current'].every(k => step[k] === undefined || step[k] === null || directLiquidInteger(step[k]))
+            && (step.wire_command === undefined || step.wire_command === null || directLiquidString(step.wire_command, 120)))
+        || !directLiquidObject(v.dependencies) || !directLiquidStrings(v.required_dependencies, 6, 1)
+        || !directLiquidStrings(v.missing_dependencies, 6) || !directLiquidStrings(v.dependency_blockers, 64)
+        || !directLiquidStrings(v.required_completion_evidence, 32) || !directLiquidObject(v.constants)
+        || !directLiquidString(v.oem_source_anchor, 1000, 1)) return false;
+    const required = v.required_dependencies;
+    if (Object.keys(v.dependencies).length < 1 || Object.keys(v.dependencies).length > 6
+        || Object.keys(v.dependencies).some(k => !required.includes(k))
+        || required.some(k => !Object.hasOwn(v.dependencies as object, k))
+        || v.missing_dependencies.some(k => !required.includes(k))
+        || !Object.values(v.dependencies).every(d => directLiquidObject(d)
+            && directLiquidKeys(d, ['bound', 'authority', 'generation', 'state', 'blockers'])
+            && typeof d.bound === 'boolean' && directLiquidInteger(d.generation) && directLiquidObject(d.state)
+            && (d.authority === undefined || d.authority === null || directLiquidString(d.authority, 240))
+            && directLiquidStrings(d.blockers, 32))) return false;
+    const satisfied = v.missing_dependencies.length === 0 && v.dependency_blockers.length === 0;
+    return v.dependencies_satisfied === satisfied && v.ok === satisfied
+        && v.blocker === (satisfied ? 'physical_pipette_execution_not_authorized' : 'application_dependencies_unbound');
+}
+
+function directLiquidLookupValid(v: unknown, status: number, s: BioXpDirectLiquidSubmission): v is BioXpDirectLiquidLookup {
+    if (!directLiquidObject(v) || v.schema !== 'bioxp.direct-liquid.lookup.v1' || v.request_kind !== s.requestKind
+        || v.idempotency_key !== s.idempotencyKey || v.live_query_performed !== false || v.retry_forbidden !== true
+        || !directLiquidKeys(v, ['schema', 'request_kind', 'idempotency_key', 'lookup_state', 'reason', 'retry_forbidden', 'live_query_performed', 'record'])) return false;
+    const reasons: Record<string, unknown[]> = { unknown: ['identity_not_found'], pending: ['nonterminal'],
+        incomplete: ['outcome_unresolved', 'receipt_incomplete'], resolved: [null], conflict: ['identity_scope_conflict'],
+        unavailable: ['store_unavailable', 'stored_binding_invalid'] };
+    if (typeof v.lookup_state !== 'string' || !Object.hasOwn(reasons, v.lookup_state)
+        || !reasons[v.lookup_state].includes(v.reason)
+        || status !== (v.lookup_state === 'conflict' ? 409 : v.lookup_state === 'unavailable' ? 503 : 200)) return false;
+    if (['unknown', 'conflict', 'unavailable'].includes(v.lookup_state)) return v.record === null;
+    const r = v.record;
+    if (!directLiquidObject(r) || !directLiquidKeys(r, ['command_id', 'pipette_operation_id', 'canonical_request_sha256',
+        'operation', 'entrypoint_id', 'caller_class', 'control_class', 'action_id', 'command_status', 'pipette_status',
+        'outcome', 'failure_code', 'ownership_generation', 'connection_generation', 'requested_inputs', 'result'])
+        || !['command_id', 'operation', 'entrypoint_id', 'caller_class', 'control_class'].every(k => directLiquidString(r[k], 160, 1))
+        || !directLiquidString(r.action_id, 240, 1) || !directLiquidString(r.command_status, 120, 1)
+        || !directLiquidNullableString(r.pipette_operation_id, 160) || !directLiquidNullableString(r.pipette_status, 120)
+        || !directLiquidNullableString(r.outcome, 120) || !directLiquidNullableString(r.failure_code, 240)
+        || !directLiquidString(r.canonical_request_sha256, 64, 64) || !/^[0-9a-f]{64}$/.test(r.canonical_request_sha256)
+        || !directLiquidInteger(r.ownership_generation) || r.ownership_generation < 0
+        || !(r.connection_generation === null || (directLiquidInteger(r.connection_generation) && r.connection_generation >= 0))
+        || !directLiquidObject(r.requested_inputs) || !directLiquidEqual(r.requested_inputs, s.request)
+        || (r.result !== null && !directLiquidResultValid(r.result, s))) return false;
+    const plan = s.requestKind === 'application_plan';
+    const operation = plan && 'operation' in s.request ? 'application_plan:' + s.request.operation : 'live_readback';
+    if (r.operation !== operation || r.action_id !== 'pipette.' + operation
+        || r.entrypoint_id !== (plan ? 'legacy.record' : 'direct.liquid.readback')
+        || r.caller_class !== (plan ? 'legacy' : 'direct_api') || r.control_class !== (plan ? 'pipette_state_command' : 'hardware_query')
+        || (r.pipette_operation_id === null) !== (r.pipette_status === null)
+        || (v.lookup_state !== 'resolved' && r.result !== null)) return false;
+    const pending = ['reserved', 'queued', 'admitted', 'dispatched', 'acknowledged', 'executing', 'running', 'blocked'];
+    const terminal = ['completed', 'observed', 'failed', 'rejected', 'cleared', 'cancelled'];
+    if (v.lookup_state === 'pending' && (!pending.includes(r.command_status) || !pending.includes(String(r.pipette_status)))) return false;
+    if (v.lookup_state === 'resolved' && (r.outcome === null || !terminal.includes(r.command_status)
+        || r.command_status !== r.pipette_status || (['completed', 'observed'].includes(r.command_status) && r.result === null))) return false;
+    return !(v.lookup_state === 'incomplete' && v.reason === 'receipt_incomplete' && r.pipette_operation_id !== null
+        && !(terminal.includes(r.command_status) && r.command_status === r.pipette_status));
+}
+
+// Mounted owner only: no reload persistence or reconnect reassociation.
+function useDirectLiquid<Request extends BioXpDirectLiquidRequest, Result extends BioXpDirectLiquidResult>(
+    kind: BioXpDirectLiquidKind, path: string, generation: number, connected: boolean,
+) {
+    const [submission, setSubmission] = useState<BioXpDirectLiquidSubmission | null>(null);
+    const [lookup, setLookup] = useState<BioXpDirectLiquidLookup | null>(null);
+    const [data, setData] = useState<Result | undefined>();
+    const [recover, setRecover] = useState(false);
+    const [identityConflict, setIdentityConflict] = useState(false);
+    const detachedOwners = useRef(new WeakSet<BioXpDirectLiquidSubmission>());
+    const retainedKeys = useRef(new Set<string>());
+    const [retainedHistory, setRetainedHistory] = useState<BioXpDirectLiquidSubmission[]>([]);
+    const owner = useRef(submission);
+    const context = useRef({ generation, connected });
+    context.current = { generation, connected };
+    const sent = useRef<BioXpDirectLiquidSubmission | null>(null);
+    const learned = useRef<{ command?: string; pipette?: string; digest?: string; receipt?: string }>({});
+    const mounted = useRef(true);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    // A disconnect is terminal for this owner, including same-generation reconnect.
+    if (submission && (!connected || generation !== submission.expectedConnectionGeneration)) detachedOwners.current.add(submission);
+    const detached = Boolean(submission && detachedOwners.current.has(submission));
+    const owns = (s: BioXpDirectLiquidSubmission) => mounted.current && owner.current === s
+        && context.current.connected && context.current.generation === s.expectedConnectionGeneration && !detachedOwners.current.has(s);
+    const mutation = useMutation({
+        mutationFn: async (s: BioXpDirectLiquidSubmission) => {
+            // BMS POST union stays unchanged; home_z_after is a robot default for non-load plans.
+            const body = { ...s.request };
+            if ('operation' in body && body.operation !== 'load_tip') delete body.home_z_after;
+            const result = (await api.post<unknown>(path, body, {
+                headers: { 'Idempotency-Key': s.idempotencyKey },
+                params: { expected_connection_generation: s.expectedConnectionGeneration },
+            })).data;
+            if (!directLiquidResultValid(result, s)) throw new Error('Invalid or mismatched direct-liquid result; reconcile stored evidence only');
+            return result as Result;
+        },
+        retry: false,
+        onSuccess: (result, s) => {
+            if (!owns(s)) return;
+            if (!result.receipt_id || (learned.current.receipt && learned.current.receipt !== result.receipt_id)) {
+                setIdentityConflict(true); setData(undefined); setLookup(null); setRecover(true); return;
+            }
+            learned.current.receipt = result.receipt_id;
+            setData(result);
+        },
+        onError: (_error, s) => { if (owns(s)) setRecover(true); },
+    });
+    // Publish the immutable owner in a committed render before transport starts.
+    useEffect(() => {
+        if (submission && sent.current !== submission && !detached) {
+            sent.current = submission;
+            mutation.mutate(submission);
+        }
+    }, [submission, detached]);
+    const query = useQuery({
+        queryKey: ['bioxp', 'direct-liquid-request', submission?.expectedConnectionGeneration, kind, submission?.idempotencyKey],
+        queryFn: async () => {
+            const s = submission!;
+            const response = await api.get<unknown>('/api/bioxp/operator-controls/pipettes/requests', {
+                params: { request_kind: s.requestKind, expected_connection_generation: s.expectedConnectionGeneration },
+                headers: { 'Idempotency-Key': s.idempotencyKey },
+                validateStatus: (status) => status === 200 || status === 409 || status === 503,
+            });
+            const value = response.data;
+            if (!owns(s)) return null;
+            if (!directLiquidLookupValid(value, response.status, s)) {
+                setIdentityConflict(true); setData(undefined); setLookup(null); return null;
+            }
+            const r = value.record;
+            const prior = learned.current;
+            const mismatch = value.schema !== 'bioxp.direct-liquid.lookup.v1' || value.request_kind !== s.requestKind
+                || value.idempotency_key !== s.idempotencyKey || value.live_query_performed !== false || value.retry_forbidden !== true
+                || (r && (!directLiquidEqual(r.requested_inputs, s.request)
+                    || (r.outcome === null ? !['pending', 'incomplete'].includes(value.lookup_state)
+                        : typeof r.outcome !== 'string' || r.outcome.length < 1 || r.outcome.length > 120)
+                    || (prior.command && prior.command !== r.command_id)
+                    || (prior.pipette && prior.pipette !== r.pipette_operation_id)
+                    || (prior.digest && prior.digest !== r.canonical_request_sha256)
+                    || (prior.receipt && r.result && prior.receipt !== r.result.receipt_id)));
+            if (mismatch) { setIdentityConflict(true); setData(undefined); setLookup(null); return null; }
+            if (r) learned.current = { command: r.command_id, pipette: r.pipette_operation_id ?? prior.pipette,
+                digest: r.canonical_request_sha256, receipt: r.result?.receipt_id ?? prior.receipt };
+            setLookup(value);
+            setData(value.lookup_state === 'resolved' && r?.result ? r.result as Result : undefined);
+            return value;
+        },
+        enabled: Boolean(submission) && recover && !detached && !identityConflict,
+        retry: false, gcTime: 0, refetchOnWindowFocus: false, refetchOnReconnect: false,
+        refetchInterval: (q) => !detached && !identityConflict && q.state.data?.lookup_state === 'pending' ? 500 : false,
+        refetchIntervalInBackground: false,
+    });
+    const start = (input: Request & { idempotencyKey?: string }, explicitlyNew = false) => {
+        if (generation < 1 || !connected) return;
+        if (owner.current && !explicitlyNew) return;
+        const previousOwner = owner.current;
+        const { idempotencyKey, ...body } = input;
+        const key = idempotencyKey ?? crypto.randomUUID();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$/.test(key)) throw new Error('Invalid direct-liquid identity');
+        if (retainedKeys.current.has(key)) throw new Error('Direct-liquid identity already retained');
+        const request = Object.freeze(JSON.parse(JSON.stringify(directLiquidNormalize(kind, body as Request)))) as BioXpDirectLiquidSubmission['request'];
+        const next = Object.freeze({ requestKind: kind, idempotencyKey: key, request, expectedConnectionGeneration: generation });
+        retainedKeys.current.add(key);
+        if (previousOwner) setRetainedHistory((previous) => [...previous, previousOwner]);
+        owner.current = next; learned.current = {}; setLookup(null); setData(undefined);
+        setRecover(false); setIdentityConflict(false); mutation.reset(); setSubmission(next);
+    };
+    return { isPending: mutation.isPending, error: mutation.error, data: detached || identityConflict ? undefined : data,
+        mutate: (input: Request & { idempotencyKey?: string }) => start(input),
+        newOperation: (input: Request & { idempotencyKey?: string }) => start(input, true),
+        submission, retainedHistory, lookup, detached, identityConflict,
+        recoveryError: query.error,
+        refreshRecovery: async () => { if (submission && !detached && !identityConflict) await query.refetch({ cancelRefetch: false }); },
+    };
+}
+
+export const useReadBioXpPipetteReadback = (generation = 0, connected = true) =>
+    useDirectLiquid<BioXpPipetteReadbackRequest, BioXpPipetteReadback>('readback', '/api/bioxp/operator-controls/pipettes/readback', generation, connected);
 
 export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, enabled = true) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'pipettes', 'application-status', connectionGeneration, enabled],
@@ -1649,14 +2317,8 @@ export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, e
     retry: false,
 });
 
-export const usePlanBioXpPipetteApplication = () => useMutation({
-    mutationFn: async (request: BioXpPipetteApplicationPlanRequest) => (
-        await api.post<BioXpPipetteApplicationPlan>(
-            '/api/bioxp/operator-controls/pipettes/application/plan',
-            request,
-        )
-    ).data,
-});
+export const usePlanBioXpPipetteApplication = (generation = 0, connected = true) =>
+    useDirectLiquid<BioXpPipetteApplicationPlanRequest, BioXpPipetteApplicationPlan>('application_plan', '/api/bioxp/operator-controls/pipettes/application/plan', generation, connected);
 
 export const useBioXpOperatorActionAdmission = (
     actionId: string | null,
@@ -1695,14 +2357,19 @@ export const useBioXpOperatorActionHistory = (
     connectionGeneration: number,
     enabled = true,
     limit = 100,
+    cursor: string | null = null,
 ) => useQuery({
-    queryKey: [...operatorHistoryKey, connectionGeneration, enabled, limit],
-    queryFn: async () => (
-        await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`)
+    queryKey: [...operatorHistoryKey, connectionGeneration, limit, cursor],
+    queryFn: async ({ signal }) => (
+        await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`, {
+            signal, params: cursor === null ? undefined : { cursor },
+        })
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: (query) => query.state.data?.items.some(bioXpReceiptV2IsNonTerminal) ? 1000 : false,
+    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorReportSummary = (
@@ -1886,6 +2553,16 @@ export const useBioXpOperatorReportExports = (
     retry: false,
 });
 
+export async function getBioXpCameraStatus(connectionGeneration: number) {
+    const startedAt = performance.now();
+    const data = (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
+        params: { expected_generation: connectionGeneration },
+    })).data;
+    const receivedAtMonotonicMs = performance.now();
+    return { ...data, requestConnectionGeneration: connectionGeneration,
+        requestElapsedMs: Math.max(0, receivedAtMonotonicMs - startedAt), receivedAtMonotonicMs };
+}
+
 export const useBioXpCameraStatus = (
     connectionGeneration: number | null,
     enabled = true,
@@ -1893,12 +2570,11 @@ export const useBioXpCameraStatus = (
     queryKey: ['bioxp', 'camera', 'status', connectionGeneration],
     queryFn: async () => {
         if (connectionGeneration === null) throw new Error('An active BioXP connection generation is required');
-        return (await api.get<BioXpCameraStatus>(BIOXP_CAMERA_ENDPOINTS.status, {
-            params: { expected_generation: connectionGeneration },
-        })).data;
+        return getBioXpCameraStatus(connectionGeneration);
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
+    refetchInterval: enabled ? 2_000 : false,
 });
 
 export const useBioXpCameraStreamState = (
@@ -1914,6 +2590,7 @@ export const useBioXpCameraStreamState = (
     },
     enabled: enabled && connectionGeneration !== null,
     retry: false,
+    refetchInterval: enabled ? 2_000 : false,
 });
 
 export async function startBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {
@@ -1928,8 +2605,9 @@ export async function stopBioXpCameraStream(connectionGeneration: number): Promi
     })).data;
 }
 
-export function buildBioXpCameraMjpegUrl(connectionGeneration: number): string {
-    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}`;
+export function buildBioXpCameraMjpegUrl(connectionGeneration: number, streamId?: string | null): string {
+    const owner = streamId ? `&stream_id=${encodeURIComponent(streamId)}` : '';
+    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`;
 }
 
 export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {
@@ -2041,29 +2719,62 @@ export const useCompileBioXpProtocol = () => useMutation({
     ).data,
 });
 
-export const useSubmitBioXpProtocol = () => useRefreshMutation(
-    async ({ protocol, idempotencyKey }: {
-        protocol: BioXpProtocol;
-        idempotencyKey: string;
-    }) => (
-        await api.post<BioXpProtocolSubmissionResponse>('/api/bioxp/protocols/submit', {
-            protocol,
-            idempotency_key: idempotencyKey,
-        })
+const workflowJobsKey = ['bioxp', 'protocols', 'jobs'] as const;
+export const useBioXpWorkflowJobs = (generation: number, enabled: boolean) => useQuery({
+    queryKey: [...workflowJobsKey, generation],
+    queryFn: async () => (await api.get<{ rows: BioXpWorkflowJob[] }>('/api/bioxp/protocols/jobs', {
+        params: { expected_connection_generation: generation },
+    })).data.rows,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchInterval: enabled ? 2_000 : false,
+});
+export const useBioXpWorkflowJob = (jobId: string | null, generation: number, enabled: boolean) => useQuery({
+    queryKey: [...workflowJobsKey, generation, jobId],
+    queryFn: async () => (await api.get<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId!)}`, {
+        params: { expected_connection_generation: generation },
+    })).data,
+    enabled: enabled && generation > 0 && jobId !== null,
+    retry: false,
+    refetchInterval: enabled ? 2_000 : false,
+});
+export const useSubmitBioXpProtocol = () => useMutation({
+    mutationFn: async (request: BioXpWorkflowSubmission) => (
+        await api.post<BioXpWorkflowJob>('/api/bioxp/protocols/submit', request)
     ).data,
-);
+    retry: false,
+});
+export const useControlBioXpWorkflow = () => useMutation({
+    mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowControlRequest }) => (
+        await api.post<BioXpWorkflowControlResponse>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/control`, request)
+    ).data,
+    retry: false,
+});
+export const useReviewBioXpWorkflow = () => useMutation({
+    mutationFn: async ({ jobId, request }: { jobId: string; request: BioXpWorkflowReviewRequest }) => (
+        await api.post<BioXpWorkflowJob>(`/api/bioxp/protocols/jobs/${encodeURIComponent(jobId)}/review`, request)
+    ).data,
+    retry: false,
+});
 
 
-export const useInvokeBioXpOperatorAction = () => {
+const refreshBioXpHistoryCaches = (queryClient: QueryClient, generation: number) => {
+    // The robot alone creates history rows and cursors. Never splice a native
+    // mutation receipt into a paginated history page or invent its ordering.
+    void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, generation] });
+};
+
+export const useInvokeBioXpOperatorAction = (lane: 'normal' | 'stop' = 'normal') => {
     const queryClient = useQueryClient();
     return useMutation({
+        mutationKey: ['bioxp', 'operator-action', lane],
         mutationFn: async ({ actionId, connectionGeneration, ownershipGeneration, inputs }: {
             actionId: string;
             connectionGeneration: number;
             ownershipGeneration: number;
             inputs: Record<string, unknown>;
         }) => (
-            await api.post<BioXpOperatorActionReceipt>(
+            await api.post<BioXpOperatorLiveActionReceipt>(
                 `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
                 {
                     ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
@@ -2075,21 +2786,14 @@ export const useInvokeBioXpOperatorAction = () => {
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
-        onSuccess: (receipt, variables) => {
-            queryClient.setQueryData<BioXpOperatorActionHistory>(
-                [...operatorHistoryKey, variables.connectionGeneration, true],
-                (current) => ({
-                    schema_version: 'bioxp.operator_action_history.v1',
-                    receipts: [
-                        receipt,
-                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
-                    ].slice(0, 100),
-                }),
-            );
+        onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
+        },
+        onSuccess: (_receipt, variables) => {
+            refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
         },
     });
@@ -2105,7 +2809,7 @@ export const useAssessBioXpOperatorAction = () => {
             verdict: 'pass' | 'fail';
             note: string;
         }) => (
-            await api.post<BioXpOperatorActionReceipt>(
+            await api.post<BioXpOperatorLiveActionReceipt>(
                 `/api/bioxp/operator-controls/receipts/${encodeURIComponent(commandId)}/assessment`,
                 {
                     ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
@@ -2118,20 +2822,10 @@ export const useAssessBioXpOperatorAction = () => {
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
-        onSuccess: (receipt, variables) => {
-            queryClient.setQueryData<BioXpOperatorActionHistory>(
-                [...operatorHistoryKey, variables.connectionGeneration, true],
-                (current) => ({
-                    schema_version: 'bioxp.operator_action_history.v1',
-                    receipts: [
-                        receipt,
-                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
-                    ].slice(0, 100),
-                }),
-            );
+        onSuccess: (_receipt, variables) => {
+            refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
         },
     });

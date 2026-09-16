@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, describe, expect, it } from 'vitest';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { InfraLiveTelemetry } from '../../src/components/InfraLiveTelemetry';
@@ -9,14 +9,17 @@ import { RemoteGpuTelemetry } from '../../src/components/RemoteGpuTelemetry';
 import {
     api,
     EXECUTION_TARGET_STORAGE_KEY,
-    VAST_DISCOVERY_QUERY_KEY,
     submitBoltzApiJob,
     submitOntBarcodeBatch,
     submitOntNgsJob,
     submitPooledReferenceAssignment,
     submitShapeBlueprint,
+    submitJob,
+    type ExecutionPlacement,
+    type ShapeLaunchRequest,
 } from '../../src/lib/api';
-import { submitCmRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
+import { CANONICAL_CM_ANALYSIS_POLICY, submitCmRequest, type CmSubmitRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
+import { setDraftExecutionPolicy } from '../../src/lib/executionPolicy';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const defaultApiAdapter = api.defaults.adapter;
@@ -55,19 +58,370 @@ const discoveredTarget = {
     started_at: '2026-08-31T12:00:00Z',
 };
 
+const persistedDiscoveredTarget = {
+    ...readyTarget,
+    id: 'vast:456',
+    provider_instance_id: '456',
+    name: 'Remote A6000',
+    state: 'discovered' as const,
+    active: false,
+    host: '203.0.113.11',
+    capabilities: { gpu_count: 1, gpu_name: 'RTX A6000', gpu_vram_mb: 49140 },
+    pricing: { hourly_rate: 0.35, provider_started_at: '2026-08-31T12:00:00Z' },
+    host_key_sha256: null,
+    activated_at: null,
+};
+
+const discoveredSystem = {
+    gpus: [],
+    gpu_error: null,
+    cpu: {
+        name: 'Test CPU',
+        cores_physical: 4,
+        cores_logical: 8,
+        utilization: 10,
+        per_core_utilization: [],
+        frequency_current_mhz: 3000,
+        frequency_max_mhz: 4000,
+        temperature: 40,
+        power_watts: 35,
+    },
+    ram: {
+        total_gb: 32,
+        used_gb: 8,
+        available_gb: 24,
+        utilization: 25,
+        swap_total_gb: 0,
+        swap_used_gb: 0,
+        swap_percent: 0,
+    },
+    timestamp: '2026-09-01T12:00:00Z',
+    cpu_history: [],
+    ram_history: [],
+};
+
+const hardwareDiscovery = {
+    success: true,
+    message: '3 GPUs discovered',
+    gpu_count: 3,
+    gpu_error: null,
+    cpu_power_telemetry: {
+        source: 'rapl',
+        available: true,
+        status: 'ok',
+        message: 'available',
+        discovered_sources: 1,
+        readable_sources: 1,
+    },
+    power_control: {
+        limits: {},
+        eco_mode: false,
+        power_percentage: 100,
+        total_current_watts: 0,
+        total_max_watts: 0,
+        hardware_limits: {},
+    },
+    fan_control: {
+        supported: false,
+        message: 'unavailable',
+        backend: 'none',
+        available_modes: [],
+        gpus: {},
+    },
+    timestamp: '2026-09-01T12:00:00Z',
+};
+
+beforeEach(() => {
+    api.defaults.adapter = async () => { throw new Error('offline test dependency'); };
+});
+
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    setDraftExecutionPolicy(undefined);
+    window.history.replaceState({}, '', '/');
     api.defaults.adapter = defaultApiAdapter;
+    vi.restoreAllMocks();
 });
 
 describe('remote execution operator surfaces', () => {
-    it('discovers Vast from the Dashboard beside local hardware discovery and shares the inventory', async () => {
+    it('keeps verified attachment manageable after runtime failure without selecting science', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', active: false,
+            setup: null as null | { phase: string; message: string }, last_error: null as string | null };
+        const posts: string[] = [];
+        const blocker = 'Mount namespaces unavailable; use a compatible VM';
+        api.defaults.adapter = async config => {
+            if (config.url === '/api/execution-targets') return response([target]);
+            if (config.url === '/api/execution-targets/activate') {
+                if (posts.length) expect(JSON.parse(config.data)).toEqual({ provider: 'vast', provider_instance_id: '456', username: 'worker', remote_root: '/worker-root' });
+                posts.push('attach');
+                target = { ...target, state: 'probing', setup: { phase: 'checking', message: 'Authenticating' } };
+                return { ...response(target), status: 202 };
+            }
+            if (config.url === '/api/execution-targets/vast%3A456/deactivate') {
+                posts.push('detach'); target = { ...target, active: false, state: 'inactive' };
+                return response(target);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div'); document.body.append(container);
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent === label)!;
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /><ExecutionTargetPicker /></QueryClientProvider>));
+            await flush();
+            await act(async () => button('Attach worker').click()); await flush();
+            expect(posts).toEqual(['attach']);
+            for (let attempt = 0; attempt < 2; attempt++) {
+                target = { ...target, state: 'unavailable', active: true, username: 'worker', remote_root: '/worker-root',
+                    setup: { phase: 'failed', message: blocker }, last_error: blocker };
+                await flush(5_020);
+                expect(container.textContent).toContain('Attached — runtime not ready');
+                expect(container.textContent).toContain(blocker);
+                expect(button('Retry setup').disabled).toBe(false);
+                expect(button('Detach').disabled).toBe(false);
+                const actions = button('Detach').closest('[role="group"][aria-label="Worker actions"]')!;
+                expect(actions).not.toBeNull();
+                expect(button('Retry setup').parentElement).toBe(actions);
+                expect([...actions.querySelectorAll('button')].map(control => control.textContent)).toEqual(['Detach', 'Retry setup']);
+                const card = actions.parentElement!;
+                expect(card.children).toHaveLength(2);
+                expect(card.firstElementChild?.textContent).toContain(blocker);
+                expect(card.firstElementChild?.classList.contains('min-w-0')).toBe(true);
+                expect(card.firstElementChild?.classList.contains('flex-1')).toBe(true);
+                expect(actions.classList.contains('shrink-0')).toBe(true);
+                const placement = [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Vast · Remote A6000'))!;
+                expect(placement.disabled).toBe(true);
+                await act(async () => placement.click());
+                expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+                expect(container.textContent).not.toContain('Remote analytics available');
+                if (attempt === 0) {
+                    await act(async () => button('Retry setup').click()); await flush();
+                    expect(posts).toEqual(['attach', 'attach']);
+                }
+            }
+            await act(async () => button('Detach').click()); await flush();
+            expect(posts).toEqual(['attach', 'attach', 'detach']);
+            expect(container.textContent).not.toContain('Attached — runtime not ready');
+            expect(button('Attach worker').disabled).toBe(false);
+        } finally {
+            await act(async () => root.unmount()); client.clear(); vi.useRealTimers();
+        }
+    });
+
+    it('polls accepted Attach setup through installing, transferring and verified ready', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', active: false, setup: null as null | { phase: string; message: string } };
+        let accept!: () => void;
+        let reads = 0;
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') { reads++; return response([target]); }
+            if (config.url === '/api/execution-targets/activate') {
+                expect(JSON.parse(config.data)).toEqual({ provider: 'vast', provider_instance_id: '456' });
+                await new Promise<void>((resolve) => { accept = resolve; });
+                target = { ...target, state: 'probing', setup: { phase: 'checking', message: 'Checking worker prerequisites' } };
+                return { ...response(target), status: 202, statusText: 'Accepted' };
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        const attach = () => [...container.querySelectorAll('button')].find((button) => /Attach worker|Attaching/.test(button.textContent ?? ''));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /><ExecutionTargetPicker /></QueryClientProvider>));
+            await flush();
+            await act(async () => attach()!.click());
+            await flush();
+            expect(attach()?.disabled).toBe(true);
+            await act(async () => accept());
+            await flush();
+            expect(container.textContent).toContain('Checking worker prerequisites');
+            expect(attach()?.disabled).toBe(true);
+            expect(container.textContent).not.toContain('Remote analytics available');
+            await act(async () => focusManager.setFocused(false));
+            const hiddenReads = reads;
+            target = { ...target, setup: { phase: 'installing', message: 'Installing Apptainer' } };
+            await flush(10_020);
+            expect(reads).toBe(hiddenReads);
+            expect(container.textContent).not.toContain('Installing Apptainer');
+            await act(async () => focusManager.setFocused(true));
+            await flush();
+            expect(reads).toBeGreaterThan(hiddenReads);
+            expect(container.textContent).toContain('Installing Apptainer');
+            for (const [phase, message] of [['installing', 'Installing Apptainer'], ['transferring', 'Transferring runtime bundle'], ['verifying', 'Verifying worker runtime']]) {
+                const previousReads = reads;
+                target = { ...target, setup: { phase, message } };
+                await flush(5_020);
+                expect(reads).toBeGreaterThan(previousReads);
+                expect(container.textContent).toContain(phase);
+                expect(container.textContent).toContain(message);
+                expect(attach()?.disabled).toBe(true);
+                expect(container.textContent).not.toContain('Vast · Remote A6000');
+                expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+            }
+            target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' } };
+            await flush(5_020);
+            expect(container.textContent).toContain('Remote analytics available');
+            expect(container.textContent).toContain('Detach');
+            expect(container.textContent).toContain('Vast · Remote A6000');
+            expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            focusManager.setFocused(undefined);
+            vi.useRealTimers();
+        }
+    });
+
+    it('restores probing setup on a fresh mount and polls the persisted failure reason', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'probing', setup: { phase: 'transferring', message: 'Copying runtime bundle' } };
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') return response([target]);
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+            expect(container.textContent).toContain('Copying runtime bundle');
+            expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Attaching…')?.disabled).toBe(true);
+            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Runtime verification failed: Apptainer unavailable' } };
+            await act(async () => { await vi.advanceTimersByTimeAsync(5_020); });
+            expect(container.textContent).toContain('Runtime verification failed: Apptainer unavailable');
+            expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')?.disabled).toBe(false);
+            expect(container.textContent).not.toContain('Remote analytics available');
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            focusManager.setFocused(undefined);
+            vi.useRealTimers();
+        }
+    });
+
+    it('clears a rejected Attach error when that target becomes ready but preserves persisted setup failure', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', setup: null as null | { phase: string; message: string }, last_error: null as string | null };
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') return response([target, readyTarget]);
+            if (config.url === '/api/execution-targets/activate') throw new Error('Attach request timed out');
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await flush();
+            await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click());
+            await flush();
+            expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
+            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
+            await flush(5_020);
+            expect(container.textContent).toContain('Setup · failed: Worker verification failed');
+            expect(container.textContent?.split('Worker verification failed')).toHaveLength(2);
+            expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
+            target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' }, last_error: null };
+            await flush(5_020);
+            expect(container.textContent).toContain('Worker runtime verified');
+            expect(container.textContent).not.toContain('Attach request timed out');
+            expect(container.querySelector('[role="alert"]')).toBeNull();
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        ['SSH host key changed', 'SSH host key changed'],
+        [{ message: 'structured detail' }, 'Request failed with status code 409'],
+        [[{ msg: 'validation error' }], 'Request failed with status code 409'],
+    ])('shows safe API Attach errors and refetches targets on failure (%j)', async (detail, expected) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([persistedDiscoveredTarget]));
+        let reads = 0;
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') { reads++; return response([persistedDiscoveredTarget]); }
+            if (config.url === '/api/execution-targets/activate') throw Object.assign(new Error('Request failed with status code 409'), { response: { data: { detail }, status: 409 } });
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await act(async () => {
+                [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click();
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            });
+            expect(container.textContent).toContain(expected);
+            expect(container.textContent).not.toContain('[object Object]');
+            expect(reads).toBeGreaterThan(0);
+            expect(container.textContent).not.toContain('Local execution remains authoritative');
+            expect(container.querySelector('[role="alert"]')?.textContent).toBe(`Attach failed: ${expected}`);
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+        }
+    });
+    it.each([true, false])('shows current empty or unknown inventory and clears saved placement on Dashboard (available=%s)', async (available) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') {
+                if (!available) throw new Error('Inventory unknown');
+                return response([]);
+            }
+            if (config.url === '/api/execution-targets/providers/vast/refresh') {
+                return response({ provider: 'vast', available, credential_configured: available, message: 'fixture inventory', instances: [] });
+            }
+            throw new Error('offline dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        const button = [...container.querySelectorAll('button')].find((node) => node.textContent === 'Discover running Vast');
+        await act(async () => {
+            button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(container.textContent).not.toContain('Remote 4090');
+        expect(container.textContent).toContain(available ? 'No owned Vast instances' : 'Vast inventory unavailable');
+        if (!available) {
+            expect(container.textContent).not.toContain('Vast discovery complete');
+            const receipt = [...container.querySelectorAll('[role="status"]')].find((node) => node.textContent?.includes('Vast inventory unavailable'));
+            expect(receipt?.className).toContain('amber');
+            expect(receipt?.className).not.toContain('emerald');
+        }
+        await act(async () => root.unmount());
+        client.clear();
+    });
+    it('gives both compact Dashboard discovery actions visible success receipts', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const requests: string[] = [];
+        let targets = [] as typeof persistedDiscoveredTarget[];
         api.defaults.adapter = async (config) => {
             requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/gpu/hardware/discover') return response(hardwareDiscovery);
+            if (config.url === '/api/gpu/status') return response(discoveredSystem);
+            if (config.url === '/api/execution-targets') return response(targets);
             if (config.url === '/api/execution-targets/providers/vast/refresh') {
+                targets = [persistedDiscoveredTarget];
                 return response({
                     provider: 'vast',
                     available: true,
@@ -92,6 +446,16 @@ describe('remote execution operator surfaces', () => {
         expect(hardwareButton).toBeTruthy();
         expect(vastButton).toBeTruthy();
         expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
+        expect(hardwareButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
+        expect(vastButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
+
+        await act(async () => {
+            hardwareButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(requests).toContain('POST /api/gpu/hardware/discover');
+        expect(container.textContent).toContain('Hardware discovery complete: 3 GPUs discovered');
 
         await act(async () => {
             vastButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -99,28 +463,59 @@ describe('remote execution operator surfaces', () => {
         });
 
         expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
-        expect(client.getQueryData<{ data: unknown }>(VAST_DISCOVERY_QUERY_KEY)?.data).toEqual({
-            provider: 'vast',
-            available: true,
-            credential_configured: true,
-            message: '1 running instance found',
-            instances: [discoveredTarget],
-        });
+        expect(container.textContent).toContain('Vast discovery complete: 1 running instance found');
+        expect(container.textContent).toContain('Remote A6000');
+        expect(container.textContent).toContain('Discovered');
+        expect(container.textContent).toContain('Attach worker');
 
         await act(async () => root.unmount());
         client.clear();
     });
 
-    it('uses Dashboard-discovered Vast inventory for attachment without duplicating discovery in Job Launcher', async () => {
+    it('restores a persisted discovered target and attaches it from Dashboard without launching a workflow', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-        client.setQueryData(['execution-targets'], response([]));
-        client.setQueryData(VAST_DISCOVERY_QUERY_KEY, response({
-            provider: 'vast',
-            available: true,
-            credential_configured: true,
-            message: '1 running instance found',
-            instances: [discoveredTarget],
-        }));
+        client.setQueryData(['execution-targets'], response([persistedDiscoveredTarget]));
+        const requests: string[] = [];
+        let targets = [persistedDiscoveredTarget];
+        api.defaults.adapter = async (config) => {
+            requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/execution-targets') return response(targets);
+            if (config.url === '/api/execution-targets/activate') {
+                targets = [readyTarget];
+                return response(readyTarget);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+
+        expect(container.textContent).toContain('Remote A6000');
+        expect(container.textContent).toContain('Attach worker');
+        const attachButton = [...container.querySelectorAll('button')]
+            .find((button) => button.textContent?.trim() === 'Attach worker');
+        await act(async () => {
+            attachButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(requests).toContain('POST /api/execution-targets/activate');
+        expect(container.textContent).toContain('Ready');
+        expect(container.textContent).toContain('Remote analytics available');
+        expect(container.textContent).toContain('Detach');
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
+    it('keeps lifecycle controls on Dashboard and leaves Job Launcher for placement only', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([readyTarget]));
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
@@ -130,27 +525,71 @@ describe('remote execution operator surfaces', () => {
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('Remote A6000');
-        expect(container.textContent).toContain('Attach worker');
+        expect(container.textContent).toContain('Local');
+        expect(container.textContent).toContain('Vast · Remote 4090');
         expect(container.textContent).not.toContain('Discover running Vast');
+        expect(container.textContent).not.toContain('Attach worker');
+        expect(container.textContent).not.toContain('Detach');
 
         await act(async () => root.unmount());
         client.clear();
     });
 
-    it('fails closed for Job Submission launchers that cannot execute on Vast', async () => {
+    it('fails closed for genuinely local-only launchers and controller GPU pins on a worker', () => {
         window.history.replaceState({}, '', '/submit');
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
+        const post = vi.spyOn(api, 'post');
 
-        expect(() => submitShapeBlueprint({} as never)).toThrow(/Choose Local/);
         expect(() => submitBoltzApiJob({} as never)).toThrow(/Choose Local/);
-        expect(() => submitOntNgsJob('wf-clone', {} as never)).toThrow(/Choose Local/);
         expect(() => submitOntBarcodeBatch('source', {} as never)).toThrow(/Choose Local/);
         expect(() => submitPooledReferenceAssignment({} as never)).toThrow(/Choose Local/);
-        await expect(submitCmRequest({} as never)).rejects.toThrow(/Choose Local/);
+        expect(() => submitOntNgsJob('wf-clone', { params: {}, pinned_gpu: 0 })).toThrow(/Controller GPU pins cannot be used on a worker/);
+        expect(post).not.toHaveBeenCalled();
     });
 
-    it('clears retained Vast selection when target refresh fails', async () => {
+    it.each(['manual', 'automatic'] as const)('supported native routes preserve science, explicit Local and saved worker with %s return', async (policy) => {
+        window.history.replaceState({}, '', '/submit');
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
+        setDraftExecutionPolicy({ remote_result_policy: policy === 'manual' ? 'automatic' : 'manual' });
+        const post = vi.spyOn(api, 'post').mockResolvedValue(response({}));
+        const shape: ShapeLaunchRequest = {
+            client_request_id: 'shape-placement-fixture', name: 'Shape placement', geometry_id: 'geometry-fixture',
+            expected_geometry_sha256: 'a'.repeat(64), expected_geometry_manifest_sha256: 'b'.repeat(64),
+            expected_point_pool_sha256: 'c'.repeat(64), target_length: 100, num_backbones: 2,
+            sequences_per_backbone: 1, seed: 23, guidance_profile: 'rfd3_ca_shape_transfer_control_v1',
+        };
+        const cm: CmSubmitRequest = {
+            name: 'CM placement', notes: 'Transport fixture', idempotency_key: 'cm-placement-fixture',
+            backend: 'protenix_v2_ensemble', ordered_seeds: [23, 7], samples_per_seed: 2,
+            registered_sequence_id: 'sequence-fixture',
+            feature_policy: { mode: 'features_disabled_control_v1', protein_msa_enabled: false, templates_enabled: false, rna_msa_enabled: false },
+            runtime_policy: { use_default_params: false, n_cycle: 4, n_step: 100 },
+            analysis_policy: CANONICAL_CM_ANALYSIS_POLICY,
+            frustrampnn_settings: {
+                schema_name: 'frustrampnn_settings', schema_version: 2, batching_enabled: false, structures_per_job: 1,
+                protein_selection: { mode: 'all_protein_entities', entities: [], regions: [], residues: [] },
+                source_structure: { selected_model_number: 1, preferred_altloc: 'A' },
+                classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.78 },
+            },
+        };
+        const ngs = { name: 'NGS placement', params: { fastq_path: 'fixture.fastq', min_read_quality: 12 }, pinned_gpu: null };
+        for (const target of [undefined, null, 'vast:saved-worker']) {
+            const placement: ExecutionPlacement = { execution_policy: { remote_result_policy: policy }, ...(target === undefined ? {} : { execution_target_id: target }) };
+            const expectedPlacement = { execution_target_id: target === undefined ? 'vast:123' : target, execution_policy: { remote_result_policy: policy } };
+            post.mockClear();
+            await submitShapeBlueprint({ ...shape, ...placement });
+            await submitCmRequest({ ...cm, ...placement });
+            await submitOntNgsJob('wf-clone', { ...ngs, ...placement });
+            expect(post.mock.calls.map(([url, body]) => [url, body])).toEqual([
+                ['/api/shape-blueprint/requests', { ...shape, ...expectedPlacement }],
+                ['/api/conformational-mapping/requests', { ...cm, ...expectedPlacement }],
+                ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
+            ]);
+        }
+    });
+
+    it('preserves retained Vast selection after refresh failure until an explicit Local choice', async () => {
+        window.history.replaceState({}, '', '/submit');
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         client.setQueryData(['execution-targets'], response([readyTarget]));
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
@@ -166,8 +605,24 @@ describe('remote execution operator surfaces', () => {
             await client.invalidateQueries({ queryKey: ['execution-targets'] });
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(readyTarget.id);
         expect(container.textContent).not.toContain('Vast · Remote 4090');
+        expect(container.textContent).toContain(`Selected worker ${readyTarget.id} is unavailable`);
+        expect(container.textContent).toContain('unavailable remote capacity cannot fall back to Local');
+        const localButton = [...container.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Local')!;
+        expect(localButton.getAttribute('aria-pressed')).toBe('false');
+        const job = { name: 'Retained worker', model_id: 'boltz2', mode: 'predict', params: { sequence: 'ACDE' } };
+        const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('Selected worker unavailable'));
+        await expect(submitJob(job)).rejects.toThrow('Selected worker unavailable');
+        expect(post).toHaveBeenCalledTimes(1);
+        expect(post.mock.calls[0][1]).toEqual({ ...job, execution_target_id: readyTarget.id, execution_policy: { remote_result_policy: 'manual' } });
+        await act(async () => localButton.click());
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(localButton.getAttribute('aria-pressed')).toBe('true');
+        post.mockResolvedValue(response({}));
+        await submitJob(job);
+        expect(post).toHaveBeenCalledTimes(2);
+        expect(post.mock.calls[1][1]).toEqual({ ...job, execution_target_id: null, execution_policy: { remote_result_policy: 'manual' } });
         await act(async () => root.unmount());
         client.clear();
     });

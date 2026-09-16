@@ -21,9 +21,7 @@ from services.md.artifacts import MdArtifactProvenanceError, resolve_resume_chec
 TERMINAL_REPLICA_STATES = frozenset({"completed", "failed", "cancelled", "orphaned"})
 ACTIVE_REPLICA_STATES = frozenset({"queued", "launching", "running", "checkpointing", "paused", "cancelling"})
 TERMINAL_PHASES = frozenset({"completed", "partial", "failed", "cancelled"})
-RETRYABLE_INFRASTRUCTURE_FAILURES = frozenset({
-    "spawn_rejected", "worker_lost", "scheduler_transient", "runtime_transient",
-})
+from scripts.bms_md.contract import RETRYABLE_INFRASTRUCTURE_FAILURES
 
 
 class MdStateError(RuntimeError):
@@ -333,97 +331,227 @@ async def retry_replica_attempt(
     session: AsyncSession, *, job_id: str, replica_index: int,
     expected_version: int, idempotency_key: str,
 ) -> MdReplicaRun:
+    """Persist native intent, then ask the shared attempt owner for replacement.
+
+    The intent commits before transport. Response loss never creates another
+    local scheduler job: replay uses the same operation and retained shared edge.
+    """
     existing_event = await _replay_event(
         session, job_id=job_id, idempotency_key=idempotency_key,
         event_type="retry_requested", expected_version=expected_version,
     )
-    if existing_event is not None:
-        replica_id = str((existing_event.payload or {}).get("replica_run_id") or "")
-        replay = await session.get(MdReplicaRun, replica_id)
-        if replay is None:
-            raise MdStateError("MD_STATE_CORRUPT", "retry event has no replica attempt")
-        return replay
-
-    run = await session.get(MdRun, job_id)
-    if run is None or run.controls_blocked or run.phase not in {"failed", "partial", "reconciling"}:
-        raise MdStateError("MD_RETRY_UNAVAILABLE", "run does not admit a dynamics retry")
-    previous = await session.scalar(select(MdReplicaRun).where(
-        MdReplicaRun.md_job_id == job_id, MdReplicaRun.replica_index == replica_index,
-    ).order_by(MdReplicaRun.attempt.desc()).limit(1))
-    if previous is None or previous.active or previous.state not in {"failed", "orphaned"}:
-        raise MdStateError("MD_RETRY_UNAVAILABLE", "replica has no retryable terminal attempt")
-    failure_code = str((previous.failure or {}).get("code") or "")
-    if failure_code not in RETRYABLE_INFRASTRUCTURE_FAILURES:
-        raise MdStateError(
-            "MD_RETRY_REVIEW_REQUIRED",
-            "only allowlisted infrastructure failures may be retried without scientific review",
-        )
-    source = await session.scalar(select(MdAttemptSegment).where(
-        MdAttemptSegment.replica_run_id == previous.id,
-    ).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
-    previous_child = await session.get(Job, previous.child_job_id) if previous.child_job_id else None
     parent_job = await session.get(Job, job_id)
-    if source is None or previous_child is None or parent_job is None or not parent_job.output_dir:
-        raise MdStateError("MD_STATE_CORRUPT", "retry source lineage is incomplete")
-
-    next_attempt = previous.attempt + 1
-    parent_output_root = Path(parent_job.output_dir).expanduser().resolve()
-    retry_output_dir = (
-        parent_output_root
-        / "md_retry_attempts"
-        / f"replica_{replica_index:03d}"
-        / f"attempt_{next_attempt:03d}"
-    ).resolve()
-    if retry_output_dir == parent_output_root or parent_output_root not in retry_output_dir.parents:
-        raise MdStateError("MD_STATE_CORRUPT", "retry output lineage escapes the parent result root")
-    child_params = copy.deepcopy(previous_child.params or {})
-    child_params["md_attempt"] = next_attempt
-    child_id = str(uuid.uuid4())
-    child = Job(
-        id=child_id,
-        name=f"{previous_child.name} retry {next_attempt}",
-        status="queued",
-        queue_status="queued",
-        model_id=previous_child.model_id,
-        mode=previous_child.mode,
-        params=child_params,
-        output_dir=str(retry_output_dir),
-        parent_job_id=job_id,
-        batch_id=previous_child.batch_id or job_id,
-        batch_name=previous_child.batch_name,
-        lineage_root_job_id=previous_child.lineage_root_job_id or job_id,
-        child_stage="md_replica",
-        priority=previous_child.priority,
-        vram_estimate_mb=previous_child.vram_estimate_mb,
-        max_retries=previous_child.max_retries,
-        oom_tolerance=previous_child.oom_tolerance,
-    )
-    replica = MdReplicaRun(
-        id=str(uuid.uuid4()), child_job_id=child_id, md_job_id=job_id,
-        replica_index=replica_index, attempt=next_attempt, engine=previous.engine,
-        state="queued", active=True,
-    )
-    segment = MdAttemptSegment(
-        id=str(uuid.uuid4()), replica_run_id=replica.id, segment_index=0, state="queued",
-        execution_plan_sha256=source.execution_plan_sha256,
-        compatibility_key=source.compatibility_key,
-    )
-    session.add(child)
+    if parent_job is None:
+        raise MdStateError("MD_RUN_NOT_FOUND", "parent scheduler job is missing")
+    if existing_event is not None:
+        intent = dict(existing_event.payload or {})
+        if intent.get('replica_index') != replica_index:
+            raise MdStateError("MD_IDEMPOTENCY_CONFLICT", "retry key belongs to another replica")
+        replica = await session.get(MdReplicaRun, intent.get('replica_run_id'))
+        if replica is None or not intent.get('source_child_job_id'):
+            raise MdStateError("MD_STATE_CORRUPT", "retry event has no shared attempt intent")
+        if intent.get('shared_retry_receipt'):
+            return replica
+    else:
+        run = await session.get(MdRun, job_id)
+        if run is None or run.controls_blocked or run.phase not in {"failed", "partial", "reconciling"}:
+            raise MdStateError("MD_RETRY_UNAVAILABLE", "run does not admit a dynamics retry")
+        previous = await session.scalar(select(MdReplicaRun).where(
+            MdReplicaRun.md_job_id == job_id, MdReplicaRun.replica_index == replica_index,
+        ).order_by(MdReplicaRun.attempt.desc()).limit(1))
+        if previous is None or previous.active or previous.state not in {"failed", "orphaned"}:
+            raise MdStateError("MD_RETRY_UNAVAILABLE", "replica has no retryable terminal attempt")
+        failure_code = str((previous.failure or {}).get("code") or "")
+        if failure_code not in RETRYABLE_INFRASTRUCTURE_FAILURES:
+            raise MdStateError("MD_RETRY_REVIEW_REQUIRED",
+                "only allowlisted infrastructure failures may be retried without scientific review")
+        source = await session.scalar(select(MdAttemptSegment).where(
+            MdAttemptSegment.replica_run_id == previous.id,
+        ).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
+        previous_child = await session.get(Job, previous.child_job_id) if previous.child_job_id else None
+        if source is None or previous_child is None:
+            raise MdStateError("MD_STATE_CORRUPT", "retry source lineage is incomplete")
+        replica = MdReplicaRun(
+            id=str(uuid.uuid4()), child_job_id=None, md_job_id=job_id,
+            replica_index=replica_index, attempt=previous.attempt + 1, engine=previous.engine,
+            state="queued", active=True,
+        )
+        intent = dict(replica_run_id=replica.id, replica_index=replica_index,
+            attempt=replica.attempt, source_replica_run_id=previous.id,
+            source_child_job_id=previous_child.id, failure_code=failure_code,
+            execution_target_id=parent_job.execution_target_id,
+            remote_attempt_id=parent_job.remote_attempt_id)
+        # CAS before any external effect. A pending operation blocks new controls
+        # but remains explicitly reconciling, not falsely running.
+        await append_event_cas(session, job_id=job_id, idempotency_key=idempotency_key,
+            event_type="retry_requested", expected_version=expected_version,
+            next_phase="reconciling", block_controls=True, payload=intent)
+        session.add(replica)
+        await session.flush()
+        session.add(MdAttemptSegment(id=str(uuid.uuid4()), replica_run_id=replica.id,
+            segment_index=0, state="queued", execution_plan_sha256=source.execution_plan_sha256,
+            compatibility_key=source.compatibility_key, source_segment_id=source.id))
+        await session.flush()
+    # The same committed intent is the retry outbox on both placements.
+    replica_id = replica.id
+    await session.commit()
+    from services.remote_execution.executor import retry_component_execution
+    try:
+        receipt = await retry_component_execution(session, parent_job,
+            component_id=intent['source_child_job_id'], operation_id=idempotency_key,
+            actor='md-retry:' + job_id, failure_code=intent['failure_code'])
+    except Exception as exc:
+        raise MdStateError("MD_RETRY_ACTUATION_UNCERTAIN",
+            "shared retry remains pending; replay the same idempotency key to reconcile") from exc
+    replica = await session.get(MdReplicaRun, replica_id, populate_existing=True)
+    event = await _replay_event(session, job_id=job_id, idempotency_key=idempotency_key,
+        event_type='retry_requested', expected_version=expected_version)
+    if event is None or replica is None:
+        raise MdStateError("MD_STATE_CORRUPT", "committed retry intent disappeared")
+    event.payload = dict(intent, pending_transport_receipt=receipt)
+    await bind_retry_child_projection(session, parent=parent_job, event=event)
+    # Local acceptance queues the SAME root for scheduler readmission. Do not
+    # claim running or require an as-yet unobserved child Job as acknowledgement.
     await session.flush()
-    session.add(replica)
-    await session.flush()
-    session.add(segment)
-    await session.flush()
-    parent_job.status = "running"; parent_job.queue_status = "running"
-    parent_job.completed_at = None; parent_job.error_message = None
-    await append_event_cas(
-        session, job_id=job_id, idempotency_key=idempotency_key,
-        event_type="retry_requested", expected_version=expected_version,
-        next_phase="replicas_queued",
-        payload={"replica_run_id": replica.id, "child_job_id": child_id,
-                 "replica_index": replica_index, "attempt": next_attempt},
-    )
     return replica
+
+async def bind_retry_child_projection(session: AsyncSession, *, parent: Job,
+                                      event: MdEvent, apply: bool = True) -> bool:
+    """Bind an observed shared child, never insert or schedule a shadow Job."""
+    intent = dict(event.payload or {})
+    if intent.get('shared_retry_receipt'):
+        return True
+    receipt = intent.get('pending_transport_receipt') or {}
+    # Raw shared edges name the predecessor in component_id; child_job_id is
+    # their replacement. Normalized transport receipts name the replacement
+    # directly in component_id. Never bind the predecessor as the new attempt.
+    native_id = (receipt.get('child_job_id') if receipt.get('replacement') else
+                 receipt.get('component_id') or receipt.get('child_job_id'))
+    if not native_id:
+        return False
+    candidates = list((await session.scalars(select(Job).where(
+        Job.parent_job_id == parent.id, Job.child_stage == 'md_replica',
+    ))).all())
+    child = next((item for item in candidates
+        if (item.provenance or {}).get('component_id') == native_id
+        or item.id == native_id), None)
+    if child is None:
+        return False
+    params = child.params or {}
+    control = (child.provenance or {}).get('component_projection') or {}
+    if (child.execution_target_id != parent.execution_target_id
+            or child.id == intent.get('source_child_job_id')
+            or control.get('root_job_id') != parent.id
+            or (parent.execution_target_id and control.get('attempt_id') != parent.remote_attempt_id)
+            or params.get('md_attempt') != intent['attempt']
+            or params.get('md_replica_index') != intent['replica_index']):
+        raise MdStateError('MD_STATE_CORRUPT', 'retry child projection conflicts with native intent')
+    replica = await session.get(MdReplicaRun, intent['replica_run_id'])
+    if replica is None:
+        raise MdStateError('MD_STATE_CORRUPT', 'retry replica projection is missing')
+    if apply:
+        replica.child_job_id = child.id
+        event.payload = dict(intent, child_job_id=child.id,
+            shared_retry_receipt=dict(receipt, child_job_id=child.id, component_id=native_id))
+        run = await session.get(MdRun, parent.id)
+        if run is not None:
+            run.controls_blocked = False
+    return True
+
+
+async def reconcile_component_projection(session: AsyncSession, parent: Job,
+                                         children: Iterable[Job]) -> None:
+    """Native projection after the shared importer authenticates attempt custody.
+
+    No Job creation, queue admission or science execution occurs here. The native
+    completion owner still requires aggregate, mandatory analyses and barrier.
+    """
+    if parent.model_id != 'molecular_dynamics' or parent.mode != 'simulate':
+        return
+    run = await session.get(MdRun, parent.id)
+    if run is None:
+        raise MdStateError('MD_RUN_NOT_FOUND', 'component projection requires its native MD run')
+    rows = sorted((child for child in children if child.child_stage == 'md_replica'),
+        key=lambda child: ((child.params or {}).get('md_replica_index', -1),
+                           (child.params or {}).get('md_attempt', -1)))
+    if not rows:
+        return
+    existing = list((await session.scalars(select(MdReplicaRun).where(
+        MdReplicaRun.md_job_id == parent.id))).all())
+    by_identity = {(item.replica_index, item.attempt): item for item in existing}
+    # Retire active projections before replacing an index (unique active index).
+    for item in existing:
+        item.active = False
+    await session.flush()
+    for child in rows:
+        params = child.params or {}
+        index, attempt = params.get('md_replica_index'), params.get('md_attempt')
+        if (child.parent_job_id != parent.id or child.execution_target_id != parent.execution_target_id
+                or not (child.provenance or {}).get('component_projection')
+                or type(index) is not int or type(attempt) is not int or attempt < 0
+                or not 0 <= index < int(run.normalized_request['replicas'])
+                or params.get('md_replica_seed') != int(run.normalized_request['random_seed']) + index
+                or params.get('md_engine') != run.normalized_request['engine']):
+            raise MdStateError('MD_STATE_CORRUPT', 'projected MD request changed native replica identity')
+        plan_sha, compatibility = params.get('md_execution_plan_sha256'), params.get('md_compatibility_key')
+        if any(not isinstance(value, str) or len(value) != 64
+               or any(char not in '0123456789abcdef' for char in value)
+               for value in (plan_sha, compatibility)):
+            raise MdStateError('MD_STATE_CORRUPT', 'projected MD request lacks native segment identity')
+        replica = by_identity.get((index, attempt))
+        if replica is None:
+            replica = MdReplicaRun(id=str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"bms-md-component:{parent.id}:{index}:{attempt}")), md_job_id=parent.id,
+                replica_index=index, attempt=attempt, engine=params['md_engine'], active=False)
+            session.add(replica)
+            by_identity[index, attempt] = replica
+        if replica.child_job_id not in {None, child.id}:
+            raise MdStateError('MD_STATE_CORRUPT', 'native attempt already belongs to another projected child')
+        replica.child_job_id = child.id
+        control = (child.provenance or {}).get('component_projection') or {}
+        raw_state = control.get('state', child.status)
+        replica.state = ({'execution_finished': 'running', 'uncertain': 'orphaned'}
+                         .get(raw_state, raw_state))
+        if replica.state not in TERMINAL_REPLICA_STATES | ACTIVE_REPLICA_STATES:
+            raise MdStateError('MD_STATE_CORRUPT', 'unknown projected native component state')
+        if replica.state in TERMINAL_REPLICA_STATES:
+            replica.completed_at = replica.completed_at or child.completed_at
+            if replica.state in {'failed', 'orphaned'} and (replica.failure is None or (
+                    control.get('failure_receipt') is not None
+                    and (replica.failure or {}).get('code') == 'execution_failed'
+                    and (replica.failure or {}).get('source') == 'worker_terminal')):
+                from services.md.reconcile import _failure_from_child
+                replica.failure = _failure_from_child(child, replica.state)
+        await session.flush()
+        segment = await session.scalar(select(MdAttemptSegment).where(
+            MdAttemptSegment.replica_run_id == replica.id,
+            MdAttemptSegment.segment_index == 0))
+        if segment is None:
+            segment = MdAttemptSegment(id=str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"bms-md-component-segment:{replica.id}:0")), replica_run_id=replica.id,
+                segment_index=0, execution_plan_sha256=plan_sha, compatibility_key=compatibility,
+                state=replica.state)
+            session.add(segment)
+        elif (segment.execution_plan_sha256, segment.compatibility_key) != (plan_sha, compatibility):
+            raise MdStateError('MD_STATE_CORRUPT', 'native segment identity changed on projection replay')
+        # Never rewrite earlier checkpoint segments; latest segment owns progress.
+        latest = await session.scalar(select(MdAttemptSegment).where(
+            MdAttemptSegment.replica_run_id == replica.id).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
+        if latest is not None:
+            latest.state = replica.state
+            if replica.state in TERMINAL_REPLICA_STATES:
+                latest.completed_at = latest.completed_at or child.completed_at
+    latest_by_index = {}
+    for item in sorted(by_identity.values(), key=lambda item: item.attempt):
+        latest_by_index[item.replica_index] = item
+    for item in latest_by_index.values():
+        item.active = item.state not in TERMINAL_REPLICA_STATES
+    events = list((await session.scalars(select(MdEvent).where(
+        MdEvent.md_job_id == parent.id, MdEvent.event_type == 'retry_requested'))).all())
+    for event in events:
+        if (event.payload or {}).get('source_child_job_id'):
+            await bind_retry_child_projection(session, parent=parent, event=event)
+    await session.flush()
 
 
 async def request_cancel(session: AsyncSession, *, job_id: str, expected_version: int, idempotency_key: str) -> MdRun:

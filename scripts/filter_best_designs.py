@@ -77,6 +77,34 @@ def main():
         print(f"Error reading CSV file: {e}")
         return 1
     
+    if 'candidate_id' in df.columns:
+        # Current native terminal rows already carry tuple-owned identity. Do
+        # not reverse-engineer fold IDs or scientific identity from filenames.
+        from pathlib import Path
+        import hashlib
+        import uuid
+        if 'producer_artifact_sha256' not in df.columns or df['candidate_id'].duplicated().any():
+            raise ValueError('canonical publication requires unique candidate/hash authority')
+        sources = []
+        for row in df.to_dict('records'):
+            candidate = row['candidate_id']
+            if not isinstance(candidate, str) or str(uuid.UUID(candidate)) != candidate:
+                raise ValueError('noncanonical terminal candidate identity')
+            source = Path(args.pdb_dir) / f'candidate_{candidate}.pdb'
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != row['producer_artifact_sha256']:
+                raise ValueError('terminal structure does not match projected producer bytes')
+            sources.append(source)
+        if {p.name for p in Path(args.pdb_dir).glob('*.pdb')} != {p.name for p in sources}:
+            raise ValueError('terminal structure roster differs from projected candidates')
+        if any(p.name not in {s.name for s in sources} for p in Path(args.output_dir).glob('*.pdb')):
+            raise ValueError('stale structure in terminal publication directory')
+        # All identities and bytes checked before any publication copies.
+        for source in sources:
+            shutil.copyfile(source, Path(args.output_dir) / source.name)
+        df.to_csv(args.output_csv, index=False)
+        print(f'Published {len(sources)} canonical terminal candidates')
+        return 0
+
     # Check if seq_id column exists in the CSV
     has_seq_id = 'seq_id' in df.columns
     print(f"CSV has seq_id column: {has_seq_id}")

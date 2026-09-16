@@ -1,0 +1,258 @@
+{
+  "schema_version": "bioxp.operator_action_receipt.v2",
+  "command_id": "operator_1789310475458_106f4226fa84",
+  "action_id": "oem.xy.move_absolute",
+  "status": "completed",
+  "terminal": true,
+  "sequence": 4,
+  "method_id": null,
+  "ownership_generation": 7,
+  "expected_board_epoch_by_board": {},
+  "state_version": 1,
+  "status_path": "/operator/v2/actions/receipts/operator_1789310475458_106f4226fa84",
+  "accepted_at": 1789310475.4588065,
+  "queued_at": 1789310475.4588065,
+  "dispatched_at": 1789310475.4591653,
+  "finished_at": 1789310475.4781601,
+  "terminal_receipt_id": null,
+  "completion_class": "oem_manual_timeout_report",
+  "physical_effect_verified": false,
+  "error": null,
+  "transport_exchanges": [],
+  "transport_retention_errors": [],
+  "interrupt_evidence": null,
+  "z_move": null,
+  "xy_failure": {
+    "before": {
+      "x": 85000,
+      "y": 86000
+    },
+    "board_present": {
+      "x": true,
+      "y": true
+    },
+    "branch": "near_axis_sequential",
+    "commands": {},
+    "controller_failure": {
+      "ack": {
+        "status": 100,
+        "value": 0
+      },
+      "before": {
+        "ack": {
+          "status": 100,
+          "value": 86000
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "position": 86000,
+        "position_reply_valid": true,
+        "position_source": "controller_reply"
+      },
+      "board": 4,
+      "command_sent": true,
+      "event_window": {
+        "after_sequence": 2,
+        "cleared": 0,
+        "oem_wait_latch_reset": true,
+        "owner_generation": 0,
+        "preserved_for_oem_null_query_stop": false,
+        "queue_purge_omitted_by_source": true,
+        "receive_owner": "4886f3f931044c53b19a50186cd5b1b7",
+        "router_cleared": {}
+      },
+      "low_level_source_return_code": 0,
+      "motor": 0,
+      "oem_wait_for_stop": true,
+      "ok": true,
+      "pre_stop": {
+        "ack": {
+          "status": 100,
+          "value": 0
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "source_return_code": 0,
+        "wait_latch_reset": true
+      },
+      "requested_position": 0,
+      "retry_ack": null,
+      "source_return_code": 0,
+      "timeout_position": {
+        "ack": {
+          "status": 100,
+          "value": 86000
+        },
+        "board": 4,
+        "motor": 0,
+        "ok": true,
+        "position": 86000,
+        "position_reply_valid": true,
+        "position_source": "controller_reply"
+      },
+      "wait": {
+        "board": 4,
+        "completion_class": null,
+        "elapsed_ms": 10,
+        "event": null,
+        "event_window": {
+          "after_sequence": 2,
+          "cleared": 0,
+          "oem_wait_latch_reset": true,
+          "owner_generation": 0,
+          "preserved_for_oem_null_query_stop": false,
+          "queue_purge_omitted_by_source": true,
+          "receive_owner": "4886f3f931044c53b19a50186cd5b1b7",
+          "router_cleared": {}
+        },
+        "events": [],
+        "failure": "oem_moveToAbs_target_event_timeout",
+        "motor": 0,
+        "no24v": false,
+        "ok": false,
+        "pending": [
+          [
+            4,
+            0
+          ]
+        ],
+        "physical_effect_verified": false,
+        "reached": {},
+        "source_wait_signaled": false,
+        "target_reached": false
+      },
+      "wire_position": 0
+    },
+    "distances": {
+      "x": 0,
+      "y": 86000
+    },
+    "failed_axis": "y",
+    "ignored_compatibility_inputs": {
+      "acc": null,
+      "speed": null,
+      "wait_timeout_s": 120.0
+    },
+    "oem_wait_timeout_ms": 5000,
+    "ok": false,
+    "physical_effect_verified": false,
+    "reference_before": {},
+    "requested": {
+      "x": 85000,
+      "y": 0
+    },
+    "source_anchor": "ClassControlInterface.cs:4285-4367",
+    "source_context": null,
+    "source_context_sealed": false,
+    "source_operation": "ClassControlInterface.moveXY",
+    "terminal_classification": {
+      "admitted_authority": {
+        "generation": 7,
+        "x": {
+          "active_receipt": null,
+          "board_lifecycle_generation": 1,
+          "current_board_lifecycle_generation": 1,
+          "generation": 7,
+          "interrupt_active": false,
+          "interrupt_epoch": 0,
+          "lifecycle_state": "referenced_ready",
+          "pending_ticket": null
+        },
+        "y": {
+          "active_board_epoch": 1,
+          "board_state": "active",
+          "interrupt_epoch": 0,
+          "lifecycle_state": "prepared_unreferenced",
+          "ownership_generation": 7,
+          "pending_ticket": null,
+          "prepared_board_epoch": 1,
+          "software_interrupt_active": false,
+          "software_interrupt_epoch": 0
+        }
+      },
+      "authority_scope": "classified_terminal_epoch_not_current_admission",
+      "authority_unchanged": true,
+      "classification": "failed_with_coherent_stopped_coordinates",
+      "observation": {
+        "axis": {
+          "axis": "y",
+          "board_id": 4,
+          "interrupt_epoch": 0,
+          "last_command_id": null,
+          "last_discrepancy_steps": 86000,
+          "last_receipt_id": "operator_1789310475458_106f4226fa84",
+          "lifecycle_state": "prepared_unreferenced",
+          "motor_id": 0,
+          "observed_position_steps": 86000,
+          "origin_position_steps": null,
+          "ownership_generation": 7,
+          "prepared_board_epoch": 1,
+          "profile_fingerprint": "fixture",
+          "reference_state": "unreferenced",
+          "state_version": 3,
+          "updated_at": 1789310475.4755955
+        },
+        "discrepancy_steps": 86000,
+        "ok": true,
+        "reconciled_to_observed": true
+      },
+      "readbacks": {
+        "x": {
+          "position": {
+            "ack": {
+              "status": 100,
+              "value": 85000
+            },
+            "board": 5,
+            "motor": 0,
+            "ok": true,
+            "position": 85000,
+            "position_reply_valid": true,
+            "position_source": "controller_reply"
+          },
+          "speed": {
+            "ack": {
+              "status": 100,
+              "value": 0
+            },
+            "board": 5,
+            "motor": 0,
+            "ok": true,
+            "speed": 0,
+            "speed_reply_valid": true,
+            "speed_source": "controller_reply"
+          }
+        },
+        "y": {
+          "position": {
+            "ack": {
+              "status": 100,
+              "value": 86000
+            },
+            "board": 4,
+            "motor": 0,
+            "ok": true,
+            "position": 86000,
+            "position_reply_valid": true,
+            "position_source": "controller_reply"
+          },
+          "speed": {
+            "ack": {
+              "status": 100,
+              "value": 0
+            },
+            "board": 4,
+            "motor": 0,
+            "ok": true,
+            "speed": 0,
+            "speed_reply_valid": true,
+            "speed_source": "controller_reply"
+          }
+        }
+      }
+    },
+    "wait_schedule": "unsealed_legacy_WaitAll"
+  }
+}

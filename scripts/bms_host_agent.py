@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from lib.native_diagnostics import redact_text
 from lib.ont_minknow_host import discover_status as discover_ont_status
 from lib.ont_minknow_host import observe_run as observe_ont_run
 from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
@@ -44,12 +44,6 @@ def bounded_tail(raw: Any) -> int:
 
 def tail_text(text: str, max_chars: int = 6000) -> str:
     return text[-max_chars:] if len(text) > max_chars else text
-
-
-def redact_text(text: str) -> str:
-    redacted = re.sub(r"(postgresql(?:\+[A-Za-z0-9_]+)?://[^:\s/@]+:)([^@\s]+)(@)", r"\1***\3", text)
-    redacted = re.sub(r"(\b[A-Z0-9_]*PASSWORD[A-Z0-9_]*=)([^\s\n]+)", r"\1[REDACTED]", redacted)
-    return redacted
 
 
 def redact_value(value: Any) -> Any:

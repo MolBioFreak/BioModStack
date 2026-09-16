@@ -47,6 +47,8 @@ async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path:
             provider_instance_id="123",
             state="ready",
             active=True,
+            provider_metadata={"inventory": {"status": "complete", "present": True,
+                                             "running": True, "checked_at": datetime.utcnow().isoformat()}},
         ))
         for job_id in ("remote-a", "remote-b"):
             seed.add(Job(
@@ -81,7 +83,8 @@ async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path:
         target = await verify.get(ExecutionTarget, target_id)
         jobs = [await verify.get(Job, job_id) for job_id in ("remote-a", "remote-b")]
         assert target is not None and target.leased_job_id in {"remote-a", "remote-b"}
-        assert sum(job is not None and job.queue_status == "running" for job in jobs) == 1
+        assert sum(job is not None and job.queue_status == "preparing" for job in jobs) == 1
+        assert all(job.started_at is None and job.status == "queued" for job in jobs)
     await engine.dispose()
 
 

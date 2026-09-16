@@ -39,6 +39,7 @@ process OpenMMRelaxation {
     publishDir "${params.out_dir}/run/openmm/relaxation", mode: 'copy', pattern: '*.pdb'
     publishDir "${params.out_dir}/run/openmm/relaxation", mode: 'copy', pattern: '*.json'
     publishDir "${params.out_dir}/run/openmm/relaxation", mode: 'copy', pattern: '*.log'
+    publishDir "${params.out_dir}/run/openmm/relaxation/${batch_id}", mode: 'copy', pattern: 'relaxed/*effective_settings.json', enabled: params.containsKey('core_protein_scientific_contract')
     
     input:
     tuple val(batch_id), path(pdbs)
@@ -56,6 +57,64 @@ process OpenMMRelaxation {
     path "openmm_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_openmm
     
     script:
+    if (params.containsKey('core_protein_scientific_contract')) {
+        def marker = params.get('core_protein_scientific_contract')
+        if (!(marker instanceof Integer) || marker != 1) throw new IllegalArgumentException('invalid core_protein_scientific_contract')
+        if (!(cdr_only instanceof Boolean)) throw new IllegalArgumentException('cdr_only must be boolean')
+        if (!(compute_tier in ['fast', 'standard', 'full'])) throw new IllegalArgumentException('invalid openmm_compute_tier')
+        if (!(restraint_mode in ['none', 'framework', 'backbone'])) throw new IllegalArgumentException('invalid openmm_restraint_mode')
+        if (!(force_field in ['amber14sb', 'charmm36m'])) throw new IllegalArgumentException('invalid openmm_force_field')
+        if (!(antibody_chain instanceof String) || !antibody_chain.trim()) throw new IllegalArgumentException('invalid openmm_antibody_chain')
+        def effective = [force_field: force_field, max_iterations: compute_tier == 'fast' ? 100 : (compute_tier == 'standard' ? 500 : 1000),
+            energy_tolerance: compute_tier == 'fast' ? 50.0d : (compute_tier == 'standard' ? 10.0d : 1.0d),
+            cdr_only: cdr_only, restraint_mode: restraint_mode, antibody_chain: antibody_chain, fix_structure: true]
+        // Only the internal pre-normalization request snapshot establishes origin.
+        // Native nextflow.config defines these keys even when nobody requested them.
+        if (!params.containsKey('openmm_requested_settings_json')) throw new IllegalArgumentException('missing OpenMM request provenance')
+        def requested = new groovy.json.JsonSlurper().parseText(params.get('openmm_requested_settings_json').toString())
+        if (!(requested instanceof Map)) throw new IllegalArgumentException('invalid OpenMM request provenance')
+        def tierSource = [requested: requested.get('openmm_compute_tier'), effective: compute_tier,
+            origin: requested.get('openmm_compute_tier') != null ? 'request' : 'workflow_default']
+        def settings = effective.collectEntries { key, value ->
+            def requestKey = 'openmm_' + key
+            def derived = key in ['max_iterations', 'energy_tolerance']
+            def origin = derived ? 'compute_tier' : (requested.get(requestKey) != null ? 'request' : 'workflow_default')
+            def setting = [requested: requested.get(requestKey), effective: value, origin: origin, scope: key == 'cdr_only' ? 'antibody' : 'model']
+            if (derived) setting.derived_from = tierSource
+            [(key): setting]
+        }
+        def files = pdbs instanceof Collection ? pdbs : [pdbs]
+        def payload = groovy.json.JsonOutput.toJson([effective: effective, settings: settings, pdbs: files.collect { it.toString() }]).bytes.encodeBase64().toString()
+        def root = task.ext.scripts_root ?: '/scripts'
+        return """
+        set -euo pipefail
+        python3 - <<'WP06PY' > openmm_contract.log 2>&1
+import base64, hashlib, json, subprocess
+from pathlib import Path
+payload = json.loads(base64.b64decode('${payload}'))
+Path('relaxed').mkdir(exist_ok=True)
+for source in payload['pdbs']:
+    stem = Path(source).stem
+    argv = ['--input', source, '--output', f'relaxed/{stem}_relaxed.pdb', '--output_json', f'relaxed/{stem}_openmm.json']
+    for key, value in payload['effective'].items():
+        if type(value) is bool:
+            if value: argv.append('--' + key)
+        elif key != 'restraint_mode' or value != 'none':
+            argv.extend(['--' + key, str(value)])
+    receipt = {'schema_version': 1, 'core_protein_scientific_contract': 1, 'model': 'openmm', 'settings': payload['settings'],
+               'argv': argv, 'sources': [{'scope': 'structure', 'used_path': source, 'sha256': hashlib.sha256(Path(source).read_bytes()).hexdigest()}]}
+    receipt_name = 'effective_settings.json' if len(payload['pdbs']) == 1 else f'{stem}.effective_settings.json'
+    Path('relaxed', receipt_name).write_text(json.dumps(receipt, allow_nan=False, sort_keys=True))
+    subprocess.run(['python3', ${groovy.json.JsonOutput.toJson(root + '/relax_openmm.py')}] + argv, check=True)
+metadata = []
+for result_path in Path('relaxed').glob('*_openmm.json'):
+    result = json.loads(result_path.read_bytes())
+    result['design_name'] = result_path.stem.removesuffix('_openmm')
+    metadata.append(json.dumps(result, allow_nan=False))
+Path('openmm_metadata_${batch_id}.jsonl').write_text('\\n'.join(metadata))
+WP06PY
+        """
+    }
     // Compute tier settings
     def maxIterations = compute_tier == 'fast' ? 100 : (compute_tier == 'standard' ? 500 : 1000)
     def energyTolerance = compute_tier == 'fast' ? 50.0 : (compute_tier == 'standard' ? 10.0 : 1.0)

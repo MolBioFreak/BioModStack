@@ -276,38 +276,62 @@ def test_generic_submit_rejects_raw_panel_and_untrusted_molbio_sequence_id() -> 
 
 
 @pytest.mark.asyncio
-async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch) -> None:
+async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch, tmp_path) -> None:
     from fastapi import Response
+    from database import Base, Job, MolBioNgsReceipt
     from routers import ont_runs
+    from services.molbio_ngs_receipts import issue_molbio_ngs_receipt, build_molbio_revision_binding
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-    receipt = SimpleNamespace(id="receipt-1", sequence_id="seq-1", revision_id="rev-1", revision_sha256="a" * 64,
-                              reference_snapshot_path="/server/immutable.fasta", reference_snapshot_sha256="b" * 64,
-                              consumed_at=None, consumed_job_id=None)
+    monkeypatch.setattr("services.molbio_ngs_receipts.get_inputs_dir", lambda: tmp_path / "inputs")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     seen = {}
-
-    async def consume(_session, *, receipt_id):
-        seen["receipt_id"] = receipt_id
-        return receipt
 
     def build(_workflow, request):
         seen["submitted"] = request.params
         return SimpleNamespace(params={})
 
-    async def create(_job, *_args):
-        return SimpleNamespace(id="job-1")
+    async def create(job, _background, session, *_args, commit):
+        assert commit is False
+        seen["binding"] = job.params["molbio_revision_binding"]
+        created = Job(id="job-1", name="Receipt fixture", model_id="nanopore", mode="plasmid_qc", params=job.params)
+        session.add(created)
+        await session.flush()
+        return created
 
-    monkeypatch.setattr(ont_runs, "consume_molbio_ngs_receipt", consume)
+    # Only the scheduler/job-shape seam is stubbed: validation and consumption
+    # use the actual SQL receipt and its server-written immutable FASTA.
     monkeypatch.setattr(ont_runs, "_job_create_for_ont_submit", build)
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", create)
-    session = SimpleNamespace(commit=lambda: _async_none(), flush=lambda: _async_none())
-    result = await ont_runs.ont_submit_ngs_workflow(
-        "ont_fastq_qc", ont_runs.OntNgsSubmitRequest(params={"molbio_ngs_receipt_id": "receipt-1", "molbio_sequence_id": ""}),
-        SimpleNamespace(), SimpleNamespace(), Response(), session,
-    )
-    assert result.id == "job-1"
-    assert seen["receipt_id"] == "receipt-1"
-    assert seen["submitted"]["reference_fasta"] == "/server/immutable.fasta"
-    assert receipt.consumed_job_id == "job-1"
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with factory() as session:
+            receipt = await issue_molbio_ngs_receipt(
+                session, sequence_id="seq-1",
+                revision=SimpleNamespace(id="rev-1", content_sha256=hashlib.sha256(b"ACGT").hexdigest(),
+                                         snapshot={"sequence": "ACGT", "sequence_type": "dna"}),
+            )
+            await session.commit()
+            receipt_id = receipt.id
+            expected = build_molbio_revision_binding(receipt)
+            result = await ont_runs.ont_submit_ngs_workflow(
+                "ont_fastq_qc", ont_runs.OntNgsSubmitRequest(params={"molbio_ngs_receipt_id": receipt_id, "molbio_sequence_id": ""}),
+                SimpleNamespace(), SimpleNamespace(), Response(), session,
+            )
+            assert result.id == "job-1"
+            assert seen["submitted"]["reference_fasta"] == receipt.reference_snapshot_path
+            assert seen["binding"] == expected
+            assert expected["receipt_id"] == receipt_id
+            assert expected["binding_source"] == "server_consumed_receipt"
+        async with factory() as session:
+            stored = await session.get(MolBioNgsReceipt, receipt_id)
+            assert stored.consumed_job_id == "job-1"
+            assert stored.consumed_at is not None
+            assert (await session.get(Job, "job-1")).params["molbio_revision_binding"] == expected
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

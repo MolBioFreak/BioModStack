@@ -150,6 +150,26 @@ describe('sortable read workbench', () => {
         expect(button(container, '↓ Desc').disabled).toBe(false);
     });
 
+    it('reflows filter and sort controls without changing sorting or read-detail actions', async () => {
+        await act(async () => root.render(<RawReadInspector jobId="job-a" sessionId="session-a" locusSlice={locusSlice} />));
+        const filter = container.querySelector('[aria-label="Filter reads by ID"]') as HTMLInputElement;
+        const sort = container.querySelector('[aria-label="Sort reads by"]') as HTMLSelectElement;
+        const direction = container.querySelector('[aria-label="Toggle sort direction"]') as HTMLButtonElement;
+        // The filter can wrap independently; the shrinkable selector stays with its direction button.
+        expect(filter.parentElement?.classList.contains('flex-wrap')).toBe(true);
+        expect(sort.parentElement).toBe(direction.parentElement);
+        expect(sort.classList.contains('min-w-0')).toBe(true);
+        expect(sort.parentElement?.classList.contains('max-w-full')).toBe(true);
+        expect(direction.classList.contains('shrink-0')).toBe(true);
+        await act(async () => direction.click());
+        await vi.waitFor(() => expect(fetchSortableAlignmentReads).toHaveBeenLastCalledWith(
+            'job-a', 'session-a', 'slice-a', expect.objectContaining({ sortDirection: 'asc' }),
+        ));
+        await act(async () => (container.querySelector('[aria-label="Inspect details for read read-a"]') as HTMLButtonElement).click());
+        await vi.waitFor(() => expect(container.textContent).toContain('Basecalled sequence'));
+        expect(container.querySelector('pre')?.textContent).toBe('AC');
+    });
+
     it('does not refetch when a parent recreates an equivalent raw-signal binding object', async () => {
         const render = () => root.render(
             <RawReadInspector

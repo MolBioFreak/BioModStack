@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
@@ -6,7 +6,7 @@ import { adaptLegacyResidueColors } from './adapters/residueColorSelections';
 import type { StructureFilterState, StructurePresentationQuery, StructureScenePresentation } from './contracts/scenePresentation.js';
 import { exportMetricIdentity } from './contracts/exportIdentity.js';
 import type { StructureComponentType } from './contracts/scenePresentation.js';
-import { canonicalResidueRefKey, type ResidueRef } from './contracts/structureIdentity.js';
+import { canonicalSpatialRefKey, type AtomRef, type ResidueRef } from './contracts/structureIdentity.js';
 import type { ViewerMeasurement } from './contracts/measurements.js';
 import type { DerivedStructureComponent } from './contracts/complexAnalysis.js';
 import { ComplexAnalysisPanel } from './extensions/complex/ComplexAnalysisPanel';
@@ -19,7 +19,7 @@ import { ViewerResourceOwner } from './runtime/resourceOwnership.js';
 import { SequenceTrackExtension } from './extensions/sequence/SequenceTrackExtension';
 import type { MetricLayer, MetricSelection, MetricValue, ResiduePairIdentity } from './metrics/metricContracts.js';
 import { MetricRegistry } from './metrics/MetricRegistry.js';
-import { projectResidueMetricLayer } from './metrics/metricProjection.js';
+import { projectResidueMetricLayer, projectAtomMetricLayer } from './metrics/metricProjection.js';
 import type { StructureSceneController } from './runtime/StructureSceneController.js';
 
 export interface StructureViewerHostProps extends MolstarViewerProps {
@@ -28,6 +28,7 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly activeMetricId?: string;
     readonly showMetricWorkbench?: boolean;
     readonly onMetricWorkbenchVisibilityChange?: (visible: boolean) => void;
+    readonly metricDetails?: ReactNode;
     readonly showSequenceTrack?: boolean;
     readonly filters?: StructureFilterState;
     readonly onFiltersChange?: (filters: StructureFilterState) => void;
@@ -40,13 +41,17 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly onMeasurementsChange?: (measurements: readonly ViewerMeasurement[]) => void;
     readonly jobId?: string;
     readonly showM6Workbench?: boolean;
+    /** Collapse custom panels without resetting their state or the molecular scene. */
+    readonly workbenchCollapsed?: boolean;
 }
 
 const EMPTY_METRIC_LAYERS: readonly MetricLayer[] = [];
 const ALL_COMPONENT_TYPES: readonly StructureComponentType[] = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'];
 const DEFAULT_FILTERS: StructureFilterState = { includeMissing: false, entityTypes: ALL_COMPONENT_TYPES };
 
-const residueLabel = (residue: ResidueRef): string => `${residue.labelAsymId ?? residue.authAsymId ?? '?'}:${residue.labelSeqId ?? residue.authSeqId ?? '?'}`;
+const residueLabel = (residue: AtomRef): string => residue.labelAtomId || residue.authAtomId
+    ? `${residue.authAsymId ?? residue.labelAsymId ?? '?'}:${residue.authSeqId ?? residue.labelSeqId ?? '?'}${residue.insertionCode ?? ''}:${residue.labelAtomId ?? residue.authAtomId}`
+    : `${residue.labelAsymId ?? residue.authAsymId ?? '?'}:${residue.labelSeqId ?? residue.authSeqId ?? '?'}${residue.insertionCode ?? ''}`;
 
 const selectedResidues = (selection: MetricSelection | null): readonly ResidueRef[] => {
     if (!selection) return [];
@@ -74,11 +79,12 @@ const filterMetricLayer = (layer: MetricLayer, filters: StructureFilterState): M
         if (entry.missingness !== undefined) return filters.includeMissing ?? false;
         return typeof entry.value === 'number' && entry.value >= metricMin && entry.value <= metricMax;
     };
-    if (layer.descriptor.dimension === 'residue-scalar') {
+    if (layer.descriptor.dimension === 'residue-scalar' || layer.descriptor.dimension === 'atom-scalar') {
         const values = layer.values as readonly MetricValue<ResidueRef>[];
         return { ...layer, values: values.filter((entry) => residueMatches(entry.identity) && valueMatches(entry)) } as MetricLayer;
     }
     if (layer.descriptor.dimension === 'residue-pair-matrix') {
+        if ('dataset' in layer && layer.dataset?.matrixDirection === 'directed') return layer;
         const values = layer.values as readonly MetricValue<ResiduePairIdentity>[];
         return { ...layer, values: values.filter((entry) => residueMatches(entry.identity.first) && residueMatches(entry.identity.second) && valueMatches(entry)) } as MetricLayer;
     }
@@ -90,6 +96,7 @@ export default function StructureViewerHost({
     activeMetricId,
     showMetricWorkbench = true,
     onMetricWorkbenchVisibilityChange,
+    metricDetails,
     showSequenceTrack,
     filters: controlledFilters,
     onFiltersChange,
@@ -101,6 +108,7 @@ export default function StructureViewerHost({
     showMeasurements = true,
     showComplexWorkbench = true,
     showM6Workbench = true,
+    workbenchCollapsed = false,
     jobId,
     artifactJobId: requestedArtifactJobId,
     derivedComponents = [],
@@ -205,6 +213,7 @@ export default function StructureViewerHost({
     const showLinkedSequence = showSequenceTrack ?? showMetricWorkbench;
     const visualMetricLayers = registry.list().filter((layer) => (
         layer.descriptor.dimension === 'residue-scalar'
+        || layer.descriptor.dimension === 'atom-scalar'
         || layer.descriptor.dimension === 'residue-pair-matrix'
     ));
     const structureSummaryLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'structure-scalar');
@@ -212,16 +221,25 @@ export default function StructureViewerHost({
     const activeLayer = requestedLayer && visualMetricLayers.some((layer) => layer.descriptor.id === requestedLayer.descriptor.id)
         ? requestedLayer
         : visualMetricLayers[0];
-    const filteredLayer = activeLayer ? filterMetricLayer(activeLayer, filters) : undefined;
-    const projected = filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
+    const filteredLayer = useMemo(() => activeLayer ? filterMetricLayer(activeLayer, filters) : undefined, [activeLayer, filters]);
+    const projected = useMemo(() => filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
         ? projectResidueMetricLayer(filteredLayer)
-        : undefined;
+        : undefined, [filteredLayer, layerVisible]);
     const residueMetricLayer = projected?.status === 'ok'
         ? projected.value
         : (!activeLayer ? compatibilityLayer : undefined);
+    const atomPoints = useMemo(() => filteredLayer && layerVisible ? projectAtomMetricLayer(filteredLayer) : [], [filteredLayer, layerVisible]);
+    const atomQuery = (ref: AtomRef): StructurePresentationQuery => ({
+        documentId:ref.documentId, entityId:ref.entityId,
+        labelAsymId:ref.labelAsymId, authAsymId:ref.authAsymId,
+        startLabelSeqId:ref.labelSeqId, endLabelSeqId:ref.labelSeqId,
+        startAuthSeqId:ref.authSeqId, endAuthSeqId:ref.authSeqId, insertionCode:ref.insertionCode,
+        labelAtomIds:ref.labelAtomId ? [ref.labelAtomId] : undefined, authAtomIds:ref.authAtomId ? [ref.authAtomId] : undefined, altLoc:ref.altLoc,
+    });
     const residues = useMemo(() => selectedResidues(selection), [selection]);
-    const selectedResidueKeys = useMemo(() => new Set(residues.map(canonicalResidueRefKey)), [residues]);
+    const selectedResidueKeys = useMemo(() => new Set(residues.map(canonicalSpatialRefKey)), [residues]);
     const linkedSelections: NonNullable<MolstarViewerProps['selections']> = residues.flatMap((residue) => {
+        if ((residue as AtomRef).labelAtomId || (residue as AtomRef).authAtomId) return [];
         const chain = residue.labelAsymId;
         const number = residue.labelSeqId;
         return chain && number !== undefined ? [{ chain_id: chain, start_residue_number: number, end_residue_number: number, color: { r: 59, g: 130, b: 246 }, focus: true }] : [];
@@ -230,7 +248,7 @@ export default function StructureViewerHost({
     const legacyColors = useMemo(() => compatibilityColors?.size ? adaptLegacyResidueColors(compatibilityColors) : null, [compatibilityColors]);
     const colorQueries = useMemo<readonly StructurePresentationQuery[]>(() => {
         if (!layerVisible) return [];
-        const queries: StructurePresentationQuery[] = [];
+        const queries: StructurePresentationQuery[] = atomPoints.map(point => ({...atomQuery(point.identity),color:point.color,opacity:layerOpacity}));
         if (residueMetricLayer?.points.length) {
             queries.push(...residueMetricLayer.points.map((point) => ({
                 documentId: point.residue.documentId ?? documentId, entityId: point.residue.entityId,
@@ -253,9 +271,14 @@ export default function StructureViewerHost({
                 color: entry.color, focus: entry.focus, opacity: layerOpacity,
             })));
         }
+        // Atom selections and author-only residue identities cannot use the legacy
+        // label-chain selection shape. Keep their exact namespace in scene queries.
+        queries.push(...residues.filter(ref => (ref as AtomRef).labelAtomId || (ref as AtomRef).authAtomId
+            || !ref.labelAsymId || ref.labelSeqId === undefined)
+            .map(ref => ({...atomQuery(ref),color:{r:59,g:130,b:246},focus:true,opacity:layerOpacity})));
         if (residueSelections.length) {
             queries.push(...residueSelections.map((residue) => ({
-                documentId: residue.documentId, entityId: residue.entityId,
+                ...atomQuery(residue), documentId: residue.documentId, entityId: residue.entityId,
                 labelAsymId: residue.labelAsymId, authAsymId: residue.authAsymId,
                 startLabelSeqId: residue.labelSeqId, endLabelSeqId: residue.labelSeqId,
                 startAuthSeqId: residue.authSeqId, endAuthSeqId: residue.authSeqId,
@@ -263,9 +286,10 @@ export default function StructureViewerHost({
             })));
         }
         return queries;
-    }, [documentId, layerOpacity, layerVisible, legacyColors, residueMetricLayer, residueSelections, selections]);
+    }, [documentId, layerOpacity, layerVisible, legacyColors, residueMetricLayer, residueSelections, selections, atomPoints, residues]);
     const tooltipQueries = useMemo((): readonly StructurePresentationQuery[] => {
         if (!layerVisible) return [];
+        if (atomPoints.length) return atomPoints.map(point => ({...atomQuery(point.identity),tooltip:point.tooltip}));
         return residueMetricLayer?.points.map((point) => ({
             documentId: point.residue.documentId ?? documentId, entityId: point.residue.entityId, labelAsymId: point.residue.labelAsymId,
             authAsymId: point.residue.authAsymId, startLabelSeqId: point.residue.labelSeqId,
@@ -273,15 +297,15 @@ export default function StructureViewerHost({
             endAuthSeqId: point.residue.authSeqId, insertionCode: point.residue.insertionCode,
             tooltip: point.tooltip,
         })) ?? [];
-    }, [documentId, layerVisible, residueMetricLayer]);
+    }, [documentId, layerVisible, residueMetricLayer, atomPoints]);
     const hiddenQueries = useMemo((): readonly StructurePresentationQuery[] => {
         const queries: StructurePresentationQuery[] = [];
-        if (activeLayer?.descriptor.dimension === 'residue-scalar' && filteredLayer?.descriptor.dimension === 'residue-scalar') {
-            const kept = new Set((filteredLayer.values as readonly MetricValue<ResidueRef>[]).map((entry) => canonicalResidueRefKey(entry.identity)));
+        if (activeLayer && filteredLayer && ['residue-scalar','atom-scalar'].includes(activeLayer.descriptor.dimension)) {
+            const kept = new Set((filteredLayer.values as readonly MetricValue<ResidueRef>[]).map((entry) => canonicalSpatialRefKey(entry.identity)));
             for (const entry of activeLayer.values as readonly MetricValue<ResidueRef>[]) {
-                if (kept.has(canonicalResidueRefKey(entry.identity))) continue;
+                if (kept.has(canonicalSpatialRefKey(entry.identity))) continue;
                 queries.push({
-                    documentId: entry.identity.documentId,
+                    ...atomQuery(entry.identity), documentId: entry.identity.documentId,
                     entityId: entry.identity.entityId,
                     labelAsymId: entry.identity.labelAsymId,
                     authAsymId: entry.identity.authAsymId,
@@ -335,13 +359,13 @@ export default function StructureViewerHost({
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
     }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, restoredPresentation, tooltipQueries]);
 
-    const residueLayer = filteredLayer?.descriptor.dimension === 'residue-scalar' ? filteredLayer : undefined;
+    const residueLayer = filteredLayer && ['residue-scalar', 'atom-scalar'].includes(filteredLayer.descriptor.dimension) ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'
         ? filteredLayer
         : undefined;
-    const residueValues = residueLayer?.descriptor.dimension === 'residue-scalar'
+    const residueValues = residueLayer
         ? residueLayer.values as readonly MetricValue<ResidueRef>[] : [];
-    const activeResidues: readonly ResidueRef[] = activeLayer?.descriptor.dimension === 'residue-scalar'
+    const activeResidues: readonly ResidueRef[] = activeLayer && ['residue-scalar','atom-scalar'].includes(activeLayer.descriptor.dimension)
         ? (activeLayer.values as readonly MetricValue<ResidueRef>[]).map((entry) => entry.identity)
         : activeLayer?.descriptor.dimension === 'residue-pair-matrix'
             ? (activeLayer.values as readonly MetricValue<ResiduePairIdentity>[]).flatMap((entry) => [entry.identity.first, entry.identity.second])
@@ -350,15 +374,17 @@ export default function StructureViewerHost({
     const chainPairLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'chain-pair-scalar') as readonly Extract<MetricLayer, { descriptor: { dimension: 'chain-pair-scalar' } }>[];
     const geometryLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'geometry-annotation') as readonly Extract<MetricLayer, { descriptor: { dimension: 'geometry-annotation' } }>[];
     const hasComplexAnalysis = derivedComponents.length > 0 || chainPairLayers.length > 0 || geometryLayers.length > 0;
-    const exportRows = useMemo(() => registry.list().flatMap((layer) => layer.values.map((entry) => ({
-        metric_id: layer.descriptor.id,
-        metric_label: layer.descriptor.label,
-        units: layer.descriptor.units ?? null,
-        identity: exportMetricIdentity(entry.identity),
-        value: entry.missingness === undefined ? entry.value : null,
-        missingness: entry.missingness ?? null,
-    }))), [registry]);
-    const hasWorkbenchContent = Boolean(showM6Workbench || activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
+    const exportRows = useMemo(() => registry.list().flatMap<Readonly<Record<string, unknown>>>((layer) => {
+        const common = {metric_id:layer.descriptor.id,metric_label:layer.descriptor.label,units:layer.descriptor.units ?? null};
+        if ('dataset' in layer && layer.dataset?.matrix) {
+            // Export the same exact dense dataset, not an empty table or repeated cell identities.
+            return [{...common,identity:{row_axis:layer.dataset.rowAxis,column_axis:layer.dataset.columnAxis},
+                value:layer.dataset.matrix,missingness:null}];
+        }
+        return layer.values.map(entry => ({...common,identity:exportMetricIdentity(entry.identity),
+            value:entry.missingness === undefined ? entry.value : null,missingness:entry.missingness ?? null}));
+    }), [registry]);
+    const hasWorkbenchContent = Boolean(metricDetails || showM6Workbench || activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
 
     const hostHeight = typeof viewerProps.height === 'number' ? `${viewerProps.height}px` : viewerProps.height;
 
@@ -373,13 +399,13 @@ export default function StructureViewerHost({
                 <button
                     type="button"
                     onClick={() => onMetricWorkbenchVisibilityChange(true)}
-                    className="absolute right-2 top-2 z-40 rounded border border-blue-500/50 bg-slate-950/90 px-3 py-1.5 text-xs font-semibold text-blue-200 shadow-lg hover:bg-slate-800"
+                    className="absolute right-14 bottom-2 z-40 rounded border border-blue-500/50 bg-slate-950/90 px-3 py-1.5 text-xs font-semibold text-blue-200 shadow-lg hover:bg-slate-800"
                 >
                     Show metrics
                 </button>
             )}
             {(showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent && (
-                <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
+                <aside hidden={workbenchCollapsed} className="absolute bottom-2 right-14 z-30 max-h-[55%] w-[min(28rem,calc(100%-4rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
                             <span>Metrics</span>
@@ -414,9 +440,25 @@ export default function StructureViewerHost({
                         </details>
                     )}
                     {showMetricWorkbench && activeLayer && <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />}
-                    {showMetricWorkbench && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} onChange={setFilters} />}
-                    {showLinkedSequence && residueLayer && <SequenceTrackExtension metricId={residueLayer.descriptor.id} points={residueValues.map((entry) => ({ residue: entry.identity, label: residueLabel(entry.identity), value: typeof entry.value === 'number' ? entry.value : null }))} selectedKeys={selectedResidueKeys} onSelection={commitSelection} />}
+                    {showMetricWorkbench && !(pairLayer && 'dataset' in pairLayer && pairLayer.dataset?.matrixDirection === 'directed') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} onChange={setFilters} />}
+                    {showLinkedSequence && residueLayer && <SequenceTrackExtension
+                        key={residueLayer.descriptor.id}
+                        metricId={residueLayer.descriptor.id}
+                        granularity={residueLayer.descriptor.dimension === 'atom-scalar' ? 'atom' : 'residue'}
+                        points={residueValues.map((entry) => ({
+                            residue: entry.identity,
+                            label: residueLabel(entry.identity),
+                            value: typeof entry.value === 'number' ? entry.value : null,
+                            missingness: entry.missingness,
+                            // Display only: the registry, palette and export keep native fractions.
+                            displayValue: residueLayer.descriptor.id === 'native-plddt' && typeof entry.value === 'number'
+                                ? `${(entry.value * 100).toFixed(1)}%` : undefined,
+                        }))}
+                        selectedKeys={selectedResidueKeys}
+                        onSelection={commitSelection}
+                    />}
                     {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
+                    {showMetricWorkbench && metricDetails}
                     {showMetricWorkbench && showComplexWorkbench && <ComplexAnalysisPanel components={derivedComponents} chainPairLayers={chainPairLayers} geometryLayers={geometryLayers} onSelection={commitSelection} />}
                     {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId={documentId} measurements={measurements} onChange={setMeasurements} />}
                     {showM6Workbench && <M6WorkbenchPanel controller={controller} jobId={jobId} tableRows={exportRows} />}

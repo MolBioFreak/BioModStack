@@ -12,6 +12,7 @@ from typing import cast
 import pytest
 from jsonschema import Draft202012Validator
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 import services.md.results as md_results_module
 from routers.md_results import _stream_verified_artifact
@@ -298,7 +299,7 @@ def test_final_structure_provenance_must_match_governed_trajectory(
     assert exc_info.value.code == "MD_REPRESENTATIVE_STRUCTURE_PROVENANCE_INVALID"
 
 
-def test_open_verified_artifact_streams_the_same_inode_that_was_hashed(
+def test_open_verified_artifact_denies_replacement_during_hashing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -309,24 +310,112 @@ def test_open_verified_artifact_streams_the_same_inode_that_was_hashed(
     trajectory_id = next(item["id"] for item in inventory["artifacts"] if item["name"] == "trajectory")
     attacker = trajectory.with_name("attacker.dcd")
     attacker.write_bytes(b"attacker-content")
-    real_read = md_results_module.os.read
+    real_read = md_results_module.os.pread
     swapped = False
 
-    def swap_after_open(descriptor: int, count: int) -> bytes:
+    def swap_after_open(descriptor: int, count: int, offset: int) -> bytes:
         nonlocal swapped
         if not swapped:
             swapped = True
             attacker.replace(trajectory)
-        return real_read(descriptor, count)
+        return real_read(descriptor, count, offset)
 
-    monkeypatch.setattr(md_results_module.os, "read", swap_after_open)
-    artifact, handle = md_results_module.open_verified_artifact(job, trajectory_id)
-    try:
-        assert artifact.sha256 == hashlib.sha256(b"trajectory").hexdigest()
-        assert trajectory.read_bytes() == b"attacker-content"
+    monkeypatch.setattr(md_results_module.os, "pread", swap_after_open)
+    with pytest.raises(MDResultError, match="changed during verification"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+
+
+def test_invalid_analysis_sidecar_does_not_block_dynamics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path))
+    raw_job, _manifest, trajectory = _md_job_tree(tmp_path)
+    job = cast(MDJobRecord, raw_job)
+    (tmp_path / "analysis").mkdir()
+    (tmp_path / "analysis/md_analysis_replica_0.artifacts.json").write_text('{"schema":"wrong"}')
+    inventory = artifact_inventory(job)
+    assert inventory["analysis_error"]["code"] == "MD_ANALYSIS_ARTIFACT_MANIFEST_INVALID"
+    assert summary(job)["status"] == "completed"
+    assert build_analysis_work_items(job)["retryable"] is True
+    with pytest.raises(MDResultError):
+        analysis_report(job)
+    trajectory_id = next(item["id"] for item in inventory["artifacts"] if item["name"] == "trajectory")
+    _artifact, handle = md_results_module.open_verified_artifact(job, trajectory_id)
+    with handle:
         assert handle.read() == b"trajectory"
-    finally:
-        handle.close()
+    trajectory.write_bytes(b"corruption")
+    with pytest.raises(MDResultError, match="immutable manifest"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+
+
+@pytest.mark.asyncio
+async def test_repeated_md_ranges_reuse_verified_digest_and_reject_changed_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Generated TEST trajectory bytes; exercises actual service and range response, not MD inference.
+    monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path))
+    raw_job, _manifest, trajectory = _md_job_tree(tmp_path)
+    job = cast(MDJobRecord, raw_job)
+    trajectory_id = next(item["id"] for item in artifact_inventory(job)["artifacts"] if item["name"] == "trajectory")
+    real_pread = md_results_module.os.pread
+    hashed_bytes = 0
+    def measured_pread(fd, size, offset):
+        nonlocal hashed_bytes
+        data = real_pread(fd, size, offset)
+        hashed_bytes += len(data)
+        return data
+    monkeypatch.setattr(md_results_module.os, "pread", measured_pread)
+    from concurrent.futures import ThreadPoolExecutor
+    def open_concurrently(_index):
+        _, handle = md_results_module.open_verified_artifact(job, trajectory_id)
+        with handle:
+            return handle.read(1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(open_concurrently, range(2))) == [b"t", b"t"]
+    assert hashed_bytes == len(b"trajectory")
+    for requested, expected in [("bytes=1-3", b"raj"), ("bytes=-2", b"ry"), ("bytes=4-", b"ectory")]:
+        artifact, handle = md_results_module.open_verified_artifact(job, trajectory_id)
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": [(b"range", requested.encode())]})
+        response = _stream_verified_artifact(handle, name=artifact.name, size=artifact.bytes, request=request)
+        assert response.status_code == 206
+        assert isinstance(response, StreamingResponse)
+        assert b"".join([chunk async for chunk in response.body_iterator]) == expected
+        assert handle.closed
+    assert hashed_bytes == len(b"trajectory")  # cold one full scan; warm ranges zero scan bytes
+    metadata = trajectory.stat()
+    trajectory.write_bytes(b"corruption")  # same size; restored mtime must not restore trust
+    md_results_module.os.utime(trajectory, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    with pytest.raises(MDResultError, match="immutable manifest"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+    replacement = trajectory.with_name("replacement")
+    replacement.write_bytes(b"corruption")
+    replacement.replace(trajectory)
+    with pytest.raises(MDResultError, match="immutable manifest"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+    target = trajectory.with_name("target")
+    target.write_bytes(b"trajectory")
+    trajectory.unlink()
+    trajectory.symlink_to(target)
+    with pytest.raises(MDResultError, match="unavailable"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+    trajectory.unlink()
+    outside_replica = tmp_path / "outside-replica"
+    outside_replica.write_bytes(b"trajectory")
+    trajectory.symlink_to(outside_replica)
+    with pytest.raises(MDResultError, match="escapes"):
+        md_results_module.open_verified_artifact(job, trajectory_id)
+    print(f"MD range hashing: concurrent cold opens=10 bytes; three warm ranges=0 bytes; total including rejected mutation/replacement={hashed_bytes}")
+
+
+def test_verified_md_handle_keeps_its_inode_after_path_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path))
+    raw_job, _manifest, trajectory = _md_job_tree(tmp_path)
+    job = cast(MDJobRecord, raw_job)
+    artifact_id = next(item["id"] for item in artifact_inventory(job)["artifacts"] if item["name"] == "trajectory")
+    _, handle = md_results_module.open_verified_artifact(job, artifact_id)
+    replacement = trajectory.with_name("replacement")
+    replacement.write_bytes(b"corruption")
+    replacement.replace(trajectory)
+    with handle:
+        assert handle.read() == b"trajectory"
+    with pytest.raises(MDResultError):
+        md_results_module.open_verified_artifact(job, artifact_id)
 
 
 def test_analysis_workflow_is_cpu_hash_bound_retryable_and_separate() -> None:
@@ -384,7 +473,7 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
             "atom_order_manifest_sha256": manifest["artifacts"]["atom_order_manifest"]["sha256"],
             "atom_order_identity": manifest["artifacts"]["final_coordinates"]["atom_order_identity"],
         },
-        "tool": {"name": "MDAnalysis", "version": "2.9.0", "implementation_sha256": md_results_module.expected_analysis_implementation_sha256(), "runtime_sif_sha256": "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68"},
+        "tool": {"name": "MDAnalysis", "version": "2.9.0", "implementation_sha256": md_results_module.expected_analysis_implementation_sha256(), "runtime_sif_sha256": "a" * 64},
         "selection": "protein and backbone",
         "reference": "first_admitted_frame",
         "policy": {
@@ -437,6 +526,18 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
     (analysis_dir / "md_analysis_replica_0.artifacts.json").write_text(json.dumps(sidecar), encoding="utf-8")
 
     result = analysis_report(job)
+    recorded_tool = result["reports"][0]["tool"].copy()
+    def changed_source():
+        raise AssertionError("Historical GET must not inspect today's implementation")
+    monkeypatch.setattr(md_results_module, "expected_analysis_implementation_sha256", changed_source)
+    assert analysis_report(job)["reports"][0]["tool"] == recorded_tool
+    assert summary(job)["status"] == "completed"
+    retained_report = report_path.read_bytes()
+    report_path.write_bytes(retained_report + b" ")
+    with pytest.raises(MDResultError, match="immutable artifact manifest"):
+        analysis_report(job)
+    assert summary(job)["status"] == "completed"
+    report_path.write_bytes(retained_report)
 
     assert result["ensemble"]["statistical_unit"] == "replica"
     assert result["ensemble"]["frame_pooling"] is False
@@ -564,6 +665,6 @@ def test_nextflow_analysis_terminal_publication_cannot_flush_stale_state_before_
     publication = source[start:end]
     assert "await session.flush()" not in publication
     assert "session.expunge(job)" in publication
-    assert "Job.status == JobStatus.RUNNING" in publication
-    assert 'Job.queue_status == "running"' in publication
-    assert publication.index("session.expunge(job)") < publication.index("update(Job)")
+    assert "snapshot=terminal_snapshot" in publication
+    assert "publish_terminal_job_changes(" in publication
+    assert publication.index("session.expunge(job)") < publication.index("publish_terminal_job_changes(")

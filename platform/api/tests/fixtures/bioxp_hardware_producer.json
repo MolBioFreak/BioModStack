@@ -1,0 +1,338 @@
+{
+  "provenance": {
+    "kind": "actual copied producer with synthetic process/device/provider inputs; no hardware evidence",
+    "sha256": {
+      "src/bioxp/api.py": "65d6aaf3aa987e343289909d867d9fa49eca76e131ebf4c7b1d3cf6f9130f245",
+      "src/bioxp/camera_provider.py": "56b47b0c0cdc914d497dfdcdb9bd14534c820658c76c9eb28c0edcdf152b0917",
+      "src/bioxp/operator_controls.py": "91ef8072a0e0be4d30c27d05e9db864719e8a9e942c7ced407056de11df9fb58",
+      "src/bioxp/hardware_status.py": "f333b163671c549c688d1ae379d962cb6f3b1bc7c542393c10ca25613952d619",
+      "tests/test_camera_stream_producer.py": "5ecd027a8d34ffc4c8a043060df50183ac52e5489b742798af0a662bc55be25e"
+    }
+  },
+  "rows": [
+    {
+      "label": "fresh",
+      "payload": {
+        "snapshot_id": "617d4c5602e140f49e6c77bc19edfaa9",
+        "ownership_epoch": 0,
+        "cache_state": "fresh",
+        "freshness": {
+          "state": "fresh",
+          "age_s": 0.0,
+          "fresh_for_s": 15.0
+        },
+        "requested_domains": [
+          "transport"
+        ],
+        "ownership": {
+          "transport": "unbound",
+          "usb": "unbound",
+          "router": "unbound",
+          "CAN_READY": null
+        },
+        "provenance": "POST /hardware/snapshot/collect",
+        "lifecycle": {
+          "schema_version": "bioxp.canonical_lifecycle.v1",
+          "revision": 0,
+          "updated_at": "2026-09-07T19:29:33.950502Z",
+          "operation_state": "stopped",
+          "operation_reason": "process_created",
+          "start_mode": null,
+          "board_test_mode": false,
+          "check_camera": false,
+          "CAN_READY": null,
+          "door": {
+            "door_closed": null,
+            "latch_closed": null,
+            "source": null,
+            "observed_at": null
+          },
+          "startup": {
+            "state": "not_run",
+            "active_stage": null,
+            "stages": {
+              "constructor_pipette_stage": {
+                "name": "constructor_pipette_stage",
+                "state": "not_run",
+                "prerequisite": null,
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initial_check": {
+                "name": "initial_check",
+                "state": "blocked",
+                "prerequisite": "constructor_pipette_stage",
+                "repeatable": true,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initialization_without_motion": {
+                "name": "initialization_without_motion",
+                "state": "blocked",
+                "prerequisite": "initial_check",
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              }
+            }
+          }
+        },
+        "available": true,
+        "completed_at": "2026-09-07T19:29:34.181730Z",
+        "domains": {
+          "transport": {
+            "status": "observed",
+            "observation": {
+              "synthetic": true
+            },
+            "error": null,
+            "observed_at": "2026-09-07T19:29:34.181715Z",
+            "observed_unix": 1000.0,
+            "provenance": {
+              "route": "POST /hardware/snapshot/collect",
+              "collector": "transport",
+              "allow_recover": false
+            },
+            "freshness": {
+              "state": "fresh",
+              "age_s": 0.0,
+              "fresh_for_s": 15.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "aged",
+      "payload": {
+        "snapshot_id": "617d4c5602e140f49e6c77bc19edfaa9",
+        "ownership_epoch": 0,
+        "cache_state": "fresh",
+        "freshness": {
+          "state": "fresh",
+          "age_s": 14.0,
+          "fresh_for_s": 15.0
+        },
+        "requested_domains": [
+          "transport"
+        ],
+        "ownership": {
+          "transport": "unbound",
+          "usb": "unbound",
+          "router": "unbound",
+          "CAN_READY": null
+        },
+        "provenance": "POST /hardware/snapshot/collect",
+        "lifecycle": {
+          "schema_version": "bioxp.canonical_lifecycle.v1",
+          "revision": 0,
+          "updated_at": "2026-09-07T19:29:33.950502Z",
+          "operation_state": "stopped",
+          "operation_reason": "process_created",
+          "start_mode": null,
+          "board_test_mode": false,
+          "check_camera": false,
+          "CAN_READY": null,
+          "door": {
+            "door_closed": null,
+            "latch_closed": null,
+            "source": null,
+            "observed_at": null
+          },
+          "startup": {
+            "state": "not_run",
+            "active_stage": null,
+            "stages": {
+              "constructor_pipette_stage": {
+                "name": "constructor_pipette_stage",
+                "state": "not_run",
+                "prerequisite": null,
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initial_check": {
+                "name": "initial_check",
+                "state": "blocked",
+                "prerequisite": "constructor_pipette_stage",
+                "repeatable": true,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initialization_without_motion": {
+                "name": "initialization_without_motion",
+                "state": "blocked",
+                "prerequisite": "initial_check",
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              }
+            }
+          }
+        },
+        "available": true,
+        "completed_at": "2026-09-07T19:29:34.181730Z",
+        "domains": {
+          "transport": {
+            "status": "observed",
+            "observation": {
+              "synthetic": true
+            },
+            "error": null,
+            "observed_at": "2026-09-07T19:29:34.181715Z",
+            "observed_unix": 1000.0,
+            "provenance": {
+              "route": "POST /hardware/snapshot/collect",
+              "collector": "transport",
+              "allow_recover": false
+            },
+            "freshness": {
+              "state": "fresh",
+              "age_s": 14.0,
+              "fresh_for_s": 15.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "expired",
+      "payload": {
+        "snapshot_id": "617d4c5602e140f49e6c77bc19edfaa9",
+        "ownership_epoch": 0,
+        "cache_state": "stale",
+        "freshness": {
+          "state": "stale",
+          "age_s": 15.001,
+          "fresh_for_s": 15.0
+        },
+        "requested_domains": [
+          "transport"
+        ],
+        "ownership": {
+          "transport": "unbound",
+          "usb": "unbound",
+          "router": "unbound",
+          "CAN_READY": null
+        },
+        "provenance": "POST /hardware/snapshot/collect",
+        "lifecycle": {
+          "schema_version": "bioxp.canonical_lifecycle.v1",
+          "revision": 0,
+          "updated_at": "2026-09-07T19:29:33.950502Z",
+          "operation_state": "stopped",
+          "operation_reason": "process_created",
+          "start_mode": null,
+          "board_test_mode": false,
+          "check_camera": false,
+          "CAN_READY": null,
+          "door": {
+            "door_closed": null,
+            "latch_closed": null,
+            "source": null,
+            "observed_at": null
+          },
+          "startup": {
+            "state": "not_run",
+            "active_stage": null,
+            "stages": {
+              "constructor_pipette_stage": {
+                "name": "constructor_pipette_stage",
+                "state": "not_run",
+                "prerequisite": null,
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initial_check": {
+                "name": "initial_check",
+                "state": "blocked",
+                "prerequisite": "constructor_pipette_stage",
+                "repeatable": true,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              },
+              "initialization_without_motion": {
+                "name": "initialization_without_motion",
+                "state": "blocked",
+                "prerequisite": "initial_check",
+                "repeatable": false,
+                "attempt_id": null,
+                "attempt_count": 0,
+                "started_at": null,
+                "completed_at": null,
+                "evidence": null,
+                "history": [],
+                "error": null
+              }
+            }
+          }
+        },
+        "available": true,
+        "completed_at": "2026-09-07T19:29:34.181730Z",
+        "domains": {
+          "transport": {
+            "status": "observed",
+            "observation": {
+              "synthetic": true
+            },
+            "error": null,
+            "observed_at": "2026-09-07T19:29:34.181715Z",
+            "observed_unix": 1000.0,
+            "provenance": {
+              "route": "POST /hardware/snapshot/collect",
+              "collector": "transport",
+              "allow_recover": false
+            },
+            "freshness": {
+              "state": "stale",
+              "age_s": 15.001,
+              "fresh_for_s": 15.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

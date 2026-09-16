@@ -25,12 +25,7 @@ def _load_builder():
     return module
 
 
-def test_live_capability_authority_uses_v2_squigulator_inventory(monkeypatch) -> None:
-    monkeypatch.setattr(
-        ngs_molbio_capabilities,
-        "_verify_phase_n0_receipt",
-        lambda *_args: None,
-    )
+def test_live_capability_authority_uses_v2_squigulator_inventory() -> None:
     inventory = ngs_molbio_capabilities.capability_inventory()
 
     assert inventory["schema"] == "bms.ngs-molbio.capability-inventory.v2"
@@ -47,6 +42,16 @@ def test_builder_defaults_to_active_v2_runtime_authority() -> None:
     assert builder.DENOMINATOR == DENOMINATOR_V2
     assert builder.DENOMINATOR_RELATIVE == DENOMINATOR_V2_RELATIVE
     assert builder.DENOMINATOR_SCHEMA == "bms.ngs-molbio.runtime-source-denominator.v2"
+
+
+def test_runtime_denominator_covers_local_resource_and_path_authority() -> None:
+    builder = _load_builder()
+    denominator = builder._load_source_denominator()
+    assert {
+        "biomodstack_local_resources.py",
+        "biomodstack_runtime_profile.py",
+        "platform/api/telemetry_store.py",
+    }.issubset(set(denominator["paths"]))
 
 
 def test_runtime_denominator_covers_complete_restriction_authority() -> None:
@@ -76,6 +81,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
         "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
         "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
+        "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
         "platform/frontend/src/components/MolBioToolkit/panels/AssemblyPanel.tsx",
         "platform/frontend/src/components/MolBioToolkit/hooks/useSequenceOperations.ts",
         "platform/frontend/src/components/MolBioToolkit/types.ts",
@@ -89,11 +95,31 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "scripts/build_restriction_enzyme_catalog.py",
     }
     assert required <= set(denominator["paths"])
-    assert len(denominator["paths"]) == 258
+    assert {'scripts/lib/shared_runtime_images.py', 'scripts/publish_runtime_images.py'} <= set(denominator['paths'])
+    assert {
+        'scripts/lib/runtime_image_lifecycle.py', 'scripts/retire_runtime_images.py',
+        'modules/ngs/clone_validation.nf', 'modules/ngs/construct_verify.nf',
+        'platform/api/services/remote_execution/bundle.py',
+        'platform/api/services/remote_execution/cache.py',
+        'platform/api/services/remote_execution/managed_inventory.py',
+        'platform/api/tools/bms_artifact_cache.py',
+        'platform/api/tools/bms_managed_runtime.py',
+    } <= set(denominator['paths'])
+    assert {
+        'platform/frontend/src/components/MolBioToolkit/panels/sequenceSearch.ts',
+        'platform/frontend/src/components/MolBioToolkit/panels/sequenceSearch.worker.ts',
+        'platform/frontend/src/components/MolBioToolkit/panels/startSequenceSearch.ts',
+        'platform/frontend/src/components/MolBioToolkit/panels/useInputOwnership.ts',
+    } <= set(denominator['paths'])
+    assert all((ROOT / path).is_file() for path in denominator['paths'])
+    assert not {
+        'platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx',
+        'platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx',
+    }.intersection(denominator['paths'])
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:
-    accepted = ngs_molbio_runtime_status.runtime_implementation_record()
+    accepted = ngs_molbio_runtime_status.runtime_implementation_record(fresh=True)
     assert accepted["implementation_state"] == "implemented_unverified"
     assert accepted["release_acceptance_state"] == "open"
     assert accepted["capability_exposure_state"] == "fail_closed"
@@ -140,6 +166,5 @@ def test_builder_uses_current_n0_authority_and_status_accepts_generated_record(
     monkeypatch.setattr(
         ngs_molbio_runtime_status, "_DENOMINATOR_RELATIVE", DENOMINATOR_V2_RELATIVE
     )
-    monkeypatch.setattr(ngs_molbio_capabilities, "_RUNTIME_RECORD", output)
-    accepted = ngs_molbio_runtime_status.runtime_implementation_record()
+    accepted = ngs_molbio_runtime_status.runtime_implementation_record(fresh=True)
     assert accepted == generated

@@ -39,6 +39,7 @@ except ImportError:
 API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+from biomodstack_services import desktop_exec_arg
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     API_SERVICE,
@@ -355,7 +356,7 @@ def toggle_autostart(icon, item):
 Type=Application
 Name=BioModStack Tray
 Comment=BioModStack System Tray Indicator
-Exec=python3 {Path(__file__).resolve()}
+Exec=python3 {desktop_exec_arg(Path(__file__).resolve())}
 Icon={ICON_PATH}
 Terminal=false
 Categories=Science;Development;

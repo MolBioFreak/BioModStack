@@ -57,6 +57,10 @@ class QueuedJobResponse(BaseModel):
     model_id: str
     mode: str
     queue_status: str
+    status: str
+    awaiting_input: bool = False
+    awaiting_stage: Optional[str] = None
+    error_message: Optional[str] = None
     paused: bool
     pinned_gpu: Optional[int]
     assigned_gpu: Optional[int]
@@ -64,6 +68,7 @@ class QueuedJobResponse(BaseModel):
     execution_target_id: Optional[str] = None
     remote_state: Optional[str] = None
     remote_waiting_reason: Optional[str] = None
+    provenance: Optional[Dict[str, Any]] = None
     priority: int
     vram_estimate_mb: Optional[int]
     sequence_length: Optional[int]
@@ -220,7 +225,7 @@ def _get_process_cmdline(pid: int, cache: Dict[int, str]) -> str:
 
 
 def _collect_live_vram_by_job(jobs: List[Job]) -> Dict[str, int]:
-    running_jobs = [job for job in jobs if job.queue_status == "running" and job_uses_assigned_gpu(job)]
+    running_jobs = [job for job in jobs if job.queue_status == "running" and not job.execution_target_id and job_uses_assigned_gpu(job)]
     if not running_jobs:
         return {}
     try:
@@ -320,7 +325,7 @@ def _collect_stage_progress_by_job(jobs: List[Job]) -> Dict[str, str]:
 
     progress_by_job: Dict[str, str] = {}
     for job in jobs:
-        if job.queue_status != "running" or not job.current_stage:
+        if job.execution_target_id or job.queue_status != "running" or not job.current_stage:
             continue
         work_dir = job.stage_work_dir or _infer_stage_work_dir(job)
         if not work_dir:
@@ -423,6 +428,8 @@ class QueueStatsResponse(BaseModel):
     queued: int
     running: int
     paused: int
+    preparing: int = 0
+    cancelling: int = 0
     total: int
 
 
@@ -477,19 +484,30 @@ async def list_queue(
     # One global scheduler projection: MD and non-MD jobs are visible here.
     # The stale-state repair above remains deliberately non-MD because durable
     # MD lifecycle state has its own guarded reconciliation semantics.
+    # Result transfer is visible work, not GPU capacity. Preserve persisted statuses
+    # and keep the capacity-only /stats predicate unchanged. Do not expose other gates.
     query = select(Job).where(
-        Job.queue_status.in_(['queued', 'running', 'paused']),
-        Job.awaiting_input == False,
-        Job.vram_estimate_mb.isnot(None)
+        (
+            Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling'])
+            & (Job.awaiting_input == False)
+            & Job.vram_estimate_mb.isnot(None)
+        ) | (
+            Job.execution_target_id.isnot(None)
+            & (Job.execution_target_id != '')
+            & (Job.awaiting_input == True)
+            & (Job.awaiting_stage == 'remote_results')
+            & (
+                ((Job.status == 'awaiting_input') & Job.remote_state.in_(['results_available', 'result_pull_failed']))
+                | ((Job.status == 'running') & (Job.queue_status == 'running') & (Job.remote_state == 'returning'))
+            )
+        )
     ).order_by(
         Job.priority.desc(),
         Job.created_at
     )
     
     if status:
-        query = select(Job).where(
-            Job.queue_status == status
-        ).order_by(Job.priority.desc(), Job.created_at)
+        query = query.where(Job.queue_status == status)
     
     result = await session.execute(query)
     jobs = result.scalars().all()
@@ -505,6 +523,10 @@ async def list_queue(
             model_id=job.model_id,
             mode=job.mode,
             queue_status=job.queue_status,
+            status=job.status,
+            awaiting_input=job.awaiting_input,
+            awaiting_stage=job.awaiting_stage,
+            error_message=job.error_message,
             paused=job.paused,
             pinned_gpu=job.pinned_gpu,
             assigned_gpu=job.assigned_gpu if job_uses_assigned_gpu(job) else None,
@@ -512,6 +534,10 @@ async def list_queue(
             execution_target_id=job.execution_target_id,
             remote_state=job.remote_state,
             remote_waiting_reason=(job.error_message if job.execution_target_id else None),
+            provenance={"remote_execution_receipt": {
+                key: ((job.provenance or {}).get("remote_execution_receipt") or {}).get(key)
+                for key in ("result_manifest_sha256", "received_manifest_sha256")
+            }} if job.execution_target_id else None,
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,
@@ -539,7 +565,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
     # Only count jobs that went through new orchestrator (have vram_estimate_mb set)
     result = await session.execute(
         select(Job).where(
-            Job.queue_status.in_(['queued', 'running', 'paused']),
+            Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling']),
             Job.awaiting_input == False,
             Job.vram_estimate_mb.isnot(None)
         )
@@ -554,6 +580,8 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
         queued=queued,
         running=running,
         paused=paused,
+        preparing=sum(j.queue_status == "preparing" for j in jobs),
+        cancelling=sum(j.queue_status == "cancelling" for j in jobs),
         total=len(jobs)
     )
 

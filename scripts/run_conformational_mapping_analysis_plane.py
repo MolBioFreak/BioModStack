@@ -149,9 +149,10 @@ def _main(active_pins: list[_frustrampnn_runtime.PinnedContainer]) -> None:
     )
     active_pins.append(container_pin)
     container = Path(f"/proc/self/fd/{container_fd}")
-    apptainer = shutil.which(args.apptainer_bin)
+    from scripts.lib.container_runtime import container_executable
+    apptainer = container_executable(shutil.which(args.apptainer_bin))
     if not apptainer:
-        raise RuntimeError("registered Apptainer executable is unavailable")
+        raise RuntimeError("registered scientific container executable is unavailable")
     checkpoint_sha256 = _container_sha256(
         apptainer, container, str(args.checkpoint), container_fd=container_fd,
     )

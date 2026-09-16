@@ -24,7 +24,7 @@ process ONTPooledReferenceAssignment {
     path "combined_intended_reference.fasta.fai"
     path "pooled_assignment.bam"
     path "pooled_assignment.bam.bai"
-    path "pooled_assignment.minimap2.log"
+    path "pooled_reference_assignment.minimap2.log"
     path "target_*.read_ids.txt"
     path "target_*.fastq"
     path "ambiguous.read_ids.txt"

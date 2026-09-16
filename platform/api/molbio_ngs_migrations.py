@@ -1700,9 +1700,14 @@ def _artifact_errors(
 
 
 def attest_schema(
-    connection: sqlite3.Connection, *, artifact_root: Path | None = None
+    connection: sqlite3.Connection, *, artifact_root: Path | None = None,
+    verify_data: bool = True,
 ) -> dict[str, object]:
-    """Attest the exact migration ledger and every user schema object's SQL."""
+    """Attest schema; optionally audit retained rows and artifact bytes too.
+
+    Startup, release and restore retain the full audit. Ordinary health probes
+    only need the fixed-size schema/ledger checks, not a scan of scientific data.
+    """
 
     expected_objects = _expected_schema_objects()
     actual_objects = _schema_objects(connection)
@@ -1731,9 +1736,12 @@ def attest_schema(
     else:
         ledger_error = None
     expected_ledger = _expected_ledger_rows()
-    foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
-    authority_coherence_errors = _authority_coherence_errors(connection)
-    artifact_errors = _artifact_errors(connection, artifact_root)
+    foreign_key_errors = (
+        [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        if verify_data else None
+    )
+    authority_coherence_errors = _authority_coherence_errors(connection) if verify_data else None
+    artifact_errors = _artifact_errors(connection, artifact_root) if verify_data else None
     ledger_matches = ledger_rows == expected_ledger and ledger_error is None
     return {
         "ok": not (
@@ -1745,6 +1753,7 @@ def attest_schema(
             or artifact_errors
             or not ledger_matches
         ),
+        "data_integrity_checked": verify_data,
         "expected_migration_ledger": [list(row) for row in expected_ledger],
         "actual_migration_ledger": [list(row) for row in ledger_rows],
         "migration_ledger_error": ledger_error,
@@ -1797,8 +1806,8 @@ def run_all(db_path: str | Path) -> None:
         connection.close()
 
 
-def health(db_path: str | Path) -> dict[str, object]:
-    """Return fail-closed health details; malformed databases never escape the probe."""
+def health(db_path: str | Path, *, deep: bool = True) -> dict[str, object]:
+    """Report schema readiness, with an explicit optional retained-data audit."""
 
     path = Path(db_path).expanduser().resolve()
     base: dict[str, object] = {"path": str(path), "exists": path.exists()}
@@ -1813,7 +1822,7 @@ def health(db_path: str | Path) -> dict[str, object]:
     connection: sqlite3.Connection | None = None
     try:
         connection = _connect(path, read_only=True)
-        attestation = attest_schema(connection)
+        attestation = attest_schema(connection, verify_data=deep)
         migration = connection.execute(
             "SELECT version, name, checksum, description, applied_at "
             "FROM molbio_ngs_schema_migrations ORDER BY version DESC LIMIT 1"

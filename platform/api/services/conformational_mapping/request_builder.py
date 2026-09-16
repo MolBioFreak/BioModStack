@@ -34,6 +34,41 @@ from services.frustrampnn.settings import (
 
 
 BACKENDS = frozenset({"protenix_v2_ensemble", "confornets", "external_import"})
+
+
+def canonical_msa_params(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Project immutable CM feature authority into the shared Protenix policy."""
+    from .contracts import validate_feature_policy, protenix_msa_settings
+    if request.get("backend") == "confornets":
+        policy = validate_feature_policy(request.get("feature_policy", {}))
+        # ConforNets owns skip_msa and native feature flags. Only project the
+        # shared provider settings here; do not invent Protenix science flags.
+        return protenix_msa_settings(policy.get("msa_settings", {}), enabled=not request.get("confornets", {}).get("skip_msa", False))
+    if request.get("backend") != "protenix_v2_ensemble":
+        if request.get("feature_policy", {}).get("msa_settings") is not None:
+            raise ValueError("CM hosted MSA settings require a prediction backend")
+        return {}
+    if not isinstance(request.get("feature_policy"), Mapping):
+        raise ValueError("CM Protenix requires an explicit feature_policy")
+    policy = validate_feature_policy(request["feature_policy"])
+    controls = ("protein_msa_enabled", "templates_enabled", "rna_msa_enabled")
+    if any(type(request["feature_policy"].get(key)) is not bool for key in controls):
+        raise ValueError("CM Protenix requires explicit protein-MSA, template, and RNA-MSA controls")
+    if policy["rna_msa_enabled"] is True:
+        raise ValueError("CM RNA-MSA is unsupported by the hosted protein-MSA artifact contract")
+    effective = protenix_msa_settings(policy.get("msa_settings", {}), enabled=policy["protein_msa_enabled"]) if policy["protein_msa_enabled"] or "msa_settings" in policy else {}
+    effective.update(protenix_use_msa=policy["protein_msa_enabled"],
+        protenix_use_template=policy["templates_enabled"],
+        protenix_use_rna_msa=policy["rna_msa_enabled"])
+    return effective
+
+
+def canonical_launch_params(request_path: Path | str) -> dict[str, Any]:
+    """Project the native request with its mandatory analysis selection."""
+
+    return {"cm_request_path": str(request_path), "run_frustrampnn": True}
+
+
 _TOP_LEVEL_FIELDS = frozenset(
     {
         "backend",
@@ -666,7 +701,23 @@ def _validate_state_landscape_comparison_plan(
 
 
 def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
-    """Validate API controls without writing files or scheduling work."""
+    """Validate a complete native request, including materialized import identity."""
+    return _validate_request_params(params, require_import_receipt=True)
+
+
+def validate_request_controls(params: Mapping[str, Any]) -> ValidatedRequest:
+    """Validate pre-staging controls; never fabricate an import receipt/coordinates.
+
+    Only the import receipt/coordinate check waits for native materialization.
+    This projection is not an executable request or scientific admission receipt.
+    """
+    return _validate_request_params(params, require_import_receipt=False)
+
+
+def _validate_request_params(
+    params: Mapping[str, Any], *, require_import_receipt: bool,
+) -> ValidatedRequest:
+    """Shared pure control normalization for both native request boundaries."""
 
     values = _strict_object(params, field="request", allowed_fields=_TOP_LEVEL_FIELDS)
     required = {
@@ -780,6 +831,18 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
             "confornets controls are invalid for the selected backend"
         )
 
+    from .contracts import validate_feature_policy, protenix_msa_settings
+    try:
+        feature = validate_feature_policy(request_fields["feature_policy"])
+        if backend in {"protenix_v2_ensemble", "confornets"} and "msa_settings" in feature:
+            enabled = (feature.get("protein_msa_enabled") is not False if backend == "protenix_v2_ensemble"
+                else not request_fields["confornets"]["skip_msa"])
+            protenix_msa_settings(feature["msa_settings"], enabled=enabled)
+    except ValueError as exc:
+        raise ConformationalMappingRequestError(str(exc)) from exc
+    if backend not in {"protenix_v2_ensemble", "confornets"} and "msa_settings" in request_fields["feature_policy"]:
+        raise ConformationalMappingRequestError("CM hosted MSA settings require a prediction backend")
+
     if backend != "protenix_v2_ensemble" and values.get("protenix_snapshot_id") not in (None, ""):
         raise ConformationalMappingRequestError(
             "protenix_snapshot_id is invalid for the selected backend"
@@ -847,7 +910,7 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
                     "staged_receipt_sha256": receipt_sha256,
                 }
             )
-    elif backend == "external_import":
+    elif backend == "external_import" and require_import_receipt:
         raise ConformationalMappingRequestError("an immutable registered import receipt is required")
 
     # Exercise the Phase 1 executable schema with a temporary valid identity/hash.
@@ -867,7 +930,8 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         validate_schema("cm_request_v1", preview)
     except ContractValidationError as exc:
         raise ConformationalMappingRequestError(str(exc)) from exc
-    _validate_state_landscape_comparison_plan(request_fields, coordinate_plan)
+    if backend != "external_import" or require_import_receipt or coordinate_plan:
+        _validate_state_landscape_comparison_plan(request_fields, coordinate_plan)
     return ValidatedRequest(
         request_fields=request_fields,
         coordinate_plan=tuple(coordinate_plan),
@@ -1108,7 +1172,7 @@ def materialize_trusted_internal_request(
     return MaterializedRequest(
         request_path=request_path,
         coordinate_plan_path=coordinate_plan_path,
-        launch_params={"cm_request_path": str(request_path), "run_frustrampnn": True},
+        launch_params=canonical_launch_params(request_path),
         request_sha256=request["request_sha256"],
         coordinate_plan_sha256=plan["coordinate_plan_sha256"],
     )

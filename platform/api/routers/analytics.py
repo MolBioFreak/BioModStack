@@ -5,10 +5,12 @@ Analytics API router - Aggregated metrics and batch comparisons.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from sqlalchemy.orm import defer
 from typing import List, Dict, Any, Optional
 import numpy as np
 from pydantic import BaseModel
 
+from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
 from database import get_session, Job, Design
 from services.analysis_runs import get_matching_job_analysis_run, load_analysis_result, validate_job_analysis_request
 from services.result_contracts import resolve_result_contract
@@ -33,6 +35,7 @@ class ScatterPoint(BaseModel):
     id: str
 
 class JobAnalytics(BaseModel):
+    scientific_cohorts: List[ScientificCohort] = []
     job_id: str
     design_count: int
     metrics: Dict[str, Optional[MetricDistribution]] | None
@@ -40,11 +43,20 @@ class JobAnalytics(BaseModel):
     pipeline_summary: Dict[str, Any]
 
 class DesignMetricPoint(BaseModel):
+    model_config = {"extra": "forbid"}
+    contract_revision: int | None = None
+    source_job_id: str | None = None
+    cohort_key: str | None = None
+    metric_states: Dict[str, MetricState] | None = None
+    metric_descriptors: Dict[str, MetricDescriptor] | None = None
+    metric_sources: Dict[str, MetricSource | None] | None = None
+    publication_state: MetricState | None = None
     id: str
     name: str
     metrics: Dict[str, float]
 
 class BatchAnalytics(BaseModel):
+    scientific_cohorts: List[ScientificCohort] = []
     job_ids: List[str]
     metrics_summary: Dict[str, Dict[str, float]]  # metric -> {job_id -> avg}
     common_metrics: List[str]
@@ -137,6 +149,20 @@ def extract_metrics(designs: List[Design]) -> Dict[str, List[float]]:
     return metrics
 
 
+def _scalar_design_query():
+    """Avoid unrelated per-residue/matrix hydration for scalar endpoints.
+
+    Native publication consumers still perform their own unchanged persisted
+    reads and byte verification. These are not canonical metric projections.
+    """
+    return select(Design).options(
+        defer(Design.pae_matrix, raiseload=True),
+        defer(Design.stability_data, raiseload=True),
+        defer(Design.residue_plddt, raiseload=True),
+        defer(Design.chain_metrics, raiseload=True),
+    )
+
+
 async def _load_designs_for_job(
     session: AsyncSession,
     job_id: str,
@@ -154,7 +180,7 @@ async def _load_designs_for_job(
         child_result = await session.execute(select(Job.id).where(Job.parent_job_id == job_id))
         job_ids.extend(str(child_id) for child_id in child_result.scalars().all())
 
-    result = await session.execute(select(Design).where(Design.job_id.in_(job_ids)))
+    result = await session.execute(_scalar_design_query().where(Design.job_id.in_(job_ids)))
     return result.scalars().all()
 
 
@@ -178,8 +204,9 @@ async def get_job_analytics(
             pipeline_summary={}
         )
 
-    # Extract raw values
-    raw_metrics = extract_metrics(designs)
+    # Legacy meanings remain in the original fields; revision-one cohorts are separate.
+    legacy, cohorts = await partition(designs, await owning_jobs(session, designs), session)
+    raw_metrics = extract_metrics(legacy)
     
     # Calculate distributions
     analyzed_metrics = {}
@@ -192,12 +219,13 @@ async def get_job_analytics(
     if raw_metrics["plddt_overall"] and raw_metrics["pae_overall"]:
         correlations["plddt_vs_pae"] = [
             ScatterPoint(x=d.plddt_overall, y=d.pae_overall, id=d.id)
-            for d in designs if d.plddt_overall is not None and d.pae_overall is not None
+            for d in legacy if d.plddt_overall is not None and d.pae_overall is not None
         ]
 
     return JobAnalytics(
         job_id=job_id,
         design_count=len(designs),
+        scientific_cohorts=cohorts,
         metrics=analyzed_metrics,
         correlations=correlations,
         pipeline_summary={
@@ -215,8 +243,10 @@ async def get_job_design_metrics(
     """Get raw metrics for all designs in a job (for custom client-side charting)."""
     designs = await _load_designs_for_job(session, job_id, include_children=include_children)
     
+    owners = await owning_jobs(session, designs)
     return [
-        DesignMetricPoint(
+        DesignMetricPoint(id=d.id, name=d.name, **(await persisted_projection(d, session)))
+        if revision_for_job(owners.get(d.job_id)) == 1 else DesignMetricPoint(
             id=d.id,
             name=d.name,
             metrics={
@@ -278,17 +308,20 @@ async def get_batch_analytics(
 ):
     """Compare metrics across multiple jobs."""
     summary = {}
+    cohorts = []
     
     # Simple loop for now - optimal would be single query with group_by
     for jid in job_ids:
-        query = select(Design).where(Design.job_id == jid)
+        query = _scalar_design_query().where(Design.job_id == jid)
         result = await session.execute(query)
         designs = result.scalars().all()
         
         if not designs:
             continue
             
-        metrics = extract_metrics(designs)
+        legacy, new_cohorts = await partition(designs, await owning_jobs(session, designs), session)
+        cohorts.extend(new_cohorts)
+        metrics = extract_metrics(legacy)
         
         # Calculate averages for comparison
         for m_name, values in metrics.items():
@@ -299,6 +332,7 @@ async def get_batch_analytics(
                 
     return BatchAnalytics(
         job_ids=job_ids,
+        scientific_cohorts=cohorts,
         metrics_summary=summary,
         common_metrics=list(summary.keys())
     )
@@ -313,6 +347,7 @@ class CorrelationPoint(BaseModel):
     n: int    # Sample size
 
 class CorrelationMatrix(BaseModel):
+    scientific_cohorts: List[ScientificCohort] = []
     job_id: str
     metrics: List[str]
     matrix: List[List[float]]  # NxN Pearson R values

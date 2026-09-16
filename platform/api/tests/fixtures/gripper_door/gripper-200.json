@@ -1,0 +1,141 @@
+{
+  "action_id": "route.motion_gripper_close_motion_gripper_close_post.0ec914f9",
+  "admission_completed_at": 1789262378.4603221,
+  "authority_fingerprint": "1fe22f5de1f1359988ba136e5bbea82ac36f3de66266e2b83215a332f8515742",
+  "authority_receipt_id": null,
+  "authority_receipt_status": null,
+  "command_id": "operator_1789262378458_3a5a5b5c37d1",
+  "completion_ambiguous": false,
+  "completion_verified": false,
+  "controller_acknowledged": true,
+  "delivery_verified": false,
+  "dispatched_at": 1789262378.4603255,
+  "duration_ms": 3.3919811248779297,
+  "error": null,
+  "finished_at": "1789262378.4615908",
+  "hardware_postcondition_verified": false,
+  "hardware_precondition_verified": false,
+  "idempotency_key": "offline-close-result",
+  "idempotency_replay_enabled": true,
+  "inputs": {},
+  "kind": "primitive",
+  "lock_acquired_at": 1789262378.457898,
+  "machine_assessment": "pass",
+  "observation_receipt_id": null,
+  "observes_command_id": null,
+  "operator_assessment": null,
+  "operator_note": null,
+  "ownership_generation": 7,
+  "physical_effect_verified": false,
+  "provider_entry_at": 1789262378.4603255,
+  "provider_returned_at": 1789262378.4615736,
+  "queued_at": 1789262378.4593573,
+  "receipt_persist_started_at": 1789262378.4615934,
+  "reconciliation_required": false,
+  "remote_acknowledged": true,
+  "request_received_at": 1789262378.4575536,
+  "requested_inputs": {},
+  "response": {
+    "body": {
+      "before": {
+        "oem_home_predicate": {
+          "query_home": {
+            "ack": {
+              "status": 100
+            },
+            "ok": true
+          }
+        },
+        "ok": true,
+        "position": {
+          "ack": {
+            "status": 100
+          },
+          "ok": true
+        },
+        "profile": {
+          "machine_config": {
+            "ok": true
+          }
+        },
+        "speed": {
+          "ack": {
+            "status": 100
+          },
+          "ok": true
+        }
+      },
+      "controller_command_acknowledged": true,
+      "move_to_calibrated": {
+        "ack": {
+          "status": 100
+        },
+        "before": {
+          "ack": {
+            "status": 100
+          },
+          "ok": true
+        },
+        "completion_class": "event_128",
+        "ok": true,
+        "pre_stop": {
+          "ack": {
+            "status": 100
+          },
+          "ok": true
+        },
+        "wait": {
+          "completion_class": "event_128",
+          "event": {
+            "status": 128
+          },
+          "failure": null,
+          "ok": true,
+          "physical_effect_verified": false,
+          "reached": {
+            "4:2": {
+              "status": 128
+            }
+          },
+          "source_wait_signaled": true
+        }
+      },
+      "ok": true,
+      "physical_effect_verified": false,
+      "position_after": {
+        "ack": {
+          "status": 100
+        },
+        "ok": true
+      },
+      "profile": {
+        "machine_config": {
+          "ok": true
+        }
+      },
+      "restore": {
+        "reason": "manual_handler_retains_parameters"
+      },
+      "source_call_completed": true,
+      "source_noop": false
+    },
+    "http_status": 200
+  },
+  "retry_forbidden": false,
+  "safety_class": "motion",
+  "schema_version": "bioxp.operator_action_receipt.v1",
+  "source_identity": {
+    "evidence_lock_identity_verified": true,
+    "evidence_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "registry_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "release_id": "offline",
+    "release_verified": true,
+    "robot_identity": "serial206",
+    "source_aggregate_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "source_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "stage_receipts": [],
+  "started_at": "1789262378.4581988",
+  "status": "completed",
+  "sequence": 3
+}

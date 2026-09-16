@@ -926,7 +926,10 @@ def load_capability_inventory() -> tuple[dict[str, Any], str]:
         "package_version": FRUSTRAMPNN_RUNTIME_IDENTITY.package_version,
         "source_commit": FRUSTRAMPNN_RUNTIME_IDENTITY.source_commit,
     }
-    if runtime != expected_runtime:
+    # The inventory is sealed historical capability evidence. Its image_path
+    # records where the probe ran, not an execution selector after relocation.
+    if ({key: value for key, value in runtime.items() if key != "image_path"}
+            != {key: value for key, value in expected_runtime.items() if key != "image_path"}):
         raise ContractValidationError(
             "FrustraMPNN capability inventory runtime identity is not installed runtime"
         )

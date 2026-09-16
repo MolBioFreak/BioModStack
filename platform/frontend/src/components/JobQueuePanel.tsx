@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { RemoteResultsPrompt } from './RemoteResultsPrompt';
+import { remoteResultsState, remoteResultQueryKeys } from './remoteResultsState';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     fetchQueue,
-    fetchSystemStatus,
     pauseQueueJob,
     resumeQueueJob,
     cancelQueueJob,
@@ -16,6 +17,7 @@ import {
     forceLaunchQueueJob,
     type QueuedJob,
 } from '../lib/api';
+import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob as isNgsJobIdentity } from '../lib/ngsResultRouting';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
@@ -355,13 +357,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         enabled: showCancelled,
     });
 
-    const { data: systemData } = useQuery({
-        queryKey: ['system'],
-        queryFn: fetchSystemStatus,
-        refetchInterval: (query) => jobPollingInterval(5000, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
+    const { data: systemData } = useSystemStatus();
     const gpuCatalog = useMemo(
         () => buildGpuCatalog(systemData?.data.gpus ?? []),
         [systemData?.data.gpus]
@@ -436,9 +432,26 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     });
 
     const queue = queueData?.data || [];
+    const previousRemoteResults = useRef<string[]>([]);
+    useEffect(() => {
+        if (!queueData) return;
+        const current = queueData.data.filter(job => remoteResultsState(job)).map(job => job.id);
+        // Completed ingestion removes the job from the queue. Refresh existing output caches then,
+        // not just when the bounded POST acknowledges the transfer request.
+        for (const jobId of previousRemoteResults.current) {
+            if (!current.includes(jobId)) {
+                for (const queryKey of remoteResultQueryKeys(jobId)) {
+                    void queryClient.invalidateQueries({ queryKey });
+                }
+            }
+        }
+        previousRemoteResults.current = current;
+    }, [queueData, queryClient]);
     const stats = {
         queued: queue.filter(j => j.queue_status === 'queued').length,
-        running: queue.filter(j => j.queue_status === 'running').length,
+        running: queue.filter(j => j.queue_status === 'running' && !remoteResultsState(j)).length,
+        preparing: queue.filter(j => j.execution_target_id && j.queue_status === 'preparing').length,
+        cancelling: queue.filter(j => j.execution_target_id && j.queue_status === 'cancelling').length,
         paused: queue.filter(j => j.queue_status === 'paused').length,
         total: queue.length,
     };
@@ -451,10 +464,15 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJobIdentity({ model_id: j.model_id, mode: j.mode }));
 
     // Separate running, paused, queued, and pending_msa jobs
-    const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
+    const runningJobs = visibleQueue.filter(j => j.queue_status === 'running' && !remoteResultsState(j));
+    const remoteTransitions = [
+        { phase: 'preparing', label: 'Preparing remote jobs' },
+        { phase: 'cancelling', label: 'Cancelling remote jobs' },
+    ].map(group => ({ ...group, jobs: visibleQueue.filter(j => j.execution_target_id && j.queue_status === group.phase) }));
     const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
     const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
     const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
+    const awaitingJobs = visibleQueue.filter(j => remoteResultsState(j));
     const hiddenQueuedCount = showNgsJobs
         ? 0
         : Math.max(
@@ -502,6 +520,9 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
                                 {stats.queued} queue
                             </span>
+                            {stats.preparing > 0 && <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">{stats.preparing} preparing</span>}
+                            {stats.cancelling > 0 && <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">{stats.cancelling} cancelling</span>}
+                            {awaitingJobs.length > 0 && <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-300">{awaitingJobs.length} remote results</span>}
                             {stats.paused > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
                                     {stats.paused} paused
@@ -595,6 +616,32 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                         </div>
                     ) : (
                         <div className="space-y-3">
+                            {awaitingJobs.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-emerald-300 mb-1 uppercase tracking-wide">Remote results</h4>
+                                    <div className="space-y-1">
+                                        {awaitingJobs.map(job => (
+                                            <div key={job.id} className="bg-slate-700/30 rounded-lg p-3">
+                                                <Link to={`/jobs/${job.id}`} className="text-sm font-medium text-white hover:underline">{getDisplayJobName(job)}</Link>
+                                                <RemoteResultsPrompt job={job} />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {remoteTransitions.filter(group => group.jobs.length > 0).map(group => (
+                                <div key={group.phase}>
+                                    <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">{group.label}</h4>
+                                    <div className="space-y-1">
+                                        {group.jobs.map(job => (
+                                            <JobRow key={job.id} job={job}
+                                                onCancel={() => cancelMutation.mutate(job.id)}
+                                                isPending={isPending || group.phase === 'cancelling'}
+                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
                             {/* Running Jobs */}
                             {runningJobs.length > 0 && (
                                 <div>
