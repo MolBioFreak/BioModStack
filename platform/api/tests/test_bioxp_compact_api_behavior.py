@@ -48,7 +48,7 @@ def test_startup_is_disconnected_and_unverified_commands_are_not_advertised(
     assert after_restart["connection"]["generation"] != status.json()["connection"]["generation"]
 
 
-def test_offline_compile_is_open_but_local_submission_requires_mutation_authorization(
+def test_offline_compile_is_open_but_legacy_local_submit_cannot_create_a_job(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -70,18 +70,18 @@ def test_offline_compile_is_open_but_local_submission_requires_mutation_authoriz
             "/api/bioxp/protocols/submit",
             json={"protocol": protocol, "idempotency_key": "offline-submit-1"},
         )
-        job_id = submitted.json()["job"]["job_id"]
-        detail = client.get(f"/api/bioxp/jobs/{job_id}")
+        history = client.get("/api/bioxp/jobs")
     asyncio.run(runtime.close())
 
     assert compiled.status_code == 200
     assert compiled.json()["executable"] is False
     assert compiled.json()["robot_compatible"] is None
     assert blocked.status_code == 503
-    assert submitted.status_code == 202
-    assert submitted.json()["delivery_attempted"] is False
-    assert submitted.json()["job"]["state"] == "submission_blocked"
-    assert detail.json()["events"][-1]["to_state"] == "submission_blocked"
+    # Live submit now requires the finite robot workflow contract. The old
+    # offline template is not an executable input or a blocked-local job.
+    assert submitted.status_code == 422
+    assert history.status_code == 200
+    assert history.json()["jobs"] == []
 
 
 def test_retired_bms_command_and_stop_routes_are_absent_regardless_global_setting(

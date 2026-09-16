@@ -33,6 +33,11 @@ from .target_policy import ValidatedBioXpTarget
 
 DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "status": ("GET", "/status", 5.0),
+    "protocol_execute": ("POST", "/protocol/execute", 30.0),
+    "protocol_jobs": ("GET", "/protocol/jobs", 10.0),
+    "protocol_job": ("GET", "/protocol/jobs/{job_id}", 10.0),
+    "protocol_control": ("POST", "/protocol/jobs/{job_id}/control", 15.0),
+    "protocol_review": ("POST", "/protocol/jobs/{job_id}/review", 15.0),
     "activate_usb_for_service": ("POST", "/reconnect", 30.0),
     "collect_hardware_snapshot": ("POST", "/hardware/snapshot/collect", 210.0),
     "oem_full_lifecycle_contract": ("GET", "/oem/runtime/movement-runs/contract", 10.0),

@@ -499,6 +499,7 @@ class BioXpConnectionService:
             "operator_control_catalog_v2", "operator_dashboard_v2",
             "operator_action_receipt_v2", "operator_command_status_v2",
             "operator_method_status_v1", "operator_command_identity",
+            "protocol_jobs", "protocol_job",
         }
         # Only the parameter-free dashboard/catalog representations are cached.
         cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"} and not params and not path_params
