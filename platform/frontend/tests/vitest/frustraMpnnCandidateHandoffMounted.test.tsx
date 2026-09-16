@@ -307,7 +307,14 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); vi.restoreAllMocks(); open.mockReset(); document.body.replaceChildren(); });
 describe('global result viewer external candidate join', () => {
     it('mounts real typed controls, submits exact identity/settings and opens queued child without replacing base science', async () => {
-        await render(); const file = await fill();
+        await render();
+        const disclosure = panel()!.closest('details')!;
+        expect(disclosure.open).toBe(false);
+        expect(container.querySelector('#frustrampnn-landscape')!.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        await act(async () => disclosure.querySelector('summary')!.click());
+        expect(disclosure.open).toBe(true);
+        expect(container.querySelector('[aria-label="FrustraMPNN reanalysis settings"]')).toBeNull();
+        const file = await fill();
         await act(async () => {
             const batching = panel()!.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]')!;
             if (!batching.checked) batching.click();
@@ -359,7 +366,7 @@ describe('global result viewer external candidate join', () => {
         if (kind === 'hash') detail.summary.landscape_sha256 = 'bad-hash';
         if (kind === 'missing') detail = null;
         await render(); expect(panel()).toBeNull();
-        expect(container.textContent).toContain('FrustraMPNN Results Viewer');
+        expect(container.querySelector('h1')?.textContent).toBe('FrustraMPNN results');
         expect(container.textContent).toContain('External candidate reanalysis requires');
         expect(post).not.toHaveBeenCalled();
     });

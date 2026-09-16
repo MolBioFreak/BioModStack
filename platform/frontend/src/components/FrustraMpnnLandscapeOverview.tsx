@@ -65,18 +65,21 @@ const identityLabel = (residue: CmLandscapeResidue): string => (
 export default function FrustraMpnnLandscapeOverview({
     residues,
     selectedResidue,
+    selectedKey,
     onSelectResidue,
 }: {
     residues: CmLandscapeResidue[];
+    selectedKey?: string;
     selectedResidue?: { authAsymId?: string; authSeqId?: number; insertionCode?: string } | null;
     onSelectResidue: (residue: CmLandscapeResidue) => void;
 }) {
+    const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const wrapperRef = useRef<HTMLDivElement | null>(null);
     const [width, setWidth] = useState(1200);
     const [hovered, setHovered] = useState<FrustraMpnnOverviewCell | null>(null);
     const model = useMemo(() => buildFrustraMpnnOverviewModel(residues), [residues]);
-    const selectedIndex = selectedResidue ? model.residues.findIndex((residue) => (
+    const selectedIndex = selectedKey ? model.residues.findIndex((residue) => residue.key === selectedKey) : selectedResidue ? model.residues.findIndex((residue) => (
         residue.auth_asym_id === selectedResidue.authAsymId
         && residue.auth_seq_id === String(selectedResidue.authSeqId)
         && residue.insertion_code === (selectedResidue.insertionCode ?? '')
@@ -102,7 +105,7 @@ export default function FrustraMpnnLandscapeOverview({
     }, []);
 
     useEffect(() => {
-        const canvas = canvasRef.current;
+        const canvas = baseCanvasRef.current;
         if (!canvas) return;
         const ratio = window.devicePixelRatio || 1;
         canvas.width = Math.floor(width * ratio);
@@ -169,6 +172,21 @@ export default function FrustraMpnnLandscapeOverview({
             const x = left + ((index + 0.5) * cellWidth);
             context.fillText(`${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code}`, x, top + matrixHeight + 9);
         });
+        context.strokeStyle = '#475569';
+        context.strokeRect(left, top, matrixWidth, matrixHeight);
+    }, [cellHeight, cellWidth, height, matrixHeight, matrixWidth, model, width]);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(width * ratio);
+        canvas.height = Math.floor(height * ratio);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        const context = canvas.getContext('2d');
+        if (!context) return;
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
         const focusedIndex = hovered?.residueIndex ?? selectedIndex;
         if (focusedIndex >= 0) {
             const x = left + (focusedIndex * cellWidth);
@@ -177,9 +195,7 @@ export default function FrustraMpnnLandscapeOverview({
             context.strokeRect(x, top - 1, Math.max(2, cellWidth), matrixHeight + 2);
             context.lineWidth = 1;
         }
-        context.strokeStyle = '#475569';
-        context.strokeRect(left, top, matrixWidth, matrixHeight);
-    }, [cellHeight, cellWidth, height, hovered, matrixHeight, matrixWidth, model, selectedIndex, width]);
+    }, [cellWidth, height, hovered, matrixHeight, selectedIndex, width]);
 
     const locateCell = (clientX: number, clientY: number): FrustraMpnnOverviewCell | null => {
         const canvas = canvasRef.current;
@@ -198,7 +214,7 @@ export default function FrustraMpnnLandscapeOverview({
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 className="text-sm font-semibold text-slate-200">Mutation × residue map</h3>
-                    <p className="mt-1 max-w-4xl text-xs text-slate-500">Scan every exact author residue and all 20 substitutions in one bounded map. Click a cell to open that residue's exact 20-slot profile and synchronize the structure selection.</p>
+                    <p className="mt-1 max-w-4xl text-xs text-slate-500">Select a residue to show its 20-slot profile. Structure selection is linked when mapping is available.</p>
                 </div>
                 <div aria-label="Canonical frustration class legend" className="flex flex-wrap gap-3 text-[11px] text-slate-300">
                     {([
@@ -215,13 +231,14 @@ export default function FrustraMpnnLandscapeOverview({
                 {model.chains.map((chain) => <button key={chain.authAsymId} type="button" onClick={() => onSelectResidue(model.residues[chain.start])} className="rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1 text-slate-300 hover:border-cyan-500/60 hover:text-cyan-200">{chain.authAsymId} <span className="text-slate-500">{chain.end - chain.start}</span></button>)}
                 <span className="ml-auto font-mono text-slate-500">{model.residues.length.toLocaleString()} residues · {model.cells.length.toLocaleString()} exact slots</span>
             </div>
-            <div ref={wrapperRef} className="mt-3 w-full overflow-hidden rounded-xl border border-slate-700/80 bg-[#07101f] shadow-inner shadow-black/30">
+            <div ref={wrapperRef} className="relative mt-3 w-full overflow-hidden rounded-xl border border-slate-700/80 bg-[#07101f] shadow-inner shadow-black/30">
+                <canvas ref={baseCanvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0" />
                 <canvas
                     ref={canvasRef}
                     role="img"
                     aria-label={`Complete FrustraMPNN heatmap showing ${model.residues.length} residues and ${model.cells.length} substitution slots`}
                     tabIndex={0}
-                    className="block cursor-crosshair outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-400/70"
+                    className="relative block cursor-crosshair outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-400/70"
                     onMouseMove={(event) => setHovered(locateCell(event.clientX, event.clientY))}
                     onMouseLeave={() => setHovered(null)}
                     onClick={(event) => {
@@ -231,6 +248,7 @@ export default function FrustraMpnnLandscapeOverview({
                     onKeyDown={(event) => {
                         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
                         event.preventDefault();
+                        setHovered(null);
                         const current = selectedIndex >= 0 ? selectedIndex : 0;
                         const next = event.key === 'Home' ? 0 : event.key === 'End' ? model.residues.length - 1 : event.key === 'ArrowLeft' ? Math.max(0, current - 1) : Math.min(model.residues.length - 1, current + 1);
                         onSelectResidue(model.residues[next]);

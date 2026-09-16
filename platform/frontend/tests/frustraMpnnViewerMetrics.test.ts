@@ -235,6 +235,20 @@ test('complete landscape collection follows bounded monotonic pages and validate
     await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...pages[0], next_offset: null, rows: [...rows, ...rows] }), 20), /bounded/i);
 });
 
+test('complete collection rejects missing whole residues, changing totals, cursor gaps and summary disagreement', async () => {
+    const rows = residue().slots;
+    const page = { request_id: 'request-1', candidate_id: 'candidate-1', entity_instance_id: null, sequence_start: null, sequence_end: null, offset: 0, limit: 500, next_offset: null, total: 20, rows };
+    await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...page, total: 40 })), /coverage incomplete/);
+    await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...page, total: 200001 })), /bounded/);
+    await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => ({ ...page, total: 40, next_offset: 25 })), /contiguous/);
+    await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async (offset) => offset === 0
+        ? { ...page, rows: rows.slice(0, 10), next_offset: 10 }
+        : { ...page, offset: 10, rows: rows.slice(10), total: 21 }), /total changed/);
+    await assert.rejects(() => collectCompleteFrustraMpnnLandscape(async () => page, undefined, 40), /summary coverage/);
+    const missingRows = rows.map(row => ({ ...row, score: null, class: null, status: 'missing', scoreable: false, reason: 'missing raw row' }));
+    assert.deepEqual(await collectCompleteFrustraMpnnLandscape(async () => ({ ...page, rows: missingRows }), undefined, 20), missingRows);
+});
+
 test('canonical conformational viewer delegates FrustraMPNN numerical authority to the global workbench', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
     assert.doesNotMatch(source, /landscapeMutation|Landscape substitution/);

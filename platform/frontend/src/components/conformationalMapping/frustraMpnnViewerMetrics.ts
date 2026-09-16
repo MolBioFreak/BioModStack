@@ -346,11 +346,13 @@ export type FrustraMpnnLandscapePageLoader = (offset: number, limit: number) => 
 export const collectCompleteFrustraMpnnLandscape = async (
     loadPage: FrustraMpnnLandscapePageLoader,
     maxRows = MAX_LANDSCAPE_ROWS,
+    expectedRows?: number,
 ): Promise<CmLandscapeRow[]> => {
     const rows: CmLandscapeRow[] = [];
     const visited = new Set<number>();
     let offset = 0;
     let candidateId: string | null | undefined;
+    let advertisedTotal: number | undefined;
     while (true) {
         if (visited.has(offset)) throw new Error('FrustraMPNN landscape pagination is not monotonic');
         visited.add(offset);
@@ -361,11 +363,24 @@ export const collectCompleteFrustraMpnnLandscape = async (
             throw new Error('FrustraMPNN landscape candidate identity mismatch');
         }
         if (rows.length + page.rows.length > maxRows) throw new Error('FrustraMPNN landscape exceeds bounded viewer capacity');
+        // CM callers may omit totals; normalized Frustra pages always advertise one.
+        const total = (page as CmLandscapePage & { total?: number }).total;
+        if (total !== undefined) {
+            if (!Number.isInteger(total) || total < 0 || total > maxRows) throw new Error('FrustraMPNN landscape total exceeds bounded viewer capacity');
+            if (advertisedTotal !== undefined && total !== advertisedTotal) throw new Error('FrustraMPNN landscape total changed');
+            advertisedTotal = total;
+        } else if (advertisedTotal !== undefined) throw new Error('FrustraMPNN landscape total missing');
         rows.push(...page.rows);
-        if (page.next_offset == null) break;
+        if (advertisedTotal !== undefined && rows.length > advertisedTotal) throw new Error('FrustraMPNN landscape total coverage mismatch');
+        if (page.next_offset == null) {
+            if (advertisedTotal !== undefined && rows.length !== advertisedTotal) throw new Error('FrustraMPNN landscape total coverage incomplete');
+            break;
+        }
         if (!Number.isInteger(page.next_offset) || page.next_offset <= offset) throw new Error('FrustraMPNN landscape pagination is not monotonic');
+        if (page.next_offset !== offset + page.rows.length) throw new Error('FrustraMPNN landscape pagination is not contiguous');
         offset = page.next_offset;
     }
+    if (expectedRows !== undefined && rows.length !== expectedRows) throw new Error('FrustraMPNN landscape summary coverage mismatch');
     groupExact20Landscape(rows);
     return rows;
 };

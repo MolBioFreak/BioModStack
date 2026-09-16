@@ -76,6 +76,7 @@ export default defineConfig({
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
             './tests/vitest/frustraMpnnSettingsControls.test.tsx',
             './tests/vitest/frustraMpnnOperatorSurfaces.test.tsx',
+            './tests/vitest/frustraMpnnResultsNavigation.test.tsx',
             ...(process.env.BMS_TEST_FRUSTRA_WIRE ? ['./tests/vitest/frustraMpnnResultReadMounted.test.tsx'] : []),
             './tests/vitest/frustraMpnnGovernedLaunches.test.tsx',
             './tests/vitest/frustraMpnnUploadAnalysis.test.tsx',
