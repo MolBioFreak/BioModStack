@@ -6125,10 +6125,10 @@ def compile_nextflow_invocation(
                 'bcp_triattn_backend',
             }:
                 params.pop(retired_key, None)
-        params.setdefault(
-            'bcp_container_path',
-            str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
-        )
+        from services.remote_execution.images import resolve_image
+        params['bcp_container_path'] = str(resolve_image(
+            DEFAULT_BOLTZ_CP_COMPAT_CONTAINER, Path(explicit_container_dir), params,
+        ))
 
         if not params.get('bcp_input_path'):
             staged_bcp_input = _write_boltz_cp_input_yaml(
