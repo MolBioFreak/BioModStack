@@ -322,11 +322,8 @@ def preflight_runtime(
         configured_container = _runtime.validate_configured_container_path(
             container, identity=selected_runtime_identity
         )
-        pinned = _runtime.open_verified_container(
-            configured_container, selected_runtime_identity.sif_sha256
-        )
-        assets = _runtime.verify_container_assets(
-            apptainer, pinned, identity=selected_runtime_identity
+        pinned, assets = _runtime.open_verified_container_with_assets(
+            apptainer, configured_container, identity=selected_runtime_identity
         )
         return {
             "schema_name": "frustrampnn_runtime_preflight",
@@ -538,11 +535,8 @@ def _run_component_v1(
             configured_container = _runtime.validate_configured_container_path(
                 container, identity=runtime_identity
             )
-            pinned = _runtime.open_verified_container(
-                configured_container, runtime_identity.sif_sha256
-            )
-            assets = _runtime.verify_container_assets(
-                apptainer, pinned, identity=runtime_identity
+            pinned, assets = _runtime.open_verified_container_with_assets(
+                apptainer, configured_container, identity=runtime_identity
             )
             raw = staging / "raw_frustrampnn.csv"
             invocation = _runtime.build_frustrampnn_command(
@@ -857,11 +851,8 @@ def _run_component_v2(
             configured_container = _runtime.validate_configured_container_path(
                 container, identity=runtime_identity
             )
-            pinned = _runtime.open_verified_container(
-                configured_container, runtime_identity.sif_sha256
-            )
-            assets = _runtime.verify_container_assets(
-                apptainer, pinned, identity=runtime_identity
+            pinned, assets = _runtime.open_verified_container_with_assets(
+                apptainer, configured_container, identity=runtime_identity
             )
         except _runtime.RuntimeValidationError as exc:
             raise ComponentRunError("runtime_identity_mismatch", str(exc)) from exc

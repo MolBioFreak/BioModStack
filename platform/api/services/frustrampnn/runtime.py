@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import sys
+from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -20,7 +21,9 @@ _SCRIPTS_ROOT = Path(__file__).resolve().parents[4] / "scripts"
 if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 from lib.container_runtime import container_executable
-from lib.shared_runtime_images import verify_image, SharedRuntimeImageError
+from lib.shared_runtime_images import (
+    verify_image, SharedRuntimeImageError, _file, _check_file, _same,
+)
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -210,6 +213,8 @@ class PinnedContainer:
         self.fd = descriptor
         self.sha256 = sha256
         self._closed = False
+        self._inspection_context: AbstractContextManager | None = None
+        self._inspection_binding: tuple[Path, int, os.stat_result, os.stat_result] | None = None
 
     @property
     def proc_path(self) -> Path:
@@ -221,12 +226,31 @@ class PinnedContainer:
 
     def close(self) -> None:
         if not self._closed:
-            os.close(self.fd)
-            self._closed = True
+            try:
+                if self._inspection_context is not None:
+                    self._inspection_context.__exit__(None, None, None)
+                else:
+                    os.close(self.fd)
+            finally:
+                self._closed = True
+
+    def _check_inspected_generation(self) -> None:
+        if self._inspection_binding is not None:
+            path, parent, before, parent_before = self._inspection_binding
+            try:
+                if stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1 or stat.S_IMODE(parent_before.st_mode) != 0o500:
+                    raise SharedRuntimeImageError("runtime image mode or link count changed")
+                _check_file(path, self.fd, parent, before)
+                if not _same(parent_before, os.fstat(parent)):
+                    raise SharedRuntimeImageError("runtime image object directory changed")
+            except (OSError, SharedRuntimeImageError) as exc:
+                raise RuntimeValidationError(str(exc)) from exc
 
     def detach(self) -> tuple[int, str]:
         if self._closed:
             raise RuntimeValidationError("verified FrustraMPNN container is already closed")
+        if self._inspection_context is not None:
+            raise RuntimeValidationError("inspected container must retain its parent binding")
         self._closed = True
         return self.fd, self.sha256
 
@@ -450,6 +474,49 @@ def verify_container_assets(
         "executable_sha256": executable_sha256,
         "checkpoint_sha256": checkpoint_sha256,
     }
+
+
+def open_verified_container_with_assets(
+    apptainer: Path | str,
+    path: Path | str,
+    *,
+    identity: FrustraMPNNRuntimeIdentity = FRUSTRAMPNN_RUNTIME_IDENTITY,
+) -> tuple[PinnedContainer, dict[str, str]]:
+    """Authenticate image and assets once, retaining this invocation's generation.
+
+    The selected managed inspector hashes actual SIF bytes under its lifecycle
+    lease and binds that verified generation to our inherited descriptor. Its
+    asset output alone is never image authority: the canonical path must encode
+    the registered image digest and remain bound to our no-follow descriptors.
+    """
+    expected = _validate_digest(identity.sif_sha256, label="registered FrustraMPNN image")
+    executable = container_executable(apptainer)
+    managed = (os.environ.get("BMS_CONTAINER_BACKEND") == "udocker"
+               and os.environ.get("BMS_CONTAINER_EXECUTABLE") == executable)
+    if not managed:
+        pinned = open_verified_container(path, expected)
+    else:
+        _lexical_parts(path, label="FrustraMPNN container")
+        store = os.environ.get("BMS_RUNTIME_IMAGE_STORE", "")
+        canonical = Path(store) / "objects" / "sha256" / expected / "runtime.sif"
+        if not store or not Path(store).is_absolute() or os.fspath(path) != str(canonical):
+            raise RuntimeValidationError("FrustraMPNN image must name the registered SHA-256 in the shared image store")
+        context = _file(canonical)
+        try:
+            descriptor, parent, before = context.__enter__()
+        except (OSError, SharedRuntimeImageError) as exc:
+            raise RuntimeValidationError(str(exc)) from exc
+        pinned = PinnedContainer(descriptor, expected)
+        pinned._inspection_context = context
+        pinned._inspection_binding = (canonical, parent, before, os.fstat(parent))
+    try:
+        pinned._check_inspected_generation()
+        assets = verify_container_assets(apptainer, pinned, identity=identity)
+        pinned._check_inspected_generation()
+        return pinned, assets
+    except BaseException:
+        pinned.close()
+        raise
 
 
 @dataclass(frozen=True)
@@ -702,14 +769,18 @@ def execute_frustrampnn(
         raise RuntimeValidationError("FrustraMPNN invocation is not bound to the pinned container")
     if invocation.task_visible_gpu_id != 0:
         raise RuntimeValidationError("FrustraMPNN task-visible GPU must be 0")
-    return subprocess.run(
-        list(invocation.argv),
-        stdout=stdout,
-        stderr=stderr,
-        timeout=timeout,
-        check=check,
-        pass_fds=(pinned_container.fd,),
-    )
+    pinned_container._check_inspected_generation()
+    try:
+        return subprocess.run(
+            list(invocation.argv),
+            stdout=stdout,
+            stderr=stderr,
+            timeout=timeout,
+            check=check,
+            pass_fds=(pinned_container.fd,),
+        )
+    finally:
+        pinned_container._check_inspected_generation()
 
 
 def _absolute_safe_host_path(path: Path | str, *, label: str) -> Path:
@@ -974,6 +1045,7 @@ __all__ = [
     "container_sha256",
     "execute_frustrampnn",
     "open_verified_container",
+    "open_verified_container_with_assets",
     "runtime_identity_dict",
     "sha256_fd",
     "verify_container_assets",

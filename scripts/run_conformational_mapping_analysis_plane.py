@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import argparse
 import hashlib
 import json
@@ -153,21 +154,16 @@ def _main(active_pins: list[_frustrampnn_runtime.PinnedContainer]) -> None:
     apptainer = container_executable(shutil.which(args.apptainer_bin))
     if not apptainer:
         raise RuntimeError("registered scientific container executable is unavailable")
-    checkpoint_sha256 = _container_sha256(
-        apptainer, container, str(args.checkpoint), container_fd=container_fd,
+    assets = _frustrampnn_runtime.verify_container_assets(
+        apptainer, container_pin,
+        identity=replace(
+            _frustrampnn_runtime.FRUSTRAMPNN_RUNTIME_IDENTITY,
+            executable_path=args.frustrampnn_bin,
+            checkpoint_path=str(args.checkpoint),
+        ),
     )
-    tool_sha256 = _container_sha256(
-        apptainer, container, args.frustrampnn_bin, container_fd=container_fd,
-    )
-    identity = _frustrampnn_runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
-    if checkpoint_sha256 != identity.checkpoint_sha256:
-        raise RuntimeError(
-            "FrustraMPNN checkpoint SHA-256 does not match the central runtime registry"
-        )
-    if tool_sha256 != identity.executable_sha256:
-        raise RuntimeError(
-            "FrustraMPNN executable SHA-256 does not match the central runtime registry"
-        )
+    checkpoint_sha256 = assets["checkpoint_sha256"]
+    tool_sha256 = assets["executable_sha256"]
 
     for candidate in ensemble["candidates"]:
         candidate_id = candidate["candidate_id"]
