@@ -6,7 +6,6 @@ import type {
 import { FrustraMpnnRequestedEffectiveSummary } from './frustrampnn/FrustraMpnnRequestedEffectiveSummary.js';
 
 const fmt = (value: number | null) => value == null ? '—' : Number(value).toFixed(3);
-const shortHash = (value: string) => `${value.slice(0, 10)}…${value.slice(-8)}`;
 
 const boundedDiagnostic = (value: string | null): string | null => {
     if (value === null) return null;
@@ -43,15 +42,15 @@ export function FrustraMpnnStatisticsAnalysisPanel({
 
 export function FrustraMpnnStatisticsSummary({ statistics }: { statistics: FrustraMpnnStatistics }) {
     return <section aria-label="Canonical FrustraMPNN statistics" className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-semibold">Statistics</h2><p className="mt-1 text-xs text-slate-400">Persisted support, distributions, class burdens, and rankings from the governed statistics authority.</p></div><div className="text-right"><span className="font-mono text-[10px] text-sky-200">{shortHash(statistics.statistics_sha256)}</span></div></div>
+        <h2 className="font-semibold">Statistics</h2>
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
             {([
                 ['Selected residues', statistics.support.selected_residue_count],
-                ['Scoreable residues', statistics.support.scoreable_residue_count],
-                ['Scoreable slots', statistics.support.scoreable_slot_count],
+                ['Residues with scores', statistics.support.scoreable_residue_count],
+                ['Scores available', statistics.support.scoreable_slot_count],
                 ['Mean score', statistics.distributions.overall.mean == null ? 'missing' : fmt(statistics.distributions.overall.mean)],
-                ['Highly frustrated', statistics.class_burden.all.counts.high],
-                ['Ranked alternatives', statistics.ranked_non_native_alternatives.best_to_worst.length],
+                ['Highly frustrated scores', statistics.class_burden.all.counts.high],
+                ['Ranked substitutions', statistics.ranked_non_native_alternatives.best_to_worst.length],
             ] as const).map(([label, value]) => <div key={label} className="rounded border border-slate-800 bg-slate-950/40 p-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="mt-1 font-mono text-slate-100">{value}</div></div>)}
         </div>
         {(statistics.support.missing_residue_count > 0 || statistics.support.missing_slot_count > 0) && <div role="status" className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-100">Missing scores: {statistics.support.missing_residue_count.toLocaleString()} residues and {statistics.support.missing_slot_count.toLocaleString()} slots.</div>}
@@ -70,7 +69,6 @@ export function FrustraMpnnResultAuthoritySurface({
         <details aria-label="Requested and effective FrustraMPNN settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <summary className="cursor-pointer font-semibold">Settings used</summary>
             {detail.effective_settings_json ? <div className="mt-2 space-y-3">
-                <div className="grid gap-2 text-xs sm:grid-cols-3"><div>Requested: {detail.effective_settings_json.requested_settings.protein_selection.mode}</div><div>Resolved chains: {detail.effective_settings_json.resolved_chains.length}</div><div>Effective authority: <span className="font-mono">{shortHash(detail.effective_settings_json.effective_settings_sha256)}</span></div></div>
                 <FrustraMpnnRequestedEffectiveSummary effective={detail.effective_settings_json} />
             </div> : <p className="mt-2 text-xs text-amber-100">Effective settings were not recorded for this result.</p>}
         </details>
