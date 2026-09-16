@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import ctypes
 import fcntl
+import hashlib
+import selectors
+import uuid
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -27,6 +30,7 @@ for _path in (_HERE.parent, _HERE.parent.parent / 'runner', _HERE.parent.parent 
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 from scripts.lib import runtime_image_views as views
+from scripts.lib import runtime_image_lifecycle as lifecycle
 from scripts.lib.shared_runtime_images import _directory, _file, _check_file
 import bms_remote_worker as owner
 
@@ -112,17 +116,143 @@ def canonical_image(value, store):
     return path, relative.parts[2]
 
 
-def extract_sif(fd, destination):
-    source = f'/proc/self/fd/{fd}'
-    listing = subprocess.check_output(['apptainer', 'sif', 'list', source], text=True, pass_fds=(fd,))
+def sif_partition_offset(fd, read=None):
+    command = ['apptainer', 'sif', 'list', f'/proc/self/fd/{fd}']
+    listing = (read(command) if read is not None else
+               subprocess.check_output(command, text=True, pass_fds=(fd,)))
     rows = [line.split('|') for line in listing.splitlines() if 'FS (Squashfs/*System/amd64)' in line]
-    if len(rows) != 1:
+    if len(rows) != 1 or len(rows[0]) < 4:
         raise ValueError('image has no unique x86_64 Squashfs system partition')
     offset = rows[0][3].strip().split('-')[0].strip()
     if not offset.isdigit():
         raise ValueError('invalid SIF system partition offset')
+    return offset
+
+
+def extract_sif(fd, destination):
+    source = f'/proc/self/fd/{fd}'
+    offset = sif_partition_offset(fd)
     subprocess.run(['unsquashfs', '-no-progress', '-processors', '2', '-d', str(destination), '-o', offset, source],
                    check=True, pass_fds=(fd,), stdout=sys.stderr)
+
+
+# Finite inspection policy, independent of image size and scientific settings.
+INSPECT_MAX_FILES = 32
+INSPECT_MAX_BYTES = 1024 * 1024 * 1024
+INSPECT_TIMEOUT = 120
+INSPECT_METADATA_BYTES = 1024 * 1024
+
+
+def inspect_paths(paths):
+    if not paths or len(paths) > INSPECT_MAX_FILES or len(set(paths)) != len(paths):
+        raise ValueError('inspection requires a bounded unique file roster')
+    for path in paths:
+        if (not path.startswith('/') or len(path.encode()) > 4096
+                or any(c in path for c in '*?[]\\')
+                or any(ord(c) < 32 or ord(c) == 127 for c in path)
+                or any(p in {'', '.', '..'} or p.startswith('-') for p in path[1:].split('/'))):
+            raise ValueError('inspection requires absolute normalized literal file paths')
+    return tuple(paths)
+
+
+def inspect_stream(command, fd, identity, deadline, consume, limit):
+    """Bound both pipes; reap every descendant before returning to the lease owner."""
+    process = subprocess.Popen(command, pass_fds=tuple(sorted(set(inherited_fds() + [fd]))),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ, 'stdout')
+            selector.register(process.stderr, selectors.EVENT_READ, 'stderr')
+            sizes = {'stdout': 0, 'stderr': 0}
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('container file inspection timed out')
+                for key, _ in selector.select(remaining):
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    sizes[key.data] += len(chunk)
+                    bound = limit if key.data == 'stdout' else INSPECT_METADATA_BYTES
+                    if sizes[key.data] > bound:
+                        raise ValueError('container file inspection exceeded byte limit')
+                    if key.data == 'stdout':
+                        consume(chunk)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('container file inspection timed out')
+            if process.wait(timeout=remaining):
+                raise ValueError('container file inspection command failed')
+    finally:
+        # main establishes subreaper ownership and signal cancellation. Never
+        # unpin an image while even a reparented inspection child is alive.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        try:
+            try:
+                if not owner.quiesce_writers(identity, timeout_seconds=5):
+                    os._exit(125)
+            except BaseException:
+                os._exit(125)  # Unknown quiescence must retain the durable lease.
+            process.wait()
+            # Reap adopted descendants too (main is the dedicated subreaper).
+            while True:
+                try:
+                    if os.waitpid(-1, os.WNOHANG) == (0, 0):
+                        break
+                except ChildProcessError:
+                    break
+            process.stdout.close()
+            process.stderr.close()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def inspect_files(image_name, paths, identity):
+    paths = inspect_paths(paths)
+    store = Path(os.environ['BMS_RUNTIME_IMAGE_STORE'])
+    if not store.is_absolute():
+        raise ValueError('container store must be absolute')
+    image, digest = canonical_image(image_name, store)
+    lease_owner = 'inspect-files:' + uuid.uuid4().hex
+    token, receipts = lifecycle.acquire_lease(store, [digest], owner=lease_owner)
+    records = []
+    try:
+        with _file(image) as (fd, parent, before):
+            def generation(info):
+                return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            def check_source():
+                _check_file(image, fd, parent, before)
+                receipt = receipts[digest]
+                if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
+                        or stat.S_IMODE(os.fstat(parent).st_mode) != 0o500
+                        or generation(before) != tuple(receipt[k] for k in
+                            ('device', 'inode', 'size', 'mtime_ns', 'ctime_ns'))):
+                    raise ValueError('inspected image generation changed')
+                if re.fullmatch(r'/proc/self/fd/[0-9]+', image_name):
+                    if generation(os.fstat(int(image_name.rsplit('/', 1)[1]))) != generation(before):
+                        raise ValueError('inherited image descriptor identity changed')
+            check_source()
+            deadline = time.monotonic() + INSPECT_TIMEOUT
+            def read_metadata(command):
+                data = bytearray()
+                inspect_stream(command, fd, identity, deadline, data.extend, INSPECT_METADATA_BYTES)
+                return data.decode('utf-8')
+            try:
+                offset = sif_partition_offset(fd, read_metadata)
+                for path in paths:
+                    hashed = hashlib.sha256()
+                    inspect_stream(['unsquashfs', '-no-progress', '-no-wildcards', '-o', offset,
+                                    '-cat', f'/proc/self/fd/{fd}', path[1:]],
+                                   fd, identity, deadline, hashed.update, INSPECT_MAX_BYTES)
+                    records.append(f'{hashed.hexdigest()}  {path}\n')
+            finally:
+                check_source()
+    finally:
+        lifecycle.release_lease(store, token, owner=lease_owner)
+    # No partial roster escapes on errors, replacement, cancellation or cleanup.
+    sys.stdout.write(''.join(records))
+    return 0
 
 
 def snapshot(path):
@@ -320,8 +450,11 @@ def main(argv=None):
         return 0
     if args and args[0] == 'exec':
         invocation = parse_exec(args[1:])
+    elif args and args[0] == 'inspect-files' and len(args) >= 3:
+        inspect_paths(args[2:])
+        invocation = None
     else:
-        raise ValueError('expected exec')
+        raise ValueError('expected exec or inspect-files IMAGE ABSOLUTE_PATH...')
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise RuntimeError('cannot establish container child ownership')
     identity = dict(boot_id=owner.boot_id(), supervisor_pid=os.getpid(),
@@ -336,6 +469,8 @@ def main(argv=None):
         raise Cancelled(signum)
     previous = {number: signal.signal(number, stop) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
+        if invocation is None:
+            return inspect_files(args[1], args[2:], identity)
         return execute(invocation, identity)
     except Cancelled as exc:
         return 128 + exc.signum

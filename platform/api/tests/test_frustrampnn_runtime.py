@@ -250,8 +250,12 @@ _CHECKPOINT_RECORD = f"{CHECKPOINT_SHA256}  /opt/frustrampnn_weights/megascale.c
     _EXEC_RECORD.replace(EXECUTABLE_SHA256, "0" * 64) + _CHECKPOINT_RECORD,
     _EXEC_RECORD + _CHECKPOINT_RECORD.replace(CHECKPOINT_SHA256, "0" * 64),
 ])
-def test_asset_output_fails_closed(tmp_path, monkeypatch, output):
+@pytest.mark.parametrize("managed", [False, True])
+def test_asset_output_fails_closed(tmp_path, monkeypatch, output, managed):
     runtime = _runtime()
+    if managed:
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
     image, digest = _qualified_image(tmp_path)
     monkeypatch.setattr(runtime.subprocess, "run", lambda *a, **kw:
                         subprocess.CompletedProcess(a, 0, stdout=output))
@@ -261,8 +265,12 @@ def test_asset_output_fails_closed(tmp_path, monkeypatch, output):
 
 
 @pytest.mark.parametrize("error", [OSError("unavailable"), subprocess.CalledProcessError(17, "sha256sum")])
-def test_asset_launch_errors_are_wrapped(tmp_path, monkeypatch, error):
+@pytest.mark.parametrize("managed", [False, True])
+def test_asset_launch_errors_are_wrapped(tmp_path, monkeypatch, error, managed):
     runtime = _runtime()
+    if managed:
+        monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
     image, digest = _qualified_image(tmp_path)
     def fail(*args, **kwargs):
         raise error
@@ -287,6 +295,47 @@ def test_public_single_asset_hash_remains_compatible(tmp_path, with_fd):
     launches = capture.read_text().splitlines()
     assert len(launches) == 1
     assert json.loads(launches[0])["argv"][-2:] == ["sha256sum", "/opt/venv/bin/frustrampnn"]
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_asset_inspection_uses_only_selected_managed_helper(tmp_path, monkeypatch, selected):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+    if selected:
+        monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    else:
+        monkeypatch.delenv("BMS_CONTAINER_EXECUTABLE", raising=False)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["pass_fds"] == (pinned.fd,)
+        assert os.fstat(pinned.fd).st_size == image.stat().st_size
+        assert argv == (["/managed/bms-container", "inspect-files", os.fspath(pinned.proc_path),
+                         "/opt/venv/bin/frustrampnn", "/opt/frustrampnn_weights/megascale.ckpt"] if selected else
+                        ["/usr/bin/apptainer", "exec", os.fspath(pinned.proc_path), "sha256sum",
+                         "/opt/venv/bin/frustrampnn", "/opt/frustrampnn_weights/megascale.ckpt"])
+        return subprocess.CompletedProcess(argv, 0, stdout=_EXEC_RECORD + _CHECKPOINT_RECORD)
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    with runtime.open_verified_container(image, digest) as pinned:
+        runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+    assert len(calls) == 1
+
+
+def test_managed_inspection_failure_never_falls_back(tmp_path, monkeypatch):
+    runtime = _runtime()
+    image, digest = _qualified_image(tmp_path)
+    monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
+    monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", "/managed/bms-container")
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        raise subprocess.CalledProcessError(125, argv, output=_EXEC_RECORD)
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    with runtime.open_verified_container(image, digest) as pinned:
+        with pytest.raises(runtime.RuntimeValidationError, match="cannot authenticate"):
+            runtime.verify_container_assets("/usr/bin/apptainer", pinned)
+    assert len(calls) == 1 and calls[0][1] == "inspect-files"
 
 
 def test_asset_hash_rejects_closed_pin_and_mismatched_descriptor(tmp_path):

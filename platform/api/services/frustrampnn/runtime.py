@@ -388,9 +388,15 @@ def _container_sha256_many(
         if os.fspath(container) != expected_container:
             raise RuntimeValidationError("container path does not match the pinned descriptor")
         pass_fds = (container_fd,)
+    # Direct inspection requires the upgraded, explicitly selected managed
+    # helper. Failure is authoritative: never fall back to an expensive exec.
+    managed = (os.environ.get("BMS_CONTAINER_BACKEND") == "udocker"
+               and os.environ.get("BMS_CONTAINER_EXECUTABLE") == executable)
+    command = ([executable, "inspect-files", os.fspath(container), *targets] if managed else
+               [executable, "exec", os.fspath(container), "sha256sum", *targets])
     try:
         result = subprocess.run(
-            [executable, "exec", os.fspath(container), "sha256sum", *targets],
+            command,
             check=True,
             capture_output=True,
             text=True,
