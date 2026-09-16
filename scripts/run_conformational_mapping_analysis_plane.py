@@ -64,14 +64,6 @@ def _candidate_structure_path(root: Path, relative_value: object) -> Path:
     return root / relative
 
 
-def _container_sha256(
-    apptainer: str, container: Path, internal_path: str, *, container_fd: int | None = None,
-) -> str:
-    return _frustrampnn_runtime.container_sha256(
-        apptainer, container, internal_path, container_fd=container_fd,
-    )
-
-
 def _sha256_fd(fd: int) -> str:
     return _frustrampnn_runtime.sha256_fd(fd)
 
