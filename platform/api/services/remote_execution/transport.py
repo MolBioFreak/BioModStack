@@ -26,6 +26,10 @@ class RemoteTransportError(RuntimeError):
     pass
 
 
+class RemoteHostKeyUnavailable(RemoteTransportError):
+    """No key received; only initial, unpinned discovery may try another route."""
+
+
 class RemoteConnectionError(RemoteTransportError):
     """SSH could not establish an authenticated command channel."""
 
@@ -269,23 +273,40 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
 
 
 async def capture_host_key(host: str, port: int) -> tuple[str, str]:
-    scan = await _run(
-        ["ssh-keyscan", "-t", "ed25519", "-p", str(port), "-T", "10", host],
-        timeout=15,
-    )
+    try:
+        scan = await _run(
+            ["ssh-keyscan", "-t", "ed25519", "-p", str(port), "-T", "10", host],
+            timeout=15,
+        )
+    except RemoteTransportError as exc:
+        if str(exc) != "Remote transport timed out":
+            raise
+        raise RemoteHostKeyUnavailable("Unable to read the remote SSH host key") from exc
     lines = sorted(
         line.strip()
         for line in scan.stdout.splitlines()
         if line.strip() and not line.startswith("#")
     )
-    if scan.returncode != 0 or not lines:
-        raise RemoteTransportError("Unable to read the remote SSH host key")
+    if not lines:
+        raise RemoteHostKeyUnavailable("Unable to read the remote SSH host key")
+    if scan.returncode != 0:
+        raise RemoteTransportError("Remote SSH host key is malformed")
     line = lines[0]
     parts = line.split()
     if len(parts) < 3:
         raise RemoteTransportError("Remote SSH host key is malformed")
     fingerprint = _host_key_digest(parts[2])
     return line, fingerprint
+
+
+async def host_key_is_pinned(host: str, port: int) -> bool:
+    # Include keys retained after an authentication/root-check failure, before
+    # the target's authenticated attachment fingerprint could be committed.
+    token = host if port == 22 else f"[{host}]:{port}"
+    found = await _run(["ssh-keygen", "-F", token, "-f", str(known_hosts_path())], timeout=5)
+    if found.returncode not in (0, 1):
+        raise RemoteTransportError("Unable to inspect pinned SSH host keys")
+    return found.returncode == 0
 
 
 async def persist_host_key(line: str, fingerprint: str) -> None:

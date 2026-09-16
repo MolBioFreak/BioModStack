@@ -27,6 +27,8 @@ from .transport import (
     RemoteTransportError,
     RemoteConnectionError,
     capture_host_key,
+    RemoteHostKeyUnavailable,
+    host_key_is_pinned,
     persist_host_key,
     probe_readiness,
     rsync_to_remote,
@@ -333,6 +335,10 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
             target.host = instance.host
             target.port = instance.port
             target.username = instance.username or "root"
+        # A provider-advertised selected route remains authoritative across
+        # refreshes. Do not reset a successfully selected proxy to dead direct SSH.
+        if (target.host, target.port) in {(e.host, e.port) for e in instance.ssh_endpoints}:
+            instance.host, instance.port = target.host, target.port
         endpoint_changed = (target.host, target.port) != (instance.host, instance.port)
         if target not in session.new:
             # Evaluate the lease in the endpoint write itself, not a stale ORM read.
@@ -356,6 +362,7 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
         target.pricing = _pricing(instance)
         target.provider_metadata = {**dict(target.provider_metadata or {}), "inventory": {
             "status": "complete", "present": True,
+            "ssh_endpoints": [e.model_dump() for e in instance.ssh_endpoints],
             "running": instance.provider_state in RUNNING_PROVIDER_STATES, "checked_at": now.isoformat()}}
         target.last_seen_at = now
         target.updated_at = now
@@ -594,7 +601,39 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         return await operation(*args, **kwargs)
 
     try:
-        host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
+        try:
+            host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
+        except RemoteHostKeyUnavailable:
+            # Exactly one provider-advertised alternative, only before first pin.
+            # Authentication, malformed keys and known-host mismatches never retry.
+            if fingerprint is not None or await checked_io(host_key_is_pinned, connection.host, connection.port):
+                raise
+            async with _inventory_refresh_lock:
+                async def noop():
+                    pass
+                await checked_io(noop)
+                alternatives = [e for e in target.provider_metadata['inventory'].get('ssh_endpoints', [])
+                                if (e['host'], e['port']) != (connection.host, connection.port)]
+                if fingerprint is not None or len(alternatives) != 1:
+                    raise
+                endpoint = alternatives[0]
+                from dataclasses import replace
+                candidate = replace(connection, host=endpoint['host'], port=endpoint['port'])
+                changed = await session.execute(update(ExecutionTarget).where(
+                    ExecutionTarget.id == identifier, ExecutionTarget.state == 'probing',
+                    ExecutionTarget.provider_metadata['setup']['started_at'].as_string() == started_at,
+                    ExecutionTarget.provider_metadata['inventory']['checked_at'].as_string() ==
+                        target.provider_metadata['inventory']['checked_at'],
+                    ExecutionTarget.host == connection.host, ExecutionTarget.port == connection.port,
+                    ExecutionTarget.username == connection.username, ExecutionTarget.remote_root == connection.remote_root,
+                    ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.leased_job_id.is_(None),
+                ).values(host=candidate.host, port=candidate.port).execution_options(synchronize_session=False))
+                if changed.rowcount != 1:
+                    await session.rollback()
+                    raise ExecutionTargetError('Vast inventory or endpoint changed during attachment')
+                await session.commit()
+                connection = candidate
+            host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
         if target.host_key_sha256 and target.host_key_sha256 != fingerprint:
             raise RemoteTransportError("Remote SSH host key changed since the last activation")
         await persist_host_key(host_key_line, fingerprint)
