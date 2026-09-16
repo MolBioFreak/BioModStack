@@ -143,7 +143,14 @@ export function FrustraMpnnSettingsPanel({
     return (
         <section
             data-frustrampnn-settings-panel
-            className="mt-3 rounded-xl border border-slate-200 bg-white"
+            className="mt-3 rounded-xl border border-border-primary bg-surface-secondary text-content
+                [&_.bg-white]:bg-surface-secondary [&_.bg-slate-100]:bg-surface-tertiary
+                [&_section]:bg-surface-tertiary [&_fieldset]:bg-surface-secondary
+                [&_input:not([type=range]):not([type=checkbox])]:bg-surface [&_select]:bg-surface
+                [&_input]:text-content [&_select]:text-content
+                [&_.text-slate-900]:text-content [&_.text-slate-800]:text-content [&_.text-slate-700]:text-content-secondary
+                [&_.border-slate-200]:border-border-primary [&_.border-slate-300]:border-border-primary
+                [&_.border-cyan-200]:border-border-primary [&_.text-cyan-800]:text-info [&_.text-red-700]:text-error"
             aria-label="FrustraMPNN analysis"
         >
             <details data-frustrampnn-settings-details>
@@ -154,20 +161,20 @@ export function FrustraMpnnSettingsPanel({
                             <div className="mt-1 text-xs text-slate-500">Model scope and post-score classification</div>
                         </div>
                         <div className="flex flex-wrap gap-2 text-xs">
-                            <span className="rounded-full bg-cyan-50 px-2.5 py-1 font-medium text-cyan-800">
+                            <span className="rounded-full bg-surface-tertiary px-2.5 py-1 font-medium text-content">
                                 Scope: {scopeSummary(value)}
                             </span>
                             <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700">
                                 Classification: {classificationSummary(value)}
                             </span>
-                            <span className="self-center font-medium text-cyan-700">Edit</span>
+                            <span className="self-center font-medium text-content-secondary">Edit</span>
                         </div>
                     </div>
                 </summary>
 
                 <div className="space-y-3 border-t border-slate-200 p-4">
                     <section
-                        className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3"
+                        className="space-y-3 rounded-xl border border-slate-200 bg-surface-tertiary p-3"
                         aria-label="Batch processing"
                     >
                         <label className="flex items-start gap-3 text-sm text-slate-800">
@@ -235,18 +242,18 @@ export function FrustraMpnnSettingsPanel({
                         allowIndividualResidues={allowIndividualResidues}
                     />
 
-                    <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3" aria-label="Result classification">
+                    <section className="space-y-2 rounded-xl border border-slate-200 bg-surface-tertiary p-3" aria-label="Result classification">
                         <div>
                             <h4 className="text-sm font-semibold text-slate-800">Result classification</h4>
                             <p className="mt-1 text-xs leading-5 text-slate-600">
-                                Classification relabels model scores after inference. It does not change FrustraMPNN scoring.
+                                Thresholds classify scores after inference; they do not change scoring.
                             </p>
                         </div>
                         <FrustraMpnnClassificationPolicyControl value={value} onChange={onChange} />
                     </section>
 
                     {sourceStructurePolicy === 'operator' ? (
-                        <details data-frustrampnn-input-normalization className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                        <details data-frustrampnn-input-normalization className="rounded-xl border border-slate-200 bg-surface-tertiary p-3">
                             <summary className="cursor-pointer text-xs font-semibold text-slate-700">Advanced input normalization</summary>
                             <div className="mt-3">
                                 <FrustraMpnnSourceStructurePolicyControl
@@ -257,22 +264,22 @@ export function FrustraMpnnSettingsPanel({
                             </div>
                         </details>
                     ) : (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs leading-5 text-slate-600" data-frustrampnn-derived-source-policy>
+                        <div className="rounded-xl border border-slate-200 bg-surface-tertiary p-3 text-xs leading-5 text-slate-600" data-frustrampnn-derived-source-policy>
                             <span className="font-semibold text-slate-700">Input normalization: </span>
                             Derived from each canonical generated conformer. Effective model and alternate-location handling are recorded as read-only provenance.
                         </div>
                     )}
 
                     {!governedSource && !suppliedInspection && (
-                        <p className="text-[11px] text-amber-700" role="status">
-                            Exact source entity, region, residue, model, and altloc choices remain unavailable until governed server inspection metadata exists. All-protein defaults are preserved for launch-time source resolution.
+                        <p className="text-[11px] text-warning" role="status">
+                            Choose a structure to inspect exact chains, regions, residues, models and alternate locations. All-protein defaults are retained.
                         </p>
                     )}
-                    {validating && <p className="text-[11px] text-cyan-700" role="status">Validating requested settings against the governed source…</p>}
-                    {diagnostic && <p className="text-[11px] text-red-700" role="alert">Validation diagnostic: {diagnostic}</p>}
+                    {validating && <p className="text-[11px] text-info" role="status">Validating settings for this structure…</p>}
+                    {diagnostic && <p className="text-[11px] text-error" role="alert">Settings validation: {diagnostic}</p>}
                     {preview && (
                         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-[11px] text-slate-600" data-frustrampnn-validation-preview>
-                            <div className="font-semibold text-emerald-700">Requested → effective settings validated</div>
+                            <div className="font-semibold text-success">Requested → effective settings validated</div>
                             <div className="mt-2"><FrustraMpnnRequestedEffectiveSummary effective={preview.effective_settings} /></div>
                             <dl className="mt-2 grid gap-1 sm:grid-cols-2">
                                 <div><dt className="inline font-medium">Settings authority: </dt><dd className="inline font-mono">{shortHash(preview.hashes.settings_sha256)}</dd></div>

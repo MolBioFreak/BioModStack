@@ -197,9 +197,9 @@ const handoffReceipt = {
 };
 
 const inspection = {
-    source_models: [1],
+    source_models: [1, 2],
     selected_source_model: 1,
-    observed_altlocs: [''],
+    observed_altlocs: ['', 'A'],
     selected_altloc: '',
     protein_entities: [{
         entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'A', auth_asym_id: 'A', pdb_chain_id: 'A',
@@ -315,6 +315,13 @@ describe('global result viewer external candidate join', () => {
         expect(disclosure.open).toBe(true);
         expect(container.querySelector('[aria-label="FrustraMPNN reanalysis settings"]')).toBeNull();
         const file = await fill();
+        expect(panel()!.textContent).toContain('Candidate name');
+        expect(panel()!.textContent).toContain('Produced by');
+        const provenance = Array.from(panel()!.querySelectorAll('details')).find(node => node.querySelector('summary')?.textContent === 'Source provenance')!;
+        expect(provenance.open).toBe(false);
+        expect(provenance.textContent).toContain('job-1');
+        expect(provenance.textContent).toContain('invoke-1');
+        expect(provenance.textContent).toContain(hashes.d);
         await act(async () => {
             const batching = panel()!.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]')!;
             if (!batching.checked) batching.click();
@@ -334,14 +341,53 @@ describe('global result viewer external candidate join', () => {
             parent_landscape_sha256: hashes.d, nucleotide_edit_set: '[]', protein_sequence_sha256: hashes.f,
             frustrampnn_settings: JSON.stringify({ ...CANONICAL_FRUSTRAMPNN_SETTINGS, batching_enabled: true, structures_per_job: 7 }),
         });
-        expect(panel()!.textContent).toContain('Child queued: child-job-1');
-        expect(panel()!.textContent).toContain('not scientific completion');
+        expect(panel()!.textContent).toContain('Analysis queued: child-job-1');
+        expect(panel()!.textContent).toContain('Results will appear when analysis completes');
         expect(container.textContent).toContain('Native-slot classes');
         expect(container.textContent).toContain('Full-landscape classes');
-        await act(async () => button('Open child results').click());
+        await act(async () => button('Open analysis results').click());
         expect(open).toHaveBeenCalledWith('child-job-1');
         expect(container.textContent).toContain('Native-slot classes');
     });
+    it.each(['all_protein_entities', 'selected_entities', 'selected_regions', 'selected_residues'])(
+        'serializes complete nondefault settings with %s scope through validation and handoff', async mode => {
+            await render(); await fill();
+            const select = async (attribute: string, value: string) => {
+                await act(async () => {
+                    const input = panel()!.querySelector<HTMLSelectElement>(`[${attribute}]`)!;
+                    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(input, value);
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            };
+            await select('data-frustrampnn-selection-mode', mode);
+            await select('data-frustrampnn-source-model', '2');
+            await select('data-frustrampnn-altloc', 'A');
+            await select('data-frustrampnn-classification-mode', 'custom');
+            await act(async () => setInput(panel()!.querySelector('[data-frustrampnn-high-max]')!, '-0.75'));
+            await act(async () => setInput(panel()!.querySelector('[data-frustrampnn-minimal-min]')!, '0.25'));
+            await act(async () => panel()!.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]')!.click());
+            await act(async () => setInput(panel()!.querySelector('[data-frustrampnn-structures-number]')!, '7'));
+            await submit();
+            const entity = { entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'A', auth_asym_id: 'A' };
+            const expected = {
+                ...CANONICAL_FRUSTRAMPNN_SETTINGS, batching_enabled: true, structures_per_job: 7,
+                source_structure: { selected_model_number: 2, preferred_altloc: 'A' },
+                classification_policy: { mode: 'custom', high_max: -0.75, minimal_min: 0.25 },
+                protein_selection: {
+                    mode,
+                    entities: mode === 'selected_entities' ? [entity] : [],
+                    regions: mode === 'selected_regions' ? [{ ...entity, sequence_start: 1, sequence_end: 1 }] : [],
+                    residues: mode === 'selected_residues' ? [{ ...entity, auth_seq_id: 1, insertion_code: '', sequence_index: 1 }] : [],
+                },
+            };
+            const validation = post.mock.calls.filter(c => String(c[0]).endsWith('/settings/validate/upload')).at(-1)!;
+            const submission = post.mock.calls.find(c => String(c[0]).endsWith('/candidates/handoff'))!;
+            expect(JSON.parse((validation[1] as FormData).get('settings') as string)).toEqual(expected);
+            expect(JSON.parse((submission[1] as FormData).get('frustrampnn_settings') as string)).toEqual(expected);
+            expect((submission[2] as { signal: AbortSignal }).signal.aborted).toBe(false);
+        },
+    );
+
     it.each(['3.0', '2.0', '1.0'])('supports persisted %s source without imposing a v3 settings gate', async version => {
         detail.component_contract_version = version; detail.terminal_result.component_contract_version = version;
         if (version === '3.0') {
@@ -356,7 +402,7 @@ describe('global result viewer external candidate join', () => {
             effective_settings_sha256: null, effective_settings_json: null, capability_inventory_sha256: null,
             statistics_sha256: null, statistics_json: null, comparison_compatibility_id: null, execution_receipt: null });
         await render(); await fill(); await submit();
-        expect(panel()!.textContent).toContain('Child queued: child-job-1');
+        expect(panel()!.textContent).toContain('Analysis queued: child-job-1');
     });
     it.each(['job', 'invocation', 'terminal', 'candidate', 'hash', 'missing'])('rejects unavailable/foreign %s source without blanking viewer', async kind => {
         if (kind === 'job') detail.parent_job_id = 'foreign-job';
@@ -375,7 +421,7 @@ describe('global result viewer external candidate join', () => {
         vi.mocked(api.get).mockRejectedValue(new Error('Selected source no longer available'));
         await refresh();
         expect(panel()).toBeNull();
-        expect(container.textContent).not.toContain('Child queued');
+        expect(container.textContent).not.toContain('Analysis queued');
         expect(container.textContent).toContain('Selected source no longer available');
         expect(container.textContent).toContain('Native-slot classes');
     });
@@ -387,12 +433,12 @@ describe('global result viewer external candidate join', () => {
             : previous(...args));
         await submit();
         expect(panel()!.querySelector('[role="alert"]')?.textContent).toContain('parent_landscape_sha256');
-        expect(panel()!.textContent).not.toContain('Child queued');
+        expect(panel()!.textContent).not.toContain('Analysis queued');
         expect(container.textContent).toContain('Native-slot classes');
     });
     it.each(['hash', 'job', 'invocation'])('resets form and receipt on %s authority change', async kind => {
         await render(); await fill(); await submit();
-        expect(panel()!.textContent).toContain('Child queued');
+        expect(panel()!.textContent).toContain('Analysis queued');
         if (kind === 'hash') { detail.summary.landscape_sha256 = hashes.e; await refresh(); }
         else if (kind === 'job') { detail.parent_job_id = 'job-2'; detail.summary.parent_job_id = 'job-2'; detail.terminal_result.parent_job_id = 'job-2'; await render('job-2'); }
         else {
@@ -405,7 +451,7 @@ describe('global result viewer external candidate join', () => {
             expect(panel()).not.toBeNull();
             expect(container.querySelector<HTMLSelectElement>('select[aria-label="Structure"]')!.value).toBe('invoke-2');
         }
-        expect(container.textContent).not.toContain('Child queued');
+        expect(container.textContent).not.toContain('Analysis queued');
         if (panel()) {
             expect(panel()!.querySelector<HTMLInputElement>('input[placeholder="variant-1"]')!.value).toBe('');
             expect(button('Queue FrustraMPNN reanalysis').disabled).toBe(true);
@@ -419,7 +465,7 @@ describe('global result viewer external candidate join', () => {
             return previous(...args);
         });
         await submit(); expect(panel()!.textContent).toContain(stage+' denied');
-        expect(panel()!.textContent).not.toContain('Child queued');
+        expect(panel()!.textContent).not.toContain('Analysis queued');
         expect(container.textContent).toContain('Native-slot classes');
         if (stage === 'validation') expect(post.mock.calls.filter(c => String(c[0]).endsWith('/candidates/handoff'))).toHaveLength(0);
     });
@@ -451,7 +497,7 @@ describe('global result viewer external candidate join', () => {
         const activeCall = post.mock.calls.filter(c => String(c[0]).endsWith(stage === 'validation' ? '/settings/validate/upload' : '/candidates/handoff')).at(-1)!;
         expect((activeCall[2] as { signal: AbortSignal }).signal.aborted).toBe(true);
         await act(async () => resolve({ data: stage === 'validation' ? validationPreview : handoffReceipt })); await settle();
-        expect(panel()!.textContent).not.toContain('Child queued');
+        expect(panel()!.textContent).not.toContain('Analysis queued');
         expect(button('Queue FrustraMPNN reanalysis').disabled).toBe(true);
         expect(container.textContent).toContain('Native-slot classes');
         if (stage === 'validation') expect(post.mock.calls.filter(c => String(c[0]).endsWith('/candidates/handoff'))).toHaveLength(0);
