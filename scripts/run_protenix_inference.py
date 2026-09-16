@@ -10,8 +10,36 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
+
+
+def _validate_gpu_architecture() -> None:
+    try:
+        import torch
+    except Exception as exc:
+        print(f"[PROTENIX] ERROR: Could not import torch: {exc}")
+        raise SystemExit(87)
+
+    if not torch.cuda.is_available():
+        print("[PROTENIX] WARNING: torch.cuda.is_available() is false; continuing")
+        return
+
+    major, minor = torch.cuda.get_device_capability(0)
+    device_arch = f"sm_{major}{minor}"
+    supported = set()
+    for arch in torch.cuda.get_arch_list():
+        match = re.search(r"sm_(\d+)", arch)
+        if match:
+            supported.add(f"sm_{match.group(1)}")
+
+    if supported and device_arch not in supported:
+        print(f"[PROTENIX] ERROR: GPU architecture {device_arch} is unsupported by this torch build: {sorted(supported)}")
+        raise SystemExit(88)
+
+    print(f"[PROTENIX] torch={torch.__version__} cuda={torch.version.cuda} device_arch={device_arch} supported={sorted(supported)}")
+
 
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -239,6 +267,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _apply_default_params(args)
+    _validate_gpu_architecture()
 
     if args.allow_exact_duplicate_template_pdb_ids:
         _install_exact_template_duplicate_allowlist(

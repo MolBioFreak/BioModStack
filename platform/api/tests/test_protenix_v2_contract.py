@@ -72,6 +72,7 @@ def test_protenix_gpu_label_keeps_runtime_image_and_weight_bind() -> None:
     end = config.index("\n    }", start)
     block = config[start:end]
 
-    assert 'container = "${params.container_dir}/protenix.sif"' in block
+    assert 'container = { params.protenix_container_path ?: (System.getenv(' in block
+    assert '"${params.container_dir}/protenix.sif") }' in block
     assert "ext.containerOptions =" in block
-    assert "--bind ${params.protenix_weights}:/protenix_weights" in block
+    assert '--bind ${weightBind(params.protenix_weights, "/protenix_weights")}' in block
