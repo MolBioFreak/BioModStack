@@ -221,10 +221,10 @@ export default function StructureViewerHost({
     const activeLayer = requestedLayer && visualMetricLayers.some((layer) => layer.descriptor.id === requestedLayer.descriptor.id)
         ? requestedLayer
         : visualMetricLayers[0];
-    const filteredLayer = activeLayer ? filterMetricLayer(activeLayer, filters) : undefined;
-    const projected = filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
+    const filteredLayer = useMemo(() => activeLayer ? filterMetricLayer(activeLayer, filters) : undefined, [activeLayer, filters]);
+    const projected = useMemo(() => filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
         ? projectResidueMetricLayer(filteredLayer)
-        : undefined;
+        : undefined, [filteredLayer, layerVisible]);
     const residueMetricLayer = projected?.status === 'ok'
         ? projected.value
         : (!activeLayer ? compatibilityLayer : undefined);
@@ -399,13 +399,13 @@ export default function StructureViewerHost({
                 <button
                     type="button"
                     onClick={() => onMetricWorkbenchVisibilityChange(true)}
-                    className="absolute right-2 top-2 z-40 rounded border border-blue-500/50 bg-slate-950/90 px-3 py-1.5 text-xs font-semibold text-blue-200 shadow-lg hover:bg-slate-800"
+                    className="absolute right-14 bottom-2 z-40 rounded border border-blue-500/50 bg-slate-950/90 px-3 py-1.5 text-xs font-semibold text-blue-200 shadow-lg hover:bg-slate-800"
                 >
                     Show metrics
                 </button>
             )}
             {(showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent && (
-                <aside hidden={workbenchCollapsed} className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
+                <aside hidden={workbenchCollapsed} className="absolute bottom-2 right-14 z-30 max-h-[55%] w-[min(28rem,calc(100%-4rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
                             <span>Metrics</span>

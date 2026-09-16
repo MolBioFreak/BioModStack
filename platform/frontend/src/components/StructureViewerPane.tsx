@@ -553,8 +553,15 @@ export default function StructureViewerPane({
     const nativeChains = useMemo(()=>parseScientificNativeMetric(chainQuery.data,nativeDocument,'chain_metrics',selectedDesignId ?? undefined),[chainQuery.data,nativeDocument,selectedDesignId]);
     const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
         descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
+            categories: {
+                veryHigh: {label: '≥90%', color: '#3b82f6'},
+                confident: {label: '70–<90%', color: '#22d3ee'},
+                low: {label: '50–<70%', color: '#facc15'},
+                veryLow: {label: '<50%', color: '#f97316'},
+            },
             provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
-        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index]})),
+        // Reuse the established confidence bands for display only; retain native fractions.
+        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})),
     } as MetricLayer),[nativeResidue]);
     const chainMetrics = useMemo(() => requiresBoundMetrics ? {} : viewerAnalyses?.chainMetrics ?? {}, [requiresBoundMetrics, viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;

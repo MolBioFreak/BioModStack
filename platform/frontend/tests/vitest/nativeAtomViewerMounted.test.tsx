@@ -42,11 +42,18 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     expect(state.gpu.alphafoldView).toBe(false);
     const q=state.gpu.scenePresentation.colorQueries;
     expect(q.filter((q:any)=>q.authAsymId==='E').map((q:any)=>q.authAtomIds)).toEqual([['C1'],['C2']]);
-    expect(q[3].color).not.toEqual(q[4].color);
+    expect(q[3].color).toEqual({r:249,g:115,b:22});
+    expect(q[4].color).toEqual({r:59,g:130,b:246});
     expect(state.gpu.scenePresentation.tooltipQueries[3].tooltip).toContain('0.25 fraction');
     expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
     expect(mounted!.root.findAllByProps({'aria-label':'Native atom confidence'})).toHaveLength(0);
+    const show=mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!;
+    expect(show.props.className).toContain('bottom-2');
+    expect(show.props.className).toContain('right-14');
+    expect(show.props.className).not.toContain('top-2');
     await openMetrics();
+    expect(mounted!.root.findByProps({'aria-label':'Structure metric workbench'}).props.className).toContain('right-14');
+    expect(text(mounted!.root.findByProps({'aria-label':'Metric categories'}))).toContain('≥90%');
     const options=()=>mounted!.root.findByProps({'aria-label':'Linked atom track'}).findAllByProps({role:'option'});
     expect(text(options()[3])).toBe('E:1:C125.0%');
     await act(async()=>options()[3].props.onClick());
@@ -62,6 +69,30 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     expect(fetcher.mock.calls.some(([url])=>url.includes('/pae?max_size=1024'))).toBe(true);
     expect(fetcher.mock.calls.some(([url])=>url.includes('/analyses'))).toBe(false);
 });
+it.each(['atom_plddt','residue_plddt'])('%s retains native fractions and established confidence thresholds through opacity changes',async metric=>{
+    const p=nativeAtomFixture(8);
+    p.confidence.metric=metric;
+    if(metric==='residue_plddt')p.confidence.axis.residues=p.confidence.axis.residues.map((r:any,index:number)=>{
+        const {label_atom_id,auth_atom_id,element,...ref}=r;
+        return {...ref,auth_seq_id:index+1,label_seq_id:index+1};
+    });
+    p.confidence.values=[0,0.4999,0.5,0.6999,0.7,0.8999,0.9,1];
+    await mount(p);
+    const layer=state.layers.find(l=>l.descriptor.id==='native-plddt');
+    expect(layer.values.map((v:any)=>v.value)).toEqual(p.confidence.values);
+    expect(layer.descriptor.valueRange).toEqual([0,1]);
+    expect(layer.descriptor.units).toBe('fraction');
+    const expected=[{r:249,g:115,b:22},{r:249,g:115,b:22},{r:250,g:204,b:21},{r:250,g:204,b:21},{r:34,g:211,b:238},{r:34,g:211,b:238},{r:59,g:130,b:246},{r:59,g:130,b:246}];
+    expect(state.gpu.scenePresentation.colorQueries.map((q:any)=>q.color)).toEqual(expected);
+    await openMetrics();
+    const before=state.gpu.scenePresentation;
+    await act(async()=>mounted!.root.findByProps({'aria-label':`${layer.descriptor.label} opacity`}).props.onChange({target:{value:'0.6'}}));
+    expect(state.gpu.scenePresentation.colorQueries.map((q:any)=>q.color)).toEqual(expected);
+    expect(state.gpu.scenePresentation.colorQueries.every((q:any)=>q.opacity===0.6)).toBe(true);
+    expect(state.gpu.scenePresentation.tooltipQueries).toBe(before.tooltipQueries);
+    expect(layer.values.map((v:any)=>v.value)).toEqual(p.confidence.values);
+});
+
 it('fullscreen starts clear but explicit Show metrics and minimize remain usable',async()=>{
     await mount();
     const descriptor=Object.getOwnPropertyDescriptor(document,'fullscreenElement');
@@ -69,6 +100,7 @@ it('fullscreen starts clear but explicit Show metrics and minimize remain usable
         Object.defineProperty(document,'fullscreenElement',{configurable:true,value:document.body});
         await act(async()=>document.dispatchEvent(new Event('fullscreenchange')));
         expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
+        expect(mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!.props.className).toContain('bottom-2');
         await openMetrics();
         expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(1);
         expect(mounted!.root.findAllByProps({'aria-label':'Linked atom track'})).toHaveLength(1);
