@@ -9,8 +9,15 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+# Support direct CLI and runpy callers from arbitrary working directories.
+# Resolve only this checked source directory, never a request-supplied path.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
 
 from plasmid_evidence import StructuralEvidenceUnavailable, validate_structural_rows
 

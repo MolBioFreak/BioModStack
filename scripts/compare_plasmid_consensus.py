@@ -4,7 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
+# Support direct CLI and runpy callers from arbitrary working directories.
+# Resolve only this checked source directory, never a request-supplied path.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
+
 from verify_construct import read_single_fasta, exact_circular_equivalence, sha256_file
 
 

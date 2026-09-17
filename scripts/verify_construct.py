@@ -20,6 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Support direct CLI and runpy callers from arbitrary working directories.
+# Resolve only this checked source directory, never a request-supplied path.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
+
 from plasmid_evidence import read_summary, validate_structural_rows
 from plasmid_circular import CircularAlignmentUnresolved, align_circular
 
