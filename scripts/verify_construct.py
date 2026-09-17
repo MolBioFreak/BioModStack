@@ -1272,6 +1272,7 @@ def write_summary(path: Path, manifest: dict[str, Any]) -> None:
         ("reason_codes", ",".join(manifest["reason_codes"])),
         ("sequence_identity_fraction", manifest["summary"].get("sequence_identity_fraction")),
         ("variant_count", manifest["summary"].get("variant_count")),
+        ("variant_analysis_status", manifest["summary"].get("variant_analysis_status", "unknown")),
         ("coverage_fraction", manifest["summary"].get("coverage_fraction")),
         ("unmapped_fraction", manifest["summary"].get("unmapped_fraction")),
         ("topology_status", manifest["checks"]["topology"]["status"]),
@@ -1282,12 +1283,26 @@ def write_summary(path: Path, manifest: dict[str, Any]) -> None:
     )
 
 
+def variant_analysis_completed(manifest: dict[str, Any]) -> bool:
+    check = manifest.get("checks", {}).get("sequence_identity", {})
+    # An empty VCF after a failed/unavailable comparison is not evidence of zero
+    # variants. Complete emitted calls can still have ambiguous read support.
+    return bool(manifest.get("variants")) or (
+        check.get("status") == "pass"
+        and check.get("metrics", {}).get("identity_fraction") == 1.0
+    )
+
+
+def check_display_name(name: str) -> str:
+    return "Expected-reference mapping" if name == "contamination" else name.replace("_", " ").title()
+
+
 def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
     verdict = html.escape(str(manifest["verdict"]))
     reasons = "".join(f"<li><code>{html.escape(code)}</code></li>" for code in manifest["reason_codes"])
     summary = manifest.get("summary", {})
     sequence_check = manifest.get("checks", {}).get("sequence_identity", {})
-    variant_analysis_complete = "VARIANT_ANALYSIS_PENDING" not in sequence_check.get("reason_codes", [])
+    variant_analysis_complete = variant_analysis_completed(manifest)
     topology_check = manifest.get("checks", {}).get("topology", {})
     topology_state = summary.get("topology_status") or topology_check.get("metrics", {}).get("state") or "unavailable"
 
@@ -1347,12 +1362,12 @@ def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
             if metric != "provenance"
         )
         check_sections.append(
-            f"<section><h3>{html.escape(name.replace('_', ' ').title())}: "
+            f"<section><h3>{html.escape(check_display_name(name))}: "
             f"{html.escape(str(check['status']).upper())}</h3>"
             f"<table><tbody>{metric_rows}</tbody></table></section>"
         )
     checks = "".join(
-        f"<tr><th>{html.escape(name.replace('_', ' ').title())}</th><td>{html.escape(check['status'])}</td>"
+        f"<tr><th>{html.escape(check_display_name(name))}</th><td>{html.escape(check['status'])}</td>"
         f"<td>{html.escape(', '.join(check['reason_codes']) or 'none')}</td></tr>"
         for name, check in manifest["checks"].items()
     )
@@ -1365,9 +1380,13 @@ def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
         "code{color:#93c5fd}</style></head><body>"
         f"<h1>Construct verification: {verdict}</h1><h2>Decision summary</h2><div class='metrics'>{decision}</div>"
         f"<h2>Reason codes</h2><ul>{reasons}</ul>"
-        f"<h2>Independent checks</h2><table><tr><th>Check</th><th>Status</th><th>Reasons</th></tr>{checks}</table>"
+        f"<h2>Evidence checks</h2><table><tr><th>Check</th><th>Status</th><th>Reasons</th></tr>{checks}</table>"
         "<h2>Observed variants</h2><table><thead><tr><th>ID</th><th>Type</th><th>Position</th><th>Reference</th><th>Observed</th><th>Support</th><th>Classification</th><th>Depth</th></tr></thead>"
         f"<tbody>{variant_rows}</tbody></table><h2>Check evidence</h2>{''.join(check_sections)}"
+        "<p>The mapping screen describes only the retained input reads. It does not establish "
+        "sample purity, absence of off-target molecules, organism identity, minor-plasmid detection "
+        "sensitivity, or molecular copy number. Consensus agreement from the same reads is not "
+        "independent biological replication.</p>"
         "<p>This portable report contains the decision-relevant machine evidence. The bound JSON manifest remains the complete provenance authority.</p>"
         "</body></html>\n",
         encoding="utf-8",
@@ -1699,6 +1718,9 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                 "unmapped_fraction": unmapped_fraction,
                 "screen_basis": "expected_reference_mapping_only",
                 "organism_identity_claimed": False,
+                "sample_purity_claimed": False,
+                "off_target_absence_claimed": False,
+                "input_population_scope": "retained_input_only_original_sample_scope_unverified",
             },
         )
         aggregate_reasons.extend(contamination_reasons)
@@ -1995,6 +2017,9 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts": [],
     }
 
+    manifest["summary"]["variant_analysis_status"] = (
+        "completed" if variant_analysis_completed(manifest) else "not_assessed"
+    )
     summary_path = out_dir / "verification_summary.tsv"
     evidence_path = out_dir / "evidence.html"
     write_summary(summary_path, manifest)
