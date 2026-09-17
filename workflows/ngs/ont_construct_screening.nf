@@ -17,7 +17,7 @@ include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation; CloneValidationAdapter } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
 def reportStage(params, stageName, files) {
@@ -237,6 +237,10 @@ workflow ONT_CONSTRUCT_SCREENING {
             analysis_bam, Channel.value(reference_file),
         )
         verificationInput = CloneValidationAdapter.out.verification_input
+        if (runFastqQc) {
+            ComparePlasmidConsensus(CloneValidationAdapter.out.verification_input, FastqPlasmidQC.out.consensus)
+            verificationInput = ComparePlasmidConsensus.out.verification_input
+        }
         supportEvidence = CloneValidationAdapter.out.per_base_support
         statsEvidence = CloneValidationAdapter.out.alignment_stats
         if (!runFastqQc) {

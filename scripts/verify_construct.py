@@ -1407,6 +1407,29 @@ def artifact_record(
     }
 
 
+def check_consensus_comparison(state: dict[str, Any], bundle: Path, observed: str) -> dict[str, Any] | None:
+    comparison = state.get("read_guided_comparison")
+    if comparison is None:
+        return None
+    if not isinstance(comparison, dict) or comparison.get("method") != "samtools_bayesian_reference_guided":
+        raise ValueError("CONSENSUS_COMPARISON_INVALID")
+    relative = comparison.get("path")
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise ValueError("CONSENSUS_COMPARISON_PATH_INVALID")
+    path = (bundle / relative).resolve()
+    if not path.is_relative_to(bundle.resolve()) or not path.is_file():
+        raise ValueError("CONSENSUS_COMPARISON_UNAVAILABLE")
+    if sha256_file(path) != comparison.get("sha256"):
+        raise ValueError("CONSENSUS_COMPARISON_DIGEST_MISMATCH")
+    _, sequence = read_single_fasta(path)
+    return {
+        "agreement": exact_circular_equivalence(observed, sequence) is not None,
+        "read_guided_sha256": comparison["sha256"],
+        "evidence_relationship": "same_read_population_different_consensus_method",
+        "independent_biological_replication": False,
+    }
+
+
 def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     reference_path = args.reference_fasta.resolve()
     observed_state_path = args.observed_state.resolve()
@@ -1815,6 +1838,21 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         sequence_check["metrics"]["actual_reference_sequence_sha256"] = actual_reference_sequence_sha256
         if sequence_check["status"] == "pass":
             sequence_check["status"] = "review"
+
+    if observed is not None and state.get("read_guided_comparison") is not None:
+        try:
+            comparison = check_consensus_comparison(state, observed_state_path.parent, observed)
+            checks["sequence_identity"]["metrics"]["consensus_comparison"] = comparison
+            comparison_reason = "CONSENSUS_METHODS_DISAGREE" if comparison and not comparison["agreement"] else None
+        except (OSError, ValueError) as exc:
+            comparison_reason = "CONSENSUS_COMPARISON_UNAVAILABLE"
+            checks["sequence_identity"]["metrics"]["comparison_error"] = str(exc)
+        if comparison_reason:
+            check = checks["sequence_identity"]
+            if check["status"] == "pass":
+                check["status"] = "review"
+            check["reason_codes"] = sorted(set([*check["reason_codes"], comparison_reason]))
+            aggregate_reasons.append(comparison_reason)
 
     check_statuses = {check["status"] for check in checks.values()}
     if "fail" in check_statuses:

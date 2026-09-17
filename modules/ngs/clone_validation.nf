@@ -226,3 +226,28 @@ process CloneValidationAdapter {
     printf 'aligned_dimer_reads\tnon_boundary_split_reads\n' > dimer_secondary_summary.tsv
     """
 }
+
+process ComparePlasmidConsensus {
+    label 'fastq_qc_cpu'
+    publishDir "${params.out_dir}/assembly/comparison", mode: 'copy'
+    tag 'compare_plasmid_consensus'
+
+    input:
+    path verification_input
+    path read_consensus
+
+    output:
+    path 'compared_verification_input', emit: verification_input
+    path 'compared_verification_input/consensus_comparison.json', emit: comparison
+
+    script:
+    def codeRoot = params.code_root ?: projectDir
+    def comparator = shellQuote("${codeRoot}/scripts/compare_plasmid_consensus.py")
+    """
+    set -euo pipefail
+    python3 ${comparator} \
+        --bundle "${verification_input}" \
+        --read-consensus "${read_consensus}" \
+        --out-dir compared_verification_input
+    """
+}

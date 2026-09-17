@@ -11,7 +11,8 @@ def test_clone_verifier_consumes_selected_structural_channels():
     assert 'secondaryEvidence = BuildDimerCanonicalOutputs.out.secondary_summary' in text
     assert text.count('FastqDimerAnalysis(qcReads,')==1
     invocation=text[text.index('    ConstructVerify(\n'):]
-    assert 'CloneValidationAdapter.out.verification_input' in invocation
+    assert 'verificationInput,' in invocation
+    assert 'ComparePlasmidConsensus(CloneValidationAdapter.out.verification_input, FastqPlasmidQC.out.consensus)' in text
     assert 'breakpointEvidence,' in invocation
     assert 'workflow.onComplete' in text
 

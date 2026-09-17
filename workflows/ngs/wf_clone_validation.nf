@@ -16,7 +16,7 @@ include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation; CloneValidationAdapter } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -205,6 +205,7 @@ workflow WF_CLONE_VALIDATION {
         analysis_bam,
         Channel.of(reference_file),
     )
+    def verificationInput = CloneValidationAdapter.out.verification_input
     def breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
     def secondaryEvidence = CloneValidationAdapter.out.secondary_summary
     if (runFastqQc) {
@@ -227,12 +228,14 @@ workflow WF_CLONE_VALIDATION {
         breakpointEvidence = BuildDimerCanonicalOutputs.out.breakpoint_call
         secondaryEvidence = BuildDimerCanonicalOutputs.out.secondary_summary
         FastqPlasmidQC(analysis_bam, Channel.value(reference_file), qcReads)
+        ComparePlasmidConsensus(CloneValidationAdapter.out.verification_input, FastqPlasmidQC.out.consensus)
+        verificationInput = ComparePlasmidConsensus.out.verification_input
     }
     // Always verify the assembled sequence in this workflow. Read-guided QC is
     // a separate observation, not a replacement for the assembly verdict.
     ConstructVerify(
         Channel.value(reference_file),
-        CloneValidationAdapter.out.verification_input,
+        verificationInput,
         CloneValidationAdapter.out.per_base_support,
         analysis_bam,
         CloneValidationAdapter.out.alignment_stats,
