@@ -17,6 +17,7 @@ process RunCloneValidation {
     path "wf_clone_out", emit: out
     path "wf_clone.log", emit: log
     path "runtime_provenance.json", emit: runtime_provenance
+    path "input_model_provenance.json", emit: input_model_provenance
     path "wf_clone_out/wf-clone-validation-report.html", emit: report
     path "wf_clone_out/sample_status.txt", emit: sample_status
 
@@ -66,6 +67,7 @@ process RunCloneValidation {
         error("wf_clone_validation requires an authoritative full reference for P3 construct verification")
     }
     def codeRoot = params.code_root ?: projectDir
+    def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
     def lock = shellQuote("${codeRoot}/config/ngs/wf_clone_validation_v1.8.4.lock.json")
     def wfCloneSingularityCache = '/mnt/BioModStack/apptainer/singularity_cache'
@@ -78,6 +80,13 @@ process RunCloneValidation {
     export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
+
+    # Validate the actual reads before supplying an upstream model override.
+    # Unknown imported FASTQ/RG provenance is rejected; it is never relabeled HAC.
+    python3 ${modelValidator} \
+        --bam "${bam}" \
+        --expected-model "${basecallerModel}" \
+        --output input_model_provenance.json
 
     python3 ${validator} \
         --lock ${lock} \
