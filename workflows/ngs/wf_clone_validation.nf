@@ -11,7 +11,7 @@ nextflow.enable.dsl = 2
 
 include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam; BamToFastqForQC } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
@@ -205,53 +205,63 @@ workflow WF_CLONE_VALIDATION {
         analysis_bam,
         Channel.of(reference_file),
     )
-    ConstructVerify(
-        Channel.of(reference_file),
-        CloneValidationAdapter.out.verification_input,
-        CloneValidationAdapter.out.per_base_support,
-        analysis_bam,
-        CloneValidationAdapter.out.alignment_stats,
-        CloneValidationAdapter.out.breakpoint_call,
-        CloneValidationAdapter.out.secondary_summary,
-    )
-    RunCloneValidation.out.out.subscribe { _ignored ->
-        reportStage(params, "wf_clone_validation", [
-            "${params.out_dir}/assembly/wf_clone_out",
-            "${params.out_dir}/assembly/wf_clone.log",
-            "${params.out_dir}/assembly/runtime_provenance.json",
-            "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
-            "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
-            "${params.out_dir}/assembly/adapter/adapter_manifest.json",
-            "${params.out_dir}/verification/qc_manifest.json",
-            "${params.out_dir}/verification/verification_summary.tsv",
-        ])
-    }
-
-    // --- FASTQ plasmid QC (only for FASTQ input with reference) ---
-    if (has_fastq && runFastqQc) {
-        FastqDimerAnalysis(Channel.of(file(params.fastq_path)), Channel.of(reference_file))
+    def breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
+    def secondaryEvidence = CloneValidationAdapter.out.secondary_summary
+    if (runFastqQc) {
+        def qcReads = null
+        if (has_fastq) {
+            qcReads = Channel.value(file(params.fastq_path))
+        } else {
+            BamToFastqForQC(analysis_bam)
+            qcReads = BamToFastqForQC.out.fastq
+        }
+        FastqDimerAnalysis(qcReads, Channel.value(reference_file))
         BuildDimerCanonicalOutputs(
             FastqDimerAnalysis.out.summary,
             FastqDimerAnalysis.out.junction_events,
             FastqDimerAnalysis.out.single_ref_split_events,
             FastqDimerAnalysis.out.single_ref_split_profile,
             FastqDimerAnalysis.out.breakpoint_screen,
-            FastqDimerAnalysis.out.dimer_reference
+            FastqDimerAnalysis.out.dimer_reference,
         )
-        FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
-        FastqPlasmidQC.out.summary.subscribe { _ignored ->
-            reportStage(params, "fastq_qc", [
-                "${params.out_dir}/fastq_qc/read_lengths.tsv",
-                "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
-                "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                "${params.out_dir}/fastq_qc/qc_manifest.json",
-                "${params.out_dir}/fastq_qc/igv_report.html",
-                "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+        breakpointEvidence = BuildDimerCanonicalOutputs.out.breakpoint_call
+        secondaryEvidence = BuildDimerCanonicalOutputs.out.secondary_summary
+        FastqPlasmidQC(analysis_bam, Channel.value(reference_file), qcReads)
+    }
+    // Always verify the assembled sequence in this workflow. Read-guided QC is
+    // a separate observation, not a replacement for the assembly verdict.
+    ConstructVerify(
+        Channel.value(reference_file),
+        CloneValidationAdapter.out.verification_input,
+        CloneValidationAdapter.out.per_base_support,
+        analysis_bam,
+        CloneValidationAdapter.out.alignment_stats,
+        breakpointEvidence,
+        secondaryEvidence,
+    )
+    workflow.onComplete {
+        if (workflow.success) {
+            reportStage(params, "wf_clone_validation", [
+                "${params.out_dir}/assembly/wf_clone_out",
+                "${params.out_dir}/assembly/wf_clone.log",
+                "${params.out_dir}/assembly/runtime_provenance.json",
+                "${params.out_dir}/assembly/input_model_provenance.json",
+                "${params.out_dir}/assembly/adapter/adapter_manifest.json",
             ])
+            reportStage(params, "construct_verification", [
+                "${params.out_dir}/verification/qc_manifest.json",
+                "${params.out_dir}/verification/verification_summary.tsv",
+            ])
+            if (runFastqQc) {
+                reportStage(params, "fastq_qc", ["${params.out_dir}/fastq_qc/qc_manifest.json"])
+                reportStage(params, "dimer_qc", [
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                ])
+            }
         }
     }
+
 }
 
 // Entry point for standalone Wf Clone Validation workflow
