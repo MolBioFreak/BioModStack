@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from plasmid_evidence import read_summary, validate_structural_rows
+from plasmid_circular import CircularAlignmentUnresolved, align_circular
 
 
 VERIFIER_NAME = "biomodstack-construct-verifier"
@@ -222,7 +223,7 @@ def _alignment_opcodes(reference: str, observed: str) -> tuple[list[tuple[str, i
     return opcodes, matches, matrix[-1][-1]
 
 
-def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
+def _small_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
     if not observed:
         opcodes, matches, edit_cost = _alignment_opcodes(reference, observed)
         return {
@@ -301,6 +302,29 @@ def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
         "identity_fraction": matches / max(len(reference), len(observed), 1),
         "canonicalization": "exhaustive_minimum_edit_lexicographic_rotation_v1",
     }
+
+
+def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
+    # An exact match is common and needs no edit search or quadratic traceback.
+    # Find an offset IN OBSERVED, not the offset-in-reference returned by
+    # exact_circular_equivalence(). Preserve the actual observed sequence.
+    if len(reference) == len(observed) and observed:
+        for orientation, oriented in (("forward", observed), ("reverse_complement", reverse_complement(observed))):
+            offset = (oriented + oriented).find(reference, 0, 2 * len(oriented) - 1)
+            if 0 <= offset < len(oriented):
+                normalized = oriented[offset:] + oriented[:offset]
+                return {
+                    "orientation": orientation, "rotation_offset": offset,
+                    "normalized_observed": normalized,
+                    "opcodes": [("equal", 0, len(reference), 0, len(observed))],
+                    "matches": len(reference), "edit_cost": 0,
+                    "identity_fraction": 1.0,
+                    "canonicalization": "exact_circular_match_v1",
+                }
+    # Preserve the independently tested exhaustive method only for short inputs.
+    if max(len(reference), len(observed)) <= 64:
+        return _small_circular_alignment(reference, observed)
+    return align_circular(reference, observed)
 
 
 def read_support_rows(path: Path) -> dict[int, dict[str, Any]]:
@@ -1548,7 +1572,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                     "valid",
                     "observed consensus to BAM-derived support v1",
                 )
-            except SequenceEvidenceUnavailable as exc:
+            except (SequenceEvidenceUnavailable, CircularAlignmentUnresolved) as exc:
                 reason = str(exc)
                 observed_trusted = False
                 observed_reason = reason
@@ -1623,7 +1647,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             checks["sequence_identity"] = make_check(sequence_status, sequence_reasons, variant_alignment)
             aggregate_reasons.extend(sequence_reasons)
         except (KeyError, TypeError, ValueError) as exc:
-            reason = "VARIANT_CALLING_UNAVAILABLE"
+            reason = str(exc) if isinstance(exc, CircularAlignmentUnresolved) else "VARIANT_CALLING_UNAVAILABLE"
             checks["sequence_identity"] = make_check("review", [reason], {"error": str(exc)})
             aggregate_reasons.append(reason)
 
