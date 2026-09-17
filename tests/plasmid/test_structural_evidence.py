@@ -15,7 +15,7 @@ def test_canonical_names_detect_non_boundary_split():
 
 
 def test_origin_is_not_structural_contradiction():
-    screen = validate_structural_rows([call(primary_position_mod_ref="0")], [{"aligned_dimer_reads": "10", "non_boundary_split_reads": "0"}], 1000)
+    screen = validate_structural_rows([call(primary_position_mod_ref="1000")], [{"aligned_dimer_reads": "10", "non_boundary_split_reads": "0"}], 1000)
     assert screen["contradictory_breakpoint_evidence"] is False
 
 
@@ -58,3 +58,22 @@ def test_conflicting_aliases_are_invalid():
     with pytest.raises(ValueError, match='conflicting'):
         validate_structural_rows([call(breakpoint_status='no_split')],
             [{'aligned_dimer_reads':'10','non_boundary_split_reads':'0'}], 1000)
+
+
+@pytest.mark.parametrize("status", ["not_evaluable", "split_detected_unresolved", "seam_only_unresolved"])
+def test_unresolved_producer_states_cannot_be_clean(status):
+    with pytest.raises(StructuralEvidenceUnavailable):
+        validate_structural_rows([call(call_status=status)],
+            [{"aligned_dimer_reads":"10","non_boundary_split_reads":"0"}],1000)
+
+
+def test_boundary_end_matches_canonical_producer_coordinates():
+    screen=validate_structural_rows([call(primary_position_mod_ref="950")],
+        [{"aligned_dimer_reads":"10","non_boundary_split_reads":"0"}],1000)
+    assert screen["contradictory_breakpoint_evidence"] is True
+
+
+def test_unknown_status_is_not_silently_negative():
+    with pytest.raises(ValueError,match="unsupported"):
+        validate_structural_rows([call(call_status="future_status")],
+            [{"aligned_dimer_reads":"10","non_boundary_split_reads":"0"}],1000)

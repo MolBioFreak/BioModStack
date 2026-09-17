@@ -50,8 +50,12 @@ def breakpoint_contradiction(row: dict[str, str], reference_length: int) -> bool
     confidence = _alias(row, "call_confidence", "confidence", "breakpoint_confidence")
     if not status:
         raise StructuralEvidenceUnavailable("STRUCTURAL_BREAKPOINT_STATUS_MISSING")
-    if status in {"not_run", "unavailable", "failed", "error", "unknown"}:
+    if status in {"not_run", "not_evaluable", "unavailable", "failed", "error", "unknown"}:
         raise StructuralEvidenceUnavailable("STRUCTURAL_BREAKPOINT_NOT_EVALUATED")
+    if status in {"split_detected_unresolved", "seam_only_unresolved"}:
+        raise StructuralEvidenceUnavailable("STRUCTURAL_BREAKPOINT_UNRESOLVED")
+    if status not in {"split_supported", "provisional_split_supported", "no_junction_evidence", "no_split"}:
+        raise ValueError("unsupported structural breakpoint status")
     split_supported = "split" in status and status != "split_detected_unresolved"
     credible = confidence in {"high", "medium"} or status in {"split_supported", "provisional_split_supported"}
     if not split_supported or not credible:
@@ -64,9 +68,9 @@ def breakpoint_contradiction(row: dict[str, str], reference_length: int) -> bool
     # The current canonical producer publishes coordinates, not a boundary flag.
     position = required_count(row, "primary_position_mod_ref")
     window = required_count(row, "boundary_window_bp")
-    if reference_length <= 0 or not 0 <= position <= reference_length or not 0 < window <= reference_length // 2:
+    if reference_length <= 0 or not 1 <= position <= reference_length or not 0 < window <= reference_length // 2:
         raise ValueError("invalid structural breakpoint coordinates/window")
-    return window < position < reference_length - window
+    return window < position <= reference_length - window
 
 
 def validate_structural_rows(
