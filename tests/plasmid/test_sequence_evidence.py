@@ -57,3 +57,17 @@ def test_new_profile_is_strict_but_not_qualified():
     for profile in (old,new):
         assert profile['automatic_pass_eligible'] is False
         assert profile['public_accuracy_validated'] is False
+
+
+def test_non_plurality_bayesian_call_is_review_not_proven_incorrect():
+    rows={1:row(),2:row('C')}
+    rows[1].update(A=16,G=14)
+    with pytest.raises(verify.SequenceEvidenceUnavailable,match='READ_COUNT_AND_CONSENSUS_DISAGREE'):
+        verify.validate_observed_consensus_binding('AC','GC',rows,rows)
+
+
+def test_low_fraction_insertion_is_not_a_proven_consensus_failure():
+    rows={1:row(),2:row('C')}
+    rows[1].update(insertion_count=16,insertion_alleles={'G':16})
+    with pytest.raises(verify.SequenceEvidenceUnavailable,match='READ_COUNT_AND_CONSENSUS_DISAGREE'):
+        verify.validate_observed_consensus_binding('AC','AC',rows,rows)

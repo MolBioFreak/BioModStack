@@ -421,6 +421,7 @@ def validate_observed_consensus_binding(
     observed: str,
     support_rows: dict[int, dict[str, Any]],
     recomputed_support: dict[int, dict[str, int]],
+    profile: dict[str, Any] | None = None,
 ) -> None:
     """Bind every published/observed reference-position consensus call to BAM support."""
     if "N" in reference:
@@ -434,7 +435,9 @@ def validate_observed_consensus_binding(
         depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
         if depth <= 0:
             raise SequenceEvidenceUnavailable("OBSERVED_SEQUENCE_HAS_UNCOVERED_POSITIONS")
+    policy = profile or {"min_depth": 20, "min_variant_support_fraction": 0.80}
     contradictions: list[str] = []
+    ambiguous: list[str] = []
     allowed_by_position: dict[int, set[str]] = {}
     for position in range(1, len(reference) + 1):
         published = support_rows.get(position)
@@ -471,9 +474,16 @@ def validate_observed_consensus_binding(
             observed_base = observed_by_reference.get(position)
             normalized_base = "-" if observed_base is None else observed_base
             if normalized_base not in allowed_by_position[position]:
-                contradictions.append(
-                    f"position {position}: observed consensus {observed_base!r} not supported by BAM consensus options {sorted(allowed_by_position[position])!r}"
-                )
+                row = recomputed_support[position]
+                observed_count = int(row["deletion_count"] if normalized_base == "-" else row.get(normalized_base, 0))
+                if observed_count > 0:
+                    # A quality-aware Bayesian call need not be the raw-count
+                    # plurality. This checker cannot prove that call incorrect.
+                    ambiguous.append(f"position {position}: read-count plurality and consensus differ")
+                else:
+                    contradictions.append(
+                        f"position {position}: observed consensus {observed_base!r} has no BAM allele observations"
+                    )
             if len(contradictions) >= 20:
                 break
         for anchor, row in recomputed_support.items():
@@ -481,7 +491,11 @@ def validate_observed_consensus_binding(
             depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
             no_insertion = max(0, depth - int(row["insertion_count"]))
             if alleles and max(int(count) for count in alleles.values()) > no_insertion and anchor not in observed_insertions:
-                contradictions.append(f"position {anchor}: observed consensus omits supported insertion")
+                major_fraction = max(int(count) for count in alleles.values()) / max(1, depth)
+                if depth >= int(policy["min_depth"]) and major_fraction >= float(policy["min_variant_support_fraction"]):
+                    contradictions.append(f"position {anchor}: observed consensus omits supported insertion")
+                else:
+                    ambiguous.append(f"position {anchor}: unresolved insertion support")
         for anchor, inserted in observed_insertions.items():
             allowed_insertions = _insertion_consensus_options(recomputed_support[anchor])
             if inserted not in allowed_insertions:
@@ -492,6 +506,8 @@ def validate_observed_consensus_binding(
                 break
     if contradictions:
         raise ValueError("; ".join(contradictions))
+    if ambiguous:
+        raise SequenceEvidenceUnavailable("READ_COUNT_AND_CONSENSUS_DISAGREE")
 
 
 def _variant_support(
@@ -1609,6 +1625,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                     observed,
                     support_rows,
                     alignment_semantics["support"],
+                    profile,
                 )
                 checks["sequence_identity"]["metrics"]["consensus_support_validation"] = semantic_validation(
                     "valid",
