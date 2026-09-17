@@ -11,6 +11,7 @@ import shlex
 import signal
 import tempfile
 import sys
+import time
 
 from .result_generation import durable_json, transfer_marker
 from .transfer_supervisor import SCHEMA, process_identity
@@ -24,6 +25,10 @@ from paths import get_data_root
 
 class RemoteTransportError(RuntimeError):
     pass
+
+
+class RemoteExecutionTimeout(RemoteTransportError):
+    """An established remote command exceeded its execution budget."""
 
 
 class RemoteHostKeyUnavailable(RemoteTransportError):
@@ -82,6 +87,7 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    command_started: float | None = None
 
 
 def known_hosts_path() -> Path:
@@ -110,6 +116,13 @@ def private_key_path() -> Path:
 def _ssh_base(connection: RemoteConnection) -> list[str]:
     return [
         "ssh",
+        "-F", "/dev/null",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "IdentityAgent=none",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
         "-i",
         str(private_key_path()),
         "-p",
@@ -229,7 +242,8 @@ async def cancel_owned_transfer(destination: Path, *, timeout: float = 5.0) -> b
     return await asyncio.to_thread(request)
 
 
-async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
+async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60,
+               establishment_timeout: float | None = None) -> CommandResult:
     process = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
@@ -237,9 +251,31 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
+    command_started = None
+    establishing = establishment_timeout is not None
+    # Drain stderr from launch, including while awaiting the authenticated shell.
+    # Never parse/log SSH debug output or allow it to fill the pipe.
+    stderr_task = asyncio.create_task(process.stderr.read()) if establishing else None
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
-    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        if establishing:
+            marker = await asyncio.wait_for(process.stdout.readline(), establishment_timeout)
+            if marker != b"BMS_COMMAND_READY\n":
+                await asyncio.wait_for(process.wait(), timeout=2)
+                raise RemoteConnectionError("Remote SSH connection or authentication failed")
+            command_started = time.monotonic()
+            establishing = False
+            async def communicate():
+                if input_bytes is not None:
+                    process.stdin.write(input_bytes)
+                    await process.stdin.drain()
+                    process.stdin.close()
+                stdout = await process.stdout.read()
+                await process.wait()
+                return stdout, await stderr_task
+            stdout, stderr = await asyncio.wait_for(communicate(), timeout)
+        else:
+            stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
+    except BaseException as exc:
         async def stop_group() -> None:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -264,8 +300,20 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
         cleanup.result()
         if isinstance(exc, asyncio.CancelledError):
             raise
+        if not isinstance(exc, asyncio.TimeoutError):
+            raise
+        if establishment_timeout is not None:
+            if establishing:
+                raise RemoteConnectionError("Remote SSH establishment timed out") from None
+            raise RemoteExecutionTimeout("Remote command execution timed out") from None
         raise RemoteTransportError("Remote transport timed out") from None
+    finally:
+        if stderr_task is not None:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
     return CommandResult(
+        command_started=command_started,
         returncode=int(process.returncode or 0),
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),
@@ -383,16 +431,24 @@ async def run_remote(
     *,
     timeout: float = 60,
     input_bytes: bytes | None = None,
+    establishment_timeout: float | None = None,
 ) -> CommandResult:
     if not argv or any("\x00" in str(value) for value in argv):
         raise RemoteTransportError("Invalid remote command")
     if connection.provision_operation_id is not None:
         argv = _provision_argv(connection, connection.provision_operation_id, "run", argv)
     remote_command = " ".join(shlex.quote(str(value)) for value in argv)
+    options = {}
+    if establishment_timeout is not None:
+        # The shell marker precedes exec and stdin consumption. Only callers
+        # explicitly opting into phased deadlines change their timeout contract.
+        remote_command = "printf 'BMS_COMMAND_READY\\n'; exec " + remote_command
+        options['establishment_timeout'] = establishment_timeout
     result = await _run(
         [*_ssh_base(connection), remote_command],
         input_bytes=input_bytes,
         timeout=timeout,
+        **options,
     )
     if result.returncode == 255:
         raise RemoteConnectionError("Remote SSH connection or authentication failed")

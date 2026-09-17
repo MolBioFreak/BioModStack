@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import logging
 from pathlib import Path
@@ -13,8 +13,11 @@ import uuid
 
 from sqlalchemy import select
 from database import ExecutionTarget
-from .transport import RemoteConnection, run_remote
+from .transport import RemoteConnection, RemoteConnectionError, RemoteExecutionTimeout, run_remote
 
+# SSH authentication/channel setup is independently bounded; measured managed
+# handshake outliers exceed the probe budget. No reuse or freshness extension.
+ESTABLISHMENT_SECONDS = 30.0
 INTERVAL = 10.0
 FRESH_SECONDS = 20.0
 HISTORY_SECONDS = 3600
@@ -91,7 +94,7 @@ class RemoteTelemetry:
         latest = entry['history'][-1]
         base.update(deepcopy(latest[2]))
         base['history'] = [deepcopy(sample) for seq, _, sample in entry['history'] if seq > cursor] if include_history else []
-        if now - latest[1] > FRESH_SECONDS:
+        if latest[2]['available'] and now - latest[1] > FRESH_SECONDS:
             base.update(available=False, gpus=[], error='Remote telemetry is stale')
         return base
 
@@ -103,10 +106,14 @@ class RemoteTelemetry:
     async def collect(self, target, entry):
         started = time.monotonic()
         sample = {'observed_at': datetime.now(timezone.utc).isoformat(), 'available': False, 'gpus': []}
+        observed = started
         try:
             connection = RemoteConnection.from_target(target)
             response = await run_remote(connection, ['python3', '-', connection.remote_root],
-                                        input_bytes=PROBE, timeout=6)
+                                        input_bytes=PROBE, timeout=6, establishment_timeout=ESTABLISHMENT_SECONDS)
+            observed = getattr(response, "command_started", None) or started
+            sample["observed_at"] = (datetime.fromisoformat(sample["observed_at"]) +
+                                     timedelta(seconds=observed - started)).isoformat()
             if len(response.stdout.encode()) > 65536:
                 raise ValueError('oversize telemetry')
             raw = json.loads(response.stdout)
@@ -120,16 +127,22 @@ class RemoteTelemetry:
             entry['raw'] = raw
             entry['failures'] = 0
             sample['payload_bytes'] = len(response.stdout.encode())
-        except Exception:
+        except Exception as exc:
+            observed = time.monotonic()
             entry['raw'] = None
             entry['failures'] += 1
-            sample['error'] = 'Remote collection failed or timed out'
+            if isinstance(exc, RemoteConnectionError):
+                sample['error'] = 'Remote SSH establishment failed or timed out'
+            elif isinstance(exc, RemoteExecutionTimeout):
+                sample['error'] = 'Remote telemetry execution timed out'
+            else:
+                sample['error'] = 'Remote collection failed or timed out'
         sample['collection_duration_ms'] = round((time.monotonic() - started) * 1000, 2)
         self.sequence += 1
         sample['sequence'] = self.sequence
-        entry['history'].append((self.sequence, started, sample))
+        entry['history'].append((self.sequence, observed, sample))
         self._prune(entry, time.monotonic())
-        entry['due'] = started + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
+        entry['due'] = time.monotonic() + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
 
     async def run(self, session_factory, stop):
         from .targets import telemetry_eligible
