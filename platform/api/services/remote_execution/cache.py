@@ -265,13 +265,30 @@ p.mkdir(mode=0o700,exist_ok=False)
              and record.relative_path != 'runtime/support-python'
              and not record.relative_path.startswith('runtime/support-python/')]
     helper = await _install_helper(connection, check_fence)
+    transferable = cache_transfer_artifacts(bundle)
     receipts = []
     if bundle.weight_layout:
+        # The layout travels by reference to the runtime listing this bundle
+        # already carries and the envelope already authenticates; its production
+        # row count exceeds the helper's declared request budget. Stage and
+        # materialize that one document first, then let the helper re-verify its
+        # digest, schema and placement before it is used.
+        listing_destination = bundle.remote_runtime_dir.rstrip('/') + '/.bms-runtime-images.json'
+        listing = next((entry for entry in transferable
+                        if entry.remote_destination == listing_destination), None)
+        if listing is None:
+            raise ValueError('Weight layout listing is unavailable for this bundle')
+        receipts = await _cache_artifacts(connection=connection, artifacts=(listing,),
+            operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
+            materialize=True, helper=helper, runtime_root=bundle.remote_runtime_dir)
+        transferable = tuple(entry for entry in transferable
+                             if entry.remote_destination != listing_destination)
+        layout = {'path': listing_destination, 'sha256': listing.sha256}
         async def weights(action):
             await check_fence()
             result = await run_remote(connection, ['python3', helper, '--root',
                 connection.remote_root + '/cache/artifacts/v1'],
-                input_bytes=json.dumps(dict(action=action, entries=list(bundle.weight_layout))).encode(), timeout=3600)
+                input_bytes=json.dumps(dict(action=action, layout=layout)).encode(), timeout=3600)
             await check_fence()
             response = json.loads(result.stdout)
             if response.get('root') != bundle.envelope.environment['BMS_WEIGHTS']:
@@ -280,16 +297,16 @@ p.mkdir(mode=0o700,exist_ok=False)
         await progress(dict(phase='checking', artifact=None, message='Resolving installed model weights'))
         observed = await weights('weights_probe')
         if observed['state'] == 'missing':
-            receipts = await _cache_artifacts(connection=connection, artifacts=bundle.runtime_weights,
+            receipts += await _cache_artifacts(connection=connection, artifacts=bundle.runtime_weights,
                 operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
             if (await weights('weights_install'))['state'] != 'ready':
                 raise ValueError('Shared model weights were not installed')
         elif observed['state'] != 'ready':
             raise ValueError('Shared model weights are damaged')
         else:
-            receipts = [dict(name=e.remote_destination.removeprefix(connection.remote_root + '/'),
-                             sha256=e.sha256, size_bytes=e.size_bytes) for e in bundle.runtime_weights]
-    receipts += await _cache_artifacts(connection=connection, artifacts=cache_transfer_artifacts(bundle),
+            receipts += [dict(name=e.remote_destination.removeprefix(connection.remote_root + '/'),
+                              sha256=e.sha256, size_bytes=e.size_bytes) for e in bundle.runtime_weights]
+    receipts += await _cache_artifacts(connection=connection, artifacts=transferable,
                                       operation_id=bundle.attempt_id, progress=progress,
                                       check_fence=check_fence, materialize=True, helper=helper,
                                       links=links, runtime_root=bundle.remote_runtime_dir)

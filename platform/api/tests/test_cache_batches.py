@@ -11,9 +11,9 @@ import uuid
 import pytest
 
 from services.remote_execution import cache
-from services.remote_execution.bundle import CacheTransferArtifact
+from services.remote_execution.bundle import CacheTransferArtifact, TransferPlan
 from test_remote_cache_integration import local_transport
-from test_artifact_cache import module, identity
+from test_artifact_cache import module, identity, production_weight_rows
 
 
 def entries(tmp_path, count=5):
@@ -176,3 +176,127 @@ def test_helper_rejects_batch_bounds_and_images(tmp_path):
                   [dict(identity(b'a'), kind='runtime_image')]):
         with pytest.raises(ValueError, match='invalid_ingest_batch'):
             authority.ingest_many(items, operation, batch)
+
+
+def listing_bundle(tmp_path, rows):
+    """Bundle carrying only the authenticated runtime listing for one layout."""
+    attempt_id = str(uuid.UUID('0' * 32))
+    generation = f'{tmp_path}/worker/attempts/{attempt_id}/materialized'
+    runtime = f'{generation}/runtime'
+    digest, normalized, payload = module.weight_layout(rows)
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    listing = staging / '.bms-runtime-images.json'
+    listing.write_bytes(json.dumps({'schema': 'bms.runtime-image-references.v1',
+                                    'runtime_root': runtime, 'weights': normalized, 'images': []},
+                                   sort_keys=True, separators=(',', ':')).encode())
+    record = SimpleNamespace(relative_path='runtime/.bms-runtime-images.json',
+                             sha256=hashlib.sha256(listing.read_bytes()).hexdigest(),
+                             size_bytes=len(listing.read_bytes()), mode=0o644,
+                             role='runtime', link_target=None)
+    bundle = SimpleNamespace(
+        attempt_id=attempt_id,
+        envelope=SimpleNamespace(files=[record], environment={
+            'BMS_WEIGHTS': f'{tmp_path}/worker/cache/artifacts/v1/weights/{digest}'}),
+        weight_layout=tuple(normalized), runtime_weights=(),
+        remote_source_dir=f'{generation}/source', remote_runtime_dir=runtime,
+        runtime_transfers=(TransferPlan(listing, runtime + '/.bms-runtime-images.json'),))
+    return SimpleNamespace(remote_root=str(tmp_path / 'worker')), bundle
+
+
+@pytest.mark.asyncio
+async def test_production_weight_layout_request_is_bounded_reference(tmp_path, monkeypatch):
+    """88,037 layout rows are referenced to the staged listing, never inlined."""
+    connection, bundle = listing_bundle(tmp_path, production_weight_rows())
+    layout = {'path': bundle.remote_runtime_dir + '/.bms-runtime-images.json',
+              'sha256': bundle.envelope.files[0].sha256}
+    assert len(json.dumps({'action': 'weights_probe', 'entries': list(bundle.weight_layout)}).encode()) \
+        > 8 * 1024 * 1024
+    monkeypatch.setattr(cache.hf_assets, 'configuration', lambda: None)
+    requests, uploads = [], []
+    async def run(connection, argv, input_bytes=None, **kwargs):
+        if '-c' in argv:
+            return SimpleNamespace(stdout='')
+        request = json.loads(input_bytes)
+        requests.append(request)
+        if request['action'] == 'probe':
+            return SimpleNamespace(stdout=json.dumps(
+                {'artifacts': [dict(row, state='missing') for row in request['artifacts']]}))
+        if request['action'] in {'weights_probe', 'weights_install'}:
+            return SimpleNamespace(stdout=json.dumps(
+                {'state': 'ready', 'root': bundle.envelope.environment['BMS_WEIGHTS']}))
+        return SimpleNamespace(stdout=json.dumps({'artifacts': []}))
+    async def upload(connection, source, destination, **kwargs):
+        uploads.append((str(source), destination))
+    monkeypatch.setattr(cache, 'run_remote', run)
+    monkeypatch.setattr(cache, 'rsync_to_remote', upload)
+    receipts = await cache.stage_cached_bundle(connection=connection, bundle=bundle)
+    assert len(receipts) == 1 and receipts[0]['sha256'] == layout['sha256']
+    assert max(len(json.dumps(request).encode()) for request in requests) < 8 * 1024 * 1024
+    weights = [request for request in requests if request['action'] in {'weights_probe', 'weights_install'}]
+    assert [request['action'] for request in weights] == ['weights_probe']
+    assert weights[0] == {'action': 'weights_probe', 'layout': layout}
+    # The listing object is uploaded, ingested and materialized before the probe.
+    probe = requests.index(weights[0])
+    assert any(request['action'] == 'probe'
+               and [row['sha256'] for row in request['artifacts']] == [layout['sha256']]
+               for request in requests[:probe])
+    assert any(request['action'] == 'ingest_many'
+               and [row['sha256'] for row in request['artifacts']] == [layout['sha256']]
+               for request in requests[:probe])
+    assert any(request['action'] == 'materialize_many'
+               and [row['destination'] for row in request['entries']] == [layout['path']]
+               for request in requests[:probe])
+    assert len(uploads) == 1
+
+
+@pytest.mark.asyncio
+async def test_production_provision_manifest_is_published_by_reference(tmp_path, monkeypatch):
+    """The 88,039-row provision manifest no longer depends on helper stdin size."""
+    from services.remote_execution import managed_inventory as mi
+    from test_managed_runtime_safety import production_release_manifest
+    manifest = production_release_manifest()
+    boot = '0' * 36
+    assert len(json.dumps(dict(action='admit', manifest=manifest, boot_id=boot)).encode()) > 8 * 1024 * 1024
+    connection = SimpleNamespace(remote_root=str(tmp_path / 'worker'))
+    uploads = []
+    async def run(connection, argv, input_bytes=None, **kwargs):
+        # The controller's declared writer runs for real: it verifies the digest
+        # before publishing the document the helper will read back.
+        uploads.append(input_bytes)
+        result = subprocess.run(argv, input=input_bytes, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        return SimpleNamespace(stdout=result.stdout.decode())
+    monkeypatch.setattr(cache, 'run_remote', run)
+    request = await mi._reference_request_documents(
+        connection, {'action': 'admit', 'manifest': manifest, 'boot_id': boot}, cache._noop)
+    assert len(json.dumps(request).encode()) < 8 * 1024 * 1024
+    reference = request['manifest']
+    assert set(reference) == {'path', 'sha256'}
+    assert reference['sha256'] == mi.release_digest(manifest)
+    published = Path(reference['path'])
+    assert published.parent == tmp_path / 'worker/managed-assets/v1/requests'
+    assert published.name == reference['sha256'] + '.json'
+    assert uploads == [published.read_bytes()]
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == reference['sha256']
+    # The caller's own manifest projection is never converted in place.
+    assert len(manifest['artifacts']) == 88039
+    # A manifest below the declared budget keeps the existing inline form.
+    smaller = json.loads(json.dumps(manifest))
+    smaller['artifacts'] = smaller['artifacts'][:2]
+    small = {'action': 'admit', 'manifest': smaller, 'boot_id': boot}
+    assert len(json.dumps(small).encode()) < 8 * 1024 * 1024
+    before = len(uploads)
+    assert await mi._reference_request_documents(connection, small, cache._noop) == small
+    assert len(uploads) == before
+    # The real worker helper reads, verifies and validates the referenced document.
+    tools = Path(cache.__file__).parents[2] / 'tools'
+    helper = ['python3', str(tools / 'bms_managed_runtime.py'),
+              '--root', str(tmp_path / 'worker/managed-assets/v1'),
+              '--cache-helper', str(tools / 'bms_artifact_cache.py')]
+    result = subprocess.run(helper, input=json.dumps(
+        {'action': 'observe', 'manifests': [reference]}).encode(), capture_output=True)
+    assert result.returncode == 0, result.stderr
+    release = json.loads(result.stdout)['releases'][0]
+    assert release['release_sha256'] == reference['sha256']
+    assert len(release['artifacts']) == len(manifest['artifacts'])

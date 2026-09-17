@@ -23,6 +23,35 @@ import uuid
 
 CHUNK = 1024 * 1024
 
+# Declared budgets. The stdin request document must stay small: any larger payload
+# is published as a worker-side file and passed by reference, never inlined.
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
+# Declared budget for one referenced worker-side document (the bundle's runtime
+# listing and the weight layout it carries). validate_manifest bounds a layout at
+# 100,000 rows, so the declared closure is well inside this bound.
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+
+# Closed diagnostic code set for these budgets. Each code is a fixed safe string,
+# never constructed from request contents, paths or external prose.
+REQUEST_CODES = {
+    'request_too_large': 'helper request exceeds the declared request byte budget',
+    'document_too_large': 'referenced document exceeds the declared document byte budget',
+    'invalid_reference': 'referenced document declaration is invalid',
+    'document_unavailable': 'referenced document is unavailable',
+    'document_identity_mismatch': 'referenced document identity does not match its digest',
+    'invalid_weight_layout_document': 'referenced weight layout document is invalid',
+}
+
+
+class RequestBudgetError(ValueError):
+    """Typed helper failure carrying one closed-set diagnostic code."""
+
+    def __init__(self, code):
+        if code not in REQUEST_CODES:
+            raise ValueError('unknown_request_code')
+        super().__init__(REQUEST_CODES[code])
+        self.code = code
+
 
 @contextmanager
 def directory(path, *, create=False):
@@ -116,6 +145,61 @@ def weight_layout(entries):
     rows.sort(key=lambda row: row['name'])
     payload = json.dumps(rows, sort_keys=True, separators=(',', ':')).encode()
     return hashlib.sha256(payload).hexdigest(), rows, payload
+
+
+LAYOUT_DOCUMENT = '.bms-runtime-images.json'
+LAYOUT_SCHEMA = 'bms.runtime-image-references.v1'
+
+
+def read_document(path, limit=MAX_DOCUMENT_BYTES):
+    """Read one declared, bounded worker-side document without following links."""
+    path = PurePosixPath(str(path))
+    with directory(path.parent) as parent:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    try:
+        regular(fd)
+        if os.fstat(fd).st_size > limit:
+            raise RequestBudgetError('document_too_large')
+        data = bytearray()
+        while chunk := os.read(fd, min(CHUNK, limit + 1 - len(data))):
+            data.extend(chunk)
+            if len(data) > limit:
+                raise RequestBudgetError('document_too_large')
+        return bytes(data)
+    finally:
+        os.close(fd)
+
+
+def weight_layout_reference(reference):
+    """Resolve a by-reference weight layout from the worker's runtime listing.
+
+    The listing is the document bundle.py already writes into the attempt runtime
+    directory and records in the authenticated envelope, so the request carries a
+    path and digest instead of every row. Document identity, schema, placement and
+    row shape are re-verified here before the rows are used for the shared view.
+    """
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}
+            or not isinstance(reference['sha256'], str)
+            or not re.fullmatch('[0-9a-f]{64}', reference['sha256'])):
+        raise RequestBudgetError('invalid_reference')
+    path = PurePosixPath(str(reference['path']))
+    if not path.is_absolute() or '..' in path.parts or path.name != LAYOUT_DOCUMENT:
+        raise RequestBudgetError('invalid_reference')
+    try:
+        payload = read_document(path)
+    except FileNotFoundError:
+        raise RequestBudgetError('document_unavailable') from None
+    if hashlib.sha256(payload).hexdigest() != reference['sha256']:
+        raise RequestBudgetError('document_identity_mismatch')
+    try:
+        document = json.loads(payload)
+    except ValueError:
+        raise RequestBudgetError('invalid_weight_layout_document') from None
+    if (not isinstance(document, dict) or document.get('schema') != LAYOUT_SCHEMA
+            or document.get('runtime_root') != str(path.parent)
+            or not isinstance(document.get('weights'), list)):
+        raise RequestBudgetError('invalid_weight_layout_document')
+    return document['weights']
 
 
 class Cache:
@@ -350,8 +434,10 @@ class Cache:
             fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             with os.fdopen(fd, 'rb') as stream:
                 regular(stream.fileno())
-                payload = stream.read(8 * 1024 * 1024 + 1)
-                if len(payload) > 8 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != expected_sha256:
+                payload = stream.read(MAX_DOCUMENT_BYTES + 1)
+                if len(payload) > MAX_DOCUMENT_BYTES:
+                    raise RequestBudgetError('document_too_large')
+                if hashlib.sha256(payload).hexdigest() != expected_sha256:
                     raise ValueError('runtime_manifest_identity_mismatch')
                 references = json.loads(payload)
         if references['schema'] != 'bms.runtime-image-references.v1':
@@ -698,9 +784,9 @@ def main():
                 os.write(fd, (json.dumps(value, sort_keys=True) + '\n').encode())
             finally:
                 os.close(fd)
-    payload = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
-    if len(payload) > 8 * 1024 * 1024:
-        raise ValueError('request_too_large')
+    payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    if len(payload) > MAX_REQUEST_BYTES:
+        raise RequestBudgetError('request_too_large')
     request = json.loads(payload)
     cache = Cache(args.root, events)
     action = request['action']
@@ -723,7 +809,14 @@ def main():
     elif action == 'materialize_links':
         result = {'artifacts': [cache.materialize_link(row['artifact'], row['destination'], request['destination_root'], row['target']) for row in request['entries']]}
     elif action in {'weights_probe', 'weights_install'}:
-        result = cache.weights(request['entries'], install=action == 'weights_install')
+        # Exactly one declared layout form: inline rows, or a by-reference
+        # listing whose digest is verified before its rows are used.
+        declared = [key for key in ('entries', 'layout') if key in request]
+        if len(declared) != 1:
+            raise ValueError('invalid_weight_request')
+        entries = (request['entries'] if declared[0] == 'entries'
+                   else weight_layout_reference(request['layout']))
+        result = cache.weights(entries, install=action == 'weights_install')
     elif action == 'materialize_many':
         result = {'artifacts': [cache.materialize_entry(row, request['destination_root']) for row in request['entries']]}
     elif action == 'materialize':
@@ -738,5 +831,7 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         # Paths, request contents and transport URLs never enter diagnostic output.
-        print(json.dumps({'state': 'failed', 'error': type(exc).__name__}), file=sys.stderr)
+        # Declared-budget failures report their closed-set code, never a bare type.
+        error = exc.code if isinstance(exc, RequestBudgetError) else type(exc).__name__
+        print(json.dumps({'state': 'failed', 'error': error}), file=sys.stderr)
         raise SystemExit(1)

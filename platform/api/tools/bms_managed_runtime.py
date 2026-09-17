@@ -23,7 +23,36 @@ import sys
 import uuid
 from typing import Any
 
-MAX_JSON = 8 * 1024 * 1024
+# Declared budgets. The stdin request document must stay small: manifests larger
+# than the request budget are published as digest-verified worker-side documents
+# and passed by reference, never inlined.
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
+# Declared budget for one referenced worker-side document. validate_manifest
+# bounds a release manifest at 100,000 rows, so the declared closure is inside
+# this bound; oversized documents are refused by name, never truncated.
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+
+# Closed diagnostic code set for these budgets. Each code is a fixed safe string,
+# never constructed from request contents, paths or external prose.
+REQUEST_CODES = {
+    'request_too_large': 'helper request exceeds the declared request byte budget',
+    'document_too_large': 'referenced document exceeds the declared document byte budget',
+    'invalid_reference': 'referenced document declaration is invalid',
+    'document_unavailable': 'referenced document is unavailable',
+    'document_identity_mismatch': 'referenced document identity does not match its digest',
+    'invalid_request_document': 'referenced request document is invalid',
+}
+
+
+class RequestBudgetError(ValueError):
+    """Typed helper failure carrying one closed-set diagnostic code."""
+
+    def __init__(self, code):
+        if code not in REQUEST_CODES:
+            raise ValueError('unknown_request_code')
+        super().__init__(REQUEST_CODES[code])
+        self.code = code
+
 
 # Same capability contract as bootstrap_worker.sh and the native smoke checks.
 # Tool/driver version output is evidence, not an exact-match release prerequisite.
@@ -176,21 +205,52 @@ def validate_manifest(value, cache):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def read_bytes(path, cache, limit=MAX_JSON):
+def read_bytes(path, cache, limit=MAX_DOCUMENT_BYTES):
     with cache.directory(path.parent) as parent:
         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     try:
         cache.regular(fd)
         if os.fstat(fd).st_size > limit:
-            raise ValueError('oversized_record')
+            raise RequestBudgetError('document_too_large')
         data = bytearray()
         while chunk := os.read(fd, min(1024 * 1024, limit + 1 - len(data))):
             data.extend(chunk)
             if len(data) > limit:
-                raise ValueError('oversized_record')
+                raise RequestBudgetError('document_too_large')
         return bytes(data)
     finally:
         os.close(fd)
+
+
+def resolve_manifest(value, root, cache):
+    """Resolve one declared request document: inline manifest or by reference.
+
+    A reference is the closed shape {'path', 'sha256'}: a worker-side document the
+    controller published under this helper's own root. Content, digest and, by the
+    caller, the manifest identity are verified before use; nothing is truncated.
+    """
+    if not isinstance(value, dict) or set(value) != {'path', 'sha256'}:
+        return value
+    digest = value['sha256']
+    if not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+        raise RequestBudgetError('invalid_reference')
+    path = PurePosixPath(str(value['path']))
+    if (not path.is_absolute() or '..' in path.parts or path.name != digest + '.json'
+            or not path.is_relative_to(root)):
+        raise RequestBudgetError('invalid_reference')
+    try:
+        payload = read_bytes(path, cache)
+    except FileNotFoundError:
+        raise RequestBudgetError('document_unavailable') from None
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise RequestBudgetError('document_identity_mismatch')
+    try:
+        document = json.loads(payload)
+    except ValueError:
+        raise RequestBudgetError('invalid_request_document') from None
+    if not isinstance(document, dict):
+        raise RequestBudgetError('invalid_request_document')
+    return document
 
 
 def publish(path, value, cache):
@@ -919,26 +979,34 @@ def main():
     root = PurePosixPath(args.root)
     if not root.is_absolute() or '..' in root.parts or root == PurePosixPath('/'):
         raise ValueError('invalid_root')
-    request = json.loads(sys.stdin.buffer.read(MAX_JSON + 1))
+    payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    if len(payload) > MAX_REQUEST_BYTES:
+        raise RequestBudgetError('request_too_large')
+    request = json.loads(payload)
     before = boot_id()
     if request['action'] == 'boot':
         result = {}
     elif request['action'] == 'observe':
-        result = {'releases': [observe(root, m, cache) for m in request['manifests']]}
+        result = {'releases': [observe(root, resolve_manifest(m, root, cache), cache)
+                               for m in request['manifests']]}
     elif request['action'] == 'bounded_check':
-        releases = [observe(root, m, cache) for m in request['manifests']]
+        releases = [observe(root, resolve_manifest(m, root, cache), cache)
+                    for m in request['manifests']]
         for release in releases:
             release['native_readiness'] = bounded_native_check(release)
         result = {'releases': releases}
     elif request['action'] == 'install':
-        result = install(root, request['manifest'], request['boot_id'], cache)
+        result = install(root, resolve_manifest(request['manifest'], root, cache),
+                         request['boot_id'], cache)
     elif request['action'] == 'admit':
         # Incoming + cache object (+ managed copy for weights), even for hits.
         # This short conservative preflight reserves nothing.
-        result = admit(root, request['manifest'], request['boot_id'], cache)
+        result = admit(root, resolve_manifest(request['manifest'], root, cache),
+                       request['boot_id'], cache)
     elif request['action'] == 'activate':
         with admission_lock(root, cache) as (_, fence):
-            result = {'release': activate(root, request['manifest'], request['boot_id'], cache, fence=fence)}
+            result = {'release': activate(root, resolve_manifest(request['manifest'], root, cache),
+                                          request['boot_id'], cache, fence=fence)}
     else:
         raise ValueError('unsupported_action')
     if boot_id() != before:
@@ -950,5 +1018,8 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        print(json.dumps({'state': 'failed', 'error': type(exc).__name__}), file=sys.stderr)
+        # Paths, request contents and transport URLs never enter diagnostic output.
+        # Declared-budget failures report their closed-set code, never a bare type.
+        error = exc.code if isinstance(exc, RequestBudgetError) else type(exc).__name__
+        print(json.dumps({'state': 'failed', 'error': error}), file=sys.stderr)
         raise SystemExit(1)

@@ -270,6 +270,14 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert not (Path(second.remote_runtime_dir) / 'weights').exists()
     assert sum(row['action'] == 'weights_install' for row in calls) == 1
     assert sum(row['action'] == 'weights_probe' for row in calls) == 2
+    # The layout is passed by reference to the attempt's authenticated listing and
+    # never inlined in the request; the real helper verified each declared digest.
+    referenced = [row for row in calls if row['action'] in {'weights_probe', 'weights_install'}]
+    assert len(referenced) == 3
+    for row in referenced:
+        path = Path(row['layout']['path'])
+        assert 'entries' not in row and path.name == '.bms-runtime-images.json'
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == row['layout']['sha256']
     # No cached model object is copied into any attempt.
     assert not any('/weights/' in row['destination'] for call in calls if call['action'] == 'materialize_many' for row in call['entries'])
     assert (Path(second.remote_source_dir) / 'main.nf').is_file()

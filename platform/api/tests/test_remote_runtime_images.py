@@ -540,13 +540,21 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
     failed = subprocess.run(prepared.envelope.command, env={**os.environ, **prepared.envelope.environment},
                             capture_output=True, text=True)
     assert failed.returncode == 1 and not failed.stdout
-    count = len(uploads)
+    count, call_count = len(uploads), len(calls)
     with pytest.raises(subprocess.CalledProcessError):
         # A corrupt worker hit must not upload/repair from the valid controller.
         retry = bundle.prepare_remote_bundle(job=job, target=target, command=command,
                                                 native_invocation=job.native_invocation)
         await cache.stage_cached_bundle(connection=target, bundle=retry)
-    assert len(uploads) == count
+    assert not any(path == str(explicit) for path in uploads[count:])
+    listing = next(record for record in retry.envelope.files
+                   if record.relative_path == 'runtime/.bms-runtime-images.json')
+    # The only object this attempt stages before failing is its own authenticated
+    # runtime listing, which the helper verifies by digest; no cache object is
+    # ingested, materialized or replaced.
+    staged = [row['artifacts'] for row in calls[call_count:] if row['action'] == 'ingest_many']
+    assert staged == [[{'sha256': listing.sha256, 'size_bytes': listing.size_bytes}]]
+    assert len(uploads) == count + 1
 
 
 def _publish_process(root, item, source):
