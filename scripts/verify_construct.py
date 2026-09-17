@@ -20,9 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from plasmid_evidence import read_summary, validate_structural_rows
+
 
 VERIFIER_NAME = "biomodstack-construct-verifier"
-VERIFIER_VERSION = "0.2.0"
+VERIFIER_VERSION = "0.3.0"
 SCHEMA_NAME = "biomodstack.construct_verification.v2"
 DNA_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
 CIGAR_TOKEN = re.compile(r"(\d+)([MIDNSHP=X])")
@@ -1700,7 +1702,13 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             topology.get("aligned_dimer_reads"),
             "aligned_dimer_reads",
         )
-        denominator = aligned_dimer_reads or alignment_semantics["mapped_reads"]
+        screen = validate_structural_rows(
+            read_summary(breakpoint_call_path), read_summary(secondary_summary_path), len(reference)
+        )
+        for field in ("non_boundary_split_reads", "aligned_dimer_reads", "contradictory_breakpoint_evidence"):
+            if type(topology.get(field)) is not type(screen[field]) or topology.get(field) != screen[field]:
+                raise LookupError(f"topology {field} disagrees with structural source tables")
+        denominator = aligned_dimer_reads
         if min(non_boundary_split, aligned_dimer_reads) < 0 or non_boundary_split > denominator:
             raise ValueError("topology anomaly counts are inconsistent")
         expected_anomaly = non_boundary_split / denominator if denominator else 0.0
