@@ -33,6 +33,10 @@ QUERY_LENGTH_CONSUMING = frozenset("MIS=XH")
 MIN_SPLIT_MAPQ = 20
 
 
+class SequenceEvidenceUnavailable(ValueError):
+    """An incomplete observation must produce REVIEW, not a sequence failure."""
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -354,7 +358,7 @@ def read_support_rows(path: Path) -> dict[int, dict[str, Any]]:
 def _consensus_options_from_support(row: dict[str, int], reference_base: str) -> set[str]:
     depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
     if depth <= 0:
-        return {reference_base}
+        return {"N"}
     counts = {base: int(row[base]) for base in "ACGTN"}
     best_count = max(counts.values())
     deletion_count = int(row["deletion_count"])
@@ -395,6 +399,17 @@ def validate_observed_consensus_binding(
     recomputed_support: dict[int, dict[str, int]],
 ) -> None:
     """Bind every published/observed reference-position consensus call to BAM support."""
+    if "N" in reference:
+        raise SequenceEvidenceUnavailable("EXPECTED_SEQUENCE_AMBIGUOUS")
+    if "N" in observed:
+        raise SequenceEvidenceUnavailable("OBSERVED_SEQUENCE_AMBIGUOUS")
+    for position in range(1, len(reference) + 1):
+        row = recomputed_support.get(position)
+        if row is None or position not in support_rows:
+            raise ValueError(f"position {position}: support row unavailable")
+        depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
+        if depth <= 0:
+            raise SequenceEvidenceUnavailable("OBSERVED_SEQUENCE_HAS_UNCOVERED_POSITIONS")
     contradictions: list[str] = []
     allowed_by_position: dict[int, set[str]] = {}
     for position in range(1, len(reference) + 1):
@@ -437,6 +452,12 @@ def validate_observed_consensus_binding(
                 )
             if len(contradictions) >= 20:
                 break
+        for anchor, row in recomputed_support.items():
+            alleles = row.get("insertion_alleles", {})
+            depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
+            no_insertion = max(0, depth - int(row["insertion_count"]))
+            if alleles and max(int(count) for count in alleles.values()) > no_insertion and anchor not in observed_insertions:
+                contradictions.append(f"position {anchor}: observed consensus omits supported insertion")
         for anchor, inserted in observed_insertions.items():
             allowed_insertions = _insertion_consensus_options(recomputed_support[anchor])
             if inserted not in allowed_insertions:
@@ -1055,6 +1076,8 @@ def read_support_metrics(
             if dominance > float(profile["max_strand_dominance_fraction"]):
                 strand_imbalanced += 1
     missing_positions = reference_length - len(positions)
+    if missing_positions:
+        raise ValueError("support table lacks required reference-position rows")
     low_depth += max(0, missing_positions)
     coverage_fraction = covered / reference_length if reference_length else 0.0
     low_depth_fraction = low_depth / reference_length if reference_length else 1.0
@@ -1525,6 +1548,16 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                     "valid",
                     "observed consensus to BAM-derived support v1",
                 )
+            except SequenceEvidenceUnavailable as exc:
+                reason = str(exc)
+                observed_trusted = False
+                observed_reason = reason
+                checks["sequence_identity"]["status"] = "review"
+                checks["sequence_identity"]["reason_codes"] = [reason]
+                checks["sequence_identity"]["metrics"]["consensus_support_validation"] = semantic_validation(
+                    "unavailable", "observed consensus to BAM-derived support v2", reason,
+                )
+                aggregate_reasons.append(reason)
             except ValueError as exc:
                 reason = "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION"
                 observed_trusted = False
@@ -1565,6 +1598,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
 
     if (
         variant_analysis_pending
+        and observed_trusted
         and observed is not None
         and "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION" not in aggregate_reasons
     ):
