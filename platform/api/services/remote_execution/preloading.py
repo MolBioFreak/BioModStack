@@ -97,7 +97,6 @@ def admission_clause(target):
         (ExecutionTarget.id == target.id) & ExecutionTarget.active.is_(True)
         & (ExecutionTarget.state == "ready") & ExecutionTarget.leased_job_id.is_(None)
         & preload_idle_clause()
-        & ~select(ExecutionTarget.id).where(ExecutionTarget.state == "probing").exists()
         & (ExecutionTarget.host == target.host) & (ExecutionTarget.port == target.port)
         & (ExecutionTarget.username == target.username) & (ExecutionTarget.remote_root == target.remote_root)
         & (ExecutionTarget.host_key_sha256 == target.host_key_sha256)
@@ -107,6 +106,27 @@ def admission_clause(target):
         & (ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
             (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat())
         & (ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat())
+    )
+
+
+def inventory_observation_clause(target, operation, previous, activated_at):
+    """Fence the exact observation, not the eligibility to start new work.
+
+    A failed read must invalidate its predecessor even when provider inventory
+    expires or work starts meanwhile. It must not invalidate a newer observation,
+    attachment generation, endpoint or provisioning operation. SQLite JSON
+    normalization removes whitespace only; it does not weaken identity checks.
+    """
+    return (
+        (ExecutionTarget.id == target.id)
+        & (ExecutionTarget.host == target.host) & (ExecutionTarget.port == target.port)
+        & (ExecutionTarget.username == target.username)
+        & (ExecutionTarget.remote_root == target.remote_root)
+        & (ExecutionTarget.host_key_sha256 == target.host_key_sha256)
+        & ExecutionTarget.activated_at.is_(activated_at)
+        & ExecutionTarget.provider_metadata['preload']['operation_id'].as_string().is_(operation)
+        & (func.coalesce(func.json_extract(ExecutionTarget.provider_metadata,
+                '$.managed_inventory'), '{}') == func.json(json.dumps(previous)))
     )
 
 
@@ -459,6 +479,7 @@ class PreloadController:
             if self.closed:
                 raise ExecutionTargetError('Preload service is stopping')
             target = await get_target(session, target_id)
+            activated_at = target.activated_at
             previous = deepcopy((target.provider_metadata or {}).get('managed_inventory', {}))
             manifests = deepcopy(saved_manifests(target))
             operation = (target.provider_metadata or {}).get('preload', {}).get('operation_id')
@@ -473,10 +494,14 @@ class PreloadController:
             if previous.get('manifests') and previous.get('endpoint_sha256') != endpoint_digest(target):
                 raise ExecutionTargetError('Managed inventory belongs to a different worker identity; provision again')
 
+            observation_fence = inventory_observation_clause(target, operation, previous, activated_at)
+
             async def fence():
                 async with self.session_factory() as check:
                     row = await get_target(check, target_id)
                     if (endpoint(row) != endpoint(target) or not inventory_fresh(row)
+                            or row.activated_at != activated_at
+                            or (row.provider_metadata or {}).get('managed_inventory', {}) != previous
                             or not row.active or row.state != 'ready' or row.leased_job_id
                             or (row.provider_metadata or {}).get('preload', {}).get('operation_id') != operation
                             or (row.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
@@ -487,8 +512,8 @@ class PreloadController:
                                endpoint_sha256=endpoint_digest(target))
                 value = func.json_set(ExecutionTarget.provider_metadata,
                     '$.managed_inventory', func.json(json.dumps(payload)), '$.managed_boot_id', str(observed.boot_id))
-                changed = await session.execute(update(ExecutionTarget).where(admission_clause(target),
-                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string().is_(operation))
+                changed = await session.execute(update(ExecutionTarget).where(
+                    admission_clause(target), observation_fence)
                     .values(provider_metadata=value).execution_options(synchronize_session=False))
                 if changed.rowcount != 1:
                     await session.rollback()
@@ -499,15 +524,17 @@ class PreloadController:
                 return result
             except BaseException as exc:
                 await session.rollback()
-                # Failed readback invalidates freshness immediately; retain prior evidence.
-                await session.execute(update(ExecutionTarget).where(admission_clause(target),
-                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string().is_(operation))
+                # Preserve evidence, but never leave this failed observation fresh.
+                # New-work admission is irrelevant to invalidating old evidence.
+                invalidated = await session.execute(update(ExecutionTarget).where(observation_fence)
                     .values(provider_metadata=func.json_set(ExecutionTarget.provider_metadata,
                         '$.managed_inventory.refresh_failed', func.json('true')))
                     .execution_options(synchronize_session=False))
                 await session.commit()
                 if isinstance(exc, asyncio.CancelledError):
                     raise
+                if invalidated.rowcount != 1:
+                    raise ExecutionTargetError('Managed inventory readback superseded; current observation preserved') from exc
                 raise ExecutionTargetError('Managed inventory readback failed; prior observation is stale, explicitly retry') from exc
 
     async def recover(self):
