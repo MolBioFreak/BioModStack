@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import runpy
+import shutil
+import sys
 import subprocess
 from pathlib import Path
 
@@ -16,8 +19,9 @@ REPO_ROOT = API_ROOT.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "verify_construct.py"
 PROFILE_CONFIG = REPO_ROOT / "config" / "ngs" / "construct_verify_profiles.json"
 SCHEMA = REPO_ROOT / "schemas" / "ngs" / "construct_verification_manifest.schema.json"
-PYTHON = Path("/home/dalab/biomodstack/biomodstack/platform/api/.venv/bin/python")
-SAMTOOLS = Path("/home/dalab/micromamba/bin/samtools")
+# Use the selected test interpreter and an explicitly configurable real tool.
+PYTHON = Path(sys.executable)
+SAMTOOLS = Path(os.environ.get("BMS_TEST_SAMTOOLS") or shutil.which("samtools") or "samtools")
 REFERENCE = "ACGTTGCAACGTGATCGTACCTGACTGACCTAGGCTAACGTTAGC"
 
 
@@ -185,6 +189,8 @@ def _run_case(
     topology_breakpoint_digest: str | None = None,
     topology_secondary_digest: str | None = None,
     verification_samtools: Path = SAMTOOLS,
+    structural_screen_evaluated: bool = True,
+    source_non_boundary_split_reads: int | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
     reference_path = tmp_path / "reference.fasta"
     observed_path = tmp_path / "observed_consensus.fasta"
@@ -291,12 +297,28 @@ def _run_case(
         f"unmapped_reads\t{unmapped_reads}\n",
         encoding="utf-8",
     )
+    non_boundary_split_reads = (
+        0 if not math.isfinite(secondary_anomaly_fraction)
+        else int(round(secondary_anomaly_fraction * bam_mapped))
+    )
+    # A positive fixture represents an evaluated screen, not an empty summary.
+    # Negative cases can still deliberately omit a row or disagree with JSON.
+    breakpoint_row = (
+        "split_supported\thigh\tfalse\n" if contradictory_breakpoint_evidence
+        else "no_junction_evidence\thigh\ttrue\n"
+    )
     breakpoint_path.write_text(
-        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n",
+        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n"
+        + (breakpoint_row if structural_screen_evaluated else ""),
         encoding="utf-8",
     )
+    source_split_count = (
+        non_boundary_split_reads if source_non_boundary_split_reads is None
+        else source_non_boundary_split_reads
+    )
     secondary_path.write_text(
-        f"non_boundary_split_reads\taligned_dimer_reads\n0\t{bam_mapped}\n",
+        "non_boundary_split_reads\taligned_dimer_reads\n"
+        f"{source_split_count}\t{bam_mapped}\n",
         encoding="utf-8",
     )
     topology = {
@@ -305,11 +327,7 @@ def _run_case(
         "expected_topology": "circular",
         "origin_spanning_reads": split_reads,
         "secondary_anomaly_fraction": secondary_anomaly_fraction,
-        "non_boundary_split_reads": (
-            0
-            if not math.isfinite(secondary_anomaly_fraction)
-            else int(round(secondary_anomaly_fraction * bam_mapped))
-        ),
+        "non_boundary_split_reads": non_boundary_split_reads,
         "aligned_dimer_reads": bam_mapped,
         "mapped_unique_reads": bam_mapped,
         "alignment_records": bam_mapped + split_reads,
@@ -1222,3 +1240,19 @@ def test_verifier_recomputation_rejects_duplicated_split_query_intervals() -> No
     semantics = recompute_alignment_semantics(records, "ref", reference)
 
     assert count_valid_origin_wraps(semantics["segments_by_read"], len(reference), 100) == 0
+
+
+def test_header_only_structural_fixture_remains_unassessed(tmp_path: Path) -> None:
+    result, manifest, _ = _run_case(tmp_path, structural_screen_evaluated=False)
+    assert result.returncode == 0, result.stderr
+    assert manifest["checks"]["topology"]["status"] == "review"
+    assert "TOPOLOGY_EVIDENCE_UNAVAILABLE" in manifest["reason_codes"]
+    assert manifest["inputs"]["topology"]["semantic_validation"]["status"] == "invalid"
+
+
+def test_structural_source_counts_must_agree_with_fixture_json(tmp_path: Path) -> None:
+    result, manifest, _ = _run_case(tmp_path, source_non_boundary_split_reads=1)
+    assert result.returncode == 0, result.stderr
+    assert manifest["checks"]["topology"]["status"] == "review"
+    assert "TOPOLOGY_PROVENANCE_INVALID" in manifest["reason_codes"]
+    assert "disagrees with structural source tables" in manifest["checks"]["topology"]["metrics"]["error"]
