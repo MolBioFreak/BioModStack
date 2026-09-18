@@ -86,3 +86,50 @@ actual source/image/model/effective-setting identity, UI/agent parity,
 ordinary result reopen/download, cancellation/stale callback/retry and restart
 acceptance. Do not gate readable partial results on optional viewers/telemetry.
 Production promotion and live runs remain separate authorizations.
+
+
+## 2026-09-18 live-review follow-up
+
+Corrected evaluated structural fixtures without relaxing missing-evidence checks. The fixture uses the selected interpreter and `BMS_TEST_SAMTOOLS` (or PATH) for real-tool tests. Registered the comparison process and model-provenance output, including helper dependencies; both assembly workflows now have matching conditional native metadata graphs. The candidate runner reports dependency preflight failure separately from executed-test outcomes.
+
+An isolated GitHub-hosted checkout ran the focused checks below. API/dev dependencies were installed using `uv sync --frozen --group dev --no-install-project` into an external environment; this was not the live Development environment or a full-API test suite. Baseline fixture assertions were unchanged; an external pytest hook redirected only their historical Python/samtools executable paths. Native metadata tests construct actual annotation objects and artifact/dependency roles; they do not run Nextflow, provision a remote worker, or sequence a biological sample.
+
+```json
+{
+  "baseline": {
+    "errors": 0,
+    "failures": 7,
+    "skipped": 0,
+    "tests": 57
+  },
+  "baseline_tool_path_override_only": true,
+  "candidate_api_fixtures": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 59
+  },
+  "native_metadata": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 39
+  },
+  "portable": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 80
+  },
+  "qualification_gate_exit_code": 2,
+  "versions": {
+    "pytest": "pytest 9.1.1",
+    "python": "3.12.3 (main, Jul 15 2026, 23:46:41) [GCC 13.3.0]",
+    "samtools": "samtools 1.19.2"
+  }
+}
+```
+
+Execution log: https://github.com/MolBioFreak/BioModStack/actions/runs/35369717831
+
+The source-bound runtime record is regenerated in the immediately following commit by the existing builder from this record-free source precursor. Its source-only/unverified/open states are not changed to acceptance. Re-run the builder after subsequent integration changes. Full-repository/Development tests, actual Nextflow/remote execution, interface parity, and scientific qualification remain open. No existing result or profile identity is rewritten.
