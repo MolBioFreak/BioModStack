@@ -21,7 +21,7 @@ from .contracts import (PreloadProgress, ProvisionRequest, ProvisionSelection, C
 from .progress import PRELOAD_ACTIVE_PHASES, preload_idle_clause
 from .targets import (ExecutionTargetError, INVENTORY_MAX_AGE_SECONDS, get_target,
     inventory_fresh, _target_response, _has_nonterminal_jobs)
-from .transport import RemoteConnection
+from .transport import RemoteConnection, RemoteHelperError
 
 
 SAFE_FAILURE_REASONS = frozenset({
@@ -38,6 +38,8 @@ SAFE_FAILURE_REASONS = frozenset({
 def failure_message(exc, phase):
     if isinstance(exc, asyncio.CancelledError):
         return "Preload interrupted; explicitly retry"
+    if isinstance(exc, RemoteHelperError):
+        return exc.user_message
     reason = str(exc)
     if reason in SAFE_FAILURE_REASONS:
         return f"{reason}; explicitly retry"

@@ -27,6 +27,53 @@ class RemoteTransportError(RuntimeError):
     pass
 
 
+MAX_DIAGNOSTIC_BYTES = 512
+HELPER_FAILURE_MESSAGES = {
+    'request_too_large': 'The helper request exceeds its control-message budget; verify the by-reference producer before retrying.',
+    'document_too_large': 'The referenced manifest exceeds the document budget; reduce or revise the dependency closure before retrying.',
+    'invalid_reference': 'The controller supplied an invalid document reference; rebuild the preview and verify the producer.',
+    'document_unavailable': 'The referenced document is missing; verify staging and obtain a fresh preview before retrying.',
+    'document_identity_mismatch': 'Document integrity verification failed; investigate the changed bytes and re-preview before retrying.',
+    'invalid_weight_layout_document': 'The weight-layout document is incompatible; verify the source and helper versions.',
+    'invalid_request_document': 'The referenced document is invalid; verify the source and helper versions.',
+}
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate diagnostic key')
+        result[key] = value
+    return result
+
+
+def helper_failure_code(stderr: str) -> str | None:
+    """Decode only the final closed helper envelope; ignore untrusted prose."""
+    line = stderr.rstrip('\r\n').rsplit('\n', 1)[-1]
+    if not line or len(line.encode('utf-8')) > MAX_DIAGNOSTIC_BYTES:
+        return None
+    try:
+        value = json.loads(line, object_pairs_hook=_unique_object)
+    except (ValueError, RecursionError):
+        return None
+    if (not isinstance(value, dict) or set(value) != {'state', 'error'}
+            or value['state'] != 'failed' or not isinstance(value['error'], str)
+            or value['error'] not in HELPER_FAILURE_MESSAGES):
+        return None
+    return value['error']
+
+
+class RemoteHelperError(RemoteTransportError):
+    """A known worker error, safe to persist without retaining remote stderr."""
+    def __init__(self, code: str):
+        if not isinstance(code, str) or code not in HELPER_FAILURE_MESSAGES:
+            raise ValueError('Unknown remote helper failure code')
+        self.code = code
+        self.user_message = f'Remote helper [{code}]: {HELPER_FAILURE_MESSAGES[code]}'
+        super().__init__(self.user_message)
+
+
 class RemoteExecutionTimeout(RemoteTransportError):
     """An established remote command exceeded its execution budget."""
 
@@ -453,6 +500,9 @@ async def run_remote(
     if result.returncode == 255:
         raise RemoteConnectionError("Remote SSH connection or authentication failed")
     if result.returncode != 0:
+        code = helper_failure_code(result.stderr)
+        if code is not None:
+            raise RemoteHelperError(code)
         controlled = _controlled_remote_failure(result.stdout)
         detail = result.stderr.strip().splitlines()[-1:] or ["remote command failed"]
         raise RemoteTransportError(controlled or detail[0][:500])
