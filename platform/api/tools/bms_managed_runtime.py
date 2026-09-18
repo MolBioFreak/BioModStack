@@ -526,6 +526,50 @@ def check_space(parent, manifest, rows, *, metadata_allowance_bytes=None):
             'required_available_bytes': required, 'reservation': False}
 
 
+def incremental_admission_rows(manifest, observed, storage):
+    """Additional bytes for the actual cache-upload/install path, not cold totals.
+
+    Existing bytes already reduce f_bavail. Each uncached content object needs
+    one upload plus one atomic CAS publication; each unverified non-image
+    destination needs its own installed copy. Links are generated metadata, not
+    uploads. The caller owns the admission lock and validates the manifest.
+    Cache.probe and observe must verify bytes before any reuse is credited.
+    This is a point-in-time estimate, never a reservation or permission to skip
+    install's boot, identity, corruption, filesystem or free-space checks.
+    """
+    if len(observed['artifacts']) != len(manifest['artifacts']):
+        raise ValueError('admission_observation_mismatch')
+    objects, additional = {}, []
+    for row, seen in zip(manifest['artifacts'], observed['artifacts'], strict=True):
+        if any(seen.get(key) != row[key] for key in ('name', 'sha256', 'size_bytes')):
+            raise ValueError('admission_observation_mismatch')
+        if seen.get('state') not in {'verified', 'missing', 'corrupt', 'incompatible'}:
+            raise ValueError('admission_observation_mismatch')
+        kind = row.get('kind')
+        if kind != 'runtime_image' and seen['state'] != 'verified':
+            additional.append(row)
+        if kind == 'runtime_link':
+            continue
+        key = (kind == 'runtime_image', row['sha256'])
+        previous = objects.setdefault(key, row)
+        if previous['size_bytes'] != row['size_bytes']:
+            raise ValueError('conflicting_cache_object_sizes')
+    for row in objects.values():
+        item = {key: row[key] for key in ('sha256', 'size_bytes')}
+        if row.get('kind') == 'runtime_image':
+            item['kind'] = 'runtime_image'
+        probe = storage.probe(item)
+        if (any(probe.get(key) != value for key, value in item.items())
+                or probe.get('state') not in {'cache_hit', 'missing', 'corrupt'}):
+            raise ValueError('admission_cache_identity_mismatch')
+        # Corrupt published images are never repairable by ordinary admission.
+        if item.get('kind') == 'runtime_image' and probe['state'] == 'corrupt':
+            raise ValueError('corrupt_shared_image')
+        if probe['state'] != 'cache_hit':
+            additional.extend((row, row))
+    return additional
+
+
 def admit(root, manifest, expected_boot, cache):
     validate_manifest(manifest, cache)
     with admission_lock(root, cache) as (parent, fence):
@@ -544,9 +588,15 @@ def admit(root, manifest, expected_boot, cache):
             with cache.directory(path, create=True) as current:
                 if os.fstat(current).st_dev != os.fstat(parent).st_dev:
                     raise ValueError('managed_filesystem_changed')
-        # Images peak at upload + immutable shared object, never a managed copy.
-        peak = [r for r in manifest['artifacts']
-                for _ in range(2 if r.get('kind') == 'runtime_image' else 3)]
+        # Credit only verified bytes, not directory existence or cache markers.
+        # The controller still probes/transfers the full selected object set;
+        # even an installed destination cannot stand in for a missing CAS object.
+        storage = cache.Cache(cache_root)
+        observed = observe(root, manifest, cache)
+        peak = incremental_admission_rows(manifest, observed, storage)
+        fence()
+        if boot_id() != expected_boot:
+            raise ValueError('worker_boot_changed')
         result = {'admission': check_space(parent, manifest, peak)}
         fence()
         return result
