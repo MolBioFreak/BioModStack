@@ -68,8 +68,8 @@ def package(tmp_path, monkeypatch):
     release = roots['runtime']/'releases/r1'
     base = release/'python-runtime'
     # Real base interpreter and complete base stdlib, not fake executable bytes.
-    shutil.copytree(sys.base_prefix, base, symlinks=True,
-                    ignore=shutil.ignore_patterns('__pycache__', 'site-packages'))
+    from python_runtime_fixture import copy_python_base
+    copy_python_base(base)
     venv = release/'venv'
     (venv/'bin').mkdir(parents=True)
     (venv/'bin/python').symlink_to(base/'bin'/f'python{sys.version_info.major}.{sys.version_info.minor}')
