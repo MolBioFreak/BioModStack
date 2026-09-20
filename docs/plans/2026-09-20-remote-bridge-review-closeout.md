@@ -134,3 +134,27 @@ cadence, interrupted-bootstrap recovery, scientific execution, frontend behavior
 or native result round trips. These remain supervised/manual acceptance tasks.
 The earlier telemetry-session, attachment-ownership, and inventory-pagination
 work packages remain separate; this correction does not pretend to implement them.
+
+## Expanded hosted-runner integration checks
+
+The combined candidate c15ba525 retained corrected review 03c32b0 and
+Development 2ba46790 and passed the updater source-authority validator.
+The expanded hosted runner identified two additional test-fixture defects:
+an activation double lacked the typed critical/backend qualification,
+and the runtime packaging fixture copied all of /usr when CPython was
+system-installed. Neither was repaired by relaxing production checks.
+The fixture now returns ManagedRelease, asserts the selected backend,
+and retains exact other-worker/Job preservation checks. Relocation tests
+copy the real interpreter, full stdlib/extensions and shared libpython,
+excluding unrelated host-prefix data; new tests execute real isolated
+stdlib imports and verify that unrelated prefix members are not copied.
+
+Include test_python_runtime_fixture.py, test_remote_bundle_runtime_gaps.py,
+test_remote_bundle_container_gaps.py and test_remote_support_packaging.py
+with the previous 20-module selection. Capture exact SHA, full command,
+exit status and JUnit cases. The prior 64/208 counts remain historical,
+not evidence of this combined candidate. Hosted CI still cannot certify
+live Vast behavior, scientific output or deployed service ownership.
+The independent verification cost decision remains unchanged: measure
+cold/warm admission and subsequent install latency on the actual worker;
+no existence-only credit, stale receipt reuse or skip was introduced.
