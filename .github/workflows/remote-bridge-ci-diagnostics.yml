@@ -1,13 +1,17 @@
-name: Diagnose pinned remote bridge collection
+name: Verify pinned remote bridge groups
 on:
   push:
     branches: [test-remote-bridge-ci-diagnostics-20260920]
 permissions:
   contents: read
 jobs:
-  diagnose:
+  verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [corrections, provisioning, transport]
     env:
       PYTHONUNBUFFERED: '1'
     steps:
@@ -28,57 +32,64 @@ jobs:
           uv sync --frozen --group dev
           mkdir -p "$RUNNER_TEMP/bridge-diagnostics"
           git rev-parse HEAD | tee "$RUNNER_TEMP/bridge-diagnostics/candidate.txt"
-      - name: Collect every selected module with a pre-collection watchdog
+      - name: Execute complete assigned group with startup and test watchdogs
         working-directory: platform/api
         shell: bash
+        env:
+          TEST_GROUP: ${{ matrix.group }}
         run: |
           set -euo pipefail
+          case "$TEST_GROUP" in
+            corrections) modules=(
+              tests/test_remote_provision_isolation.py
+              tests/test_remote_inventory_supersession.py
+              tests/test_remote_incremental_admission.py
+              tests/test_remote_helper_diagnostics.py
+              tests/test_managed_runtime_safety.py
+              tests/test_ngs_molbio_runtime_record_builder.py
+            ) ;;
+            provisioning) modules=(
+              tests/test_remote_managed_inventory.py
+              tests/test_remote_preloading.py
+              tests/test_vast_auto_setup.py
+              tests/test_remote_cache_integration.py
+              tests/test_remote_runtime_images.py
+              tests/test_remote_runner_integrity.py
+              tests/test_artifact_cache.py
+              tests/test_cache_batches.py
+            ) ;;
+            transport) modules=(
+              tests/test_multiworker_scheduling.py
+              tests/test_multiworker_migration.py
+              tests/test_managed_ssh_transport.py
+              tests/test_vast_ssh_endpoint_selection.py
+              tests/test_hf_worker_acquisition.py
+              tests/test_remote_telemetry.py
+            ) ;;
+            *) exit 2 ;;
+          esac
           parent_namespace="$(readlink /proc/self/ns/net)"
-          # Frozen venv, real route-free namespace, repository safety unchanged.
           sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" PYTHONUNBUFFERED=1 \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
-            timeout --signal=TERM --kill-after=5s 75s \
+            timeout --signal=TERM --kill-after=10s 210s \
             "$PWD/.venv/bin/python" -u -c '
-          import faulthandler, os, pathlib, sys
+          import faulthandler, sys
           faulthandler.enable()
-          faulthandler.dump_traceback_later(45, exit=True)
-          print("INTERPRETER_STARTED", sys.executable, flush=True)
-          print("NETNS", os.readlink("/proc/self/ns/net"), "PARENT", os.environ.get("_BIOXP_PYTEST_PARENT_NETNS"), flush=True)
-          print(pathlib.Path("/proc/net/route").read_text(), flush=True)
-          print(pathlib.Path("/proc/net/if_inet6").read_text(), flush=True)
+          faulthandler.dump_traceback_later(180, exit=True)
+          print("FROZEN_INTERPRETER", sys.executable, flush=True)
           import pytest
-          print("PYTEST_IMPORTED", pytest.__version__, flush=True)
-          result = pytest.main(sys.argv[1:])
+          code = pytest.main(sys.argv[1:])
           faulthandler.cancel_dump_traceback_later()
-          raise SystemExit(result)
-          ' --collect-only -vv -s \
-            tests/test_remote_provision_isolation.py \
-            tests/test_remote_inventory_supersession.py \
-            tests/test_remote_incremental_admission.py \
-            tests/test_remote_helper_diagnostics.py \
-            tests/test_managed_runtime_safety.py \
-            tests/test_ngs_molbio_runtime_record_builder.py \
-            tests/test_remote_managed_inventory.py \
-            tests/test_remote_preloading.py \
-            tests/test_vast_auto_setup.py \
-            tests/test_remote_cache_integration.py \
-            tests/test_remote_runtime_images.py \
-            tests/test_remote_runner_integrity.py \
-            tests/test_artifact_cache.py \
-            tests/test_cache_batches.py \
-            tests/test_multiworker_scheduling.py \
-            tests/test_multiworker_migration.py \
-            tests/test_managed_ssh_transport.py \
-            tests/test_vast_ssh_endpoint_selection.py \
-            tests/test_hf_worker_acquisition.py \
-            tests/test_remote_telemetry.py \
-            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/collection.log"
-      - name: Preserve exact source and diagnostic evidence
+          raise SystemExit(code)
+          ' -vv -s --randomly-seed=20260920 "${modules[@]}" \
+            --junitxml="$RUNNER_TEMP/bridge-diagnostics/junit-${TEST_GROUP}.xml" \
+            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/${TEST_GROUP}.log"
+      - name: Preserve exact source and case evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: bridge-diagnostics-${{ github.sha }}
+          name: bridge-${{ matrix.group }}-${{ github.sha }}
           path: ${{ runner.temp }}/bridge-diagnostics/
           if-no-files-found: error
           retention-days: 14
