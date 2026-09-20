@@ -21,6 +21,8 @@ from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 from paths import get_data_root
+from tools.bms_artifact_cache import REQUEST_CODES as CACHE_REQUEST_CODES
+from tools.bms_managed_runtime import REQUEST_CODES as MANAGED_REQUEST_CODES
 
 
 class RemoteTransportError(RuntimeError):
@@ -28,7 +30,7 @@ class RemoteTransportError(RuntimeError):
 
 
 MAX_DIAGNOSTIC_BYTES = 512
-HELPER_FAILURE_MESSAGES = {
+_HELPER_FAILURE_ADVICE = {
     'request_too_large': 'The helper request exceeds its control-message budget; verify the by-reference producer before retrying.',
     'document_too_large': 'The referenced manifest exceeds the document budget; reduce or revise the dependency closure before retrying.',
     'invalid_reference': 'The controller supplied an invalid document reference; rebuild the preview and verify the producer.',
@@ -36,6 +38,15 @@ HELPER_FAILURE_MESSAGES = {
     'document_identity_mismatch': 'Document integrity verification failed; investigate the changed bytes and re-preview before retrying.',
     'invalid_weight_layout_document': 'The weight-layout document is incompatible; verify the source and helper versions.',
     'invalid_request_document': 'The referenced document is invalid; verify the source and helper versions.',
+}
+
+# Accepted codes are owned by the independently installed helpers. Advice may
+# refine their fixed text but cannot admit an undeclared diagnostic. Newly
+# declared codes retain a safe message even before operator advice is added;
+# the parity regression requires that advice to be reviewed before integration.
+HELPER_FAILURE_MESSAGES = {
+    code: _HELPER_FAILURE_ADVICE.get(code, message)
+    for code, message in (CACHE_REQUEST_CODES | MANAGED_REQUEST_CODES).items()
 }
 
 

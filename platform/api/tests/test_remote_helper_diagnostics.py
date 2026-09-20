@@ -66,3 +66,16 @@ def test_cancellation_and_unknown_errors_keep_existing_behavior():
     assert 'SECRET' not in message
     with pytest.raises(ValueError):
         transport.RemoteHelperError('unknown')
+
+
+def test_request_diagnostics_match_both_producing_helpers():
+    from tools.bms_artifact_cache import REQUEST_CODES as cache_codes
+    from tools.bms_managed_runtime import REQUEST_CODES as managed_codes
+    declared = set(cache_codes) | set(managed_codes)
+    assert set(transport.HELPER_FAILURE_MESSAGES) == declared
+    assert set(transport._HELPER_FAILURE_ADVICE) == declared
+    assert all(isinstance(message, str) and message.strip()
+               for message in transport.HELPER_FAILURE_MESSAGES.values())
+    # Shared declarations must not silently disagree across the two helpers.
+    assert all(cache_codes[code] == managed_codes[code]
+               for code in set(cache_codes) & set(managed_codes))
