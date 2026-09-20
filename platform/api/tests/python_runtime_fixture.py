@@ -21,13 +21,13 @@ def copy_python_base(destination: Path) -> Path:
     stdlib = Path(sysconfig.get_path('stdlib')).resolve()
     installed_stdlib = destination / 'lib' / f'python{version}'
     ignored = shutil.ignore_patterns('__pycache__', 'site-packages', 'dist-packages')
-    shutil.copytree(stdlib, installed_stdlib, symlinks=True, ignore=ignored)
+    shutil.copytree(stdlib, installed_stdlib, symlinks=False, ignore=ignored)
     extension_dir = sysconfig.get_config_var('DESTSHARED')
     if extension_dir:
         extension_dir = Path(extension_dir).resolve()
         if not extension_dir.is_relative_to(stdlib):
             shutil.copytree(extension_dir, installed_stdlib / 'lib-dynload',
-                            symlinks=True, ignore=ignored, dirs_exist_ok=True)
+                            symlinks=False, ignore=ignored, dirs_exist_ok=True)
 
     if sysconfig.get_config_var('Py_ENABLE_SHARED'):
         library_dir = Path(sysconfig.get_config_var('LIBDIR'))

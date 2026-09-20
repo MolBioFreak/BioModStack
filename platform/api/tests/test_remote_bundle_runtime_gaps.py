@@ -83,6 +83,12 @@ def package(tmp_path, monkeypatch):
     (venv/'bin/probe').chmod(0o755)
     current = roots['runtime']/'current'
     current.symlink_to('releases/r1', target_is_directory=True)
+    # Compiler-only command identity: never discover the operator's installed
+    # Nextflow. A test that actually executes this placeholder must fail.
+    launcher = roots['runtime'] / 'nextflow'
+    launcher.write_text('#!/bin/sh\nprintf "compiler-only Nextflow fixture must not execute\\n" >&2\nexit 125\n')
+    launcher.chmod(0o755)
+    monkeypatch.setenv('BMS_NEXTFLOW_BIN', str(launcher))
     for key in ('BMS_PROTENIX_CONTAINER_PATH', 'BMS_CM_CONFORNETS_CONTAINER_PATH',
                 'BMS_FRUSTRAMPNN_SIF', 'BMS_RUNTIME_IMAGE_STORE', 'BMS_RUNTIME_IMAGE_LANE'):
         monkeypatch.delenv(key, raising=False)

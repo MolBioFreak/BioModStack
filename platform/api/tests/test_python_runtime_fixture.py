@@ -21,6 +21,8 @@ def test_relocated_runtime_imports_complete_stdlib(tmp_path):
     assert {entry.name for entry in base.iterdir()} == {'bin', 'lib'}
     assert not list(base.rglob('site-packages'))
     assert not list(base.rglob('dist-packages'))
+    assert all(not member.is_symlink() or member.resolve().is_relative_to(base)
+               for member in base.rglob('*'))
 
 
 def test_os_prefix_is_never_traversed(tmp_path, monkeypatch):
@@ -28,6 +30,10 @@ def test_os_prefix_is_never_traversed(tmp_path, monkeypatch):
     stdlib = prefix / 'lib/python-fixture'
     stdlib.mkdir(parents=True)
     (stdlib / 'stdlib.py').write_text('# complete test source')
+    library = prefix / 'lib/libpython-fixture.so'
+    library.write_bytes(b'fixture library bytes, never executed')
+    (stdlib / 'config').mkdir()
+    (stdlib / 'config/libpython.so').symlink_to(library)
     for name in ('site-packages', 'dist-packages', '__pycache__'):
         (stdlib / name).mkdir()
         (stdlib / name / 'unrelated').write_bytes(b'not copied')
@@ -45,3 +51,6 @@ def test_os_prefix_is_never_traversed(tmp_path, monkeypatch):
     assert not (base / 'share').exists()
     assert list(base.rglob('stdlib.py'))
     assert not list(base.rglob('unrelated'))
+    copied = next(base.rglob('config/libpython.so'))
+    assert not copied.is_symlink()
+    assert copied.read_bytes() == library.read_bytes()

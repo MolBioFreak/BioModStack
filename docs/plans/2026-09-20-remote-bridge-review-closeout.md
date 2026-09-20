@@ -158,3 +158,17 @@ live Vast behavior, scientific output or deployed service ownership.
 The independent verification cost decision remains unchanged: measure
 cold/warm admission and subsequent install latency on the actual worker;
 no existence-only credit, stale receipt reuse or skip was introduced.
+
+The next full run on d5e1562 completed 544 cases: 510 passed, 29 failed,
+five pre-existing explicit live/parser opt-ins skipped. No cases were
+removed to conceal failures. That run exposed incomplete closure of the
+narrowed CPython fixture's multiarch symlinks, a compiler-only fixture
+discovering host Nextflow, and fake-root shell tests attempting a real
+chown as an unprivileged runner. The fixture now materializes actual
+stdlib link referents and asserts containment, explicitly pins a
+compiler-only launcher that fails if executed, and records/asserts the
+simulated ownership call. Real parser/container opt-ins remain separate;
+no fake launcher is accepted as evidence of native Nextflow execution.
+Production readiness, bootstrap ownership and bundle containment are
+unchanged. Case-level results of the corrected candidate must supersede
+this historical failed run before promotion.
