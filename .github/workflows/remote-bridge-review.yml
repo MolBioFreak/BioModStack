@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 066f4a9d59b0ebb860d52dcaec011504320d6ac7
+          test "$(git rev-parse HEAD^)" = 41a51e015d962e3d9b8f8afe285499dcc7dee6fe
           evidence="$RUNNER_TEMP/remote-bridge-evidence"
           mkdir -p "$evidence"
           python - <<'PY'
@@ -56,6 +56,14 @@ jobs:
           PY
           git show 066f4a9d59b0ebb860d52dcaec011504320d6ac7:.github/workflows/remote-bridge-review.yml > .github/workflows/remote-bridge-review.yml
           git apply --whitespace=error-all "$RUNNER_TEMP/review-corrections.patch"
+          python - <<'PYHOME'
+          from pathlib import Path
+          path = Path('.github/workflows/remote-bridge-review.yml')
+          text = path.read_text()
+          assert text.count('sudo env PATH="$PATH"') == 1
+          path.write_text(text.replace('sudo env PATH="$PATH"',
+              'sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH"'))
+          PYHOME
           git diff --check
           git config user.name 'BMS Review'
           git config user.email 'bms-review@users.noreply.github.com'
@@ -122,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           parent_namespace="$(readlink /proc/self/ns/net)"
-          sudo env PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
+          sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
             uv run --offline --frozen --group dev python -m pytest -q \
