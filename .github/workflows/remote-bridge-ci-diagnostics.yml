@@ -1,4 +1,4 @@
-name: Diagnose pinned remote bridge candidate
+name: Diagnose pinned remote bridge collection
 on:
   push:
     branches: [test-remote-bridge-ci-diagnostics-20260920]
@@ -7,7 +7,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
       PYTHONUNBUFFERED: '1'
     steps:
@@ -28,14 +28,13 @@ jobs:
           uv sync --frozen --group dev
           mkdir -p "$RUNNER_TEMP/bridge-diagnostics"
           git rev-parse HEAD | tee "$RUNNER_TEMP/bridge-diagnostics/candidate.txt"
-          .venv/bin/python -c 'import sys; print(sys.executable, sys.version)'
-      - name: Diagnose collection without uv inside the isolated namespace
+      - name: Collect every selected module with a pre-collection watchdog
         working-directory: platform/api
         shell: bash
         run: |
           set -euo pipefail
           parent_namespace="$(readlink /proc/self/ns/net)"
-          # Same frozen venv and real route-free namespace; no safety opt-out.
+          # Frozen venv, real route-free namespace, repository safety unchanged.
           sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" PYTHONUNBUFFERED=1 \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
@@ -58,22 +57,6 @@ jobs:
             tests/test_remote_inventory_supersession.py \
             tests/test_remote_incremental_admission.py \
             tests/test_remote_helper_diagnostics.py \
-            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/collection.log"
-      - name: Execute integrated candidate gates in the frozen interpreter
-        working-directory: platform/api
-        shell: bash
-        run: |
-          set -euo pipefail
-          parent_namespace="$(readlink /proc/self/ns/net)"
-          sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" PYTHONUNBUFFERED=1 \
-            _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
-            unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
-            timeout --signal=TERM --kill-after=10s 600s \
-            "$PWD/.venv/bin/python" -u -m pytest -vv -o faulthandler_timeout=90 \
-            tests/test_remote_provision_isolation.py \
-            tests/test_remote_inventory_supersession.py \
-            tests/test_remote_incremental_admission.py \
-            tests/test_remote_helper_diagnostics.py \
             tests/test_managed_runtime_safety.py \
             tests/test_ngs_molbio_runtime_record_builder.py \
             tests/test_remote_managed_inventory.py \
@@ -90,8 +73,7 @@ jobs:
             tests/test_vast_ssh_endpoint_selection.py \
             tests/test_hf_worker_acquisition.py \
             tests/test_remote_telemetry.py \
-            --junitxml="$RUNNER_TEMP/bridge-diagnostics/junit-review.xml" \
-            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/regression.log"
+            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/collection.log"
       - name: Preserve exact source and diagnostic evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
