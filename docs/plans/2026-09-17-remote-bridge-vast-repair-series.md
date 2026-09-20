@@ -2,6 +2,11 @@
 
 ## Review branch and status
 
+**September 20 correction:** this document records the original four-commit
+candidate. For the R1-R6 disposition, corrected commands, cost decision, and
+freeze/bind verification procedure, see
+[the worker-review closeout](2026-09-20-remote-bridge-review-closeout.md).
+
 Prepared for manual verification on `test-remote-bridge-repairs-20260917`, based on
 `test@9ad10eea97cf784da47b07d6d9b2896da35e455e`. This branch is separate from the
 canonical auto-synced Development branch. Creating this review branch does not
@@ -21,7 +26,7 @@ remains 8 MiB and referenced documents remain bounded at 64 MiB. No selected
 scientific settings, model implementations, GPU assignment, batching, result
 return authorization or provider lifecycle policy is changed.
 
-**The generated runtime-source record has NOT been regenerated for this series.**
+**At the original `f953aeec` tip, the runtime-source record had NOT been regenerated.**
 The inherited `platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json`
 contains the baseline source binding. Review and focused unit tests can proceed;
 source-gated live execution and integration require the companion generation in
@@ -47,7 +52,9 @@ Use the repository's locked environment, from `platform/api`:
 uv run --frozen --group dev python -m pytest \
   tests/test_remote_provision_isolation.py \
   tests/test_remote_incremental_admission.py \
-  tests/test_remote_helper_diagnostics.py
+  tests/test_remote_helper_diagnostics.py \
+  tests/test_remote_inventory_supersession.py \
+  --junitxml=/tmp/bms-remote-bridge-focused.xml
 ```
 
 Then run the owning subsystem regressions:
@@ -55,13 +62,19 @@ Then run the owning subsystem regressions:
 ```bash
 uv run --frozen --group dev python -m pytest \
   tests/test_managed_runtime_safety.py \
+  tests/test_ngs_molbio_runtime_record_builder.py \
+  tests/test_remote_managed_inventory.py \
+  tests/test_remote_preloading.py \
+  tests/test_multiworker_scheduling.py \
+  tests/test_multiworker_migration.py \
   tests/test_artifact_cache.py \
   tests/test_cache_batches.py \
   tests/test_remote_cache_integration.py \
   tests/test_remote_runtime_images.py \
   tests/test_managed_ssh_transport.py \
   tests/test_vast_ssh_endpoint_selection.py \
-  tests/test_remote_telemetry.py
+  tests/test_remote_telemetry.py \
+  --junitxml=/tmp/bms-remote-bridge-regressions.xml
 ```
 
 The authoring environment ran 64 isolated checks of the proposed predicates,
