@@ -12,12 +12,12 @@ nextflow.enable.dsl = 2
 
 include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
-include { PrepareBamForAnalysis; ValidateMappedBam } from '../../modules/ngs/bam_prepare.nf'
+include { PrepareBamForAnalysis; ValidateMappedBam; BamToFastqForQC } from '../../modules/ngs/bam_prepare.nf'
 include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
-include { RunCloneValidation } from '../../modules/ngs/clone_validation.nf'
+include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
 def reportStage(params, stageName, files) {
@@ -73,8 +73,8 @@ workflow ONT_CONSTRUCT_SCREENING {
         }
     }
 
-    if (has_fastq && !has_reference) {
-        error("FASTQ analysis requires --reference_fasta for alignment and QC")
+    if (!has_reference) {
+        error("Construct screening requires --reference_fasta; use a separately qualified reconstruction workflow for unknown plasmids")
     }
 
     // Validate minimap2 preset for FASTQ
@@ -191,28 +191,24 @@ workflow ONT_CONSTRUCT_SCREENING {
         analysis_bam = FastqAlign.out.aligned
     }
 
-    // --- Clone validation (optional for construct screening) ---
     if (analysis_bam == null) {
         error("Construct screening requires BAM-capable output from basecall/align stage")
     }
+    def qcReads = null
+    def verificationInput = null
+    def supportEvidence = null
+    def statsEvidence = null
+    def breakpointEvidence = null
+    def secondaryEvidence = null
 
-    if (runAssembly) {
-        println("Running clone validation for construct screening")
-        def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
-        RunCloneValidation(clone_input)
-        RunCloneValidation.out.out.subscribe { _ignored ->
-            reportStage(params, "wf_clone_validation", [
-                "${params.out_dir}/assembly/wf_clone_out",
-                "${params.out_dir}/assembly/wf_clone.log",
-                "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
-                "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
-            ])
+    if (runFastqQc) {
+        if (has_fastq) {
+            qcReads = Channel.value(file(params.fastq_path))
+        } else {
+            BamToFastqForQC(analysis_bam)
+            qcReads = BamToFastqForQC.out.fastq
         }
-    }
-
-    // --- FASTQ plasmid QC (only for FASTQ input with reference) ---
-    if (has_fastq && runFastqQc) {
-        FastqDimerAnalysis(Channel.of(file(params.fastq_path)), Channel.of(reference_file))
+        FastqDimerAnalysis(qcReads, Channel.value(reference_file))
         BuildDimerCanonicalOutputs(
             FastqDimerAnalysis.out.summary,
             FastqDimerAnalysis.out.junction_events,
@@ -221,35 +217,63 @@ workflow ONT_CONSTRUCT_SCREENING {
             FastqDimerAnalysis.out.breakpoint_screen,
             FastqDimerAnalysis.out.dimer_reference,
         )
-        FastqPlasmidQC(FastqAlign.out.aligned, Channel.of(reference_file), Channel.of(file(params.fastq_path)))
-        ConstructVerify(
-            FastqPlasmidQC.out.reference,
-            FastqPlasmidQC.out.verification_input,
-            FastqPlasmidQC.out.per_base_support,
-            FastqAlign.out.aligned,
-            FastqPlasmidQC.out.alignment_stats,
-            BuildDimerCanonicalOutputs.out.breakpoint_call,
-            BuildDimerCanonicalOutputs.out.secondary_summary,
-        )
-        FastqPlasmidQC.out.summary.subscribe { _ignored ->
-            reportStage(params, "fastq_qc", [
-                "${params.out_dir}/fastq_qc/read_lengths.tsv",
-                "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
-                "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                "${params.out_dir}/fastq_qc/qc_manifest.json",
-                "${params.out_dir}/fastq_qc/igv_report.html",
-                "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-            ])
-        }
+        FastqPlasmidQC(analysis_bam, Channel.value(reference_file), qcReads)
+        verificationInput = FastqPlasmidQC.out.verification_input
+        supportEvidence = FastqPlasmidQC.out.per_base_support
+        statsEvidence = FastqPlasmidQC.out.alignment_stats
+        breakpointEvidence = BuildDimerCanonicalOutputs.out.breakpoint_call
+        secondaryEvidence = BuildDimerCanonicalOutputs.out.secondary_summary
         if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
             def comparisonSnapshot = file(params.comparison_panel_snapshot)
             if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
-            // Deliberately separate from both FastqAlign primary BAM and dimer BAM.
-            ComparisonPanelAttribution(Channel.of(file(params.fastq_path)), Channel.of(reference_file), Channel.of(comparisonSnapshot))
-            ComparisonPanelAttribution.out.summary.subscribe { _ignored ->
-                reportStage(params, "comparison_panel", [
+            ComparisonPanelAttribution(qcReads, Channel.value(reference_file), Channel.value(comparisonSnapshot))
+        }
+    }
+    if (runAssembly) {
+        def cloneInput = analysis_bam.map { bam, bai -> [bam, reference_file.toString()] }
+        RunCloneValidation(cloneInput)
+        CloneValidationAdapter(
+            RunCloneValidation.out.out, RunCloneValidation.out.runtime_provenance,
+            analysis_bam, Channel.value(reference_file),
+        )
+        verificationInput = CloneValidationAdapter.out.verification_input
+        if (runFastqQc) {
+            ComparePlasmidConsensus(CloneValidationAdapter.out.verification_input, FastqPlasmidQC.out.consensus)
+            verificationInput = ComparePlasmidConsensus.out.verification_input
+        }
+        supportEvidence = CloneValidationAdapter.out.per_base_support
+        statsEvidence = CloneValidationAdapter.out.alignment_stats
+        if (!runFastqQc) {
+            // Deliberately unavailable: the operator did not request this screen.
+            breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
+            secondaryEvidence = CloneValidationAdapter.out.secondary_summary
+        }
+    }
+    if (runFastqQc || runAssembly) {
+        ConstructVerify(
+            Channel.value(reference_file), verificationInput, supportEvidence,
+            analysis_bam, statsEvidence, breakpointEvidence, secondaryEvidence,
+        )
+    }
+    workflow.onComplete {
+        if (workflow.success) {
+            if (runAssembly) reportStage(params, "wf_clone_validation", [
+                "${params.out_dir}/assembly/wf_clone_out",
+                "${params.out_dir}/assembly/runtime_provenance.json",
+                "${params.out_dir}/assembly/input_model_provenance.json",
+                "${params.out_dir}/assembly/adapter/adapter_manifest.json",
+            ])
+            if (runFastqQc || runAssembly) reportStage(params, "construct_verification", [
+                "${params.out_dir}/verification/qc_manifest.json",
+                "${params.out_dir}/verification/verification_summary.tsv",
+            ])
+            if (runFastqQc) {
+                reportStage(params, "fastq_qc", ["${params.out_dir}/fastq_qc/qc_manifest.json"])
+                reportStage(params, "dimer_qc", [
+                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                    "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                ])
+                if (params.comparison_panel_snapshot) reportStage(params, "comparison_panel", [
                     "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
                     "${params.out_dir}/comparison_panel/comparison_panel.bam",
                     "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
@@ -257,6 +281,7 @@ workflow ONT_CONSTRUCT_SCREENING {
             }
         }
     }
+
 }
 
 // Entry point for standalone Ont Construct Screening workflow

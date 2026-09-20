@@ -182,7 +182,7 @@ def _consensus_and_fraction(item: PositionSupport, reference_base: str) -> tuple
     base_counts = item.base_counts
     depth = item.depth
     if depth <= 0:
-        return (reference_base if reference_base in BASES else "N", 0.0)
+        return ("N", 0.0)  # No observation is not the expected nucleotide.
     consensus_base, major_count = max(base_counts.items(), key=lambda kv: (kv[1], "ACGTN".index(kv[0]) * -1))
     if item.deletion_count > major_count:
         consensus_base = "-"

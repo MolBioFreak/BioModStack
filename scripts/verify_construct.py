@@ -20,15 +20,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Support direct CLI and runpy callers from arbitrary working directories.
+# Resolve only this checked source directory, never a request-supplied path.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
+
+from plasmid_evidence import read_summary, validate_structural_rows
+from plasmid_circular import CircularAlignmentUnresolved, align_circular
+
 
 VERIFIER_NAME = "biomodstack-construct-verifier"
-VERIFIER_VERSION = "0.2.0"
+VERIFIER_VERSION = "0.3.0"
 SCHEMA_NAME = "biomodstack.construct_verification.v2"
 DNA_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
 CIGAR_TOKEN = re.compile(r"(\d+)([MIDNSHP=X])")
 QUERY_CONSUMING = frozenset("MIS=X")
 QUERY_LENGTH_CONSUMING = frozenset("MIS=XH")
 MIN_SPLIT_MAPQ = 20
+
+
+class SequenceEvidenceUnavailable(ValueError):
+    """An incomplete observation must produce REVIEW, not a sequence failure."""
 
 
 def sha256_file(path: Path) -> str:
@@ -216,7 +229,7 @@ def _alignment_opcodes(reference: str, observed: str) -> tuple[list[tuple[str, i
     return opcodes, matches, matrix[-1][-1]
 
 
-def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
+def _small_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
     if not observed:
         opcodes, matches, edit_cost = _alignment_opcodes(reference, observed)
         return {
@@ -297,6 +310,29 @@ def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
     }
 
 
+def best_circular_alignment(reference: str, observed: str) -> dict[str, Any]:
+    # An exact match is common and needs no edit search or quadratic traceback.
+    # Find an offset IN OBSERVED, not the offset-in-reference returned by
+    # exact_circular_equivalence(). Preserve the actual observed sequence.
+    if len(reference) == len(observed) and observed:
+        for orientation, oriented in (("forward", observed), ("reverse_complement", reverse_complement(observed))):
+            offset = (oriented + oriented).find(reference, 0, 2 * len(oriented) - 1)
+            if 0 <= offset < len(oriented):
+                normalized = oriented[offset:] + oriented[:offset]
+                return {
+                    "orientation": orientation, "rotation_offset": offset,
+                    "normalized_observed": normalized,
+                    "opcodes": [("equal", 0, len(reference), 0, len(observed))],
+                    "matches": len(reference), "edit_cost": 0,
+                    "identity_fraction": 1.0,
+                    "canonicalization": "exact_circular_match_v1",
+                }
+    # Preserve the independently tested exhaustive method only for short inputs.
+    if max(len(reference), len(observed)) <= 64:
+        return _small_circular_alignment(reference, observed)
+    return align_circular(reference, observed)
+
+
 def read_support_rows(path: Path) -> dict[int, dict[str, Any]]:
     required = {
         "position_1based",
@@ -352,7 +388,7 @@ def read_support_rows(path: Path) -> dict[int, dict[str, Any]]:
 def _consensus_options_from_support(row: dict[str, int], reference_base: str) -> set[str]:
     depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
     if depth <= 0:
-        return {reference_base}
+        return {"N"}
     counts = {base: int(row[base]) for base in "ACGTN"}
     best_count = max(counts.values())
     deletion_count = int(row["deletion_count"])
@@ -391,9 +427,23 @@ def validate_observed_consensus_binding(
     observed: str,
     support_rows: dict[int, dict[str, Any]],
     recomputed_support: dict[int, dict[str, int]],
+    profile: dict[str, Any] | None = None,
 ) -> None:
     """Bind every published/observed reference-position consensus call to BAM support."""
+    if "N" in reference:
+        raise SequenceEvidenceUnavailable("EXPECTED_SEQUENCE_AMBIGUOUS")
+    if "N" in observed:
+        raise SequenceEvidenceUnavailable("OBSERVED_SEQUENCE_AMBIGUOUS")
+    for position in range(1, len(reference) + 1):
+        row = recomputed_support.get(position)
+        if row is None or position not in support_rows:
+            raise ValueError(f"position {position}: support row unavailable")
+        depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
+        if depth <= 0:
+            raise SequenceEvidenceUnavailable("OBSERVED_SEQUENCE_HAS_UNCOVERED_POSITIONS")
+    policy = profile or {"min_depth": 20, "min_variant_support_fraction": 0.80}
     contradictions: list[str] = []
+    ambiguous: list[str] = []
     allowed_by_position: dict[int, set[str]] = {}
     for position in range(1, len(reference) + 1):
         published = support_rows.get(position)
@@ -430,11 +480,28 @@ def validate_observed_consensus_binding(
             observed_base = observed_by_reference.get(position)
             normalized_base = "-" if observed_base is None else observed_base
             if normalized_base not in allowed_by_position[position]:
-                contradictions.append(
-                    f"position {position}: observed consensus {observed_base!r} not supported by BAM consensus options {sorted(allowed_by_position[position])!r}"
-                )
+                row = recomputed_support[position]
+                observed_count = int(row["deletion_count"] if normalized_base == "-" else row.get(normalized_base, 0))
+                if observed_count > 0:
+                    # A quality-aware Bayesian call need not be the raw-count
+                    # plurality. This checker cannot prove that call incorrect.
+                    ambiguous.append(f"position {position}: read-count plurality and consensus differ")
+                else:
+                    contradictions.append(
+                        f"position {position}: observed consensus {observed_base!r} has no BAM allele observations"
+                    )
             if len(contradictions) >= 20:
                 break
+        for anchor, row in recomputed_support.items():
+            alleles = row.get("insertion_alleles", {})
+            depth = sum(int(row[base]) for base in "ACGTN") + int(row["deletion_count"])
+            no_insertion = max(0, depth - int(row["insertion_count"]))
+            if alleles and max(int(count) for count in alleles.values()) > no_insertion and anchor not in observed_insertions:
+                major_fraction = max(int(count) for count in alleles.values()) / max(1, depth)
+                if depth >= int(policy["min_depth"]) and major_fraction >= float(policy["min_variant_support_fraction"]):
+                    contradictions.append(f"position {anchor}: observed consensus omits supported insertion")
+                else:
+                    ambiguous.append(f"position {anchor}: unresolved insertion support")
         for anchor, inserted in observed_insertions.items():
             allowed_insertions = _insertion_consensus_options(recomputed_support[anchor])
             if inserted not in allowed_insertions:
@@ -445,6 +512,8 @@ def validate_observed_consensus_binding(
                 break
     if contradictions:
         raise ValueError("; ".join(contradictions))
+    if ambiguous:
+        raise SequenceEvidenceUnavailable("READ_COUNT_AND_CONSENSUS_DISAGREE")
 
 
 def _variant_support(
@@ -1053,6 +1122,8 @@ def read_support_metrics(
             if dominance > float(profile["max_strand_dominance_fraction"]):
                 strand_imbalanced += 1
     missing_positions = reference_length - len(positions)
+    if missing_positions:
+        raise ValueError("support table lacks required reference-position rows")
     low_depth += max(0, missing_positions)
     coverage_fraction = covered / reference_length if reference_length else 0.0
     low_depth_fraction = low_depth / reference_length if reference_length else 1.0
@@ -1223,6 +1294,7 @@ def write_summary(path: Path, manifest: dict[str, Any]) -> None:
         ("reason_codes", ",".join(manifest["reason_codes"])),
         ("sequence_identity_fraction", manifest["summary"].get("sequence_identity_fraction")),
         ("variant_count", manifest["summary"].get("variant_count")),
+        ("variant_analysis_status", manifest["summary"].get("variant_analysis_status", "unknown")),
         ("coverage_fraction", manifest["summary"].get("coverage_fraction")),
         ("unmapped_fraction", manifest["summary"].get("unmapped_fraction")),
         ("topology_status", manifest["checks"]["topology"]["status"]),
@@ -1233,12 +1305,26 @@ def write_summary(path: Path, manifest: dict[str, Any]) -> None:
     )
 
 
+def variant_analysis_completed(manifest: dict[str, Any]) -> bool:
+    check = manifest.get("checks", {}).get("sequence_identity", {})
+    # An empty VCF after a failed/unavailable comparison is not evidence of zero
+    # variants. Complete emitted calls can still have ambiguous read support.
+    return bool(manifest.get("variants")) or (
+        check.get("status") == "pass"
+        and check.get("metrics", {}).get("identity_fraction") == 1.0
+    )
+
+
+def check_display_name(name: str) -> str:
+    return "Expected-reference mapping" if name == "contamination" else name.replace("_", " ").title()
+
+
 def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
     verdict = html.escape(str(manifest["verdict"]))
     reasons = "".join(f"<li><code>{html.escape(code)}</code></li>" for code in manifest["reason_codes"])
     summary = manifest.get("summary", {})
     sequence_check = manifest.get("checks", {}).get("sequence_identity", {})
-    variant_analysis_complete = "VARIANT_ANALYSIS_PENDING" not in sequence_check.get("reason_codes", [])
+    variant_analysis_complete = variant_analysis_completed(manifest)
     topology_check = manifest.get("checks", {}).get("topology", {})
     topology_state = summary.get("topology_status") or topology_check.get("metrics", {}).get("state") or "unavailable"
 
@@ -1298,12 +1384,12 @@ def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
             if metric != "provenance"
         )
         check_sections.append(
-            f"<section><h3>{html.escape(name.replace('_', ' ').title())}: "
+            f"<section><h3>{html.escape(check_display_name(name))}: "
             f"{html.escape(str(check['status']).upper())}</h3>"
             f"<table><tbody>{metric_rows}</tbody></table></section>"
         )
     checks = "".join(
-        f"<tr><th>{html.escape(name.replace('_', ' ').title())}</th><td>{html.escape(check['status'])}</td>"
+        f"<tr><th>{html.escape(check_display_name(name))}</th><td>{html.escape(check['status'])}</td>"
         f"<td>{html.escape(', '.join(check['reason_codes']) or 'none')}</td></tr>"
         for name, check in manifest["checks"].items()
     )
@@ -1316,9 +1402,13 @@ def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
         "code{color:#93c5fd}</style></head><body>"
         f"<h1>Construct verification: {verdict}</h1><h2>Decision summary</h2><div class='metrics'>{decision}</div>"
         f"<h2>Reason codes</h2><ul>{reasons}</ul>"
-        f"<h2>Independent checks</h2><table><tr><th>Check</th><th>Status</th><th>Reasons</th></tr>{checks}</table>"
+        f"<h2>Evidence checks</h2><table><tr><th>Check</th><th>Status</th><th>Reasons</th></tr>{checks}</table>"
         "<h2>Observed variants</h2><table><thead><tr><th>ID</th><th>Type</th><th>Position</th><th>Reference</th><th>Observed</th><th>Support</th><th>Classification</th><th>Depth</th></tr></thead>"
         f"<tbody>{variant_rows}</tbody></table><h2>Check evidence</h2>{''.join(check_sections)}"
+        "<p>The mapping screen describes only the retained input reads. It does not establish "
+        "sample purity, absence of off-target molecules, organism identity, minor-plasmid detection "
+        "sensitivity, or molecular copy number. Consensus agreement from the same reads is not "
+        "independent biological replication.</p>"
         "<p>This portable report contains the decision-relevant machine evidence. The bound JSON manifest remains the complete provenance authority.</p>"
         "</body></html>\n",
         encoding="utf-8",
@@ -1355,6 +1445,29 @@ def artifact_record(
         "size_bytes": present_path.stat().st_size if present_path is not None else None,
         "reason": reason,
         "semantic_validation": validation,
+    }
+
+
+def check_consensus_comparison(state: dict[str, Any], bundle: Path, observed: str) -> dict[str, Any] | None:
+    comparison = state.get("read_guided_comparison")
+    if comparison is None:
+        return None
+    if not isinstance(comparison, dict) or comparison.get("method") != "samtools_bayesian_reference_guided":
+        raise ValueError("CONSENSUS_COMPARISON_INVALID")
+    relative = comparison.get("path")
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise ValueError("CONSENSUS_COMPARISON_PATH_INVALID")
+    path = (bundle / relative).resolve()
+    if not path.is_relative_to(bundle.resolve()) or not path.is_file():
+        raise ValueError("CONSENSUS_COMPARISON_UNAVAILABLE")
+    if sha256_file(path) != comparison.get("sha256"):
+        raise ValueError("CONSENSUS_COMPARISON_DIGEST_MISMATCH")
+    _, sequence = read_single_fasta(path)
+    return {
+        "agreement": exact_circular_equivalence(observed, sequence) is not None,
+        "read_guided_sha256": comparison["sha256"],
+        "evidence_relationship": "same_read_population_different_consensus_method",
+        "independent_biological_replication": False,
     }
 
 
@@ -1518,11 +1631,22 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                     observed,
                     support_rows,
                     alignment_semantics["support"],
+                    profile,
                 )
                 checks["sequence_identity"]["metrics"]["consensus_support_validation"] = semantic_validation(
                     "valid",
                     "observed consensus to BAM-derived support v1",
                 )
+            except (SequenceEvidenceUnavailable, CircularAlignmentUnresolved) as exc:
+                reason = str(exc)
+                observed_trusted = False
+                observed_reason = reason
+                checks["sequence_identity"]["status"] = "review"
+                checks["sequence_identity"]["reason_codes"] = [reason]
+                checks["sequence_identity"]["metrics"]["consensus_support_validation"] = semantic_validation(
+                    "unavailable", "observed consensus to BAM-derived support v2", reason,
+                )
+                aggregate_reasons.append(reason)
             except ValueError as exc:
                 reason = "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION"
                 observed_trusted = False
@@ -1563,6 +1687,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
 
     if (
         variant_analysis_pending
+        and observed_trusted
         and observed is not None
         and "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION" not in aggregate_reasons
     ):
@@ -1587,7 +1712,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             checks["sequence_identity"] = make_check(sequence_status, sequence_reasons, variant_alignment)
             aggregate_reasons.extend(sequence_reasons)
         except (KeyError, TypeError, ValueError) as exc:
-            reason = "VARIANT_CALLING_UNAVAILABLE"
+            reason = str(exc) if isinstance(exc, CircularAlignmentUnresolved) else "VARIANT_CALLING_UNAVAILABLE"
             checks["sequence_identity"] = make_check("review", [reason], {"error": str(exc)})
             aggregate_reasons.append(reason)
 
@@ -1616,6 +1741,9 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
                 "unmapped_fraction": unmapped_fraction,
                 "screen_basis": "expected_reference_mapping_only",
                 "organism_identity_claimed": False,
+                "sample_purity_claimed": False,
+                "off_target_absence_claimed": False,
+                "input_population_scope": "retained_input_only_original_sample_scope_unverified",
             },
         )
         aggregate_reasons.extend(contamination_reasons)
@@ -1700,7 +1828,13 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             topology.get("aligned_dimer_reads"),
             "aligned_dimer_reads",
         )
-        denominator = aligned_dimer_reads or alignment_semantics["mapped_reads"]
+        screen = validate_structural_rows(
+            read_summary(breakpoint_call_path), read_summary(secondary_summary_path), len(reference)
+        )
+        for field in ("non_boundary_split_reads", "aligned_dimer_reads", "contradictory_breakpoint_evidence"):
+            if type(topology.get(field)) is not type(screen[field]) or topology.get(field) != screen[field]:
+                raise LookupError(f"topology {field} disagrees with structural source tables")
+        denominator = aligned_dimer_reads
         if min(non_boundary_split, aligned_dimer_reads) < 0 or non_boundary_split > denominator:
             raise ValueError("topology anomaly counts are inconsistent")
         expected_anomaly = non_boundary_split / denominator if denominator else 0.0
@@ -1749,6 +1883,21 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         sequence_check["metrics"]["actual_reference_sequence_sha256"] = actual_reference_sequence_sha256
         if sequence_check["status"] == "pass":
             sequence_check["status"] = "review"
+
+    if observed is not None and state.get("read_guided_comparison") is not None:
+        try:
+            comparison = check_consensus_comparison(state, observed_state_path.parent, observed)
+            checks["sequence_identity"]["metrics"]["consensus_comparison"] = comparison
+            comparison_reason = "CONSENSUS_METHODS_DISAGREE" if comparison and not comparison["agreement"] else None
+        except (OSError, ValueError) as exc:
+            comparison_reason = "CONSENSUS_COMPARISON_UNAVAILABLE"
+            checks["sequence_identity"]["metrics"]["comparison_error"] = str(exc)
+        if comparison_reason:
+            check = checks["sequence_identity"]
+            if check["status"] == "pass":
+                check["status"] = "review"
+            check["reason_codes"] = sorted(set([*check["reason_codes"], comparison_reason]))
+            aggregate_reasons.append(comparison_reason)
 
     check_statuses = {check["status"] for check in checks.values()}
     if "fail" in check_statuses:
@@ -1891,6 +2040,9 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts": [],
     }
 
+    manifest["summary"]["variant_analysis_status"] = (
+        "completed" if variant_analysis_completed(manifest) else "not_assessed"
+    )
     summary_path = out_dir / "verification_summary.tsv"
     evidence_path = out_dir / "evidence.html"
     write_summary(summary_path, manifest)

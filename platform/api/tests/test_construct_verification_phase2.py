@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import runpy
+import shutil
+import sys
 import subprocess
 from pathlib import Path
 
@@ -16,9 +19,31 @@ REPO_ROOT = API_ROOT.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "verify_construct.py"
 PROFILE_CONFIG = REPO_ROOT / "config" / "ngs" / "construct_verify_profiles.json"
 SCHEMA = REPO_ROOT / "schemas" / "ngs" / "construct_verification_manifest.schema.json"
-PYTHON = Path("/home/dalab/biomodstack/biomodstack/platform/api/.venv/bin/python")
-SAMTOOLS = Path("/home/dalab/micromamba/bin/samtools")
+# Use the selected interpreter; discover external tools only when needed.
+PYTHON = Path(sys.executable)
 REFERENCE = "ACGTTGCAACGTGATCGTACCTGACTGACCTAGGCTAACGTTAGC"
+
+
+def _require_samtools() -> Path:
+    """Resolve lazily: missing optional tools skip; broken overrides fail loudly."""
+    configured = os.environ.get("BMS_TEST_SAMTOOLS")
+    requested = "samtools" if configured is None else configured
+    resolved = shutil.which(requested) if requested else None
+    if resolved is None:
+        if configured is not None:
+            pytest.fail(
+                f"BMS_TEST_SAMTOOLS={configured!r} does not resolve to an executable file; "
+                "set it to a valid samtools executable path or command name. "
+                "The explicit override is authoritative; no PATH fallback was used.",
+                pytrace=False,
+            )
+        pytest.skip(
+            "samtools is not available on PATH; BAM-backed construct-verification "
+            "tests were not run. Install samtools or set BMS_TEST_SAMTOOLS to its "
+            "executable path. Use pytest -rs to display this reason."
+        )
+    # Wrappers use execv, which requires a path rather than PATH lookup.
+    return Path(resolved).absolute()
 
 
 def _sha256(path: Path) -> str:
@@ -184,8 +209,13 @@ def _run_case(
     topology_overrides: dict[str, object] | None = None,
     topology_breakpoint_digest: str | None = None,
     topology_secondary_digest: str | None = None,
-    verification_samtools: Path = SAMTOOLS,
+    verification_samtools: Path | None = None,
+    structural_screen_evaluated: bool = True,
+    source_non_boundary_split_reads: int | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
+    samtools = _require_samtools()
+    if verification_samtools is None:
+        verification_samtools = samtools
     reference_path = tmp_path / "reference.fasta"
     observed_path = tmp_path / "observed_consensus.fasta"
     state_path = tmp_path / "observed_sequence.json"
@@ -260,13 +290,13 @@ def _run_case(
     alignment_sam_path.write_text("\n".join(sam_lines) + "\n", encoding="utf-8")
     source_fastq.write_text("".join(fastq_records), encoding="utf-8")
     subprocess.run(
-        [str(SAMTOOLS), "view", "-b", "-o", str(alignment_bam_path), str(alignment_sam_path)],
+        [str(samtools), "view", "-b", "-o", str(alignment_bam_path), str(alignment_sam_path)],
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        [str(SAMTOOLS), "index", str(alignment_bam_path), str(alignment_index_path)],
+        [str(samtools), "index", str(alignment_bam_path), str(alignment_index_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -291,12 +321,28 @@ def _run_case(
         f"unmapped_reads\t{unmapped_reads}\n",
         encoding="utf-8",
     )
+    non_boundary_split_reads = (
+        0 if not math.isfinite(secondary_anomaly_fraction)
+        else int(round(secondary_anomaly_fraction * bam_mapped))
+    )
+    # A positive fixture represents an evaluated screen, not an empty summary.
+    # Negative cases can still deliberately omit a row or disagree with JSON.
+    breakpoint_row = (
+        "split_supported\thigh\tfalse\n" if contradictory_breakpoint_evidence
+        else "no_junction_evidence\thigh\ttrue\n"
+    )
     breakpoint_path.write_text(
-        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n",
+        "breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n"
+        + (breakpoint_row if structural_screen_evaluated else ""),
         encoding="utf-8",
     )
+    source_split_count = (
+        non_boundary_split_reads if source_non_boundary_split_reads is None
+        else source_non_boundary_split_reads
+    )
     secondary_path.write_text(
-        f"non_boundary_split_reads\taligned_dimer_reads\n0\t{bam_mapped}\n",
+        "non_boundary_split_reads\taligned_dimer_reads\n"
+        f"{source_split_count}\t{bam_mapped}\n",
         encoding="utf-8",
     )
     topology = {
@@ -305,11 +351,7 @@ def _run_case(
         "expected_topology": "circular",
         "origin_spanning_reads": split_reads,
         "secondary_anomaly_fraction": secondary_anomaly_fraction,
-        "non_boundary_split_reads": (
-            0
-            if not math.isfinite(secondary_anomaly_fraction)
-            else int(round(secondary_anomaly_fraction * bam_mapped))
-        ),
+        "non_boundary_split_reads": non_boundary_split_reads,
         "aligned_dimer_reads": bam_mapped,
         "mapped_unique_reads": bam_mapped,
         "alignment_records": bam_mapped + split_reads,
@@ -392,6 +434,7 @@ def _run_case(
 
 
 def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path: Path) -> None:
+    samtools = _require_samtools()
     wrapper = tmp_path / "samtools-with-binary-version"
     wrapper.write_text(
         "#!/usr/bin/env python3\n"
@@ -402,7 +445,7 @@ def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path
         "if len(sys.argv) > 1 and sys.argv[1] == 'idxstats' and '-X' in sys.argv:\n"
         "    os.write(2, b\"idxstats: invalid option -- 'X'\\n\")\n"
         "    raise SystemExit(2)\n"
-        f"os.execv({str(SAMTOOLS)!r}, [{str(SAMTOOLS)!r}, *sys.argv[1:]])\n",
+        f"os.execv({str(samtools)!r}, [{str(samtools)!r}, *sys.argv[1:]])\n",
         encoding="utf-8",
     )
     wrapper.chmod(0o755)
@@ -1222,3 +1265,19 @@ def test_verifier_recomputation_rejects_duplicated_split_query_intervals() -> No
     semantics = recompute_alignment_semantics(records, "ref", reference)
 
     assert count_valid_origin_wraps(semantics["segments_by_read"], len(reference), 100) == 0
+
+
+def test_header_only_structural_fixture_remains_unassessed(tmp_path: Path) -> None:
+    result, manifest, _ = _run_case(tmp_path, structural_screen_evaluated=False)
+    assert result.returncode == 0, result.stderr
+    assert manifest["checks"]["topology"]["status"] == "review"
+    assert "TOPOLOGY_EVIDENCE_UNAVAILABLE" in manifest["reason_codes"]
+    assert manifest["inputs"]["topology"]["semantic_validation"]["status"] == "invalid"
+
+
+def test_structural_source_counts_must_agree_with_fixture_json(tmp_path: Path) -> None:
+    result, manifest, _ = _run_case(tmp_path, source_non_boundary_split_reads=1)
+    assert result.returncode == 0, result.stderr
+    assert manifest["checks"]["topology"]["status"] == "review"
+    assert "TOPOLOGY_PROVENANCE_INVALID" in manifest["reason_codes"]
+    assert "disagrees with structural source tables" in manifest["checks"]["topology"]["metrics"]["error"]

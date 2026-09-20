@@ -17,6 +17,7 @@ process RunCloneValidation {
     path "wf_clone_out", emit: out
     path "wf_clone.log", emit: log
     path "runtime_provenance.json", emit: runtime_provenance
+    path "input_model_provenance.json", emit: input_model_provenance
     path "wf_clone_out/wf-clone-validation-report.html", emit: report
     path "wf_clone_out/sample_status.txt", emit: sample_status
 
@@ -66,6 +67,7 @@ process RunCloneValidation {
         error("wf_clone_validation requires an authoritative full reference for P3 construct verification")
     }
     def codeRoot = params.code_root ?: projectDir
+    def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
     def lock = shellQuote("${codeRoot}/config/ngs/wf_clone_validation_v1.8.4.lock.json")
     def wfCloneSingularityCache = '/mnt/BioModStack/apptainer/singularity_cache'
@@ -78,6 +80,13 @@ process RunCloneValidation {
     export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
+
+    # Validate the actual reads before supplying an upstream model override.
+    # Unknown imported FASTQ/RG provenance is rejected; it is never relabeled HAC.
+    python3 ${modelValidator} \
+        --bam "${bam}" \
+        --expected-model "${basecallerModel}" \
+        --output input_model_provenance.json
 
     python3 ${validator} \
         --lock ${lock} \
@@ -215,5 +224,30 @@ process CloneValidationAdapter {
     } > alignment_stats.tsv
     printf 'breakpoint_status\tconfidence\tprimary_breakpoint_in_boundary_window\n' > dimer_breakpoint_call.tsv
     printf 'aligned_dimer_reads\tnon_boundary_split_reads\n' > dimer_secondary_summary.tsv
+    """
+}
+
+process ComparePlasmidConsensus {
+    label 'fastq_qc_cpu'
+    publishDir "${params.out_dir}/assembly/comparison", mode: 'copy'
+    tag 'compare_plasmid_consensus'
+
+    input:
+    path verification_input
+    path read_consensus
+
+    output:
+    path 'compared_verification_input', emit: verification_input
+    path 'compared_verification_input/consensus_comparison.json', emit: comparison
+
+    script:
+    def codeRoot = params.code_root ?: projectDir
+    def comparator = shellQuote("${codeRoot}/scripts/compare_plasmid_consensus.py")
+    """
+    set -euo pipefail
+    python3 ${comparator} \
+        --bundle "${verification_input}" \
+        --read-consensus "${read_consensus}" \
+        --out-dir compared_verification_input
     """
 }

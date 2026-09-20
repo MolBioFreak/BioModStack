@@ -1,75 +1,47 @@
-name: Prepare pinned remote bridge integration
+name: Remote bridge review
 
 on:
   push:
-    branches: [test-remote-bridge-integration-20260920]
+    branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test]
+  workflow_dispatch:
 
-# One-time publication only to the isolated integration branch. The generated
-# candidate restores the normal contents-read-only review workflow before freeze.
+# No deployment, provider credentials, rental operations, or repository writes.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  prepare:
-    if: github.repository == 'MolBioFreak/BioModStack' && github.ref == 'refs/heads/test-remote-bridge-integration-20260920'
+  review:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      REVIEW_BASE: 03c32b052b7f40d2858110d7f222e2024d6c4b8d
-      TEST_BASE: 2ba46790d8ae2a0993f583c98d21ff1f111432bc
-      OUTPUT_BRANCH: test-remote-bridge-integration-20260920
-      PYTHONUNBUFFERED: '1'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          persist-credentials: true
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+          persist-credentials: false
+      - name: Record exact source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/remote-bridge-evidence"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/tree.txt"
+          git cat-file commit HEAD > "$evidence/commit.object"
+          git archive --format=tar HEAD | gzip > "$evidence/source.tar.gz"
+          git diff --check 9ad10eea97cf784da47b07d6d9b2896da35e455e..HEAD
+          if test -f platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json; then
+            echo 'record_free=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'record_free=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: '0.12.17'
           python-version: '3.12'
           enable-cache: false
-      - name: Merge pinned histories and freeze the actual combined source
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$REVIEW_BASE"
-          test "$(git ls-remote origin refs/heads/test | cut -f1)" = "$TEST_BASE"
-          test "$(git ls-remote origin "refs/heads/$OUTPUT_BRANCH" | cut -f1)" = "$GITHUB_SHA"
-          git config user.name 'BMS Review'
-          git config user.email 'bms-review@users.noreply.github.com'
-          record=platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json
-          if ! git -c rerere.enabled=false merge --no-ff --no-commit "$TEST_BASE"; then
-            test "$(git diff --name-only --diff-filter=U)" = "$record"
-          fi
-          # Neither parent's generated record can certify the combined source.
-          git rm "$record"
-          git show "$REVIEW_BASE:.github/workflows/remote-bridge-review.yml" > .github/workflows/remote-bridge-review.yml
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/workflows/remote-bridge-review.yml')
-          text = path.read_text()
-          old = 'branches: [test-remote-bridge-repairs-20260917]'
-          assert text.count(old) == 1
-          text = text.replace(old, 'branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test]')
-          text = text.replace('uv run --offline --frozen --group dev python -m pytest -q',
-                              'timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv -o faulthandler_timeout=90')
-          path.write_text(text)
-          PY
-          git add .github/workflows/remote-bridge-review.yml
-          git diff --cached --check
-          test -z "$(git diff --name-only --diff-filter=U)"
-          git commit -m 'merge(remote): reconcile reviewed repairs with current test and freeze source' \
-            -m "Preserve $REVIEW_BASE and $TEST_BASE. Resolve only the generated runtime record by removing it for canonical regeneration. Restore read-only CI and bound verbose regression execution; never deploy this record-free commit."
-          evidence="$RUNNER_TEMP/remote-bridge-evidence"
-          mkdir -p "$evidence"
-          git rev-parse HEAD > "$evidence/freeze-commit.txt"
-          git rev-parse 'HEAD^{tree}' > "$evidence/freeze-tree.txt"
-          git cat-file commit HEAD > "$evidence/freeze-commit.object"
-          git archive --format=tar HEAD | gzip > "$evidence/frozen-source.tar.gz"
-          git merge-base --is-ancestor "$REVIEW_BASE" HEAD
-          git merge-base --is-ancestor "$TEST_BASE" HEAD
-      - name: Build canonical binding and validate candidate without deployment
+      - name: Generate companion only from a record-free committed archive
+        if: steps.source.outputs.record_free == 'true'
         working-directory: platform/api
         shell: bash
         run: |
@@ -77,53 +49,28 @@ jobs:
           evidence="$RUNNER_TEMP/remote-bridge-evidence"
           frozen="$RUNNER_TEMP/remote-bridge-frozen"
           mkdir -p "$frozen"
-          tar -xzf "$evidence/frozen-source.tar.gz" -C "$frozen"
-          uv sync --frozen --group dev
-          uv run --offline --frozen --group dev python \
+          tar -xzf "$evidence/source.tar.gz" -C "$frozen"
+          uv run --frozen --group dev python \
             "$frozen/scripts/build_ngs_molbio_runtime_implementation_record.py" \
-            --successor-source-commit "$(cat "$evidence/freeze-commit.txt")" \
-            --successor-source-tree "$(cat "$evidence/freeze-tree.txt")" \
-            --successor-commit-object "$evidence/freeze-commit.object"
-          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" config/ngs_molbio_runtime/runtime_implementation_v2.json
-          git add config/ngs_molbio_runtime/runtime_implementation_v2.json
-          git diff --cached --check
-          git commit -m 'build(runtime): bind combined remote bridge and current test source'
-          git diff --check "$TEST_BASE..HEAD"
-          git rev-parse HEAD > "$evidence/candidate-commit.txt"
-          git rev-parse 'HEAD^{tree}' > "$evidence/candidate-tree.txt"
-          uv run --offline --frozen --group dev python - <<'PY'
-          import importlib.util, json, os, pathlib, subprocess, sys
-          root = pathlib.Path.cwd().parents[1]
-          spec = importlib.util.spec_from_file_location('review_dev_sync', root / 'scripts/biomodstack_dev_sync.py')
-          module = importlib.util.module_from_spec(spec)
-          sys.modules[spec.name] = module
-          spec.loader.exec_module(module)
-          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          result = module.validate_candidate_runtime_authority(root, revision)
-          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'remote-bridge-evidence'
-          (evidence / 'updater-authority.json').write_text(json.dumps(
-              {'revision': revision, 'accepted': True, 'result': result}, sort_keys=True, indent=2) + '\n')
-          print('Updater source authority accepted:', revision)
-          PY
-      - name: Publish bound candidate to review branch only, not promotion
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git ls-remote origin "refs/heads/$OUTPUT_BRANCH" | cut -f1)" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" HEAD
-          git push origin "HEAD:refs/heads/$OUTPUT_BRANCH"
-          printf 'Bound candidate %s; regression acceptance is still pending.\n' "$(git rev-parse HEAD)"
-      - name: Run locked gates with bounded visible progress
+            --successor-source-commit "$(cat "$evidence/commit.txt")" \
+            --successor-source-tree "$(cat "$evidence/tree.txt")" \
+            --successor-commit-object "$evidence/commit.object"
+          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" "$evidence/"
+          echo 'Generated source binding only; a separately committed bound tip must pass all review gates.'
+      - name: Run locked source, provisioning, transport and multiworker gates
+        if: steps.source.outputs.record_free == 'false'
         working-directory: platform/api
         shell: bash
         run: |
           set -euo pipefail
+          # Install locked dependencies before entering a genuinely route-free
+          # namespace. Never disable the repository's collection-time guards.
+          uv sync --frozen --group dev
           parent_namespace="$(readlink /proc/self/ns/net)"
-          sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONUNBUFFERED=1 \
+          sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
-            timeout --signal=TERM --kill-after=15s 900s \
-            uv run --offline --frozen --group dev python -m pytest -vv -o faulthandler_timeout=90 \
+            timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv -o faulthandler_timeout=90 \
             tests/test_remote_provision_isolation.py \
             tests/test_remote_inventory_supersession.py \
             tests/test_remote_incremental_admission.py \
@@ -145,11 +92,31 @@ jobs:
             tests/test_hf_worker_acquisition.py \
             tests/test_remote_telemetry.py \
             --junitxml="$RUNNER_TEMP/remote-bridge-evidence/junit-review.xml"
-      - name: Preserve evidence even when a gate fails
+      - name: Validate the updater's exact committed-source authority
+        if: always() && steps.source.outputs.record_free == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import importlib.util, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          path = root / 'scripts/biomodstack_dev_sync.py'
+          spec = importlib.util.spec_from_file_location('review_dev_sync', path)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = module.validate_candidate_runtime_authority(root, revision)
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'remote-bridge-evidence'
+          (evidence / 'updater-authority.json').write_text(json.dumps(
+              {'revision': revision, 'result': result}, indent=2, sort_keys=True) + '\n')
+          print(json.dumps({'revision': revision, 'updater_authority': 'accepted'}))
+          PYCODE
+      - name: Preserve revision and case-level evidence even on failure
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: remote-bridge-integration-${{ github.sha }}
+          name: remote-bridge-review-${{ github.sha }}
           path: ${{ runner.temp }}/remote-bridge-evidence/
           retention-days: 14
           if-no-files-found: error
