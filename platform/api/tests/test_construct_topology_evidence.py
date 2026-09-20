@@ -10,6 +10,14 @@ API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "build_construct_topology_evidence.py"
 
+# A structural screen that was evaluated and reported no junction evidence.
+# The builder now requires an evaluated screen before it will report topology
+# as "present"; an unevaluated screen is reported as "unavailable".
+NO_JUNCTION_BREAKPOINT = {
+    "breakpoint_status": "no_junction_evidence",
+    "confidence": "high",
+}
+
 
 def load_module():
     assert SCRIPT.is_file(), "missing topology-evidence builder"
@@ -32,7 +40,7 @@ def test_origin_spanning_reads_are_deduplicated() -> None:
     evidence = module.derive_topology_evidence(
         reference_length=1000,
         sam_rows=sam_rows,
-        breakpoint_rows=[],
+        breakpoint_rows=[dict(NO_JUNCTION_BREAKPOINT)],
         secondary_rows=[{"non_boundary_split_reads": "0", "aligned_dimer_reads": "20"}],
         edge_window_bp=100,
     )
@@ -82,8 +90,8 @@ def test_full_length_linear_reads_are_not_circular_origin_spanning_evidence() ->
             "linear-a\t0\tref\t1\t60\t1000M\t*\t0\t0\t*\t*",
             "linear-b\t0\tref\t1\t60\t1000M\t*\t0\t0\t*\t*",
         ],
-        breakpoint_rows=[],
-        secondary_rows=[],
+        breakpoint_rows=[dict(NO_JUNCTION_BREAKPOINT)],
+        secondary_rows=[{"non_boundary_split_reads": "0", "aligned_dimer_reads": "20"}],
         edge_window_bp=100,
     )
 
@@ -163,7 +171,7 @@ def test_secondary_topology_counts_reject_rounding_and_nonfinite_text() -> None:
             module.derive_topology_evidence(
                 reference_length=1000,
                 sam_rows=["linear-a\t0\tref\t1\t60\t1000M\t*\t0\t0\t*\t*"],
-                breakpoint_rows=[],
+                breakpoint_rows=[dict(NO_JUNCTION_BREAKPOINT)],
                 secondary_rows=[{"non_boundary_split_reads": raw, "aligned_dimer_reads": "10"}],
                 edge_window_bp=100,
             )
@@ -171,6 +179,19 @@ def test_secondary_topology_counts_reject_rounding_and_nonfinite_text() -> None:
             assert "non_boundary_split_reads" in str(exc)
         else:
             raise AssertionError(f"accepted malformed count {raw!r}")
+
+
+def test_unevaluated_structural_screen_is_unavailable_not_present() -> None:
+    module = load_module()
+    evidence = module.derive_topology_evidence(
+        reference_length=1000,
+        sam_rows=["linear-a\t0\tref\t1\t60\t1000M\t*\t0\t0\t*\t*"],
+        breakpoint_rows=[],
+        secondary_rows=[],
+        edge_window_bp=100,
+    )
+    assert evidence["state"] == "unavailable"
+    assert evidence["reason"] == "STRUCTURAL_SCREEN_NOT_EVALUATED"
 
 
 def test_non_boundary_dimer_evidence_is_quantified() -> None:
