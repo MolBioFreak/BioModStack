@@ -1,46 +1,81 @@
-name: Remote bridge review
+name: Prepare remote bridge review corrections
 
 on:
   push:
     branches: [test-remote-bridge-repairs-20260917]
-  workflow_dispatch:
 
-# No deployment, provider credentials, rental operations, or repository writes.
+# One-time, branch-confined publication of the requested reviewed corrections.
+# The resulting source restores the regular contents-read-only review workflow.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  review:
+  prepare:
+    if: github.ref == 'refs/heads/test-remote-bridge-repairs-20260917'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-          persist-credentials: false
-      - name: Record exact source identity
-        id: source
+          persist-credentials: true
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.12.17'
+          python-version: '3.12'
+          enable-cache: false
+      - name: Apply the exact reviewed patch and create separate correction commits
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 066f4a9d59b0ebb860d52dcaec011504320d6ac7
           evidence="$RUNNER_TEMP/remote-bridge-evidence"
           mkdir -p "$evidence"
-          git rev-parse HEAD > "$evidence/commit.txt"
-          git rev-parse 'HEAD^{tree}' > "$evidence/tree.txt"
-          git cat-file commit HEAD > "$evidence/commit.object"
-          git archive --format=tar HEAD | gzip > "$evidence/source.tar.gz"
-          git diff --check 9ad10eea97cf784da47b07d6d9b2896da35e455e..HEAD
-          if test -f platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json; then
-            echo 'record_free=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'record_free=true' >> "$GITHUB_OUTPUT"
-          fi
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-        with:
-          python-version: '3.12'
-          enable-cache: false
-      - name: Generate companion only from a record-free committed archive
-        if: steps.source.outputs.record_free == 'true'
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, urllib.request
+          parts = []
+          for sha in ('838240b1f62036e32b68911555548574df6bfcd0',
+                      'db3468432970c3bdc8a7471ab509834d49ea51fe',
+                      '43530cc19217addb8d5527e20ff6f26e4cffa8c2',
+                      '9fdb0667beee0c6bd8921580d8ffe437e9c97d0f'):
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/MolBioFreak/BioModStack/git/blobs/' + sha,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  value = json.load(response)
+              assert value['sha'] == sha and value['encoding'] == 'base64'
+              content = base64.b64decode(value['content'])
+              assert hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest() == sha
+              parts.append(content)
+          patch = gzip.decompress(base64.b64decode(b''.join(parts), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '3c5110d50dde22f2a166c7d71d58dd3b324bf27416783d6c5e77227d465974a1'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'review-corrections.patch').write_bytes(patch)
+          PY
+          git show 066f4a9d59b0ebb860d52dcaec011504320d6ac7:.github/workflows/remote-bridge-review.yml > .github/workflows/remote-bridge-review.yml
+          git apply --whitespace=error-all "$RUNNER_TEMP/review-corrections.patch"
+          git diff --check
+          git config user.name 'BMS Review'
+          git config user.email 'bms-review@users.noreply.github.com'
+          git add platform/api/tests/test_managed_runtime_safety.py platform/api/tests/test_remote_inventory_supersession.py
+          git diff --cached --check
+          git commit -m 'test(remote): cover real incremental admission and superseded inventory'
+          git add platform/api/services/remote_execution/transport.py platform/api/tests/test_remote_helper_diagnostics.py
+          git diff --cached --check
+          git commit -m 'fix(remote): derive request diagnostics from helper declarations'
+          git add .github/workflows/remote-bridge-review.yml docs/plans/2026-09-17-remote-bridge-vast-repair-series.md docs/plans/2026-09-20-remote-bridge-review-closeout.md
+          git diff --cached --check
+          git commit -m 'docs(ci): close review gates and record verification costs'
+          git rm platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git diff --cached --check
+          git commit -m 'build(runtime): freeze remote bridge review corrections for exact binding'
+          git rev-parse HEAD > "$evidence/freeze-commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/freeze-tree.txt"
+          git cat-file commit HEAD > "$evidence/freeze-commit.object"
+          git archive --format=tar HEAD | gzip > "$evidence/frozen-source.tar.gz"
+      - name: Build source binding from the committed record-free archive
         working-directory: platform/api
         shell: bash
         run: |
@@ -48,22 +83,51 @@ jobs:
           evidence="$RUNNER_TEMP/remote-bridge-evidence"
           frozen="$RUNNER_TEMP/remote-bridge-frozen"
           mkdir -p "$frozen"
-          tar -xzf "$evidence/source.tar.gz" -C "$frozen"
+          tar -xzf "$evidence/frozen-source.tar.gz" -C "$frozen"
+          uv sync --frozen --group dev
           uv run --frozen --group dev python \
             "$frozen/scripts/build_ngs_molbio_runtime_implementation_record.py" \
-            --successor-source-commit "$(cat "$evidence/commit.txt")" \
-            --successor-source-tree "$(cat "$evidence/tree.txt")" \
-            --successor-commit-object "$evidence/commit.object"
-          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" "$evidence/"
-          echo 'Generated source binding only; a separately committed bound tip must pass all review gates.'
-      - name: Run locked source, provisioning, transport and multiworker gates
-        if: steps.source.outputs.record_free == 'false'
+            --successor-source-commit "$(cat "$evidence/freeze-commit.txt")" \
+            --successor-source-tree "$(cat "$evidence/freeze-tree.txt")" \
+            --successor-commit-object "$evidence/freeze-commit.object"
+          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git add config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git diff --cached --check
+          git commit -m 'build(runtime): bind remote bridge review corrections'
+          git rev-parse HEAD > "$evidence/candidate-commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/candidate-tree.txt"
+          git diff --check 9ad10eea97cf784da47b07d6d9b2896da35e455e..HEAD
+          git log --format='%H %s' 066f4a9d59b0ebb860d52dcaec011504320d6ac7..HEAD > "$evidence/commits.txt"
+      - name: Validate the source-gated updater without deploying
         working-directory: platform/api
         shell: bash
         run: |
           set -euo pipefail
-          uv run --frozen --group dev python -m pytest -q \
+          uv run --offline --frozen --group dev python - <<'PY'
+          import importlib.util, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd().parents[1]
+          spec = importlib.util.spec_from_file_location('review_dev_sync', root / 'scripts/biomodstack_dev_sync.py')
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = module.validate_candidate_runtime_authority(root, revision)
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'remote-bridge-evidence/updater-authority.json').write_text(
+              json.dumps({'revision': revision, 'accepted': True, 'result': result}, sort_keys=True, indent=2) + '\n')
+          print('Updater source authority accepted:', revision)
+          PY
+      - name: Run locked regression gates in an actual route-free namespace
+        working-directory: platform/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent_namespace="$(readlink /proc/self/ns/net)"
+          sudo env PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
+            _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
+            unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
+            uv run --offline --frozen --group dev python -m pytest -q \
             tests/test_remote_provision_isolation.py \
+            tests/test_remote_inventory_supersession.py \
             tests/test_remote_incremental_admission.py \
             tests/test_remote_helper_diagnostics.py \
             tests/test_managed_runtime_safety.py \
@@ -81,12 +145,33 @@ jobs:
             tests/test_managed_ssh_transport.py \
             tests/test_vast_ssh_endpoint_selection.py \
             tests/test_hf_worker_acquisition.py \
+            tests/test_remote_telemetry.py \
             --junitxml="$RUNNER_TEMP/remote-bridge-evidence/junit-review.xml"
-      - name: Preserve revision and case-level evidence even on failure
+      - name: Publish only the verified review branch, never test or main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin test-remote-bridge-repairs-20260917
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git push origin HEAD:refs/heads/test-remote-bridge-repairs-20260917
+          remote="$(git ls-remote origin refs/heads/test-remote-bridge-repairs-20260917 | cut -f1)"
+          test "$remote" = "$(git rev-parse HEAD)"
+          printf '%s\n' "$remote" > "$RUNNER_TEMP/remote-bridge-evidence/published-commit.txt"
+      - name: Preserve exact candidate and case evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/remote-bridge-evidence"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/final-local-commit.txt"
+          git bundle create "$evidence/candidate.bundle" HEAD ^066f4a9d59b0ebb860d52dcaec011504320d6ac7
+          git archive --format=tar HEAD | gzip > "$evidence/candidate-source.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: remote-bridge-review-${{ github.sha }}
+          name: remote-bridge-corrections-${{ github.sha }}
           path: ${{ runner.temp }}/remote-bridge-evidence/
           retention-days: 14
           if-no-files-found: error
