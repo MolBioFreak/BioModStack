@@ -565,14 +565,30 @@ def test_parent_renamed_during_copy_cannot_activate(tree, monkeypatch):
     assert marker.read_bytes() == before
 
 
-def test_preupload_peak_budget_is_conservative_and_not_reserved(tree):
+@pytest.mark.parametrize('state,copies', [('cold', 3), ('cached', 1), ('installed', 0)])
+def test_preupload_peak_budget_is_conservative_and_not_reserved(tree, state, copies):
     m, cache, root, make, prior, marker = tree
+    before = marker.read_bytes()
+    if state == 'installed':
+        manifest = prior
+    elif state == 'cached':
+        manifest = make(b'cached but not installed')
+    else:
+        # No upload or cache publication: exercise the real cold admit path.
+        data = b'neither cached nor installed'
+        manifest = dict(prior, artifacts=[dict(prior['artifacts'][0],
+            sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data))])
     with cache.directory(root) as parent:
-        budget = m.check_space(parent, prior, prior['artifacts'])
-    admitted = m.admit(root, prior, m.boot_id(), cache)['admission']
-    assert admitted['additional_copy_bytes'] == 3 * budget['additional_copy_bytes']
+        budget = m.check_space(parent, manifest, manifest['artifacts'])
+    admitted = m.admit(root, manifest, m.boot_id(), cache)['admission']
+    assert admitted['additional_copy_bytes'] == copies * budget['additional_copy_bytes']
+    assert admitted['metadata_allowance_bytes'] == budget['metadata_allowance_bytes'] > 0
     assert admitted['reservation'] is False
-    assert admitted['headroom_bytes'] == 1024 * 1024 * 1024
+    assert admitted['headroom_bytes'] == m.MIN_HEADROOM == 1024 * 1024 * 1024
+    assert admitted['required_available_bytes'] == (admitted['additional_copy_bytes']
+        + admitted['metadata_allowance_bytes'] + admitted['headroom_bytes'])
+    assert marker.read_bytes() == before  # Admission must not activate a release.
+    assert m.observe(root, prior, cache)['state'] == 'verified'
 
 
 def test_preupload_rejects_cache_on_another_device(tree, monkeypatch):
