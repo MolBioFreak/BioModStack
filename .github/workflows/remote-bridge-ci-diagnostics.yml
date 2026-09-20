@@ -1,95 +1,295 @@
-name: Verify pinned remote bridge groups
+name: Repair and verify pinned bridge test fixtures
 on:
   push:
     branches: [test-remote-bridge-ci-diagnostics-20260920]
+# Writes are restricted below to test files, documentation and the generated
+# binding on the isolated integration branch. No workflow or deployment writes.
 permissions:
-  contents: read
+  contents: write
 jobs:
-  verify:
+  repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [corrections, provisioning, transport]
+    timeout-minutes: 20
     env:
+      BASE: c15ba52586c66e73f3f3a6d56334b694aa66cdfc
+      OUTPUT_BRANCH: test-remote-bridge-integration-20260920
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: c15ba52586c66e73f3f3a6d56334b694aa66cdfc
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
         with:
           version: '0.12.17'
           python-version: '3.12'
           enable-cache: false
-      - name: Install exact locked environment and record tested source
+      - name: Correct the two demonstrated fixture defects without changing production
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE"
+          test "$(git ls-remote origin "refs/heads/$OUTPUT_BRANCH" | cut -f1)" = "$BASE"
+          git config user.name 'BMS Review'
+          git config user.email 'bms-review@users.noreply.github.com'
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('platform/api/tests/test_multiworker_scheduling.py')
+          text = path.read_text()
+          old = '''        async def activate(*args, **kwargs):
+                      return SimpleNamespace(model_dump=lambda **kw: {"state": "ready"})'''
+          new = '''        async def activate(*args, **kwargs):
+                      # Typed fixture for the actual qualified-release boundary. No CUDA
+                      # executes here; real backend qualification belongs to its own tests.
+                      return managed_inventory.ManagedRelease(
+                          selection=manifest['selection'],
+                          critical=dict(requirements=manifest['critical']['requirements'],
+                              observed=dict(backend='apptainer', cuda='BMS_CUDA_OK',
+                                            nextflow='BMS_NEXTFLOW_INTERPRETERS_OK'), compatible=True),
+                          release_sha256=managed_inventory.release_digest(manifest),
+                          source_revision=manifest['source_revision'], source_tree=manifest['source_tree'],
+                          state='verified', artifacts=[dict(
+                              **{key: row[key] for key in ('name', 'sha256', 'size_bytes')}, state='verified')
+                              for row in manifest['artifacts']])'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = '''        assert response.active and response.state == "ready"
+                  assert (await session.execute(select(ExecutionTarget.__table__)'''
+          new = '''        assert response.active and response.state == "ready"
+                  assert response.capabilities['readiness']['container_backend'] == 'apptainer'
+                  assert response.capabilities['readiness']['container_qualification'] == 'BMS_CUDA_OK'
+                  assert (await session.execute(select(ExecutionTarget.__table__)'''
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new))
+          PY
+          git add platform/api/tests/test_multiworker_scheduling.py
+          git diff --cached --check
+          git commit -m 'test(remote): model the qualified activation release in multiworker fixtures'
+          cat > platform/api/tests/python_runtime_fixture.py <<'PY'
+          """Copy the real CPython closure used by relocation tests, not its OS prefix.
+
+          A system interpreter can have /usr as sys.base_prefix. Copying that directory
+          includes unrelated tools, package caches and devices. These Linux import-only
+          fixtures need the interpreter, complete stdlib/extensions and libpython only;
+          OS shared dependencies remain supplied by the same test host as before.
+          """
+          from pathlib import Path
+          import shutil
+          import sys
+          import sysconfig
+
+
+          def copy_python_base(destination: Path) -> Path:
+              version = f'{sys.version_info.major}.{sys.version_info.minor}'
+              destination.mkdir(parents=True, exist_ok=False)
+              binary = destination / 'bin' / f'python{version}'
+              binary.parent.mkdir()
+              shutil.copy2(Path(getattr(sys, '_base_executable', sys.executable)).resolve(), binary)
+
+              stdlib = Path(sysconfig.get_path('stdlib')).resolve()
+              installed_stdlib = destination / 'lib' / f'python{version}'
+              ignored = shutil.ignore_patterns('__pycache__', 'site-packages', 'dist-packages')
+              shutil.copytree(stdlib, installed_stdlib, symlinks=True, ignore=ignored)
+              extension_dir = sysconfig.get_config_var('DESTSHARED')
+              if extension_dir:
+                  extension_dir = Path(extension_dir).resolve()
+                  if not extension_dir.is_relative_to(stdlib):
+                      shutil.copytree(extension_dir, installed_stdlib / 'lib-dynload',
+                                      symlinks=True, ignore=ignored, dirs_exist_ok=True)
+
+              if sysconfig.get_config_var('Py_ENABLE_SHARED'):
+                  library_dir = Path(sysconfig.get_config_var('LIBDIR'))
+                  names = {sysconfig.get_config_var(key) for key in ('LDLIBRARY', 'INSTSONAME')}
+                  for name in sorted(name for name in names if name):
+                      # Copy the soname as a physical member, not a link to host storage.
+                      shutil.copy2((library_dir / name).resolve(strict=True), destination / 'lib' / name)
+              return binary
+          PY
+          cat > platform/api/tests/test_python_runtime_fixture.py <<'PY'
+          """Real relocated imports and explicit exclusion of unrelated host-prefix data."""
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          import python_runtime_fixture as runtime
+
+
+          def test_relocated_runtime_imports_complete_stdlib(tmp_path):
+              base = tmp_path / 'python'
+              binary = runtime.copy_python_base(base)
+              env = {key: value for key, value in os.environ.items() if not key.startswith('PYTHON')}
+              probe = ('import ctypes,encodings,json,pathlib,sqlite3,ssl,sys; '
+                       'print(json.dumps({"base":sys.base_prefix,"stdlib":encodings.__file__}))')
+              result = subprocess.run([str(binary), '-I', '-c', probe], env=env,
+                                      capture_output=True, text=True, check=True, timeout=30)
+              observed = json.loads(result.stdout)
+              assert Path(observed['base']) == base
+              assert Path(observed['stdlib']).is_relative_to(base)
+              assert {entry.name for entry in base.iterdir()} == {'bin', 'lib'}
+              assert not list(base.rglob('site-packages'))
+              assert not list(base.rglob('dist-packages'))
+
+
+          def test_os_prefix_is_never_traversed(tmp_path, monkeypatch):
+              prefix = tmp_path / 'usr'
+              stdlib = prefix / 'lib/python-fixture'
+              stdlib.mkdir(parents=True)
+              (stdlib / 'stdlib.py').write_text('# complete test source')
+              for name in ('site-packages', 'dist-packages', '__pycache__'):
+                  (stdlib / name).mkdir()
+                  (stdlib / name / 'unrelated').write_bytes(b'not copied')
+              (prefix / 'share').mkdir()
+              (prefix / 'share/huge-unrelated-file').write_bytes(b'not Python')
+              binary = prefix / 'bin/python-fixture'
+              binary.parent.mkdir()
+              binary.write_bytes(b'layout-only fixture, never executed')
+              monkeypatch.setattr(runtime.sys, '_base_executable', str(binary))
+              monkeypatch.setattr(runtime.sys, 'base_prefix', str(prefix))
+              monkeypatch.setattr(runtime.sysconfig, 'get_path', lambda key: str(stdlib))
+              monkeypatch.setattr(runtime.sysconfig, 'get_config_var', lambda key: None)
+              base = tmp_path / 'copy'
+              runtime.copy_python_base(base)
+              assert not (base / 'share').exists()
+              assert list(base.rglob('stdlib.py'))
+              assert not list(base.rglob('unrelated'))
+          PY
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          path = Path('platform/api/tests/test_remote_bundle_runtime_gaps.py')
+          text = path.read_text()
+          old = "    shutil.copytree(sys.base_prefix, base, symlinks=True,\n                    ignore=shutil.ignore_patterns('__pycache__', 'site-packages'))"
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, "    from python_runtime_fixture import copy_python_base\n    copy_python_base(base)"))
+          for name in ('test_multiworker_scheduling.py', 'test_remote_bundle_runtime_gaps.py',
+                       'python_runtime_fixture.py', 'test_python_runtime_fixture.py'):
+              path = Path('platform/api/tests') / name
+              ast.parse(path.read_text(), filename=str(path))
+          PY
+          git add platform/api/tests/python_runtime_fixture.py platform/api/tests/test_python_runtime_fixture.py platform/api/tests/test_remote_bundle_runtime_gaps.py
+          git diff --cached --check
+          git commit -m 'test(remote): bound real Python relocation fixtures to their runtime closure'
+          cat >> docs/plans/2026-09-20-remote-bridge-review-closeout.md <<'EOF'
+
+          ## Expanded hosted-runner integration checks
+
+          The combined candidate c15ba525 retained corrected review 03c32b0 and
+          Development 2ba46790 and passed the updater source-authority validator.
+          The expanded hosted runner identified two additional test-fixture defects:
+          an activation double lacked the typed critical/backend qualification,
+          and the runtime packaging fixture copied all of /usr when CPython was
+          system-installed. Neither was repaired by relaxing production checks.
+          The fixture now returns ManagedRelease, asserts the selected backend,
+          and retains exact other-worker/Job preservation checks. Relocation tests
+          copy the real interpreter, full stdlib/extensions and shared libpython,
+          excluding unrelated host-prefix data; new tests execute real isolated
+          stdlib imports and verify that unrelated prefix members are not copied.
+
+          Include test_python_runtime_fixture.py, test_remote_bundle_runtime_gaps.py,
+          test_remote_bundle_container_gaps.py and test_remote_support_packaging.py
+          with the previous 20-module selection. Capture exact SHA, full command,
+          exit status and JUnit cases. The prior 64/208 counts remain historical,
+          not evidence of this combined candidate. Hosted CI still cannot certify
+          live Vast behavior, scientific output or deployed service ownership.
+          The independent verification cost decision remains unchanged: measure
+          cold/warm admission and subsequent install latency on the actual worker;
+          no existence-only credit, stale receipt reuse or skip was introduced.
+          EOF
+          git rm platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git add docs/plans/2026-09-20-remote-bridge-review-closeout.md
+          git diff --cached --check
+          git commit -m 'build(runtime): freeze integrated fixture corrections for canonical binding'
+          mkdir -p "$RUNNER_TEMP/bridge-fixture-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/bridge-fixture-evidence/freeze.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/bridge-fixture-evidence/tree.txt"
+          git cat-file commit HEAD > "$RUNNER_TEMP/bridge-fixture-evidence/commit.object"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/bridge-fixture-evidence/frozen-source.tar.gz"
+      - name: Generate and validate the exact corrected runtime binding
         working-directory: platform/api
+        shell: bash
         run: |
           set -euo pipefail
           uv sync --frozen --group dev
-          mkdir -p "$RUNNER_TEMP/bridge-diagnostics"
-          git rev-parse HEAD | tee "$RUNNER_TEMP/bridge-diagnostics/candidate.txt"
-      - name: Execute complete assigned group with startup and test watchdogs
-        working-directory: platform/api
+          evidence="$RUNNER_TEMP/bridge-fixture-evidence"
+          frozen="$RUNNER_TEMP/bridge-fixture-frozen"
+          mkdir -p "$frozen"
+          tar -xzf "$evidence/frozen-source.tar.gz" -C "$frozen"
+          uv run --offline --frozen --group dev python "$frozen/scripts/build_ngs_molbio_runtime_implementation_record.py" \
+            --successor-source-commit "$(cat "$evidence/freeze.txt")" \
+            --successor-source-tree "$(cat "$evidence/tree.txt")" \
+            --successor-commit-object "$evidence/commit.object"
+          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git add config/ngs_molbio_runtime/runtime_implementation_v2.json
+          git diff --cached --check
+          git commit -m 'build(runtime): bind integrated remote bridge fixture corrections'
+          git diff --check "$BASE..HEAD"
+          git rev-parse HEAD > "$evidence/candidate.txt"
+          git log --oneline "$BASE..HEAD" | tee "$evidence/commits.txt"
+          uv run --offline --frozen --group dev python - <<'PY'
+          import importlib.util, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd().parents[1]
+          spec = importlib.util.spec_from_file_location('candidate_sync', root / 'scripts/biomodstack_dev_sync.py')
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = module.validate_candidate_runtime_authority(root, revision)
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'bridge-fixture-evidence'
+          (evidence / 'updater.json').write_text(json.dumps({'revision': revision, 'accepted': True, 'result': result}, sort_keys=True))
+          print('UPDATER_ACCEPTED', revision)
+          PY
+      - name: Publish committed corrections to isolated integration branch only
         shell: bash
-        env:
-          TEST_GROUP: ${{ matrix.group }}
         run: |
           set -euo pipefail
-          case "$TEST_GROUP" in
-            corrections) modules=(
-              tests/test_remote_provision_isolation.py
-              tests/test_remote_inventory_supersession.py
-              tests/test_remote_incremental_admission.py
-              tests/test_remote_helper_diagnostics.py
-              tests/test_managed_runtime_safety.py
-              tests/test_ngs_molbio_runtime_record_builder.py
-            ) ;;
-            provisioning) modules=(
-              tests/test_remote_managed_inventory.py
-              tests/test_remote_preloading.py
-              tests/test_vast_auto_setup.py
-              tests/test_remote_cache_integration.py
-              tests/test_remote_runtime_images.py
-              tests/test_remote_runner_integrity.py
-              tests/test_artifact_cache.py
-              tests/test_cache_batches.py
-            ) ;;
-            transport) modules=(
-              tests/test_multiworker_scheduling.py
-              tests/test_multiworker_migration.py
-              tests/test_managed_ssh_transport.py
-              tests/test_vast_ssh_endpoint_selection.py
-              tests/test_hf_worker_acquisition.py
-              tests/test_remote_telemetry.py
-            ) ;;
-            *) exit 2 ;;
-          esac
+          # No changed workflow bytes and no test/main deployment ref writes.
+          test -z "$(git diff --name-only "$BASE..HEAD" -- .github/workflows)"
+          python3 - <<'PY'
+          import os, subprocess
+          allowed = {'platform/api/tests/test_multiworker_scheduling.py',
+              'platform/api/tests/test_remote_bundle_runtime_gaps.py',
+              'platform/api/tests/python_runtime_fixture.py',
+              'platform/api/tests/test_python_runtime_fixture.py',
+              'docs/plans/2026-09-20-remote-bridge-review-closeout.md',
+              'platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json'}
+          paths = set(subprocess.check_output(['git', 'diff', '--name-only', os.environ['BASE']+'..HEAD'], text=True).splitlines())
+          assert paths == allowed, paths
+          PY
+          test "$(git ls-remote origin "refs/heads/$OUTPUT_BRANCH" | cut -f1)" = "$BASE"
+          git merge-base --is-ancestor "$BASE" HEAD
+          git push origin "HEAD:refs/heads/$OUTPUT_BRANCH"
+      - name: Execute all selected gates plus owning relocation tests
+        working-directory: platform/api
+        shell: bash
+        run: |
+          set -euo pipefail
           parent_namespace="$(readlink /proc/self/ns/net)"
           sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" PYTHONUNBUFFERED=1 \
             _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
-            timeout --signal=TERM --kill-after=10s 210s \
-            "$PWD/.venv/bin/python" -u -c '
-          import faulthandler, sys
-          faulthandler.enable()
-          faulthandler.dump_traceback_later(180, exit=True)
-          print("FROZEN_INTERPRETER", sys.executable, flush=True)
-          import pytest
-          code = pytest.main(sys.argv[1:])
-          faulthandler.cancel_dump_traceback_later()
-          raise SystemExit(code)
-          ' -vv -s --randomly-seed=20260920 "${modules[@]}" \
-            --junitxml="$RUNNER_TEMP/bridge-diagnostics/junit-${TEST_GROUP}.xml" \
-            2>&1 | tee "$RUNNER_TEMP/bridge-diagnostics/${TEST_GROUP}.log"
-      - name: Preserve exact source and case evidence
+            timeout --signal=TERM --kill-after=10s 600s \
+            "$PWD/.venv/bin/python" -u -m pytest -vv -s --randomly-seed=20260920 -o faulthandler_timeout=90 \
+            tests/test_remote_provision_isolation.py tests/test_remote_inventory_supersession.py \
+            tests/test_remote_incremental_admission.py tests/test_remote_helper_diagnostics.py \
+            tests/test_managed_runtime_safety.py tests/test_ngs_molbio_runtime_record_builder.py \
+            tests/test_remote_managed_inventory.py tests/test_remote_preloading.py \
+            tests/test_vast_auto_setup.py tests/test_remote_cache_integration.py \
+            tests/test_remote_runtime_images.py tests/test_remote_runner_integrity.py \
+            tests/test_artifact_cache.py tests/test_cache_batches.py \
+            tests/test_multiworker_scheduling.py tests/test_multiworker_migration.py \
+            tests/test_managed_ssh_transport.py tests/test_vast_ssh_endpoint_selection.py \
+            tests/test_hf_worker_acquisition.py tests/test_remote_telemetry.py \
+            tests/test_python_runtime_fixture.py tests/test_remote_bundle_runtime_gaps.py \
+            tests/test_remote_bundle_container_gaps.py tests/test_remote_support_packaging.py \
+            --junitxml="$RUNNER_TEMP/bridge-fixture-evidence/junit.xml" \
+            2>&1 | tee "$RUNNER_TEMP/bridge-fixture-evidence/regression.log"
+      - name: Preserve immutable source and case evidence on any outcome
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: bridge-${{ matrix.group }}-${{ github.sha }}
-          path: ${{ runner.temp }}/bridge-diagnostics/
-          if-no-files-found: error
+          name: bridge-fixture-corrections-${{ github.sha }}
+          path: ${{ runner.temp }}/bridge-fixture-evidence/
           retention-days: 14
+          if-no-files-found: error
