@@ -133,3 +133,67 @@ An isolated GitHub-hosted checkout ran the focused checks below. API/dev depende
 Execution log: https://github.com/MolBioFreak/BioModStack/actions/runs/35369717831
 
 The source-bound runtime record is regenerated in the immediately following commit by the existing builder from this record-free source precursor. Its source-only/unverified/open states are not changed to acceptance. Re-run the builder after subsequent integration changes. Full-repository/Development tests, actual Nextflow/remote execution, interface parity, and scientific qualification remain open. No existing result or profile identity is rewritten.
+
+
+## 2026-09-20 samtools discovery follow-up
+
+The API construct-verification fixture now resolves samtools lazily. With no `BMS_TEST_SAMTOOLS` and no samtools on `PATH`, only BAM-backed tests skip with an explicit dependency reason; pure-Python checks still execute. An explicitly configured but unresolvable executable fails clearly without fallback. `AGENTS.md` documents the executable override, `-rs`, and the distinction between skipped native checks and native verification. Scientific assertions, verifier code, and qualification flags are unchanged.
+
+An isolated GitHub-hosted full checkout, using API/dev Python dependencies from `uv sync --frozen --group dev --no-install-project`, reproduced the original missing-tool failure and checked both PATH discovery and explicit selection outside PATH. The targeted runs use `--noconftest` to avoid the host-specific API harness; they do not claim a live Development or full API test run. The invalid-override failure below is an intentional negative control, and native skips mean tests not run.
+
+```json
+{
+  "baseline_missing": {
+    "errors": 0,
+    "failures": 45,
+    "passed": 14,
+    "skipped": 0,
+    "tests": 59
+  },
+  "candidate_explicit": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 59,
+    "skipped": 0,
+    "tests": 59
+  },
+  "candidate_missing": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 14,
+    "skipped": 45,
+    "tests": 59
+  },
+  "candidate_path": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 59,
+    "skipped": 0,
+    "tests": 59
+  },
+  "invalid_override": {
+    "errors": 0,
+    "failures": 1,
+    "passed": 0,
+    "skipped": 0,
+    "tests": 1
+  },
+  "native_metadata": {
+    "errors": 0,
+    "failures": 0,
+    "passed": 39,
+    "skipped": 0,
+    "tests": 39
+  },
+  "portable": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 93
+  }
+}
+```
+
+Execution log: https://github.com/MolBioFreak/BioModStack/actions/runs/35534014440
+
+The qualification flag still exits 2. These four test/documentation paths are outside the runtime source denominator; every recorded source-authority digest and the existing canonical runtime record were checked unchanged. That record continues to bind its original source precursor, not this test-only commit. Nextflow execution, remote provisioning, UI acceptance, and biological qualification remain outside this check.

@@ -19,10 +19,31 @@ REPO_ROOT = API_ROOT.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "verify_construct.py"
 PROFILE_CONFIG = REPO_ROOT / "config" / "ngs" / "construct_verify_profiles.json"
 SCHEMA = REPO_ROOT / "schemas" / "ngs" / "construct_verification_manifest.schema.json"
-# Use the selected test interpreter and an explicitly configurable real tool.
+# Use the selected interpreter; discover external tools only when needed.
 PYTHON = Path(sys.executable)
-SAMTOOLS = Path(os.environ.get("BMS_TEST_SAMTOOLS") or shutil.which("samtools") or "samtools")
 REFERENCE = "ACGTTGCAACGTGATCGTACCTGACTGACCTAGGCTAACGTTAGC"
+
+
+def _require_samtools() -> Path:
+    """Resolve lazily: missing optional tools skip; broken overrides fail loudly."""
+    configured = os.environ.get("BMS_TEST_SAMTOOLS")
+    requested = "samtools" if configured is None else configured
+    resolved = shutil.which(requested) if requested else None
+    if resolved is None:
+        if configured is not None:
+            pytest.fail(
+                f"BMS_TEST_SAMTOOLS={configured!r} does not resolve to an executable file; "
+                "set it to a valid samtools executable path or command name. "
+                "The explicit override is authoritative; no PATH fallback was used.",
+                pytrace=False,
+            )
+        pytest.skip(
+            "samtools is not available on PATH; BAM-backed construct-verification "
+            "tests were not run. Install samtools or set BMS_TEST_SAMTOOLS to its "
+            "executable path. Use pytest -rs to display this reason."
+        )
+    # Wrappers use execv, which requires a path rather than PATH lookup.
+    return Path(resolved).absolute()
 
 
 def _sha256(path: Path) -> str:
@@ -188,10 +209,13 @@ def _run_case(
     topology_overrides: dict[str, object] | None = None,
     topology_breakpoint_digest: str | None = None,
     topology_secondary_digest: str | None = None,
-    verification_samtools: Path = SAMTOOLS,
+    verification_samtools: Path | None = None,
     structural_screen_evaluated: bool = True,
     source_non_boundary_split_reads: int | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
+    samtools = _require_samtools()
+    if verification_samtools is None:
+        verification_samtools = samtools
     reference_path = tmp_path / "reference.fasta"
     observed_path = tmp_path / "observed_consensus.fasta"
     state_path = tmp_path / "observed_sequence.json"
@@ -266,13 +290,13 @@ def _run_case(
     alignment_sam_path.write_text("\n".join(sam_lines) + "\n", encoding="utf-8")
     source_fastq.write_text("".join(fastq_records), encoding="utf-8")
     subprocess.run(
-        [str(SAMTOOLS), "view", "-b", "-o", str(alignment_bam_path), str(alignment_sam_path)],
+        [str(samtools), "view", "-b", "-o", str(alignment_bam_path), str(alignment_sam_path)],
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        [str(SAMTOOLS), "index", str(alignment_bam_path), str(alignment_index_path)],
+        [str(samtools), "index", str(alignment_bam_path), str(alignment_index_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -410,6 +434,7 @@ def _run_case(
 
 
 def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path: Path) -> None:
+    samtools = _require_samtools()
     wrapper = tmp_path / "samtools-with-binary-version"
     wrapper.write_text(
         "#!/usr/bin/env python3\n"
@@ -420,7 +445,7 @@ def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path
         "if len(sys.argv) > 1 and sys.argv[1] == 'idxstats' and '-X' in sys.argv:\n"
         "    os.write(2, b\"idxstats: invalid option -- 'X'\\n\")\n"
         "    raise SystemExit(2)\n"
-        f"os.execv({str(SAMTOOLS)!r}, [{str(SAMTOOLS)!r}, *sys.argv[1:]])\n",
+        f"os.execv({str(samtools)!r}, [{str(samtools)!r}, *sys.argv[1:]])\n",
         encoding="utf-8",
     )
     wrapper.chmod(0o755)
