@@ -47,14 +47,14 @@ jobs:
       - name: Freeze and generate canonical runtime source binding
         run: python3 .review/build_dev57.py bind
       - name: Verify baseline, regression detection, candidate and updater authority
-        run: python3 .review/build_dev57.py verify
+        run: python3 .review/verify_dev57.py
       - name: Publish only the verified secondary branch
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          candidate="$RUNNER_TEMP/bms-dev57/candidate"
+          candidate="$RUNNER_TEMP/bms-dev57/publish"
           verified="$(cat "$RUNNER_TEMP/bms-dev57/evidence/verified.txt")"
           test "$(git -C "$candidate" rev-parse HEAD)" = "$verified"
           test -z "$(git -C "$candidate" status --porcelain)"
