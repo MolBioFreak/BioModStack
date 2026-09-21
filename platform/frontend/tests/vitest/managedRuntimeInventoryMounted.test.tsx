@@ -199,7 +199,7 @@ it.each(['cancelling', 'recovery_blocked', 'cancelled'] as const)('does not prom
     recovery_required: true, artifact: null, message: 'Transport quiescence unknown', started_at: 'now', updated_at: 'now' } };
   await render();
   expect(container.textContent).toContain('Critical runtime ready: unknown (no fresh evidence)');
-  expect(container.textContent).toContain('Bounded readiness: stale');
+  expect(container.textContent).toContain('Asset integrity: stale');
   expect(button().disabled).toBe(true);
   expect(requests.every(request => request.method === 'get')).toBe(true);
 });

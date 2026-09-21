@@ -109,7 +109,7 @@ it('renders exact dependency estimates and blocks mutation on preview blockers',
     transfer_bytes: 1234, storage_bytes: 1234, asset_states: [{ ...artifacts[0], state: 'unknown' }], blockers: ['Critical runtime unavailable'] }));
   await click('Preview artifact downloads');
   expect(container.textContent).toContain('Destination: vast:123 · /opt/bms');
-  expect(container.textContent).toContain('Transfer upper bound: 1,234 bytes');
+  expect(container.textContent).toContain('Download size: 1,234 bytes');
   expect(container.textContent).toContain('Critical runtime unavailable');
   expect(button('Start provision').disabled).toBe(true);
 });
@@ -125,9 +125,9 @@ it('renders the actual blocked route wire with unknown bytes and no start', asyn
     expect(container.textContent).toContain('host_asset_unavailable');
     expect(container.textContent).toContain('containers/boltz2.sif');
     expect(container.textContent).toContain('weights/boltz');
-    expect(container.textContent).toContain('Unknown dependency bytes total');
-    expect(container.textContent).toContain('Transfer upper bound: unknown bytes');
-    expect(container.textContent).toContain('Selected storage: unknown bytes');
+    expect(container.textContent).toContain('Dependency bytes unknown');
+    expect(container.textContent).toContain('Download size: unknown bytes');
+    expect(container.textContent).toContain('Storage needed: unknown bytes');
     expect(container.textContent).toContain('size and SHA256 unknown');
     expect(button('Start provision').disabled).toBe(true);
     await click('Start provision');
@@ -164,7 +164,7 @@ it('retries a stopped operation only with a fresh preview of its persisted selec
 
 it('mounts in the real worker panel without Jobs; previews exact bytes then starts once with the digest', async () => {
   await render();
-  expect(container.textContent).toContain('Optional advance downloads, not a job launcher');
+  expect(container.textContent).toContain('It does not launch a job, run inference or establish scientific readiness');
   expect(container.textContent).toContain('Installed artifacts are unknown');
   expect(button('Start provision').disabled).toBe(true);
   await select('Provision model', 'protenix');
@@ -243,8 +243,8 @@ it('restores only the persisted last receipt and displays stale/failed status wi
   target = { ...target, artifact_inventory: { operation_id: 'receipt', selection: catalog[0], artifacts, observed_at: '2026-01-01T00:00:00Z', state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false } };
   await render();
   expect(container.textContent).toContain('Cache downloads verified at observation');
-  expect(container.textContent).toContain('Not a full installed inventory');
-  expect(container.textContent).toContain('not scientific readiness');
+  expect(container.textContent).toContain('Cache downloads only, and separate from the installed inventory below');
+  expect(container.textContent).toContain('Not scientific readiness or runtime activation');
   await act(async () => root.render(null)); await render();
   expect(container.textContent).toContain('2026-01-01T00:00:00Z');
   target = { ...target, artifact_inventory: { ...target.artifact_inventory!, state: 'stale' } }; await render();
@@ -380,7 +380,7 @@ it('invalidates the picker preview immediately on execution-policy and target ch
 
 it('discovers the shared launcher workflows and full model registry without granting unsupported preparation', async () => {
   await render();
-  expect(container.textContent).toContain('Other registered model — independent preparation unavailable');
+  expect(container.textContent).toContain('Other registered model (not available in this scope)');
   await select('Provision model', 'unsupported');
   expect(button('Preview artifact downloads').disabled).toBe(true);
   await select('Provision scope', 'workflow');
@@ -408,4 +408,58 @@ it('lazily discloses exact dependency files without hiding blockers or posting',
   expect(container.textContent).not.toContain(artifacts[0].name);
   expect(posts).toEqual([]); // Preview uses the explicitly mocked post; disclosures never call it.
   expect(api.post).toHaveBeenCalledTimes(1);
+});
+
+it('leads with the running preparation, its verified bytes and the stop control', async () => {
+  target.preload = { operation_id: 'live1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+    request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'weights/protenix.bin', message: 'Downloading artifact from Hugging Face',
+    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', sequence: 3,
+    artifact_progress: [{ ...artifacts[0], state: 'verified' },
+      { name: 'weights/protenix.bin', sha256: 'd'.repeat(64), size_bytes: 2000, state: 'transferring' }] };
+  await render();
+  expect(container.textContent).toContain('Downloading assets');
+  expect(container.textContent).toContain('1 of 2 artifacts verified');
+  expect(container.textContent).toContain('1,234 bytes of 3,234 bytes (38%)');
+  expect(container.textContent).toContain('2m 0s elapsed');
+  expect(container.textContent).toContain('MB/s average');
+  expect(container.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('38');
+  expect(container.textContent!.indexOf('Downloading assets')).toBeLessThan(container.textContent!.indexOf('Provision scope'));
+  expect(button('Cancel provision')).toBeTruthy();
+  expect(posts).toEqual([]);
+});
+
+it('states the preparation caveat once and keeps the technical evidence collapsed', async () => {
+  await render();
+  expect(container.textContent!.split('establish scientific readiness').length - 1).toBe(1);
+  const evidence = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.startsWith('Evidence'))!;
+  expect(evidence.open).toBe(false);
+});
+
+it('pairs a stale installed observation with the control that refreshes it', async () => {
+  const originalGet = api.get.bind(api);
+  vi.spyOn(api, 'get').mockImplementation((url, config) => String(url).endsWith('/runtime-inventory')
+    ? Promise.resolve(response({ scope: 'managed_independent_asset_releases', state: 'stale', observed_at: '2026-09-20T00:00:00Z',
+        boot_id: 'boot', critical_runtime_ready: true, scientific_ready: false, blockers: [], releases: [] }))
+    : originalGet(url, config));
+  target.preload = { operation_id: 'done1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+    request_sha256: 'c'.repeat(64), phase: 'verifying', artifact: null, message: 'Artifact cache identities verified',
+    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', artifact_progress: [{ ...artifacts[0], state: 'verified' }] };
+  await render();
+  const stale = [...container.querySelectorAll('p')].find(item => item.textContent?.includes('Stale observation'))!;
+  expect(stale).toBeTruthy();
+  expect(stale.nextElementSibling?.textContent).toContain('Refresh installed observation');
+});
+
+it('refreshes the target and installed evidence once as a running preparation settles', async () => {
+  target.preload = { operation_id: 'settle1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+    request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: artifacts[0].name, message: 'Downloading artifact from Hugging Face',
+    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z',
+    artifact_progress: [{ ...artifacts[0], state: 'transferring' }] };
+  await render();
+  changed.mockClear();
+  target = { ...target, preload: { ...target.preload!, phase: 'verifying', message: 'Artifact cache identities verified',
+    artifact_progress: [{ ...artifacts[0], state: 'verified' }] } };
+  await render();
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(posts.filter(post => post.url.includes('/provision'))).toEqual([]);
 });
