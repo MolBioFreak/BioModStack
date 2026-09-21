@@ -1,0 +1,196 @@
+name: Fold-CP isolated review assembly
+on:
+  push:
+    branches: [review-build/fold-cp-launch-20260921]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      BASE: 02a57a2fc0c3034dfa05b777e3a54c178f4a1b08
+      TARGET: test-fold-cp-launch-fixes-20260921
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 02a57a2fc0c3034dfa05b777e3a54c178f4a1b08
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.12.17'
+          python-version: '3.12'
+          enable-cache: false
+      - name: Assemble exact reviewed patches on the pinned base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/foldcp-evidence"
+          git config user.name 'BMS Review'
+          git config user.email 'bms-review@users.noreply.github.com'
+          git switch -c "$TARGET" "$BASE"
+          python3 - <<'PY'
+          import base64, json, os, pathlib, subprocess
+          patches = [
+            ('c20fbd50bee155def76f3f877e2ab6ae63e5dc86', 'c20fbd50bee155def76f3f877e2ab6ae63e5dc86', 'fix(remote): bind generated Fold-CP configs to verified prepared owners'),
+            ('5b23649a209471b4357146439341601615585a3b', 'b878f867711e0d62e5d1a8a59318cfd7ff233efd', 'fix(jobs): reject unmanaged resume destinations before preview and writes'),
+            ('b456955915e38d1f1d5f713197958c1d54f11dbb', 'b456955915e38d1f1d5f713197958c1d54f11dbb', 'fix(ui): retain Fold-CP placement through explicit preview approval'),
+            ('64a3a22c57904e4fd07a5ec64ba7bd20266e6650', '64a3a22c57904e4fd07a5ec64ba7bd20266e6650', 'docs(remote): bound Fold-CP launch repair scope and remaining recovery gate'),
+          ]
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'foldcp-evidence'
+          for index, (blob, expected, message) in enumerate(patches, 1):
+              response = json.loads(subprocess.check_output(['gh', 'api', f'repos/MolBioFreak/BioModStack/git/blobs/{blob}']))
+              raw = base64.b64decode(response['content'])
+              assert subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip() == blob
+              # Normalize a transported diff separator, then require exact local patch identity.
+              raw = raw.replace(b'\n diff --git ', b'\ndiff --git ')
+              assert subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip() == expected
+              patch = evidence / f'{index:02d}.patch'
+              patch.write_bytes(raw)
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+              subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+              subprocess.run(['git', 'commit', '-m', message], check=True)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip() == '072ef2eabd5acab54c384346bf0eb3ff850861ef'
+          PY
+      - name: Install the locked API environment
+        working-directory: platform/api
+        run: uv sync --frozen --group dev
+      - name: Freeze and canonically rebind exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          record=platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json
+          evidence="$RUNNER_TEMP/foldcp-evidence"
+          frozen="$RUNNER_TEMP/foldcp-frozen"
+          git rm "$record"
+          git diff --cached --check
+          git commit -m 'build(runtime): freeze Fold-CP launch repairs for source binding'
+          git rev-parse HEAD > "$evidence/freeze.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/freeze-tree.txt"
+          git cat-file commit HEAD > "$evidence/freeze.object"
+          mkdir -p "$frozen"
+          git archive HEAD | tar -x -C "$frozen"
+          (cd platform/api && uv run --offline --frozen --group dev python \
+            "$frozen/scripts/build_ngs_molbio_runtime_implementation_record.py" \
+            --successor-source-commit "$(cat "$evidence/freeze.txt")" \
+            --successor-source-tree "$(cat "$evidence/freeze-tree.txt")" \
+            --successor-commit-object "$evidence/freeze.object")
+          cp "$frozen/$record" "$record"
+          git add "$record"
+          git diff --cached --check
+          git commit -m 'build(runtime): bind Fold-CP launch repair source'
+          git rev-parse HEAD > "$evidence/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/tree.txt"
+          git cat-file commit HEAD > "$evidence/commit.object"
+          git archive HEAD | gzip > "$evidence/source.tar.gz"
+          git bundle create "$evidence/review.bundle" "$BASE..HEAD"
+          git diff --check "$BASE..HEAD"
+          python3 - <<'PY'
+          import importlib.util, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          spec = importlib.util.spec_from_file_location('foldcp_sync', root / 'scripts/biomodstack_dev_sync.py')
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = module.validate_candidate_runtime_authority(root, revision)
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'foldcp-evidence'
+          (evidence / 'updater-authority.json').write_text(json.dumps({'revision': revision, 'result': result}, indent=2) + '\n')
+          PY
+      - name: Baseline and candidate API regressions in real network isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/foldcp-baseline" "$BASE"
+          interpreter="$GITHUB_WORKSPACE/platform/api/.venv/bin/python"
+          parent_namespace="$(readlink /proc/self/ns/net)"
+          tests=(tests/test_remote_bundle_path_gaps.py tests/test_msa_bundle_integration.py tests/test_fold_cp_placement.py tests/test_fold_cp_shared_image_selection.py tests/test_resume_identity.py tests/test_resume_remote_placement.py tests/test_remote_rectify_admission.py tests/test_remote_bundle_runtime_gaps.py tests/test_ngs_molbio_runtime_record_builder.py)
+          for lane in baseline candidate; do
+            root="$GITHUB_WORKSPACE"
+            extra=()
+            if test "$lane" = baseline; then root="$RUNNER_TEMP/foldcp-baseline"; else extra=(tests/test_managed_resume_admission.py); fi
+            set +e
+            (cd "$root/platform/api" && sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" \
+              _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
+              unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
+              timeout --signal=TERM --kill-after=15s 600s "$interpreter" -m pytest -q -o faulthandler_timeout=90 \
+              "${tests[@]}" "${extra[@]}" --junitxml="$RUNNER_TEMP/foldcp-evidence/$lane.xml")
+            code=$?
+            set -e
+            echo "$code" > "$RUNNER_TEMP/foldcp-evidence/$lane.exit"
+            if test "$code" -gt 1; then exit "$code"; fi
+          done
+      - name: Install the locked frontend workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/foldcp-tools" --ignore-scripts --no-audit --no-fund --package-lock=false pnpm@10.11.0
+          node "$RUNNER_TEMP/foldcp-tools/node_modules/pnpm/bin/pnpm.cjs" --filter frontend... install --frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.manage-package-manager-versions=false
+      - name: Mounted approval and submission regressions
+        working-directory: platform/frontend
+        shell: bash
+        run: |
+          set +e
+          node "$RUNNER_TEMP/foldcp-tools/node_modules/pnpm/bin/pnpm.cjs" exec vitest run --config vitest.md.config.ts \
+            tests/vitest/foldCpPlacementMounted.test.tsx tests/vitest/remoteAdmissionMounted.test.tsx \
+            tests/vitest/remoteCloseFollowonMounted.test.tsx tests/vitest/remoteExecutionSurfaces.test.tsx \
+            tests/vitest/executionPolicyMounted.test.tsx tests/vitest/independentProvisionMounted.test.tsx \
+            --reporter=default --reporter=junit --outputFile="$RUNNER_TEMP/foldcp-evidence/frontend.xml"
+          code=$?
+          echo "$code" > "$RUNNER_TEMP/foldcp-evidence/frontend.exit"
+          exit 0
+      - name: Require no new failures and a valid source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, xml.etree.ElementTree as ET
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'foldcp-evidence'
+          def read(name):
+              root = ET.parse(evidence / (name + '.xml')).getroot()
+              rows = list(root.iter('testcase'))
+              assert rows, f'no cases in {name}'
+              failures = {(r.get('classname', ''), r.get('name', '')): (r.find('failure').get('message', '') if r.find('failure') is not None else r.find('error').get('message', '')) for r in rows if r.find('failure') is not None or r.find('error') is not None}
+              skips = [(r.get('classname'), r.get('name')) for r in rows if r.find('skipped') is not None]
+              return rows, failures, skips
+          baseline, old, old_skips = read('baseline')
+          candidate, new, new_skips = read('candidate')
+          frontend, front_bad, front_skips = read('frontend')
+          added_failures = {key: value for key, value in new.items() if key not in old or old[key] != value}
+          result = dict(baseline_cases=len(baseline), candidate_cases=len(candidate), frontend_cases=len(frontend), baseline_failures=[list(k) for k in old], candidate_failures=[list(k) for k in new], new_failures=[list(k) for k in added_failures], baseline_skips=old_skips, candidate_skips=new_skips, frontend_skips=front_skips, frontend_failures=[list(k) for k in front_bad])
+          (evidence / 'comparison.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          assert not added_failures and not front_bad
+          assert len(candidate) >= len(baseline) + 38
+          assert (evidence / 'frontend.exit').read_text().strip() == '0'
+          assert (evidence / 'updater-authority.json').exists()
+          PY
+          git diff --exit-code
+          git diff --check "$BASE..HEAD"
+      - name: Publish only the secondary review branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TARGET" = test-fold-cp-launch-fixes-20260921
+          test -z "$(git ls-remote https://github.com/MolBioFreak/BioModStack.git "refs/heads/$TARGET")"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push https://github.com/MolBioFreak/BioModStack.git "HEAD:refs/heads/$TARGET"
+          remote="$(git ls-remote https://github.com/MolBioFreak/BioModStack.git "refs/heads/$TARGET" | cut -f1)"
+          test "$remote" = "$(git rev-parse HEAD)"
+          printf '%s\n' "$remote" > "$RUNNER_TEMP/foldcp-evidence/published.txt"
+      - name: Retain exact source and test evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fold-cp-launch-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/foldcp-evidence/
+          retention-days: 14
+          if-no-files-found: error
