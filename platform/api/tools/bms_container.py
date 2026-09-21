@@ -172,7 +172,10 @@ def sif_partition_offset(fd, read=None):
 def extract_sif(fd, destination):
     source = f'/proc/self/fd/{fd}'
     offset = sif_partition_offset(fd)
-    subprocess.run(['unsquashfs', '-no-progress', '-processors', '2', '-d', str(destination), '-o', offset, source],
+    # An image extraction is the slowest single pass of a first execution. Use the
+    # host's own share of cores (80%) instead of a hardcoded 2.
+    workers = str(views.parallel_workers())
+    subprocess.run(['unsquashfs', '-no-progress', '-processors', workers, '-d', str(destination), '-o', offset, source],
                    check=True, pass_fds=(fd,), stdout=sys.stderr)
 
 
