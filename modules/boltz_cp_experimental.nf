@@ -167,7 +167,7 @@ from lib.portable_inputs import bind_native_document
 root, original = Path(sys.argv[2]), Path(sys.argv[3]).resolve()
 files = sorted(root.rglob('*.yaml')) + sorted(root.rglob('*.yml')) if root.is_dir() else [root]
 for path in files:
-    owner = original / path.relative_to(root) if root.is_dir() else original
+    owner = original / (path.relative_to(root) if root.is_dir() else path.name)
     document = yaml.safe_load(path.read_text())
     bound = bind_native_document(document, 'boltz-yaml', owner=owner)
     path.write_text(yaml.safe_dump(bound, sort_keys=False))
