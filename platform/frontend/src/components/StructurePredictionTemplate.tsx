@@ -419,8 +419,19 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         navigate(await completeCurrentLaunchContext(jobResponse as UntypedApiValue) ?? '/');
     };
 
+    const [launchError, setLaunchError] = useState<string | null>(null);
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
+        // A refused launch must say why: a silent rejection leaves the operator
+        // pressing a button that appears to do nothing.
+        onError: (error: UntypedApiValue) => {
+            const detail = error?.response?.data?.detail;
+            setLaunchError(
+                typeof detail === 'string'
+                    ? detail
+                    : detail?.message || error?.message || 'The launch request was refused by the API.'
+            );
+        },
         onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             await navigateAfterSubmission(response.data);
@@ -1234,6 +1245,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             return;
         }
 
+        setLaunchError(null);
         submitMutation.mutate(submission.jobRequest);
 
         // Treat force-refresh as a one-shot action to avoid accidental cache-bypass on reruns.
@@ -2653,6 +2665,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 />
 
                 {/* Submit */}
+                {launchError && (
+                    <p role="alert" className="mb-3 rounded-lg border border-red-500/40 bg-red-950/40 p-3 text-sm text-red-100">
+                        {launchError}
+                    </p>
+                )}
                 <div className={`flex ${isBoltzApi ? 'justify-end' : 'justify-between'} items-center pt-6 border-t border-slate-800`}>
                     {/* Left side: managed post-prediction analysis and retry policy */}
                     {!isBoltzApi && <div className="flex flex-wrap items-start gap-5">

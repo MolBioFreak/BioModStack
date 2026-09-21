@@ -120,3 +120,21 @@ it('local explicit GPU selection is preserved', async () => {
     expect(preview().params).toMatchObject({ bcp_gpu_ids: '9', bcp_size_cp: 1, pinned_gpus: [9] });
     expect(reads).toEqual([]);
 });
+it('states why a launch was refused instead of appearing to do nothing', async () => {
+    await mount(fixture, 'vast:one');
+    await sample(telemetry('vast:one'));
+    const passthrough = api.defaults.adapter;
+    // The API refuses remote submissions without a matching preview approval; the
+    // operator must see that reason rather than a button that silently did nothing.
+    api.defaults.adapter = async config => {
+        if (config.method === 'post') {
+            throw Object.assign(new Error('Request failed with status code 409'), {
+                isAxiosError: true,
+                response: { status: 409, data: { detail: 'Remote submission requires explicit execution-plan preview approval' } },
+            });
+        }
+        return passthrough(config);
+    };
+    await click('Launch Prediction');
+    expect(text(renderer.root)).toContain('Remote submission requires explicit execution-plan preview approval');
+});
