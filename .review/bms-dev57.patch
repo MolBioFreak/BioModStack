@@ -1,0 +1,296 @@
+diff --git a/biomodstack_msa_api.py b/biomodstack_msa_api.py
+index 0c65209..797a290 100644
+--- a/biomodstack_msa_api.py
++++ b/biomodstack_msa_api.py
+@@ -182,8 +182,16 @@ def effective_settings(provider: str, settings: dict, sequences: list[str]) -> d
+     else:
+         defaults = dict(coverage=35, identity_threshold=50, max_sequences=1000000,
+                         force_uppercase=False, pad_sequences=False, pairing_mode="unpaired")
+-    if set(settings) - set(defaults):
+-        raise MSAAPIError("unsupported scientific setting keys")
++    unsupported = set(settings) - set(defaults)
++    if unsupported:
++        # Report setting names, never values, paths or credential contents.
++        # Bound/validate labels so arbitrary dict keys cannot inject UI/log text.
++        names = sorted(key if isinstance(key, str)
++                       and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", key)
++                       else "<invalid setting key>" for key in unsupported)
++        suffix = f" (+{len(names) - 16} more)" if len(names) > 16 else ""
++        raise MSAAPIError("unsupported scientific setting keys: "
++                          + ", ".join(names[:16]) + suffix)
+     result = {**defaults, **settings}
+     for key, default in defaults.items():
+         if isinstance(default, bool) and type(result[key]) is not bool:
+diff --git a/docs/plans/bms-dev57-msa-provider-settings.md b/docs/plans/bms-dev57-msa-provider-settings.md
+new file mode 100644
+index 0000000..b290fa2
+--- /dev/null
++++ b/docs/plans/bms-dev57-msa-provider-settings.md
+@@ -0,0 +1,76 @@
++# BMS-DEV-57: scientific-only MSA provider settings
++
++Base: `test@6438833c044a63ae67120fb023d81f7c4e2c9a56`.
++Scope: fix the shared launcher-to-provider scientific-settings projection and
++make closed-schema refusals actionable. No provider, worker or scientific run is
++part of the offline verification. No inference or transport settings are changed.
++
++## Reproduction and correction
++
++The reported launcher payload contains five ColabFold scientific aliases and
++three transport keys: `colabfold_api_host`, `colabfold_api_min_interval`, and
++`colabfold_api_poll_interval`. The baseline projection admits all eight, retaining
++the three transport names unchanged. `validate_settings('colabfold_api', ...)`
++then refuses them. The Neurosnap projection and validation succeed on the same
++mixed payload.
++
++`provider_settings()` now selects exact membership in the existing five-alias
++map, not every key beginning with `colabfold_`. The existing Neurosnap field set,
++provider-specific exclusion, defaults and typed argv conversion are unchanged.
++ColabFold's scientific values (including false booleans and nondefault pairing)
++are retained; unsupported scientific values are still rejected by the validator.
++Other ColabFold transport, inference, path, credential and future undeclared keys
++do not enter provider settings, HTTP scientific fields or cache identity.
++
++The closed schema remains closed. Neither provider's defaults or accepted
++scientific keys are expanded. Direct invalid settings still raise `MSAAPIError`,
++now naming the offending keys in sorted order without their values. For safe UI
++and log presentation, only identifier-shaped names up to 80 characters are
++shown; malformed/oversized labels are redacted. At most 16 labels are shown,
++with an explicit remaining count. Normal field names are not redacted.
++
++Example direct refusal (passing transport keys directly to the validator):
++
++```text
++unsupported scientific setting keys: colabfold_api_host, colabfold_api_min_interval, colabfold_api_poll_interval
++```
++
++## Verification
++
++`test_msa_provider_projection.py` exercises both providers with mixed launcher
++parameters and argv-style values, the exact reported payload, every ColabFold
++scientific mapping, invalid scientific booleans, undeclared prefixed keys,
++provider request-identity invariance, and actual preparation forwarding with
++only the provider/cache IO boundary doubled. It checks named refusals, omission
++of values, bounded diagnostics and input immutability. No provider call is made.
++
++From `platform/api`, use the repository's locked environment and default network
++isolation, retaining JUnit case identities and failure/skip counts:
++
++```bash
++uv run --frozen --group dev python -m pytest -q \
++  tests/test_msa_provider_projection.py \
++  tests/test_msa_provider_setup.py \
++  tests/test_msa_provider_controls.py \
++  tests/test_model_msa_handoff.py \
++  tests/test_fold_cp_input_msa_metadata.py \
++  tests/test_msa_bundle_integration.py \
++  tests/test_msa_controller_handoff.py \
++  tests/test_msa_policy_saved_admission.py \
++  tests/test_ngs_molbio_runtime_record_builder.py \
++  ../../tests/test_msa_api_client.py \
++  --junitxml=/tmp/bms-dev57.xml
++```
++
++Run the two-provider reproduction on the parent and bound candidate; require
++ColabFold to validate after projection, Neurosnap to remain identical, and direct
++invalid settings to retain refusal with named keys. Generate the runtime source
++record from the final record-free committed archive and raw commit object, then
++commit the record separately and require the updater validator to accept that
++exact final revision. Do not publish a record-free tip to canonical `test`.
++
++BMS-DEV-53/54/55 fixes are preserved, not reopened. BMS-DEV-56 remains open and
++untouched: absent status, idle GPUs, or an absent supervisor do not authorize
++attempt retirement or ownership release. This patch is not a live launch,
++provider-acceptance or cancellation-recovery claim. A subsequent supervised
++launcher attempt must confirm the reported pre-job refusal is gone.
+diff --git a/platform/api/services/msa_provider_setup.py b/platform/api/services/msa_provider_setup.py
+index a558d48..a1e176b 100644
+--- a/platform/api/services/msa_provider_setup.py
++++ b/platform/api/services/msa_provider_setup.py
+@@ -37,8 +37,10 @@ identity or HTTP fields. Each provider validates its own closed settings schema.
+ """
+     aliases = {f"colabfold_{key}": key for key in (
+         "use_env", "use_filter", "use_templates", "pairing_mode", "pairing_strategy")}
++    # A shared launcher also carries transport/inference colabfold_* keys.
++    # Only the five declared scientific aliases belong in provider identity.
+     result = {aliases.get(key, key): value for key, value in params.items()
+-              if key in NEUROSNAP_FIELDS or key.startswith("colabfold_")}
++              if key in NEUROSNAP_FIELDS or key in aliases}
+     # Nextflow argv parsing yields strings; restore the same typed identity as
+     # browser/API JSON, rejecting unknown representations rather than truthiness.
+     for key in ("use_env", "use_filter", "use_templates",
+diff --git a/platform/api/tests/test_msa_provider_projection.py b/platform/api/tests/test_msa_provider_projection.py
+new file mode 100644
+index 0000000..36677e6
+--- /dev/null
++++ b/platform/api/tests/test_msa_provider_projection.py
+@@ -0,0 +1,169 @@
++"""BMS-DEV-57: real provider projection/validation, no provider IO or launch."""
++from copy import deepcopy
++
++import pytest
++
++from services import msa_preparation as preparation
++from services import msa_provider_setup as setup
++import biomodstack_msa_api as api
++
++
++COLABFOLD = {
++    'colabfold_use_env': True,
++    'colabfold_use_filter': True,
++    'colabfold_use_templates': False,
++    'colabfold_pairing_mode': 'unpaired',
++    'colabfold_pairing_strategy': 'greedy',
++}
++NEUROSNAP = {
++    'msa_neurosnap_coverage_percent': 35,
++    'msa_neurosnap_identity_percent': 50,
++    'msa_neurosnap_max_sequences': 1000,
++    'msa_neurosnap_force_uppercase': False,
++    'msa_neurosnap_pad_sequences': False,
++}
++TRANSPORT = {
++    'colabfold_api_host': 'https://api.colabfold.com',
++    'colabfold_api_min_interval': 1.0,
++    'colabfold_api_poll_interval': 5.0,
++}
++LAUNCHER = {
++    **COLABFOLD, **NEUROSNAP, **TRANSPORT,
++    'colabfold_model_type': 'auto',
++    'colabfold_num_recycle': 3,
++    'colabfold_cache_dir': '/not-a-provider-setting',
++    'colabfold_api_token': 'SECRET-TRANSPORT-VALUE',
++    'colabfold_future_transport_option': 'SECRET-FUTURE-VALUE',
++    'msa_cache_dir': '/not-authoritative',
++    'credential_file': '/not-a-credential',
++    'bcp_num_gpus': 4,
++}
++EXPECTED = {
++    'colabfold_api': {key.removeprefix('colabfold_'): value for key, value in COLABFOLD.items()},
++    'neurosnap_api': NEUROSNAP,
++}
++
++
++@pytest.mark.parametrize('provider', setup.PROVIDERS)
++@pytest.mark.parametrize('argv_strings', [False, True])
++def test_launcher_projection_stays_in_each_providers_closed_schema(provider, argv_strings):
++    params = deepcopy(dict(LAUNCHER, msa_provider=provider))
++    if argv_strings:
++        params = {key: str(value).lower() if isinstance(value, bool)
++                  else str(value) if isinstance(value, (int, float)) else value
++                  for key, value in params.items()}
++    before = deepcopy(params)
++    settings = setup.provider_settings(params)
++    assert params == before
++    assert settings == EXPECTED[provider]
++    effective = api.validate_settings(provider, settings)
++    # Ask the existing validator for its expanded schema; do not add defaults.
++    assert set(effective) == set(api.validate_settings(provider, {}))
++    assert effective == api.validate_settings(provider, EXPECTED[provider])
++    assert not set(settings).intersection(TRANSPORT)
++    assert 'SECRET' not in repr(settings)
++
++
++@pytest.mark.parametrize('key', list(TRANSPORT) + [
++    'colabfold_model_type', 'colabfold_num_recycle', 'colabfold_api_token',
++    'colabfold_cache_dir', 'colabfold_future_transport_option',
++])
++def test_non_scientific_colabfold_keys_do_not_enter_the_projection(key):
++    params = dict(COLABFOLD, msa_provider='colabfold_api')
++    params[key] = 'SECRET-UNVALIDATED-NONSCIENTIFIC-VALUE'
++    settings = setup.provider_settings(params)
++    assert settings == EXPECTED['colabfold_api']
++    api.validate_settings('colabfold_api', settings)
++
++
++def test_exact_reported_colabfold_regression_and_neurosnap_control():
++    params = {**COLABFOLD, **TRANSPORT, **{key: value for key, value in NEUROSNAP.items()
++              if key not in {'msa_neurosnap_force_uppercase', 'msa_neurosnap_pad_sequences'}}}
++    for provider in setup.PROVIDERS:
++        settings = setup.provider_settings(dict(params, msa_provider=provider))
++        expected = (EXPECTED[provider] if provider == 'colabfold_api' else
++                    {key: params[key] for key in setup.NEUROSNAP_FIELDS if key in params})
++        assert settings == expected
++        assert api.validate_settings(provider, settings) == api.validate_settings(provider, EXPECTED[provider])
++
++
++@pytest.mark.parametrize('key,value', [
++    ('colabfold_use_env', False), ('colabfold_use_filter', False),
++    ('colabfold_use_templates', True), ('colabfold_pairing_mode', 'unpaired_paired'),
++    ('colabfold_pairing_strategy', 'complete'),
++])
++def test_all_five_scientific_values_survive_without_silent_defaulting(key, value):
++    params = dict(COLABFOLD, msa_provider='colabfold_api', **TRANSPORT)
++    params[key] = value
++    settings = setup.provider_settings(params)
++    assert settings == {**EXPECTED['colabfold_api'], key.removeprefix('colabfold_'): value}
++    if key == 'colabfold_use_templates':
++        # Preserve the validator's existing unsupported-template refusal.
++        with pytest.raises(api.MSAAPIError, match='template retrieval is not supported'):
++            api.validate_settings('colabfold_api', settings)
++    else:
++        assert api.validate_settings('colabfold_api', settings)[key.removeprefix('colabfold_')] == value
++
++
++@pytest.mark.parametrize('key', ['colabfold_use_env', 'colabfold_use_filter', 'colabfold_use_templates'])
++def test_invalid_scientific_booleans_are_still_refused(key):
++    with pytest.raises(ValueError, match='Invalid boolean MSA setting'):
++        setup.provider_settings(dict(LAUNCHER, msa_provider='colabfold_api', **{key: 'maybe'}))
++
++
++@pytest.mark.parametrize('provider', setup.PROVIDERS)
++def test_transport_does_not_change_provider_request_identity(tmp_path, provider):
++    client = api.MSAClient(config=api.ClientConfig(controller_root=tmp_path / 'authority'))
++    params = dict(COLABFOLD, **NEUROSNAP, msa_provider=provider)
++    clean = setup.provider_settings(params)
++    transported = setup.provider_settings(dict(params, **TRANSPORT))
++    sequences = ['ACDEFGHIKLMNPQRSTVWYA']
++    assert client._identity(sequences, provider, clean) == client._identity(sequences, provider, transported)
++    assert not (tmp_path / 'authority').exists()
++
++
++@pytest.mark.parametrize('provider', setup.PROVIDERS)
++def test_preparation_forwards_only_valid_science_with_launcher_transport(tmp_path, monkeypatch, provider):
++    captured = []
++    def cache_lookup(**kwargs):
++        captured.append(kwargs)
++        assert kwargs['provider'] == provider
++        assert kwargs['settings'] == EXPECTED[provider]
++        api.validate_settings(provider, kwargs['settings'])
++        assert kwargs['cache_only'] is True
++        return {'offline_fixture': True}
++    monkeypatch.setattr(api, 'prepare_msa', cache_lookup)
++    monkeypatch.setattr(setup, 'cache_root', lambda: tmp_path / 'not-created')
++    monkeypatch.setattr(setup, 'credential_file', lambda: None)
++    result = preparation.prepare_model_msa(sequences=['ACDEFGHIKLMNPQRSTVWYA'],
++        params=dict(LAUNCHER, msa_provider=provider, msa_cache_only=True))
++    assert result == {'offline_fixture': True}
++    assert len(captured) == 1 and not (tmp_path / 'not-created').exists()
++
++
++@pytest.mark.parametrize('provider', setup.PROVIDERS)
++def test_closed_validator_names_offending_keys_but_not_values(provider):
++    with pytest.raises(api.MSAAPIError) as caught:
++        api.validate_settings(provider, {
++            'colabfold_api_poll_interval': 'SECRET-POLL',
++            'colabfold_api_host': 'https://private.invalid/?token=SECRET-HOST',
++            'colabfold_api_min_interval': 'SECRET-MIN',
++        })
++    assert str(caught.value) == ('unsupported scientific setting keys: colabfold_api_host, '
++        'colabfold_api_min_interval, colabfold_api_poll_interval')
++    assert 'SECRET' not in str(caught.value) and 'private.invalid' not in str(caught.value)
++
++
++@pytest.mark.parametrize('key', ['bad\nkey', 'https://private.invalid/?token=SECRET', 'x' * 1000, 42])
++def test_unsupported_key_labels_are_bounded_and_not_raw_ui_text(key):
++    with pytest.raises(api.MSAAPIError) as caught:
++        api.validate_settings('colabfold_api', {key: 'SECRET-VALUE'})
++    assert str(caught.value) == 'unsupported scientific setting keys: <invalid setting key>'
++
++
++def test_many_unsupported_keys_have_bounded_sorted_diagnostics():
++    settings = {f'unknown_{i:03d}': 'SECRET-VALUE' for i in reversed(range(100))}
++    with pytest.raises(api.MSAAPIError) as caught:
++        api.validate_settings('colabfold_api', settings)
++    assert str(caught.value) == ('unsupported scientific setting keys: '
++        + ', '.join(f'unknown_{i:03d}' for i in range(16)) + ' (+84 more)')

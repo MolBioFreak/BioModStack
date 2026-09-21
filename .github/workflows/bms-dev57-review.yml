@@ -1,0 +1,56 @@
+name: BMS-DEV-57 isolated review
+on:
+  push:
+    branches: [review-build/bms-dev57-msa-provider-settings]
+  workflow_dispatch:
+# The token is exposed only to the final, explicitly named review-branch push.
+# No worker, provider secrets, canonical test/main mutation, or deployment step.
+permissions:
+  contents: write
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.12.17'
+          python-version: '3.12'
+          enable-cache: false
+      - name: Assemble pinned source repair without changing canonical branches
+        run: python3 .review/build_dev57.py assemble
+      - name: Install the unchanged locked API environment
+        run: cd "$RUNNER_TEMP/bms-dev57/candidate/platform/api" && uv sync --frozen --group dev
+      - name: Freeze and generate canonical runtime source binding
+        run: python3 .review/build_dev57.py bind
+      - name: Verify baseline, regression detection, candidate and updater authority
+        run: python3 .review/build_dev57.py verify
+      - name: Publish only the verified secondary branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/bms-dev57/candidate"
+          verified="$(cat "$RUNNER_TEMP/bms-dev57/evidence/verified.txt")"
+          test "$(git -C "$candidate" rev-parse HEAD)" = "$verified"
+          test -z "$(git -C "$candidate" status --porcelain)"
+          branch='test-bms-dev57-msa-provider-settings'
+          test -z "$(git -C "$candidate" ls-remote origin "refs/heads/$branch")"
+          header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -C "$candidate" -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $header" \
+            push origin "HEAD:refs/heads/$branch"
+          test "$(git -C "$candidate" ls-remote origin "refs/heads/$branch" | cut -f1)" = "$verified"
+          printf '%s\n' "$verified" > "$RUNNER_TEMP/bms-dev57/evidence/published.txt"
+      - name: Preserve source and case-level evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bms-dev57-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/bms-dev57/evidence/
+          retention-days: 14
+          if-no-files-found: error
