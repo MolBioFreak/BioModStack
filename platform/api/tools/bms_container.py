@@ -37,7 +37,18 @@ import bms_remote_worker as owner
 LOOPBACK_HOSTS = '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n'
 
 
-def name_resolution_bindings(private, resolver=None):
+def hosts_file_content(hostname=None):
+    """Name resolution content for one execution container.
+
+    The container's own hostname is mapped too: torch's rendezvous endpoint is
+    built from the host name when the supervisor sets no MASTER_ADDR, and a name
+    that resolves nowhere fails the run the same way `localhost` did.
+    """
+    hostname = os.uname().nodename if hostname is None else hostname
+    return LOOPBACK_HOSTS + '127.0.0.1 ' + hostname + '\n'
+
+
+def name_resolution_bindings(private, resolver=None, hostname=None):
     """Give the container working name resolution.
 
     udocker runs with --nosysdirs, which leaves /etc/hosts and /etc/resolv.conf
@@ -48,7 +59,7 @@ def name_resolution_bindings(private, resolver=None):
     carries configuration. No host hosts/resolver content is copied otherwise.
     """
     hosts = private / 'etc-hosts'
-    hosts.write_text(LOOPBACK_HOSTS)
+    hosts.write_text(hosts_file_content(hostname))
     hosts.chmod(0o444)
     bindings = [(str(hosts), '/etc/hosts')]
     resolver = Path('/etc/resolv.conf') if resolver is None else Path(resolver)

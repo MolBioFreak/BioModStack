@@ -1,11 +1,13 @@
 """Name resolution must work inside an execution container.
 
 udocker runs with --nosysdirs, so the container's /etc/hosts and /etc/resolv.conf
-are empty placeholders. torch.distributed.run --standalone rendezvouses on
-localhost, fails with `gai error: -3 Temporary failure in name resolution`, and
-no rank is ever started — the GPUs stay idle while the workflow burns its budget.
+are empty placeholders. torch.distributed.run --standalone rendezvouses by name,
+fails with `gai error: -3 Temporary failure in name resolution` — or, once
+localhost resolves, on the container's own hostname — and no rank is ever
+started: the GPUs stay idle while the workflow burns its budget.
 """
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -17,16 +19,24 @@ spec.loader.exec_module(driver)
 
 
 def test_container_gets_a_generated_loopback_hosts_file(tmp_path):
-    bindings = driver.name_resolution_bindings(tmp_path)
+    bindings = driver.name_resolution_bindings(tmp_path, hostname='worker-1')
     assert bindings[0][1] == '/etc/hosts'
     source = Path(bindings[0][0])
     # Generated for this execution, never the host's own hosts file.
     assert source.parent == tmp_path
-    assert source.read_text() == driver.LOOPBACK_HOSTS
+    assert source.read_text() == driver.hosts_file_content('worker-1')
     lines = source.read_text().splitlines()
     assert lines[0] == '127.0.0.1 localhost'
     assert lines[1].startswith('::1 localhost')
     assert source.stat().st_mode & 0o222 == 0
+
+
+def test_generated_hosts_maps_the_container_own_hostname(tmp_path):
+    # The rendezvous endpoint is the host name when no MASTER_ADDR is set, so the
+    # container's own name must resolve to loopback too.
+    assert '127.0.0.1 %s\n' % os.uname().nodename in driver.hosts_file_content()
+    bindings = driver.name_resolution_bindings(tmp_path, hostname='6db20091e47e')
+    assert '127.0.0.1 6db20091e47e\n' in Path(bindings[0][0]).read_text()
 
 
 def test_host_resolver_is_bound_only_when_configured(tmp_path):
