@@ -2153,8 +2153,11 @@ async def _prove_pull_endpoint(session, job, *, diagnostics=False):
             or dict((job.provenance or {}).get("remote_execution_receipt") or {}) != receipt_snapshot
             or (target.host, target.port, target.username, target.provider_instance_id) != endpoint):
         raise RemoteExecutionError("Result source changed during provider verification")
+    advertised = {(instance.host, instance.port)}
+    advertised.update((endpoint.host, endpoint.port)
+                      for endpoint in (getattr(instance, 'ssh_endpoints', None) or ()))
     if (instance.provider_state not in RUNNING_PROVIDER_STATES
-            or (instance.host, instance.port) != (target.host, target.port)):
+            or (target.host, target.port) not in advertised):
         raise RemoteExecutionError("Current provider endpoint does not match the result source")
     receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
     if (receipt.get("attempt_id") != str(job.remote_attempt_id)
