@@ -26,6 +26,52 @@ BATCH_BYTES = 256 * 1024 * 1024
 HF_MIN_BYTES = 8 * 1024 * 1024
 
 
+def _concurrency(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# Staging is latency-bound, not bandwidth-bound. The measured lane moved 2,048
+# small files per batch at ~34 files/s because each batch waited on four
+# sequential remote round trips, and a probe sweep of the shared weight tree
+# needed one round trip per 2,048 objects. Independent batches and probe pages
+# now run concurrently, bounded so a worker is never asked to run more helper
+# processes at once than it can hash for. Every batch keeps its own operation
+# id, incoming directory and lock set, so concurrency does not share state.
+PROBE_CONCURRENCY = _concurrency('BMS_CACHE_PROBE_CONCURRENCY', 8)
+TRANSFER_CONCURRENCY = _concurrency('BMS_CACHE_TRANSFER_CONCURRENCY', 6)
+MATERIALIZE_CONCURRENCY = _concurrency('BMS_CACHE_MATERIALIZE_CONCURRENCY', 4)
+
+
+def _stage_error(error: BaseException) -> BaseException:
+    while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:
+        error = error.exceptions[0]
+    return error
+
+
+async def _bounded_group(items, worker):
+    """Run independent staging units concurrently, preserving caller contracts.
+
+    Each unit owns its own remote incoming directory and locks, so concurrency
+    never shares mutable worker state. A failure cancels the siblings (the group
+    does that) and the original exception type is re-raised, because callers
+    distinguish a fence failure, an SSH loss, a cancellation and a corrupt
+    ingest by type.
+    """
+    if not items:
+        return []
+    tasks = []
+    try:
+        async with asyncio.TaskGroup() as group:
+            for item in items:
+                tasks.append(group.create_task(worker(item)))
+    except BaseException as error:
+        raise _stage_error(error) from error
+    return [task.result() for task in tasks]
+
+
 async def _noop(*args, **kwargs):
     pass
 
@@ -101,10 +147,19 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     def key(entry):
         return (entry.role == 'image', entry.sha256)
     objects = tuple(unique.values())
-    for offset in range(0, len(objects), BATCH_COUNT):
-        batch = objects[offset:offset + BATCH_COUNT]
-        await report('checking', None, 'Verifying cached artifact batch')
-        response = await call({'action': 'probe', 'artifacts': [identity(entry) for entry in batch]})
+    probe_pages = [objects[offset:offset + BATCH_COUNT]
+                   for offset in range(0, len(objects), BATCH_COUNT)]
+    if probe_pages:
+        await report('checking', None,
+                     f'Verifying {len(objects)} cached artifact identities across {len(probe_pages)} page(s)')
+    probe_limit = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def probe_page(page):
+        async with probe_limit:
+            return await call({'action': 'probe',
+                               'artifacts': [identity(entry) for entry in page]})
+
+    for response in await _bounded_group(probe_pages, probe_page):
         states.update({(row.get('kind') == 'runtime_image', row['sha256']): row['state']
                        for row in response['artifacts']})
     # HF is a byte source, not a second registry. Verified worker hits remain
@@ -187,21 +242,36 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
                 activity[index]['state'] = 'verified'
 
     batch, size = [], 0
+    staged_plans: list[tuple[list, bool, bool]] = []
     for entry in objects:
         if states[key(entry)] == 'cache_hit':
             continue
         use_hf = hf_enabled and key(entry) in bulk
         direct = use_hf or entry.role == 'image' or entry.size_bytes > BATCH_BYTES
         if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
-            await transfer(batch)
+            staged_plans.append((batch, False, False))
             batch, size = [], 0
         if direct:
-            await transfer([entry], direct=True, use_hf=use_hf)
+            staged_plans.append(([entry], True, use_hf))
         else:
             batch.append(entry)
             size += entry.size_bytes
     if batch:
-        await transfer(batch)
+        staged_plans.append((batch, False, False))
+    if staged_plans:
+        await report('transferring', None,
+                     f'Transferring {len(staged_plans)} artifact batch(es), {TRANSFER_CONCURRENCY} at a time')
+    transfer_limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
+
+    async def run_plan(plan):
+        batch, direct, use_hf = plan
+        async with transfer_limit:
+            await transfer(batch, direct=direct, use_hf=use_hf)
+
+    # A fence failure or cancelled staging must not leave sibling batches
+    # running: the group cancels them, and each batch owns its own incoming
+    # directory so a partial one is never mistaken for evidence.
+    await _bounded_group(staged_plans, run_plan)
     receipts = []
     for index, entry in enumerate(artifacts):
         name = activity[index]['name']
@@ -210,20 +280,37 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     if track_artifacts:
         await report('verifying', None, 'Artifact cache identities verified')
     if materialize:
-        for offset in range(0, len(artifacts), 128):
-            batch = artifacts[offset:offset + 128]
-            await progress({'phase': 'verifying', 'artifact': None, 'message': 'Materializing verified artifact batch'})
-            await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
-                        'entries': [{'artifact': identity(entry),
-                                     'destination': entry.remote_destination, 'mode': entry.mode,
-                                     'aliases': list(entry.aliases), 'runtime_root': runtime_root} for entry in batch]})
-        for offset in range(0, len(links), 128):
-            await call({'action': 'materialize_links', 'destination_root': runtime_root,
-                        'entries': links[offset:offset + 128]})
-        for entry in artifacts:
-            if entry.role == 'source':
-                await call({'action': 'extract_source', 'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
+        materialize_batches = [artifacts[offset:offset + 128] for offset in range(0, len(artifacts), 128)]
+        if materialize_batches:
+            await progress({'phase': 'verifying', 'artifact': None,
+                            'message': f'Materializing {len(artifacts)} verified artifact(s) in {len(materialize_batches)} batch(es)'})
+        materialize_limit = asyncio.Semaphore(MATERIALIZE_CONCURRENCY)
+
+        async def materialize_batch(batch):
+            async with materialize_limit:
+                await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
+                            'entries': [{'artifact': identity(entry),
+                                         'destination': entry.remote_destination, 'mode': entry.mode,
+                                         'aliases': list(entry.aliases), 'runtime_root': runtime_root} for entry in batch]})
+
+        await _bounded_group(materialize_batches, materialize_batch)
+        link_batches = [links[offset:offset + 128] for offset in range(0, len(links), 128)]
+
+        async def materialize_link_batch(batch):
+            async with materialize_limit:
+                await call({'action': 'materialize_links', 'destination_root': runtime_root,
+                            'entries': list(batch)})
+
+        await _bounded_group(link_batches, materialize_link_batch)
+        source_entries = [entry for entry in artifacts if entry.role == 'source']
+
+        async def extract_source_entry(entry):
+            async with materialize_limit:
+                await call({'action': 'extract_source',
+                            'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
                             'destination': str(Path(entry.remote_destination).parent)})
+
+        await _bounded_group(source_entries, extract_source_entry)
     await check_fence()
     return receipts
 

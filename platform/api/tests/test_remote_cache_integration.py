@@ -193,12 +193,14 @@ async def test_warm_probe_and_materialize_use_bounded_batches(tmp_path, monkeypa
                                  operation_id=str(uuid.uuid4()), progress=progress,
                                  check_fence=cache._noop, materialize=True)
     assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [257]
-    assert [len(r['entries']) for r in calls if r['action'] == 'materialize_many'] == [128, 128, 1]
+    # Batches run concurrently now, so completion order is not an assertion;
+    # the batch composition still is.
+    assert sorted(len(r['entries']) for r in calls if r['action'] == 'materialize_many') == [1, 128, 128]
     assert len(calls) == 4
     assert events == ([{'phase': 'checking', 'artifact': None,
-                        'message': 'Verifying cached artifact batch'}]
+                        'message': 'Verifying 257 cached artifact identities across 1 page(s)'}]
                       + [{'phase': 'verifying', 'artifact': None,
-                          'message': 'Materializing verified artifact batch'}] * 3)
+                          'message': 'Materializing 257 verified artifact(s) in 3 batch(es)'}])
 
 
 @pytest.mark.parametrize('identity_matches', [True, False])
