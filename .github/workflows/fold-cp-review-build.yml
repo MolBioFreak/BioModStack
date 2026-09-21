@@ -13,6 +13,8 @@ jobs:
     env:
       BASE: 02a57a2fc0c3034dfa05b777e3a54c178f4a1b08
       TARGET: test-fold-cp-launch-fixes-20260921
+      NXF_VER: 25.10.1
+      NXF_DISABLE_CHECK_LATEST: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -47,7 +49,6 @@ jobs:
               response = json.loads(subprocess.check_output(['gh', 'api', f'repos/MolBioFreak/BioModStack/git/blobs/{blob}']))
               raw = base64.b64decode(response['content'])
               assert subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip() == blob
-              # Normalize a transported diff separator, then require exact local patch identity.
               raw = raw.replace(b'\n diff --git ', b'\ndiff --git ')
               assert subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip() == expected
               patch = evidence / f'{index:02d}.patch'
@@ -61,6 +62,22 @@ jobs:
       - name: Install the locked API environment
         working-directory: platform/api
         run: uv sync --frozen --group dev
+      - name: Provision the real pinned Nextflow tool before isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher="$HOME/.local/lib/nextflow/25.10.1/nextflow"
+          mkdir -p "$(dirname "$launcher")" "$RUNNER_TEMP/nextflow-download"
+          curl --fail --location --retry 2 --max-time 120 \
+            https://github.com/nextflow-io/nextflow/releases/download/v25.10.1/nextflow -o "$launcher"
+          echo "04cf76ee6bef9175273ea908d7ff0d5f82a7c5fd09e668248f56d376ed67ee11  $launcher" | sha256sum --check
+          chmod 755 "$launcher"
+          (cd "$RUNNER_TEMP/nextflow-download" && "$launcher" -version) | tee "$RUNNER_TEMP/foldcp-evidence/nextflow-version.txt"
+          sha256sum "$launcher" "$HOME/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar" > "$RUNNER_TEMP/foldcp-evidence/nextflow-sha256.txt"
+          echo "BMS_NEXTFLOW_BIN=$launcher" >> "$GITHUB_ENV"
+          echo "BMS_NEXTFLOW_VERSION=25.10.1" >> "$GITHUB_ENV"
+          echo "NXF_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "$(dirname "$launcher")" >> "$GITHUB_PATH"
       - name: Freeze and canonically rebind exact source
         shell: bash
         run: |
@@ -117,6 +134,7 @@ jobs:
             if test "$lane" = baseline; then root="$RUNNER_TEMP/foldcp-baseline"; else extra=(tests/test_managed_resume_admission.py); fi
             set +e
             (cd "$root/platform/api" && sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" \
+              BMS_NEXTFLOW_BIN="$BMS_NEXTFLOW_BIN" BMS_NEXTFLOW_VERSION="$BMS_NEXTFLOW_VERSION" NXF_OFFLINE=true NXF_DISABLE_CHECK_LATEST=true \
               _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
               unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
               timeout --signal=TERM --kill-after=15s 600s "$interpreter" -m pytest -q -o faulthandler_timeout=90 \
@@ -150,20 +168,28 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, pathlib, xml.etree.ElementTree as ET
+          import json, os, pathlib, re, xml.etree.ElementTree as ET
           evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'foldcp-evidence'
           def read(name):
               root = ET.parse(evidence / (name + '.xml')).getroot()
               rows = list(root.iter('testcase'))
               assert rows, f'no cases in {name}'
-              failures = {(r.get('classname', ''), r.get('name', '')): (r.find('failure').get('message', '') if r.find('failure') is not None else r.find('error').get('message', '')) for r in rows if r.find('failure') is not None or r.find('error') is not None}
+              failures = {}
+              for row in rows:
+                  problem = row.find('failure')
+                  if problem is None: problem = row.find('error')
+                  if problem is not None:
+                      message = problem.get('message', '')
+                      # Compare the same assertion, excluding only pytest's per-run temporary root.
+                      message = re.sub(r'/tmp/pytest-of-[^/]+/pytest-[0-9]+', '<pytest-root>', message)
+                      failures[(row.get('classname', ''), row.get('name', ''))] = message
               skips = [(r.get('classname'), r.get('name')) for r in rows if r.find('skipped') is not None]
               return rows, failures, skips
           baseline, old, old_skips = read('baseline')
           candidate, new, new_skips = read('candidate')
           frontend, front_bad, front_skips = read('frontend')
           added_failures = {key: value for key, value in new.items() if key not in old or old[key] != value}
-          result = dict(baseline_cases=len(baseline), candidate_cases=len(candidate), frontend_cases=len(frontend), baseline_failures=[list(k) for k in old], candidate_failures=[list(k) for k in new], new_failures=[list(k) for k in added_failures], baseline_skips=old_skips, candidate_skips=new_skips, frontend_skips=front_skips, frontend_failures=[list(k) for k in front_bad])
+          result = dict(baseline_cases=len(baseline), candidate_cases=len(candidate), frontend_cases=len(frontend), baseline_failures=[{'case': list(k), 'message': v} for k,v in old.items()], candidate_failures=[{'case': list(k), 'message': v} for k,v in new.items()], new_failures=[{'case': list(k), 'message': v} for k,v in added_failures.items()], baseline_skips=old_skips, candidate_skips=new_skips, frontend_skips=front_skips, frontend_failures=[list(k) for k in front_bad])
           (evidence / 'comparison.json').write_text(json.dumps(result, indent=2) + '\n')
           print(json.dumps(result, indent=2))
           assert not added_failures and not front_bad
