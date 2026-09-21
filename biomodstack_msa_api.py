@@ -182,8 +182,16 @@ def effective_settings(provider: str, settings: dict, sequences: list[str]) -> d
     else:
         defaults = dict(coverage=35, identity_threshold=50, max_sequences=1000000,
                         force_uppercase=False, pad_sequences=False, pairing_mode="unpaired")
-    if set(settings) - set(defaults):
-        raise MSAAPIError("unsupported scientific setting keys")
+    unsupported = set(settings) - set(defaults)
+    if unsupported:
+        # Report setting names, never values, paths or credential contents.
+        # Bound/validate labels so arbitrary dict keys cannot inject UI/log text.
+        names = sorted(key if isinstance(key, str)
+                       and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", key)
+                       else "<invalid setting key>" for key in unsupported)
+        suffix = f" (+{len(names) - 16} more)" if len(names) > 16 else ""
+        raise MSAAPIError("unsupported scientific setting keys: "
+                          + ", ".join(names[:16]) + suffix)
     result = {**defaults, **settings}
     for key, default in defaults.items():
         if isinstance(default, bool) and type(result[key]) is not bool:
