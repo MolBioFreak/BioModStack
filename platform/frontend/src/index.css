@@ -58,7 +58,7 @@
   --bg-gradient-to: #0b1020;
   --text-primary: #eef4ff;
   --text-secondary: #a6b3ca;
-  --text-muted: #71809b;
+  --text-muted: #939fb6;
   --accent-primary: #83a7ff;
   --accent-secondary: #b28cff;
   --accent-gradient-from: #759cff;
@@ -98,7 +98,7 @@
   --bg-gradient-to: #050607;
   --text-primary: #f3f6f9;
   --text-secondary: #9aa6b3;
-  --text-muted: #65717e;
+  --text-muted: #86909a;
   --accent-primary: #54d6bf;
   --accent-secondary: #62a8ff;
   --accent-gradient-from: #54d6bf;
@@ -139,7 +139,7 @@
   --bg-gradient-to: #ffffff;
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-muted: #5b677b;
   --accent-primary: #7c3aed;
   --accent-secondary: #db2777;
   --accent-gradient-from: #7c3aed;
@@ -154,6 +154,8 @@
   --error: #dc2626;
   --link: #2563eb;
   --link-hover: #1d4ed8;
+  --surface-control: #f8fafc;
+  --surface-control-strong: #e2e8f0;
 }
 
 /* Theme: Clean Light - Bright white with blue accents (no purple) */
@@ -166,7 +168,7 @@
   --bg-gradient-to: #f7f9fc;
   --text-primary: #172033;
   --text-secondary: #64718a;
-  --text-muted: #8b97aa;
+  --text-muted: #626d80;
   --accent-primary: #2768d8;
   --accent-secondary: #1598c8;
   --accent-gradient-from: #2768d8;
@@ -206,7 +208,7 @@
   --bg-gradient-to: #1e293b;
   --text-primary: #f1f5f9;
   --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
+  --text-muted: #c2cbd8;
   --accent-primary: #14b8a6;
   --accent-secondary: #22d3ee;
   --accent-gradient-from: #14b8a6;
@@ -221,6 +223,8 @@
   --error: #ef4444;
   --link: #38bdf8;
   --link-hover: #7dd3fc;
+  --surface-control: #334155;
+  --surface-control-strong: #475569;
 }
 
 /* Theme: Desert - Warm adobe parchment with clay and mineral accents */
@@ -233,7 +237,7 @@
   --bg-gradient-to: #eadfcd;
   --text-primary: #4b3626;
   --text-secondary: #6b5541;
-  --text-muted: #8a735d;
+  --text-muted: #6e5844;
   --accent-primary: #b26a3a;
   --accent-secondary: #ca9869;
   --accent-gradient-from: #aa6033;
@@ -248,6 +252,8 @@
   --error: #b3624a;
   --link: #5b7f72;
   --link-hover: #466459;
+  --surface-control: #eadfcd;
+  --surface-control-strong: #e2d5bf;
 }
 
 /* Theme: Solarized Dark - Classic developer color scheme */
@@ -260,7 +266,7 @@
   --bg-gradient-to: #002b36;
   --text-primary: #fdf6e3;
   --text-secondary: #93a1a1;
-  --text-muted: #657b83;
+  --text-muted: #9da9a7;
   --accent-primary: #268bd2;
   --accent-secondary: #2aa198;
   --accent-gradient-from: #268bd2;
@@ -275,6 +281,8 @@
   --error: #dc322f;
   --link: #268bd2;
   --link-hover: #6cb9e6;
+  --surface-control: #073642;
+  --surface-control-strong: #0a4050;
 }
 
 /* Theme: Nord - Arctic blue-gray palette */
@@ -287,7 +295,7 @@
   --bg-gradient-to: #2e3440;
   --text-primary: #eceff4;
   --text-secondary: #d8dee9;
-  --text-muted: #a0aec0;
+  --text-muted: #b4bfce;
   --accent-primary: #88c0d0;
   --accent-secondary: #81a1c1;
   --accent-gradient-from: #88c0d0;
@@ -302,6 +310,8 @@
   --error: #bf616a;
   --link: #88c0d0;
   --link-hover: #8fbcbb;
+  --surface-control: #3b4252;
+  --surface-control-strong: #434c5e;
 }
 
 /* Theme: Dracula - Gothic purple and pink */
@@ -314,7 +324,7 @@
   --bg-gradient-to: #282a36;
   --text-primary: #f8f8f2;
   --text-secondary: #bfbfbf;
-  --text-muted: #6272a4;
+  --text-muted: #b2b9cd;
   --accent-primary: #bd93f9;
   --accent-secondary: #ff79c6;
   --accent-gradient-from: #bd93f9;
@@ -329,6 +339,8 @@
   --error: #ff5555;
   --link: #8be9fd;
   --link-hover: #a4f0ff;
+  --surface-control: #343746;
+  --surface-control-strong: #44475a;
 }
 
 /* Theme: Forest - Deep woodland greens */
@@ -341,7 +353,7 @@
   --bg-gradient-to: #1a2418;
   --text-primary: #e8f4e5;
   --text-secondary: #b8d4b0;
-  --text-muted: #7a9c70;
+  --text-muted: #93b08b;
   --accent-primary: #4caf50;
   --accent-secondary: #81c784;
   --accent-gradient-from: #4caf50;
@@ -356,6 +368,8 @@
   --error: #e57373;
   --link: #81c784;
   --link-hover: #a5d6a7;
+  --surface-control: #253024;
+  --surface-control-strong: #324030;
 }
 
 /* Theme: Ember - Warm sunset oranges and reds */
@@ -383,6 +397,8 @@
   --error: #ff5252;
   --link: #ff9f68;
   --link-hover: #ffb88c;
+  --surface-control: #2d1c14;
+  --surface-control-strong: #3d281c;
 }
 
 /* Theme: Retro Terminal - CRT workstation with phosphor mint and amber */
@@ -395,7 +411,7 @@
   --bg-gradient-to: #101311;
   --text-primary: #e2eadf;
   --text-secondary: #a7b8aa;
-  --text-muted: #748477;
+  --text-muted: #839286;
   --accent-primary: #68e39b;
   --accent-secondary: #92f0bc;
   --accent-gradient-from: #54d58d;
@@ -410,6 +426,8 @@
   --error: #d97869;
   --link: #9de6d2;
   --link-hover: #c7f2e6;
+  --surface-control: #161b18;
+  --surface-control-strong: #202823;
 }
 
 /* Theme: Cyberpunk - Neon pink & cyan on deep purple */
@@ -422,7 +440,7 @@
   --bg-gradient-to: #0f0a1e;
   --text-primary: #f0abfc;
   --text-secondary: #e879f9;
-  --text-muted: #c026d3;
+  --text-muted: #d35be3;
   --accent-primary: #f0abfc;
   --accent-secondary: #22d3ee;
   --accent-gradient-from: #f0abfc;
@@ -437,6 +455,8 @@
   --error: #fb7185;
   --link: #22d3ee;
   --link-hover: #67e8f9;
+  --surface-control: #1a0f2e;
+  --surface-control-strong: #2d1b4e;
 }
 
 /* Theme: Ocean Depths - Deep blues with teal accents */
@@ -464,6 +484,8 @@
   --error: #f87171;
   --link: #38bdf8;
   --link-hover: #7dd3fc;
+  --surface-control: #0f2744;
+  --surface-control-strong: #1e3a5f;
 }
 
 } /* End @layer base */

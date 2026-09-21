@@ -34,6 +34,7 @@ export default defineConfig({
             './tests/vitest/scientificPairMatrixMounted.test.tsx',
             './tests/vitest/nativeAtomViewerMounted.test.tsx',
             './tests/vitest/nativeOpacityAdapter.test.ts',
+            './tests/vitest/themeContrast.test.ts',
             './tests/vitest/spatialTrackMounted.test.tsx',
             './tests/vitest/scientificViewerIdentity.test.ts',
             './tests/vitest/scientificViewerMounted.test.tsx',

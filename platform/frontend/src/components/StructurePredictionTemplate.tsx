@@ -1547,7 +1547,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                         </div>
                                         <div className="text-xs opacity-70">{pred.desc}</div>
                                         {pred.disabledReason && (
-                                            <div className="text-[11px] text-amber-300/80 mt-2 leading-snug">{pred.disabledReason}</div>
+                                            <div className="text-[11px] text-amber-200 mt-2 leading-snug">{pred.disabledReason}</div>
                                         )}
                                     </button>
                                 );
@@ -1556,7 +1556,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                     ) : (
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
                             <div className="font-medium">Fixed predictor</div>
-                            <div className="mt-1 text-xs text-orange-100/80">
+                            <div className="mt-1 text-xs text-orange-100">
                                 Fixed predictor variant.
                             </div>
                         </div>
@@ -1564,7 +1564,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                     {!resolvedPredictorSelection.valid && (
                         <div role="alert" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                             <div className="font-semibold">Retired historical predictor</div>
-                            <div className="mt-1 text-xs text-amber-100/80">{resolvedPredictorSelection.error}</div>
+                            <div className="mt-1 text-xs text-amber-100">{resolvedPredictorSelection.error}</div>
                         </div>
                     )}
                 </div>
@@ -1822,7 +1822,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                 )}
                             </div>
                         ) : (
-                            <p className="text-xs text-amber-300/80">
+                            <p className="text-xs text-amber-200">
                                 Import a shared target source or add an additional component to enable target conditioning.
                             </p>
                         )}
@@ -2041,7 +2041,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                         {isBoltzCpLaunch && (
                             <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
                                 <div>
-                                    <label className="text-xs text-orange-100/80 block mb-1">Context Parallel Size Request</label>
+                                    <label className="text-xs text-orange-100 block mb-1">Context Parallel Size Request</label>
                                     <input
                                         type="number"
                                         value={bcpRequestedSizeCp}
@@ -2390,7 +2390,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                                 className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                             />
                                         </div>
-                                        <p className="md:col-span-3 text-xs text-emerald-200/80">
+                                        <p className="md:col-span-3 text-xs text-emerald-200">
                                             Shards EnvDB for balanced/maximum runs. Fast screens quickly; Off is rollback/debug.
                                         </p>
                                     </div>
@@ -2610,7 +2610,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     />
                                     <div>
                                         <span className="text-emerald-300 font-medium">Use Existing Cache Only</span>
-                                        <p className="text-xs text-emerald-200/70">Skip MSA generation. Job fails if cache is missing.</p>
+                                        <p className="text-xs text-emerald-200">Skip MSA generation. Job fails if cache is missing.</p>
                                     </div>
                                 </label>
                                 {/* Force Refresh Toggle */}
@@ -2643,7 +2643,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     />
                                     <div>
                                         <span className="text-amber-300 font-medium">Allow Empty MSA Fallback</span>
-                                        <p className="text-xs text-amber-200/70">If chain MSA generation fails, continue with `msa: empty` instead of failing complex prep</p>
+                                        <p className="text-xs text-amber-200">If chain MSA generation fails, continue with `msa: empty` instead of failing complex prep</p>
                                     </div>
                                 </label>
                                 <div className="text-xs text-[var(--text-muted)] bg-[var(--bg-tertiary)] p-2 rounded">
