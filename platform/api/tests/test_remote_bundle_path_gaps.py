@@ -501,3 +501,97 @@ def test_prepared_cp_template_keeps_original_native_owner(roots, tmp_path, monke
     derived = portable.bind_native_document(yaml.safe_load(owner.read_bytes()), 'boltz-yaml', owner=owner)
     assert Path(derived['templates'][0]['cif']).read_bytes() == template.read_bytes()
     assert owner.read_bytes() == original == packaged.read_bytes() == native.read_bytes()
+
+
+@pytest.fixture
+def generated_cp_config(roots):
+    import json
+    import yaml
+    prepared = roots['results'] / 'fresh-job' / 'prepared-msa'
+    prepared.mkdir(parents=True)
+    config = prepared / 'boltz_cp_input.yaml'
+    template = prepared / 'template.cif'
+    template.write_bytes(b'prepared template fixture')
+    config.write_text(yaml.safe_dump({
+        'sequences': [{'protein': {'id': 'A', 'sequence': 'AAAA', 'msa': 'empty'}}],
+        'templates': [{'cif': 'template.cif'}],
+    }))
+    manifest = prepared / 'msa-inputs.json'
+    value = {'schema': 'bms.boltz-cp-msa-inputs.v1', 'configs': [{
+        'path': config.name, 'sha256': bundle._sha256_file(config),
+        'source_sha256': 'a' * 64, 'chains': [],
+    }]}
+    manifest.write_text(json.dumps(value))
+    params = {'bcp_input_path': str(prepared),
+              'boltz_prepared_msa_sha256': bundle._sha256_file(manifest)}
+    def discover(requested=None):
+        invocation = NativeInvocation.capture(model_id='boltz_cp_experimental', mode='predict',
+            command=['nextflow'], requested=requested or {'sequence': 'AAAA'}, effective=params,
+            native_parameters=params, entrypoint='boltz_cp_experimental.nf')
+        refs = []
+        assets = bundle._input_assets(params, native_invocation=invocation,
+            repo_root=roots['repo'], runtime_paths=set(), output_dir=prepared.parent,
+            references=refs)
+        return assets, refs
+    return prepared, config, manifest, value, params, discover
+
+
+def test_generated_cp_config_is_owned_by_the_prepared_root(generated_cp_config):
+    prepared, config, _, _, _, discover = generated_cp_config
+    assets, refs = discover()
+    assert assets and {row['source_path'] for row in refs} >= {
+        str(config), str(prepared / 'template.cif')}
+    assert next(row for row in refs if row['source_path'] == str(prepared / 'template.cif'))['owner'] == str(config)
+
+
+@pytest.mark.parametrize('fault', ['config_bytes', 'manifest_bytes', 'missing_config',
+    'absolute_config', 'traversal_config', 'empty_config', 'config_symlink', 'manifest_symlink'])
+def test_prepared_cp_config_identity_and_containment_remain_closed(generated_cp_config, fault):
+    import json
+    prepared, config, manifest, value, params, discover = generated_cp_config
+    if fault == 'config_bytes':
+        config.write_text('sequences: []')
+    elif fault == 'manifest_bytes':
+        manifest.write_text('{}')
+    elif fault == 'missing_config':
+        config.unlink()
+    elif fault in {'absolute_config', 'traversal_config', 'empty_config'}:
+        value['configs'][0]['path'] = {'absolute_config': str(config),
+            'traversal_config': '../escape.yaml', 'empty_config': ''}[fault]
+        manifest.write_text(json.dumps(value))
+        params['boltz_prepared_msa_sha256'] = bundle._sha256_file(manifest)
+    else:
+        path = config if fault == 'config_symlink' else manifest
+        original = path.with_name('retained-' + path.name)
+        path.rename(original)
+        path.symlink_to(original)
+    with pytest.raises(bundle.RemoteBundleError):
+        discover()
+
+
+def test_generated_cp_prepared_root_outside_managed_storage_is_refused(roots, tmp_path, generated_cp_config):
+    prepared, _, _, _, params, discover = generated_cp_config
+    outside = tmp_path / 'unmanaged'
+    prepared.rename(outside)
+    params['bcp_input_path'] = str(outside)
+    with pytest.raises(bundle.RemoteBundleError, match='outside BMS-managed storage|outside managed storage'):
+        discover()
+
+
+@pytest.mark.parametrize('source', ['missing', 'changed', 'relative', 'outside', 'symlink'])
+def test_declared_cp_source_cannot_fall_back_to_generated_owner(roots, tmp_path, generated_cp_config, source):
+    _, _, _, _, _, discover = generated_cp_config
+    path = roots['inputs'] / 'original.yaml'
+    if source == 'changed':
+        path.write_text('sequences: []')
+    elif source == 'relative':
+        path = Path('relative.yaml')
+    elif source == 'outside':
+        path = tmp_path / 'outside.yaml'
+        path.write_text('sequences: []')
+    elif source == 'symlink':
+        target = roots['inputs'] / 'target.yaml'
+        target.write_text('sequences: []')
+        path.symlink_to(target)
+    with pytest.raises(bundle.RemoteBundleError):
+        discover({'bcp_input_path': str(path)})
