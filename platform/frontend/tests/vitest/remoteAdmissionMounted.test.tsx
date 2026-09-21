@@ -58,3 +58,19 @@ it('agent-supplied approval is forwarded unchanged; explicit local launches do n
     await submitJob({ ...preview.request, execution_target_id: null }, { launchContext: false });
     expect(post.mock.calls.map(row => row[0])).toEqual(['/api/jobs', '/api/jobs']);
 });
+
+
+it.each(['missing-digest', 'wrong-target', 'wrong-model', 'wrong-mode'])(
+    'does not enqueue from an invalid preview response: %s', async fault => {
+        const invalid = structuredClone(preview) as any;
+        if (fault === 'missing-digest') delete invalid.approval_digest;
+        else if (fault === 'wrong-target') invalid.request.execution_target_id = 'vast:other';
+        else if (fault === 'wrong-model') invalid.request.model_id = 'other';
+        else invalid.request.mode = 'other';
+        const post = vi.spyOn(api, 'post').mockResolvedValue({ data: invalid });
+        await expect(submitJob({ ...preview.request, name: 'test', params: {} },
+            { launchContext: false })).rejects.toThrow('preview does not bind this request');
+        expect(post).toHaveBeenCalledTimes(1);
+        expect(post.mock.calls[0][0]).toBe('/api/jobs/execution-plan/preview');
+        expect(button('Approve and submit')).toBeUndefined();
+    });

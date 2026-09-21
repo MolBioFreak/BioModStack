@@ -1172,6 +1172,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
         const jobRequest = {
             name: jobName,
+            // The same placement owns GPU selection, preview and submission.
+            // Do not re-read ambient session storage in submitJob for this form.
+            execution_target_id: executionTargetId ?? null,
             model_id: modelId,
             mode: mode,
             params: {

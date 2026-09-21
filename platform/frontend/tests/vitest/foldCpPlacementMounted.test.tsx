@@ -138,3 +138,47 @@ it('states why a launch was refused instead of appearing to do nothing', async (
     await click('Launch Prediction');
     expect(text(renderer.root)).toContain('Remote submission requires explicit execution-plan preview approval');
 });
+
+
+it('actual Fold-CP launcher reviews then submits the identical request despite ambient placement drift', async () => {
+    await mount(fixture, 'vast:one');
+    await sample(telemetry('vast:one'));
+    const requests: Array<{ url: string; body: any }> = [];
+    const originalAdapter = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (config.method !== 'post') return originalAdapter(config);
+        const body = JSON.parse(config.data);
+        requests.push({ url: config.url!, body });
+        const data = config.url === '/api/jobs/execution-plan/preview' ? {
+            schema: 'bms.job.execution-preview.v1', approval_digest: 'a'.repeat(64),
+            admissible: true, request: body,
+            plan: { requested_json: body.params, effective_json: body.params,
+                source_identity: { revision: 'b'.repeat(40), tree: 'c'.repeat(40) },
+                metadata: { static_components: [{ component_key: 'RunBoltzCPExperimental' }],
+                    dynamic_templates: [], external_services: [] } },
+            deferred_preparation: [], blockers: [],
+        } : { id: 'reviewed-fold-cp' };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    // No target-change event: simulate another form changing the shared default.
+    // The selected form and its telemetry still belong to vast:one.
+    sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:two');
+    await click('Launch Prediction');
+    let approve: HTMLButtonElement | undefined;
+    for (let attempt = 0; attempt < 100 && !approve; attempt++) {
+        await flush();
+        approve = [...document.querySelectorAll('button')].find(
+            button => button.textContent === 'Approve and submit');
+    }
+    expect(approve).toBeTruthy();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe('/api/jobs/execution-plan/preview');
+    expect(requests[0].body.execution_target_id).toBe('vast:one');
+    expect(requests[0].body.params).toMatchObject({ bcp_size_cp: 4, bcp_gpu_ids: '0,1,2,3' });
+    sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+    await act(async () => { approve!.click(); });
+    await flush(); await flush();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual({ url: '/api/jobs',
+        body: { ...requests[0].body, execution_plan_approval: 'a'.repeat(64) } });
+}, 15000);

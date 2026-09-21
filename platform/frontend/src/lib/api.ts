@@ -1087,6 +1087,11 @@ export const submitJob = async (jobData: Partial<Job>, options: { launchContext?
     const payload = structuredClone(prepareJobSubmission(jobData, options));
     if (payload.execution_target_id && !payload.execution_plan_approval) {
         const preview = (await previewJobExecutionPlan(payload)).data;
+        if (typeof preview?.approval_digest !== 'string' || !/^[0-9a-f]{64}$/.test(preview.approval_digest)
+            || preview.request?.model_id !== payload.model_id || preview.request?.mode !== payload.mode
+            || preview.request?.execution_target_id !== payload.execution_target_id) {
+            throw new Error('Execution-plan preview does not bind this request; refresh the preview and review it again.');
+        }
         const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
         if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
         payload.execution_plan_approval = preview.approval_digest;
