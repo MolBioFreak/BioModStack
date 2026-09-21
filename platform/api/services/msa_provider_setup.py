@@ -37,8 +37,10 @@ identity or HTTP fields. Each provider validates its own closed settings schema.
 """
     aliases = {f"colabfold_{key}": key for key in (
         "use_env", "use_filter", "use_templates", "pairing_mode", "pairing_strategy")}
+    # A shared launcher also carries transport/inference colabfold_* keys.
+    # Only the five declared scientific aliases belong in provider identity.
     result = {aliases.get(key, key): value for key, value in params.items()
-              if key in NEUROSNAP_FIELDS or key.startswith("colabfold_")}
+              if key in NEUROSNAP_FIELDS or key in aliases}
     # Nextflow argv parsing yields strings; restore the same typed identity as
     # browser/API JSON, rejecting unknown representations rather than truthiness.
     for key in ("use_env", "use_filter", "use_templates",
