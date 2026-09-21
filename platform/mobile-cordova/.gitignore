@@ -2,10 +2,10 @@
 node_modules/
 
 # Cordova/Android generated outputs
-platforms/
-plugins/
-.cache/
-www/
+/platforms/
+/plugins/
+/.cache/
+/www/
 
 # Local-only runtime overrides
 cordova.runtime.local.json

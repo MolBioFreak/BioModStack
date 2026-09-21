@@ -60,3 +60,38 @@ dogfood-output/
 apptainer/*.sif
 apptainer/*.sif.*
 ngs_runtime_fixtures/
+
+# Private environment/configuration; retain intentionally sanitized examples.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+
+# Local Python environments, analysis caches, and coverage output.
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# SQLite naming variants and their runtime sidecars.
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+
+# Local literature collection and editor metadata.
+/.ngs_latest_papers/
+.idea/
+.DS_Store

@@ -1,22 +1,20 @@
 # BioModStack Documentation
 
 This directory is the current tracked documentation surface for BioModStack.
-Canonical docs describe what is live today. Active plans are kept separately
+Canonical docs describe supported source contracts and explicitly identify
+acceptance boundaries; they are not proof of what is deployed. Active plans are kept separately
 under `docs/plans/` and should not be mistaken for the product truth.
 
 ## Start Here
 
 - [Platform Overview](Platform_Overview.md)
-- [Workstation Setup and Runtime](Workstation%20Set%20Up%20and%20Install%20Guide.md)
+- [Repository Maintenance](Repository_Maintenance.md)
+- [Nonproduction Installation](Nonproduction_Installation.md)
 - [Desktop Runtime and Shell Architecture](Desktop_Runtime_and_Shell_Architecture.md)
 - [Structure Design and Refinement](Structure_Design_and_Refinement.md)
-- [Experimental Protein CAD Workflow](Experimental_Protein_CAD_Workflow.md)
-- [Caliby Experimental Workflow](Caliby_Experimental_Workflow.md)
-- [Protein Hunter Experimental Workflow](Protein_Hunter_Experimental_Workflow.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](Results_and_Analysis.md)
 - [Model Configuration, Operator Control, and Agent Parity](Model_Configuration_Operator_Control_and_Agent_Parity.md)
-- [Documentation Harmonization Strategy](Documentation_Harmonization_Strategy.md)
 
 ## Platform and subsystem references
 
@@ -33,27 +31,21 @@ under `docs/plans/` and should not be mistaken for the product truth.
 
 - [Global FrustraMPNN 100% implementation plan](plans/2026-08-08-frustrampnn-global-100-implementation.md)
 
-- [Plans README](plans/README.md)
-- [MSA control-plane guardrails and regression checklist](plans/2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
-- [Local high-quality MSA target-DB sharding spec](plans/2026-04-23-local-msa-target-db-sharding-spec.md)
-- [RepA local MSA root-cause and fix spec](plans/2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
-- [MolBio read-QC harmonization implementation plan](plans/2026-04-25-molbio-read-qc-harmonization-spec.md)
-- [Caliby finishing changes specification](plans/2026-04-27-caliby-finishing-changes-spec.md)
-- [GPU MMseqs EnvDB fix implementation plan](plans/2026-04-27-gpu-mmseqs-envdb-fix-spec.md)
-
 ## Canonical doc roles
 
 - `README.md` at the repo root:
   GitHub landing page and first-run orientation.
 - `docs/*.md` without a date in the filename:
-  current operator, workflow, and platform documentation.
+  operator, workflow, and platform contracts, including explicit limitations.
+  A filename alone is not evidence of live acceptance.
 - `platform/api/README.md` and `platform/frontend/README.md`:
   subsystem-specific technical references.
 - `docs/plans/*.md`:
   active implementation plans and transition notes only; these do not define the
   canonical product contract.
-- `docs/plans/archive/*.md`:
-  archived historical planning/spec material kept for auditability.
+- Historical planning material belongs in Git history, not an in-tree archive.
+  Keep active plans and explicitly source-bound authority documents until their
+  controlled retirement; do not remove them based on filename age alone.
 - `docs/ai_guidance/Model_Integrations.md`:
   current model integration guidance. Older AI instruction docs are pruned once stale.
 
