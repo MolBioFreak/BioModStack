@@ -11,6 +11,9 @@ jobs:
   review:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      NXF_VER: 25.10.1
+      NXF_DISABLE_CHECK_LATEST: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -25,6 +28,22 @@ jobs:
         run: python3 .review/build_dev57.py assemble
       - name: Install the unchanged locked API environment
         run: cd "$RUNNER_TEMP/bms-dev57/candidate/platform/api" && uv sync --frozen --group dev
+      - name: Provision the real pinned Nextflow before network isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          launcher="$HOME/.local/lib/nextflow/25.10.1/nextflow"
+          mkdir -p "$(dirname "$launcher")" "$RUNNER_TEMP/nextflow-download"
+          curl --fail --location --retry 2 --max-time 120 \
+            https://github.com/nextflow-io/nextflow/releases/download/v25.10.1/nextflow -o "$launcher"
+          echo "04cf76ee6bef9175273ea908d7ff0d5f82a7c5fd09e668248f56d376ed67ee11  $launcher" | sha256sum --check
+          chmod 755 "$launcher"
+          (cd "$RUNNER_TEMP/nextflow-download" && "$launcher" -version) | tee "$RUNNER_TEMP/bms-dev57/evidence/nextflow-version.txt"
+          sha256sum "$launcher" "$HOME/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar" > "$RUNNER_TEMP/bms-dev57/evidence/nextflow-sha256.txt"
+          echo "BMS_NEXTFLOW_BIN=$launcher" >> "$GITHUB_ENV"
+          echo "BMS_NEXTFLOW_VERSION=25.10.1" >> "$GITHUB_ENV"
+          echo "NXF_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "$(dirname "$launcher")" >> "$GITHUB_PATH"
       - name: Freeze and generate canonical runtime source binding
         run: python3 .review/build_dev57.py bind
       - name: Verify baseline, regression detection, candidate and updater authority
