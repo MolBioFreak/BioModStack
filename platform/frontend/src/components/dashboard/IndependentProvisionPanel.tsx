@@ -28,7 +28,7 @@ const PHASE_LABELS: Record<string, string> = {
   recovery_blocked: 'Needs attention — transport not proven stopped',
   failed: 'Failed',
   cancelled: 'Cancelled',
-  source_download_ready: 'Ready to transfer',
+  source_download_ready: 'Assets ready',
 };
 const ARTIFACT_STATE_LABELS: Record<string, string> = {
   pending: 'queued', transferring: 'downloading', verifying: 'verifying', verified: 'verified', interrupted: 'interrupted',
