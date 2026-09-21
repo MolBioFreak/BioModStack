@@ -34,6 +34,35 @@ from scripts.lib import runtime_image_lifecycle as lifecycle
 from scripts.lib.shared_runtime_images import _directory, _file, _check_file
 import bms_remote_worker as owner
 
+LOOPBACK_HOSTS = '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n'
+
+
+def name_resolution_bindings(private, resolver=None):
+    """Give the container working name resolution.
+
+    udocker runs with --nosysdirs, which leaves /etc/hosts and /etc/resolv.conf
+    as empty placeholders. Anything that resolves a name inside the container
+    then fails: torch's rendezvous on localhost dies with gai error -3 before any
+    rank starts, and in-container clients cannot reach a host by name. Bind a
+    generated loopback hosts file, and the host resolver only when it actually
+    carries configuration. No host hosts/resolver content is copied otherwise.
+    """
+    hosts = private / 'etc-hosts'
+    hosts.write_text(LOOPBACK_HOSTS)
+    hosts.chmod(0o444)
+    bindings = [(str(hosts), '/etc/hosts')]
+    resolver = Path('/etc/resolv.conf') if resolver is None else Path(resolver)
+    if resolver.is_file() and resolver.stat().st_size > 0:
+        bindings.append((str(resolver), '/etc/resolv.conf'))
+    return bindings
+
+
+def host_system_bindings(private):
+    """Kernel interfaces plus name resolution for every container execution."""
+    bindings = [(p, p) for p in ('/proc', '/sys', '/dev') if Path(p).exists()]
+    bindings.extend(name_resolution_bindings(private))
+    return bindings
+
 
 @dataclass
 class Invocation:
@@ -351,7 +380,7 @@ def execute(invocation, identity):
                 resolved = node.resolve(strict=True)
                 mount = resolved if resolved.is_dir() else resolved.parent
                 volumes.append((str(mount), str(mount)))
-        volumes.extend((p, p) for p in ('/proc', '/sys', '/dev') if Path(p).exists())
+        volumes.extend(host_system_bindings(private))
         shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
         shared = Path(shared).absolute() if shared else None
         requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
