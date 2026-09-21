@@ -2,7 +2,7 @@ name: Remote bridge review
 
 on:
   push:
-    branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test]
+    branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test, test-repository-cleanup-20260921]
   workflow_dispatch:
 
 # No deployment, provider credentials, rental operations, or repository writes.

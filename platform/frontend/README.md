@@ -29,27 +29,29 @@ Relevant runtime helpers include:
 - `src/runtime/cordovaShell.ts`
   one-shot readiness signal hook for Cordova-style shells
 
-## Run locally
+## Managed Development startup
 
-From the repo root:
+Complete [Nonproduction Installation](../../docs/Nonproduction_Installation.md)
+using the supported Python/frontend bootstrap and verification actions. The root
+`pnpm-lock.yaml` and workspace configuration are authoritative; do not regenerate
+lockfiles or substitute a different package manager.
+
+From the repository root after setup:
 
 ```bash
-./start_ui.sh start
+./start_ui.sh start --runtime dev
+./start_ui.sh status --runtime dev --json
+./start_ui.sh stop --runtime dev
 ```
 
-Frontend-only dev mode:
+Read the configured origin from managed status; do not assume a fixed host or
+port. The hosted router basename is `/bms/`. Do not start an independent Vite
+server as the managed-service path.
 
-```bash
-# From the repository root; the root pnpm lock is authoritative.
-corepack pnpm install
-corepack pnpm --dir platform/frontend dev --host 127.0.0.1 --port 5173
-```
-
-Default local URL:
-
-- `http://127.0.0.1:5173/bms/`
-
-The router basename is `/bms/`.
+Development deliberately uses React's non-profiling production runtime while
+Vite keeps its `development` mode and serves source modules. Do not remove
+`NODE_ENV=production` to identify Development; use Vite's mode and the managed
+runtime identity. See [AGENTS.md](../../AGENTS.md).
 
 ## Current routes
 

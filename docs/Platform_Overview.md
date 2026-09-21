@@ -6,7 +6,7 @@ layers:
 - Nextflow workflows for compute-heavy design, prediction, docking, sequencing,
   and experimental runs
 - a FastAPI backend for orchestration, metadata, artifact serving, runtime
-  administration, and hardware proxying
+  administration, and bounded instrument integrations
 - a React frontend for launch, review, visualization, mol bio, sequencing,
   infra, and robotics
 - shared local service/shell entrypoints for browser, Electron, GTK panel/tray,
@@ -14,7 +14,8 @@ layers:
 
 ## Primary entry points
 
-- workflow entrypoint: [main.nf](../main.nf)
+- workflow dispatch: [workflow adapter registry](../platform/api/services/workflow_adapter_registry.py)
+- legacy-compatible workflow wrapper: [main.nf](../main.nf)
 - API entrypoint: [platform/api/main.py](../platform/api/main.py)
 - frontend entrypoint: [platform/frontend/src/App.tsx](../platform/frontend/src/App.tsx)
 - service launcher: [start_ui.sh](../start_ui.sh)
@@ -24,7 +25,8 @@ layers:
 
 ## Runtime model
 
-The live workstation/runtime model is:
+The managed runtime architecture supports these roles; actual ownership and
+readiness must be verified for the selected installation:
 
 - default runtime mode: `container`
 - containerized API/web runtime under `biomodstack-core-runtime.service`
@@ -80,14 +82,13 @@ absent; robot-local runtime evidence remains authoritative.
 
 ## Workflow families
 
-The live workflow surface includes:
+The source includes the following workflow families. Registry presence does not
+prove runtime acquisition, scientific qualification, or deployment acceptance:
 
 - antibody de novo and refinement
-- antibody toolkit modes
 - generic structure prediction and validation
 - RFdiffusion-based generation
 - protein local redesign
-- retired binder workflow
 - BoltzGen
 - Oligo Designer / RFDpoly
 - docking
@@ -141,7 +142,8 @@ alone.
 
 ## Canonical docs to read next
 
-- [Workstation Setup and Runtime](Workstation%20Set%20Up%20and%20Install%20Guide.md)
+- [Nonproduction Installation](Nonproduction_Installation.md)
+- [Repository Maintenance](Repository_Maintenance.md)
 - [Desktop Runtime and Shell Architecture](Desktop_Runtime_and_Shell_Architecture.md)
 - [Structure Design and Refinement](Structure_Design_and_Refinement.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)

@@ -3,15 +3,16 @@
 This FastAPI service is the control plane for BioModStack. It is not just a job
 submission wrapper: it owns orchestration state, result metadata, lineage,
 analysis scheduling, file access, sequence operations, runtime administration,
-and hardware proxying.
+and bounded instrument integrations.
 
 ## Entry point
 
 - [main.py](main.py)
 
-On startup the API initializes the database, starts the analysis worker, and
-registers the router surface used by the web UI, Electron shell, local tooling,
-and linked hardware clients. The GPU workflow orchestrator starts only when the
+The managed pre-launch path initializes genuinely empty databases and runs
+registered migrations; ordinary API startup attests the existing schema rather
+than silently repairing it. The API starts the analysis worker and registers the
+router surface used by the web UI, Electron shell, and local tooling. The GPU workflow orchestrator starts only when the
 runtime is allowed to own workflow launches; guarded core-runtime mode skips that
 scheduler ownership and relies on the host workflow adapter instead.
 
@@ -29,19 +30,31 @@ That means:
 - browser, Electron, GTK, and optional mobile shells all talk to the same API
   contract
 
-## Run locally
+## Managed Development startup
 
-From `platform/api` in repo-first dev mode:
-
-```bash
-uv run uvicorn main:app --reload --port 8000
-```
-
-Or from the repo root through the shared launcher:
+Complete the [nonproduction installation procedure](../../docs/Nonproduction_Installation.md)
+first. From the repository root, explicitly select Development:
 
 ```bash
-./start_ui.sh start
+./start_ui.sh start --runtime dev
+./start_ui.sh status --runtime dev --json
+./start_ui.sh stop --runtime dev
 ```
+
+Use `start-api`, `restart-api`, and `stop-api` through the same launcher when a
+targeted operation is required. Do not start an independent Uvicorn process as a
+substitute for the managed service: dependency ownership, pre-launch migrations,
+readiness, and workflow-adapter ownership belong to the supported control path.
+
+For focused tests, use the locked environment without starting services:
+
+```bash
+cd platform/api
+uv run --frozen --group dev python -m pytest <focused tests> -q -rs
+```
+
+Keep the repository's route-free test guards enabled. Skipped native-tool checks
+are not evidence of native acceptance; see [AGENTS.md](../../AGENTS.md).
 
 ## Major router surface
 
@@ -54,7 +67,7 @@ The API currently includes routers for:
 - analytics
 - system and GPU status
 - install-profile/runtime-state inspection
-- workflow-adapter launch/cancel/running-jobs bridge routes
+- workflow-adapter launch/cancel/running-job bridge routes
 - framework lookup and MSA helpers
 - nucleotide sequence storage and mol bio operations
 - RCSB and Ribocentre helpers

@@ -47,10 +47,11 @@ The Electron shell currently includes:
 
 ## Install and run
 
-From the repo root:
+Use the repository-pinned pnpm toolchain and root workspace lockfile; do not
+create a package-local lockfile. From the repo root:
 
 ```bash
-pnpm --dir platform/desktop-electron install
+pnpm --dir platform/desktop-electron install --frozen-lockfile
 ./start_ui_electron.sh --runtime container
 ```
 
