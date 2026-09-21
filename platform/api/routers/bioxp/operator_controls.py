@@ -73,6 +73,7 @@ router = APIRouter()
 
 
 def _validate_live_action_receipt(payload: Any) -> OperatorLiveActionReceipt:
+    payload = _normalize_interrupt_evidence(payload)
     try:
         return TypeAdapter(OperatorLiveActionReceipt).validate_python(payload)
     except ValidationError as exc:
@@ -375,6 +376,39 @@ def _validate(model: type[Any], payload: Any) -> Any:
         raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
 
 
+_INTERRUPT_EVIDENCE_NULLABLE_FLAGS = (
+    "source_call_completed",
+    "source_return_ok",
+    "controller_stop_acknowledged",
+    "controller_terminal_state_verified",
+)
+
+
+def _normalize_interrupt_evidence(payload: Any) -> Any:
+    """Backfill the nullable interrupt-evidence flags when the robot omits them.
+
+    The robot's closed evidence contract carries these four flags as nullable
+    booleans; receipts recorded for a press refused before dispatch omit the
+    keys entirely instead of recording nulls. Materialize the nulls so the
+    evidence that does exist (rejection details, persistence state) validates
+    without inventing delivery facts — a refusal is never promoted to
+    issued-stop evidence. Applied only where robot receipts are validated;
+    returns the input unchanged when nothing needs filling.
+    """
+    if isinstance(payload, list):
+        normalized_items = [_normalize_interrupt_evidence(item) for item in payload]
+        return payload if all(a is b for a, b in zip(normalized_items, payload)) else normalized_items
+    if not isinstance(payload, dict):
+        return payload
+    evidence = payload.get("interrupt_evidence")
+    if isinstance(evidence, dict):
+        missing = [flag for flag in _INTERRUPT_EVIDENCE_NULLABLE_FLAGS if flag not in evidence]
+        if missing:
+            payload = {**payload, "interrupt_evidence": {**evidence, **dict.fromkeys(missing)}}
+    normalized = {key: _normalize_interrupt_evidence(value) for key, value in payload.items()}
+    return payload if all(normalized[key] is payload[key] for key in payload) else normalized
+
+
 
 
 async def _legacy_command_report_context(
@@ -532,7 +566,7 @@ async def operator_control_catalog_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorControlCatalogV2, payload)
+    return _validate(OperatorControlCatalogV2, _normalize_interrupt_evidence(payload))
 
 
 @router.get("/operator-controls/v2/dashboard", response_model=OperatorDashboardV2)
@@ -548,7 +582,7 @@ async def operator_dashboard_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorDashboardV2, payload)
+    return _validate(OperatorDashboardV2, _normalize_interrupt_evidence(payload))
 
 
 @router.post(
@@ -575,7 +609,7 @@ async def invoke_operator_action_v2(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     try:
-        receipt = OperatorActionReceiptV2.model_validate(payload)
+        receipt = OperatorActionReceiptV2.model_validate(_normalize_interrupt_evidence(payload))
     except ValidationError as exc:
         uncertainty = _post_dispatch_receipt_uncertainty(payload)
         if uncertainty is not None:
@@ -612,7 +646,7 @@ async def interrupt_operator_action_v1(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     try:
-        receipt = OperatorActionReceiptV2.model_validate(payload)
+        receipt = OperatorActionReceiptV2.model_validate(_normalize_interrupt_evidence(payload))
     except ValidationError as exc:
         uncertainty = _post_dispatch_receipt_uncertainty(payload)
         if uncertainty is not None:
@@ -664,7 +698,7 @@ async def operator_command_request_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceiptV2, payload)
+    receipt = _validate(OperatorActionReceiptV2, _normalize_interrupt_evidence(payload))
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched v2 command receipt")
     return receipt
@@ -687,7 +721,7 @@ async def operator_action_receipt_v2(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     model = OperatorActionReceiptDetailV2 if detail else OperatorActionReceiptV2
-    receipt = _validate(model, payload)
+    receipt = _validate(model, _normalize_interrupt_evidence(payload))
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched v2 command receipt")
     return receipt
@@ -754,7 +788,7 @@ async def operator_command_status_v2(
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     model = OperatorActionReceiptDetailV2 if detail else OperatorActionReceiptV2
-    receipt = _validate(model, payload)
+    receipt = _validate(model, _normalize_interrupt_evidence(payload))
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched v2 command status")
     return receipt

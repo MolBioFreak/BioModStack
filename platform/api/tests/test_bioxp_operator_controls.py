@@ -10,11 +10,12 @@ from pydantic import ValidationError
 import pytest
 
 from routers import bioxp
-from routers.bioxp.operator_controls import _translate_robot_error
+from routers.bioxp.operator_controls import _normalize_interrupt_evidence, _translate_robot_error
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTimeoutError
 from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionReceipt,
+    OperatorActionReceiptV2,
     OperatorDashboard,
     OperatorDashboardXFailure,
     OperatorDashboardXReference,
@@ -3206,3 +3207,144 @@ def test_history_rejects_failed_x_receipt_without_authority_when_motion_dispatch
 
     with pytest.raises(ValueError):
         OperatorActionReceipt.model_validate(dispatched)
+
+
+def refusal_stop_receipt() -> dict:
+    """Exact robot receipt for a stop press refused before dispatch.
+
+    Captured from the live robot (2026-09-21, oem.x.stop,
+    interrupt_request_schema_required): the four nullable interrupt-evidence
+    flags are omitted entirely rather than recorded as nulls, which the BMS
+    relay must tolerate without inventing delivery facts.
+    """
+    return {
+        "schema_version": "bioxp.operator_action_receipt.v2",
+        "command_id": "141380cb8e0c48aa8990dab4b94d0ae1",
+        "action_id": "oem.x.stop",
+        "status": "rejected",
+        "terminal": True,
+        "sequence": 13101,
+        "method_id": None,
+        "ownership_generation": 1,
+        "expected_board_epoch_by_board": {},
+        "state_version": 1,
+        "status_path": "/operator/v2/actions/receipts/141380cb8e0c48aa8990dab4b94d0ae1",
+        "accepted_at": 1789989274.050407,
+        "queued_at": 1789989274.050407,
+        "dispatched_at": None,
+        "finished_at": 1789989274.050427,
+        "terminal_receipt_id": None,
+        "completion_class": None,
+        "physical_effect_verified": False,
+        "error": {
+            "code": "action_rejected",
+            "message": "Operator action was rejected.",
+            "retryable": False,
+        },
+        "transport_exchanges": [],
+        "transport_retention_errors": [],
+        "interrupt_evidence": {
+            "details": {
+                "rejection": "interrupt_request_schema_required",
+                "required_schema": "bioxp.operator_interrupt_request.v1",
+                "surface": "x",
+            },
+            "persistence_state": "committed",
+            "physical_effect_verified": False,
+        },
+        "z_move": None,
+        "xy_failure": None,
+    }
+
+
+_REFUSAL_EVIDENCE_FLAGS = (
+    "source_call_completed",
+    "source_return_ok",
+    "controller_stop_acknowledged",
+    "controller_terminal_state_verified",
+)
+
+
+def test_refusal_stop_receipt_requires_nullable_evidence_backfill() -> None:
+    payload = refusal_stop_receipt()
+
+    with pytest.raises(ValidationError):
+        OperatorActionReceiptV2.model_validate(payload)
+
+    normalized = _normalize_interrupt_evidence(payload)
+    parsed = OperatorActionReceiptV2.model_validate(normalized)
+
+    assert parsed.status == "rejected"
+    evidence = parsed.interrupt_evidence
+    assert evidence is not None
+    for flag in _REFUSAL_EVIDENCE_FLAGS:
+        assert getattr(evidence, flag) is None
+    assert evidence.persistence_state == "committed"
+    assert evidence.physical_effect_verified is False
+    assert evidence.details == {
+        "rejection": "interrupt_request_schema_required",
+        "required_schema": "bioxp.operator_interrupt_request.v1",
+        "surface": "x",
+    }
+    # The relayed robot payload is never mutated in place.
+    assert "source_call_completed" not in payload["interrupt_evidence"]
+
+
+def test_interrupt_evidence_normalization_is_identity_when_complete() -> None:
+    payload = v2_dashboard()
+    assert _normalize_interrupt_evidence(payload) is payload
+
+
+def test_v2_dashboard_route_relays_refusal_receipt(monkeypatch) -> None:
+    client, runtime = make_client(monkeypatch)
+    payload = v2_dashboard()
+    payload["latest_receipts"] = [refusal_stop_receipt()]
+    runtime.connection.client.responses["operator_dashboard_v2"] = payload
+
+    response = client.get("/api/bioxp/operator-controls/v2/dashboard")
+
+    assert response.status_code == 200
+    evidence = response.json()["latest_receipts"][0]["interrupt_evidence"]
+    for flag in _REFUSAL_EVIDENCE_FLAGS:
+        assert evidence[flag] is None
+    assert evidence["details"]["rejection"] == "interrupt_request_schema_required"
+
+
+def test_v2_catalog_route_relays_refusal_receipt(monkeypatch) -> None:
+    client, runtime = make_client(monkeypatch)
+    dashboard = v2_dashboard()
+    dashboard["latest_receipts"] = [refusal_stop_receipt()]
+    payload = {
+        "schema_version": "bioxp.operator_control_catalog.v2",
+        "dashboard": dashboard,
+        "actions": [{
+            "action_id": "oem.x.stop",
+            "request_schema_version": "bioxp.operator_interrupt_request.v1",
+            "response_schema_version": "bioxp.operator_action_receipt.v2",
+            "interrupt": True,
+            "enabled": True,
+            "disabled_reason": None,
+        }],
+    }
+    runtime.connection.client.responses["operator_control_catalog_v2"] = payload
+
+    response = client.get("/api/bioxp/operator-controls/v2/catalog")
+
+    assert response.status_code == 200
+    evidence = response.json()["dashboard"]["latest_receipts"][0]["interrupt_evidence"]
+    for flag in _REFUSAL_EVIDENCE_FLAGS:
+        assert evidence[flag] is None
+
+
+def test_v2_receipt_route_relays_refusal_receipt(monkeypatch) -> None:
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["operator_action_receipt_v2"] = refusal_stop_receipt()
+
+    response = client.get(
+        "/api/bioxp/operator-controls/v2/receipts/141380cb8e0c48aa8990dab4b94d0ae1"
+    )
+
+    assert response.status_code == 200
+    evidence = response.json()["interrupt_evidence"]
+    for flag in _REFUSAL_EVIDENCE_FLAGS:
+        assert evidence[flag] is None
