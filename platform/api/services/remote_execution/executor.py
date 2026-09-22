@@ -1982,6 +1982,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             raise RemoteExecutionError("Resumed remote attempt has no valid started receipt")
         return await _publish_started_receipt(session, job, status)
     if job.queue_status == "preparing":
+        if status.state in TERMINAL_REMOTE_STATES and status.quiescent and status.started_at is None:
+            return await _publish_remote_transition(session, job, {
+                "status": "failed", "queue_status": "failed", "remote_state": "launch_failed",
+                "error_message": status.error or "Remote attempt stopped before starting",
+                "completed_at": datetime.utcnow(), "assigned_gpu": None,
+                "params": release_scheduler_gpu_assignment(job.params),
+            }, release_lease=True)
         if status.started_at is None or status.state not in {"running", *TERMINAL_REMOTE_STATES}:
             return False
         return await _publish_started_receipt(session, job, status)

@@ -584,6 +584,28 @@ async def test_uncertain_attempt_cannot_reenter_launch_or_prestart_failure(store
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("quiescent", [False, True])
+async def test_abandoned_prestart_releases_only_after_worker_quiescence(store, monkeypatch, quiescent):
+    await preparing(store)
+    async with store() as s:
+        job = await s.get(Job, "job")
+        job.remote_attempt_id, job.nextflow_run_id, job.remote_state = "attempt", "remote:attempt", "launch_uncertain"
+        await s.commit()
+    async def observed(*_):
+        return RemoteAttemptStatus(job_id="job", attempt_id="attempt", state="failed",
+            boot_id="test-boot", quiescent=quiescent, exit_code=1,
+            completed_at=datetime.utcnow(), error="Start command died before supervisor ownership")
+    monkeypatch.setattr(ex, "remote_status", observed)
+    async with store() as s:
+        await ex.reconcile_remote_job(s, await s.get(Job, "job"))
+    async with store() as s:
+        job = await s.get(Job, "job")
+        target = await s.get(ExecutionTarget, "target")
+        assert (job.status, job.queue_status, target.leased_job_id) == (
+            ("failed", "failed", None) if quiescent else ("queued", "preparing", "job"))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("conflict", [None, "source", "lease", "device"])
 async def test_fresh_admission_and_start_share_one_publication(store, monkeypatch, conflict):
     import json

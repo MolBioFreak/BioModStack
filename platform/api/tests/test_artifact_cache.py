@@ -87,6 +87,27 @@ def test_bad_partial_never_published(tmp_path):
     assert not list((tmp_path / 'cache/objects').rglob('.partial-*'))
 
 
+def test_failed_weight_view_culls_partial_and_prior_crash_without_touching_cas(tmp_path):
+    root = tmp_path / 'cache'
+    cache, source = upload(root, b'cached weight')
+    first = identity(b'cached weight')
+    cache.ingest(first, source)
+    rows = [dict(name='model/first.pt', **first, mode=0o444),
+            dict(name='model/missing.pt', **identity(b'absent'), mode=0o444)]
+    digest, _, _ = module.weight_layout(rows)
+    stale = root / 'weights' / ('.partial-' + digest + '-prior-crash')
+    (stale / 'nested').mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.write_text('keep')
+    (stale / 'nested' / 'link').symlink_to(outside)
+    (stale / 'nested').chmod(0o555)
+    with pytest.raises(FileNotFoundError):
+        cache.weights(rows, install=True)
+    assert not list((root / 'weights').glob('.partial-' + digest + '-*'))
+    assert outside.read_text() == 'keep'
+    assert cache.probe(first)['state'] == 'cache_hit'
+
+
 def _concurrent(root, item, source, output):
     output.put(module.Cache(root).ingest(item, source)['cache_hit'])
 

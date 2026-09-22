@@ -16,6 +16,7 @@ import os
 import posixpath
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import sys
 import time
@@ -80,6 +81,18 @@ def directory(path, *, create=False):
         yield fd
     finally:
         os.close(fd)
+
+
+def remove_partial_weight_tree(path):
+    # Only unpublished stages are disposable; leave CAS objects and published
+    # generations alone, including hardlinks into a failed stage.
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('unsafe_partial_weight_tree')
+    if path.exists():
+        for current, _, _ in os.walk(path, followlinks=False):
+            os.chmod(current, 0o700)
+        shutil.rmtree(path)
 
 
 def artifact(value):
@@ -403,53 +416,58 @@ class Cache:
                     raise ValueError('damaged_weight_layout')
                 if not install:
                     return dict(state='missing', root=str(root), sha256=digest)
-                stage = self.root / 'weights' / ('.partial-' + uuid.uuid4().hex)
-                with directory(stage, create=True):
-                    pass
-                for row in sorted(rows, key=lambda r: 'target' in r):
-                    destination = stage / row['name']
-                    if 'target' in row:
-                        with directory(destination.parent, create=True) as out:
-                            os.symlink(row['target'], destination.name, dir_fd=out)
-                            os.fsync(out)
-                        continue
-                    with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
-                        source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
-                        try:
-                            info = regular(source)
-                            if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
-                                raise ValueError('corrupt_weight_object')
-                            if row['mode'] == 0o444:
-                                os.link(row['sha256'], destination.name, src_dir_fd=objects,
-                                        dst_dir_fd=out, follow_symlinks=False)
-                                linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
-                                if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
-                                    raise ValueError('weight_object_changed')
+                for stale in (Path(self.root) / 'weights').glob('.partial-' + digest + '-*'):
+                    remove_partial_weight_tree(stale)
+                stage = self.root / 'weights' / ('.partial-' + digest + '-' + uuid.uuid4().hex)
+                try:
+                    with directory(stage, create=True):
+                        pass
+                    for row in sorted(rows, key=lambda r: 'target' in r):
+                        destination = stage / row['name']
+                        if 'target' in row:
+                            with directory(destination.parent, create=True) as out:
+                                os.symlink(row['target'], destination.name, dir_fd=out)
                                 os.fsync(out)
-                            else:
-                                # An executable permission projection cannot chmod
-                                # other aliases of an immutable content object.
-                                self._publish_copy(source, out, destination.name, row, row['mode'])
-                        finally:
-                            os.close(source)
-                with directory(stage) as parent:
-                    fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-                    with os.fdopen(fd, 'wb') as stream:
-                        stream.write(payload)
-                        stream.flush()
-                        os.fchmod(stream.fileno(), 0o444)
-                        os.fsync(stream.fileno())
-                for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
-                    with directory(stage / name) as fd:
+                            continue
+                        with self.locked(row), self.objects(row) as objects, directory(destination.parent, create=True) as out:
+                            source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
+                            try:
+                                info = regular(source)
+                                if stat.S_IMODE(info.st_mode) != 0o444 or not verified(source, row):
+                                    raise ValueError('corrupt_weight_object')
+                                if row['mode'] == 0o444:
+                                    os.link(row['sha256'], destination.name, src_dir_fd=objects,
+                                            dst_dir_fd=out, follow_symlinks=False)
+                                    linked = os.stat(destination.name, dir_fd=out, follow_symlinks=False)
+                                    if (linked.st_dev, linked.st_ino) != (info.st_dev, info.st_ino):
+                                        raise ValueError('weight_object_changed')
+                                    os.fsync(out)
+                                else:
+                                    # An executable permission projection cannot chmod
+                                    # other aliases of an immutable content object.
+                                    self._publish_copy(source, out, destination.name, row, row['mode'])
+                            finally:
+                                os.close(source)
+                    with directory(stage) as parent:
+                        fd = os.open('.bms-weights.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+                        with os.fdopen(fd, 'wb') as stream:
+                            stream.write(payload)
+                            stream.flush()
+                            os.fchmod(stream.fileno(), 0o444)
+                            os.fsync(stream.fileno())
+                    for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
+                        with directory(stage / name) as fd:
+                            os.fchmod(fd, 0o555)
+                            os.fsync(fd)
+                    with directory(stage) as fd:
                         os.fchmod(fd, 0o555)
                         os.fsync(fd)
-                with directory(stage) as fd:
-                    os.fchmod(fd, 0o555)
-                    os.fsync(fd)
-                check(stage)
-                with directory(root.parent) as parent:
-                    os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
-                    os.fsync(parent)
+                    check(stage)
+                    with directory(root.parent) as parent:
+                        os.rename(stage.name, root.name, src_dir_fd=parent, dst_dir_fd=parent)
+                        os.fsync(parent)
+                finally:
+                    remove_partial_weight_tree(stage)
         return dict(state='ready', root=str(root), sha256=digest)
 
     def archive_root(self, archive):

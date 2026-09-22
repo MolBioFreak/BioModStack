@@ -1103,6 +1103,35 @@ def _recover_terminal_manifest(attempt_dir: Path, envelope: dict, value: dict) -
 
 
 def status(attempt_dir: Path) -> dict[str, Any]:
+    # The start command can die after claiming but before spawning. If neither
+    # the command nor a supervisor owns its kernel lock, no future spawn can
+    # arrive: fail the attempt instead of retaining its lease indefinitely.
+    if (attempt_dir / "launch-claim.json").is_file():
+        snapshot = load_json(status_path(attempt_dir))
+        if (snapshot.get("state") == "prepared" and not snapshot.get("continuation_lease_id")
+                and snapshot.get("boot_id") == boot_id()):
+            with (attempt_dir / "start.lock").open("a+b") as start_lock:
+                try:
+                    fcntl.flock(start_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    with (attempt_dir / "supervisor.lock").open("a+b") as supervisor_lock:
+                        try:
+                            fcntl.flock(supervisor_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            pass
+                        else:
+                            with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as status_lock:
+                                fcntl.flock(status_lock.fileno(), fcntl.LOCK_EX)
+                                current = load_json(status_path(attempt_dir))
+                                if (current.get("state") == "prepared" and not current.get("continuation_lease_id")
+                                        and current.get("boot_id") == boot_id()):
+                                    cancelled = (attempt_dir / CANCEL_REQUEST_FILE).exists()
+                                    current.update(state="cancelled" if cancelled else "failed", quiescent=True,
+                                        completed_at=utc_now(), exit_code=-15 if cancelled else 1,
+                                        error=None if cancelled else "Start command died before supervisor ownership")
+                                    _write_atomic_json(status_path(attempt_dir), current)
     with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         value = load_json(status_path(attempt_dir))
@@ -1160,8 +1189,15 @@ def status(attempt_dir: Path) -> dict[str, Any]:
         if (value.get("state") in {"failed", "lost", "cancelled"}
                 and value.get("quiescent") is True and not supervisor_alive
                 and not value.get("result_manifest_sha256")):
-            _recover_terminal_manifest(attempt_dir, envelope, value)
-            _write_atomic_json(status_path(attempt_dir), value)
+            try:
+                _recover_terminal_manifest(attempt_dir, envelope, value)
+            except Exception:
+                if value.get("started_at") is not None:
+                    raise  # Never hide missing or damaged results after science starts.
+                # No run or result writers existed; a diagnostic failure must not
+                # retain the worker lease for a dead prestart attempt.
+            else:
+                _write_atomic_json(status_path(attempt_dir), value)
         # Even terminal publication is not permission to race the publisher.
         if supervisor_alive:
             value["quiescent"] = False
