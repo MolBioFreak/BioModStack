@@ -24,6 +24,7 @@ def test_bootstrap_shell_reports_controlled_install_failures(tmp_path, stage):
     (tmp_path / 'os-release').write_text('ID=ubuntu\n')
     prefix = r'''
 id() { echo 0; }
+chown() { printf '%s\n' "$*" >> "$STATE/chown-log"; }
 uname() { echo x86_64; }
 unshare() { :; }
 nvidia-smi() { :; }
@@ -34,9 +35,10 @@ apt-get() { test "$FAIL_STAGE" != apt; }
 curl() { test "$FAIL_STAGE" != download; }
 sha256sum() { /bin/cat >/dev/null; test "$FAIL_STAGE" != checksum; }
 '''
-    result = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env={**os.environ, 'FAIL_STAGE': stage}, capture_output=True, text=True)
+    result = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env={**os.environ, 'FAIL_STAGE': stage, 'STATE': str(tmp_path)}, capture_output=True, text=True)
     assert result.returncode != 0
     assert 'BMS_SETUP_ERROR:' in result.stdout
+    assert f"0:0 -- {tmp_path / 'worker-root'}" in (tmp_path / 'chown-log').read_text()
     assert {'apt': 'Package installation failed', 'download': 'Apptainer download failed', 'checksum': 'Apptainer checksum mismatch'}[stage] in result.stdout
 
 
@@ -49,6 +51,7 @@ def test_bootstrap_script_installs_missing_only_and_rejects_namespaces(tmp_path)
 set -eu
 env() { shift; "$@"; }
 id() { echo 0; }
+chown() { printf '%s\n' "$*" >> "$STATE/chown-log"; }
 uname() { echo x86_64; }
 unshare() { test "${BLOCKED:-0}" = 0; }
 mount() { :; }
@@ -72,6 +75,7 @@ export -f id uname unshare mount umount nvidia-smi java apptainer apt-get curl s
     assert not (tmp_path / 'apt-log').exists()
     first = subprocess.run(['bash', '-c', prefix + script, 'bootstrap', 'install', str(tmp_path / 'worker-root')], env=env, capture_output=True, text=True)
     assert first.returncode == 0, first.stderr
+    assert f"0:0 -- {tmp_path / 'worker-root'}" in (tmp_path / 'chown-log').read_text()
     calls = (tmp_path / 'apt-log').read_text()
     assert 'openjdk-17-jre-headless' in calls and 'apptainer.deb' in calls
     assert 'upgrade' not in calls

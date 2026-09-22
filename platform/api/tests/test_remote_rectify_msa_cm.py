@@ -135,6 +135,7 @@ def test_cm_actual_native_portable_delivery(cm, tmp_path, monkeypatch, provider)
             raise ReachedPreprocess
         runner = types.SimpleNamespace(configs=types.SimpleNamespace(sorted_by_ranking_score=False), init_dumper=lambda **kw: None)
         for name, fields in {
+            'torch': {'cuda': types.SimpleNamespace(is_available=lambda: False)},
             'configs.configs_inference': {'inference_configs': {}},
             'runner.batch_inference': {'get_default_runner': lambda **kw: runner, 'preprocess_input': preprocess},
             'runner.inference': {'infer_predict': lambda *args: pytest.fail('inference not authorized')},

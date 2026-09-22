@@ -68,8 +68,8 @@ def package(tmp_path, monkeypatch):
     release = roots['runtime']/'releases/r1'
     base = release/'python-runtime'
     # Real base interpreter and complete base stdlib, not fake executable bytes.
-    shutil.copytree(sys.base_prefix, base, symlinks=True,
-                    ignore=shutil.ignore_patterns('__pycache__', 'site-packages'))
+    from python_runtime_fixture import copy_python_base
+    copy_python_base(base)
     venv = release/'venv'
     (venv/'bin').mkdir(parents=True)
     (venv/'bin/python').symlink_to(base/'bin'/f'python{sys.version_info.major}.{sys.version_info.minor}')
@@ -83,6 +83,12 @@ def package(tmp_path, monkeypatch):
     (venv/'bin/probe').chmod(0o755)
     current = roots['runtime']/'current'
     current.symlink_to('releases/r1', target_is_directory=True)
+    # Compiler-only command identity: never discover the operator's installed
+    # Nextflow. A test that actually executes this placeholder must fail.
+    launcher = roots['runtime'] / 'nextflow'
+    launcher.write_text('#!/bin/sh\nprintf "compiler-only Nextflow fixture must not execute\\n" >&2\nexit 125\n')
+    launcher.chmod(0o755)
+    monkeypatch.setenv('BMS_NEXTFLOW_BIN', str(launcher))
     for key in ('BMS_PROTENIX_CONTAINER_PATH', 'BMS_CM_CONFORNETS_CONTAINER_PATH',
                 'BMS_FRUSTRAMPNN_SIF', 'BMS_RUNTIME_IMAGE_STORE', 'BMS_RUNTIME_IMAGE_LANE'):
         monkeypatch.delenv(key, raising=False)

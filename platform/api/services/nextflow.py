@@ -1070,7 +1070,15 @@ def _derive_boltz_cp_gpu_launch_settings(
         raw_gpu_ids = scheduler_gpu_id
 
     parsed_gpu_ids = _parse_boltz_cp_gpu_ids(raw_gpu_ids)
-    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+    size_cp = _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+    if requested_size_cp not in (None, ""):
+        requested = _coerce_int(requested_size_cp, 0)
+        if requested < 1 or requested != size_cp or (requested > 1 and not parsed_gpu_ids):
+            raise ValueError(
+                f"Fold-CP size_cp {requested_size_cp} requires an explicit GPU selection "
+                "divisible by that square CP size; CP cannot be reduced automatically"
+            )
+    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), size_cp
 
 
 def _normalize_boltz_cp_component_id(value: object, fallback: str) -> List[str]:
@@ -4384,7 +4392,10 @@ def _bind_protenix_msa_transport(invocation, params):
         else:
             command.extend([flag, str(value)])
         native[key] = value
-    plan = (_bind_prepared_protenix_plan(invocation, supplied)
+    from services.model_msa_handoff import bind_prepared_fold_cp_plan
+    plan = (bind_prepared_fold_cp_plan(invocation, supplied)
+            if invocation.model_id == 'boltz_cp_experimental' else
+            _bind_prepared_protenix_plan(invocation, supplied)
             if invocation.model_id == 'protenix' else
             _bind_prepared_boltz_plan(invocation, supplied)
             if invocation.model_id == 'boltz2' else invocation.execution_plan)
@@ -6125,10 +6136,10 @@ def compile_nextflow_invocation(
                 'bcp_triattn_backend',
             }:
                 params.pop(retired_key, None)
-        params.setdefault(
-            'bcp_container_path',
-            str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
-        )
+        from services.remote_execution.images import resolve_image
+        params['bcp_container_path'] = str(resolve_image(
+            DEFAULT_BOLTZ_CP_COMPAT_CONTAINER, Path(explicit_container_dir), params,
+        ))
 
         if not params.get('bcp_input_path'):
             staged_bcp_input = _write_boltz_cp_input_yaml(

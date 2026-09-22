@@ -44,9 +44,15 @@ class HFAssetLinkCheckRequest(StrictModel):
     pass
 
 
+class SSHEndpoint(StrictModel):
+    host: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$")
+    port: int = Field(ge=1, le=65535)
+
+
 class DiscoveredExecutionTarget(StrictModel):
     provider: Literal["vast"]
     provider_instance_id: str = Field(min_length=1, max_length=128)
+    ssh_endpoints: list[SSHEndpoint] = Field(default_factory=list, max_length=2)
     name: str | None = Field(default=None, max_length=255)
     provider_state: str = Field(min_length=1, max_length=64)
     host: str | None = Field(default=None, max_length=255)

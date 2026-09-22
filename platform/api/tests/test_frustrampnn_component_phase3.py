@@ -204,11 +204,11 @@ def _mock_v2_runtime(
             FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,
         )
 
-    monkeypatch.setattr(runtime, "open_verified_container", open_container)
-    monkeypatch.setattr(runtime, "verify_container_assets", lambda *_args, **_kwargs: {
-        "executable_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
-        "checkpoint_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256,
-    })
+    monkeypatch.setattr(runtime, "open_verified_container_with_assets",
+        lambda _apptainer, path, *, identity: (open_container(path, identity.sif_sha256), {
+            "executable_sha256": identity.executable_sha256,
+            "checkpoint_sha256": identity.checkpoint_sha256,
+        }))
 
     def execute(invocation, _pinned, **_kwargs):
         argv = list(invocation.argv)
@@ -318,14 +318,13 @@ def test_preflight_default_runtime_identity_is_resolved_at_call_time(
                 pass
 
         monkeypatch.setattr(runtime, "validate_configured_container_path", validate)
-        monkeypatch.setattr(runtime, "open_verified_container", lambda path, expected: Pinned())
         monkeypatch.setattr(
             runtime,
-            "verify_container_assets",
-            lambda apptainer, pinned, *, identity: {
+            "open_verified_container_with_assets",
+            lambda apptainer, path, *, identity: (Pinned(), {
                 "executable_sha256": identity.executable_sha256,
                 "checkpoint_sha256": identity.checkpoint_sha256,
-            },
+            }),
         )
 
         result = component.preflight_runtime(container=current_container)
@@ -437,7 +436,11 @@ def stub_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     container.write_bytes(b"stub-sif-generation\n")
     apptainer = tmp_path / request.param
     _write_stub_apptainer(apptainer)
+    store = tmp_path / "image-store"
     if request.param == "bms-container":
+        from scripts.lib.shared_runtime_images import publish_image
+        container = publish_image(container, store, hashlib.sha256(container.read_bytes()).hexdigest())
+        monkeypatch.setenv("BMS_RUNTIME_IMAGE_STORE", str(store))
         monkeypatch.setenv("BMS_CONTAINER_BACKEND", "udocker")
         monkeypatch.setenv("BMS_CONTAINER_EXECUTABLE", str(apptainer))
     identity = _stub_identity(container)
@@ -445,7 +448,11 @@ def stub_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     monkeypatch.setenv("STUB_CHECKPOINT_SHA", identity.checkpoint_sha256)
     runtime = importlib.import_module("services.frustrampnn.runtime")
     monkeypatch.setattr(runtime, "FRUSTRAMPNN_RUNTIME_IDENTITY", identity)
-    return apptainer, container, identity
+    yield apptainer, container, identity
+    if store.exists():
+        for directory in store.rglob("*"):
+            if directory.is_dir():
+                directory.chmod(0o700)
 
 
 def test_phase3_cli_and_module_future_contract_exists() -> None:

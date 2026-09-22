@@ -315,10 +315,9 @@ def run_grouped_batch(
         pin = pinned_container
         if pin is None:
             configured = _runtime.validate_configured_container_path(container)
-            owned_pin = _runtime.open_verified_container(
-                configured, _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256
+            owned_pin, _assets = _runtime.open_verified_container_with_assets(
+                apptainer, configured
             )
-            _runtime.verify_container_assets(apptainer, owned_pin)
             pin = owned_pin
         invocation = build_command(
             apptainer=apptainer,

@@ -10,6 +10,7 @@ import stat
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 from paths import get_code_root
@@ -24,6 +25,52 @@ from . import hf_assets
 BATCH_COUNT = 2048
 BATCH_BYTES = 256 * 1024 * 1024
 HF_MIN_BYTES = 8 * 1024 * 1024
+
+
+def _concurrency(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# Staging is latency-bound, not bandwidth-bound. The measured lane moved 2,048
+# small files per batch at ~34 files/s because each batch waited on four
+# sequential remote round trips, and a probe sweep of the shared weight tree
+# needed one round trip per 2,048 objects. Independent batches and probe pages
+# now run concurrently, bounded so a worker is never asked to run more helper
+# processes at once than it can hash for. Every batch keeps its own operation
+# id, incoming directory and lock set, so concurrency does not share state.
+PROBE_CONCURRENCY = _concurrency('BMS_CACHE_PROBE_CONCURRENCY', 8)
+TRANSFER_CONCURRENCY = _concurrency('BMS_CACHE_TRANSFER_CONCURRENCY', 6)
+MATERIALIZE_CONCURRENCY = _concurrency('BMS_CACHE_MATERIALIZE_CONCURRENCY', 4)
+
+
+def _stage_error(error: BaseException) -> BaseException:
+    while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:
+        error = error.exceptions[0]
+    return error
+
+
+async def _bounded_group(items, worker):
+    """Run independent staging units concurrently, preserving caller contracts.
+
+    Each unit owns its own remote incoming directory and locks, so concurrency
+    never shares mutable worker state. A failure cancels the siblings (the group
+    does that) and the original exception type is re-raised, because callers
+    distinguish a fence failure, an SSH loss, a cancellation and a corrupt
+    ingest by type.
+    """
+    if not items:
+        return []
+    tasks = []
+    try:
+        async with asyncio.TaskGroup() as group:
+            for item in items:
+                tasks.append(group.create_task(worker(item)))
+    except BaseException as error:
+        raise _stage_error(error) from error
+    return [task.result() for task in tasks]
 
 
 async def _noop(*args, **kwargs):
@@ -101,17 +148,26 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     def key(entry):
         return (entry.role == 'image', entry.sha256)
     objects = tuple(unique.values())
-    for offset in range(0, len(objects), BATCH_COUNT):
-        batch = objects[offset:offset + BATCH_COUNT]
-        await report('checking', None, 'Verifying cached artifact batch')
-        response = await call({'action': 'probe', 'artifacts': [identity(entry) for entry in batch]})
+    probe_pages = [objects[offset:offset + BATCH_COUNT]
+                   for offset in range(0, len(objects), BATCH_COUNT)]
+    if probe_pages:
+        await report('checking', None,
+                     f'Verifying {len(objects)} cached artifact identities across {len(probe_pages)} page(s)')
+    probe_limit = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def probe_page(page):
+        async with probe_limit:
+            return await call({'action': 'probe',
+                               'artifacts': [identity(entry) for entry in page]})
+
+    for response in await _bounded_group(probe_pages, probe_page):
         states.update({(row.get('kind') == 'runtime_image', row['sha256']): row['state']
                        for row in response['artifacts']})
     # HF is a byte source, not a second registry. Verified worker hits remain
     # offline; selected bulk misses alone consult controller-owned cloud config.
     # Keep small support files batched rather than doing thousands of HTTP calls.
     bulk = {key(e) for e in objects if states[key(e)] != 'cache_hit'
-            and e.role in {'image', 'runtime', 'source'} and e.size_bytes >= HF_MIN_BYTES}
+            and e.role in hf_assets.DELIVERY_ROLES and e.size_bytes >= HF_MIN_BYTES}
     hf_enabled = bool(bulk) and hf_assets.configuration() is not None
     indices = {}
     for index, entry in enumerate(artifacts):
@@ -187,21 +243,36 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
                 activity[index]['state'] = 'verified'
 
     batch, size = [], 0
+    staged_plans: list[tuple[list, bool, bool]] = []
     for entry in objects:
         if states[key(entry)] == 'cache_hit':
             continue
         use_hf = hf_enabled and key(entry) in bulk
         direct = use_hf or entry.role == 'image' or entry.size_bytes > BATCH_BYTES
         if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
-            await transfer(batch)
+            staged_plans.append((batch, False, False))
             batch, size = [], 0
         if direct:
-            await transfer([entry], direct=True, use_hf=use_hf)
+            staged_plans.append(([entry], True, use_hf))
         else:
             batch.append(entry)
             size += entry.size_bytes
     if batch:
-        await transfer(batch)
+        staged_plans.append((batch, False, False))
+    if staged_plans:
+        await report('transferring', None,
+                     f'Transferring {len(staged_plans)} artifact batch(es), {TRANSFER_CONCURRENCY} at a time')
+    transfer_limit = asyncio.Semaphore(TRANSFER_CONCURRENCY)
+
+    async def run_plan(plan):
+        batch, direct, use_hf = plan
+        async with transfer_limit:
+            await transfer(batch, direct=direct, use_hf=use_hf)
+
+    # A fence failure or cancelled staging must not leave sibling batches
+    # running: the group cancels them, and each batch owns its own incoming
+    # directory so a partial one is never mistaken for evidence.
+    await _bounded_group(staged_plans, run_plan)
     receipts = []
     for index, entry in enumerate(artifacts):
         name = activity[index]['name']
@@ -210,22 +281,113 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     if track_artifacts:
         await report('verifying', None, 'Artifact cache identities verified')
     if materialize:
-        for offset in range(0, len(artifacts), 128):
-            batch = artifacts[offset:offset + 128]
-            await progress({'phase': 'verifying', 'artifact': None, 'message': 'Materializing verified artifact batch'})
-            await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
-                        'entries': [{'artifact': identity(entry),
-                                     'destination': entry.remote_destination, 'mode': entry.mode,
-                                     'aliases': list(entry.aliases), 'runtime_root': runtime_root} for entry in batch]})
-        for offset in range(0, len(links), 128):
-            await call({'action': 'materialize_links', 'destination_root': runtime_root,
-                        'entries': links[offset:offset + 128]})
-        for entry in artifacts:
-            if entry.role == 'source':
-                await call({'action': 'extract_source', 'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
+        materialize_batches = [artifacts[offset:offset + 128] for offset in range(0, len(artifacts), 128)]
+        if materialize_batches:
+            await progress({'phase': 'verifying', 'artifact': None,
+                            'message': f'Materializing {len(artifacts)} verified artifact(s) in {len(materialize_batches)} batch(es)'})
+        materialize_limit = asyncio.Semaphore(MATERIALIZE_CONCURRENCY)
+
+        async def materialize_batch(batch):
+            async with materialize_limit:
+                await call({'action': 'materialize_many', 'destination_root': connection.remote_root,
+                            'entries': [{'artifact': identity(entry),
+                                         'destination': entry.remote_destination, 'mode': entry.mode,
+                                         'aliases': list(entry.aliases), 'runtime_root': runtime_root} for entry in batch]})
+
+        await _bounded_group(materialize_batches, materialize_batch)
+        link_batches = [links[offset:offset + 128] for offset in range(0, len(links), 128)]
+
+        async def materialize_link_batch(batch):
+            async with materialize_limit:
+                await call({'action': 'materialize_links', 'destination_root': runtime_root,
+                            'entries': list(batch)})
+
+        await _bounded_group(link_batches, materialize_link_batch)
+        source_entries = [entry for entry in artifacts if entry.role == 'source']
+
+        async def extract_source_entry(entry):
+            async with materialize_limit:
+                await call({'action': 'extract_source',
+                            'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
                             'destination': str(Path(entry.remote_destination).parent)})
+
+        await _bounded_group(source_entries, extract_source_entry)
     await check_fence()
     return receipts
+
+
+def _weights_archive_artifact():
+    """The declared packed shared weight tree, or None when none is configured.
+
+    It is published out of band, so there is no local source to publish from: an
+    absent object fails visibly instead of being uploaded from the controller.
+    """
+    identity = hf_assets.weights_archive()
+    if identity is None:
+        return None
+    digest, size = identity
+    return SimpleNamespace(source=Path('/nonexistent-bms-weight-archive'), role='weights',
+                           sha256=digest, size_bytes=size)
+
+
+async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence):
+    """Obtain the shared weight tree as one object, then unpack it on the worker.
+
+    Returns the digests the archive delivered into the worker content store, or
+    None when no packed archive is declared. Those files never travel through
+    the controller: the worker verifies every member against the bundle's own
+    authenticated weight layout, and only then publishes the shared view.
+    """
+    archive = _weights_archive_artifact()
+    if archive is None or hf_assets.configuration() is None:
+        return None
+    detail = {'sha256': archive.sha256, 'size_bytes': archive.size_bytes}
+    root = f'{connection.remote_root}/cache/artifacts/v1'
+
+    async def call(request):
+        await check_fence()
+        result = await run_remote(connection, ['python3', helper, '--root', root],
+                                  input_bytes=json.dumps(request).encode(), timeout=3600)
+        await check_fence()
+        return json.loads(result.stdout)
+
+    def announce(message):
+        return progress(dict(phase='transferring', artifact=None, message=message))
+
+    # A finished pass is its own evidence. The worker answers from the record it
+    # wrote, so a retried stage installs the shared view from the objects that
+    # are already verified instead of downloading the whole archive again.
+    observed = await call({'action': 'weights_archive_probe', 'archive': detail, 'layout': layout})
+    if observed.get('state') == 'ready':
+        await announce('Shared weight archive is already unpacked on the worker')
+        return set(observed.get('matched', ()))
+
+    batch_id = uuid.uuid4().hex
+    owner = {'operation_id': operation_id, 'batch_id': batch_id}
+    await call({'action': 'prepare_incoming', **owner})
+    await announce('Preparing private Hugging Face weight archive delivery')
+    acquired = {}
+    for _renewal in range(2):
+        sources = await hf_assets.prepare_sources([archive], check_fence=check_fence)
+        if (False, archive.sha256) not in sources:
+            raise ValueError('Hugging Face weight archive is unavailable')
+        await announce('Downloading shared weight archive from Hugging Face')
+        acquired = await call({'action': 'acquire_hf', 'artifact': detail, **owner,
+                               'source': sources[(False, archive.sha256)]})
+        # Same finite fresh-link renewal as every other HF acquisition; neither
+        # expiry nor cancellation publishes an unverified partial.
+        if acquired.get('state') != 'source_expired':
+            break
+    if (acquired.get('state') != 'downloaded' or acquired.get('sha256') != archive.sha256
+            or acquired.get('size_bytes') != archive.size_bytes):
+        raise ValueError('Hugging Face weight archive acquisition did not verify')
+    await announce('Unpacking shared model weights from the archive')
+    unpacked = await call({'action': 'unpack_weights_archive', 'archive': detail,
+                          'layout': layout, **owner})
+    if unpacked.get('state') != 'ready' or unpacked.get('archive') != detail:
+        raise ValueError('Shared weight archive was not unpacked completely')
+    await call({'action': 'remove_incoming', **owner})
+    return set(unpacked.get('matched', ()))
 
 
 async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence=_noop):
@@ -265,13 +427,30 @@ p.mkdir(mode=0o700,exist_ok=False)
              and record.relative_path != 'runtime/support-python'
              and not record.relative_path.startswith('runtime/support-python/')]
     helper = await _install_helper(connection, check_fence)
+    transferable = cache_transfer_artifacts(bundle)
     receipts = []
     if bundle.weight_layout:
+        # The layout travels by reference to the runtime listing this bundle
+        # already carries and the envelope already authenticates; its production
+        # row count exceeds the helper's declared request budget. Stage and
+        # materialize that one document first, then let the helper re-verify its
+        # digest, schema and placement before it is used.
+        listing_destination = bundle.remote_runtime_dir.rstrip('/') + '/.bms-runtime-images.json'
+        listing = next((entry for entry in transferable
+                        if entry.remote_destination == listing_destination), None)
+        if listing is None:
+            raise ValueError('Weight layout listing is unavailable for this bundle')
+        receipts = await _cache_artifacts(connection=connection, artifacts=(listing,),
+            operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
+            materialize=True, helper=helper, runtime_root=bundle.remote_runtime_dir)
+        transferable = tuple(entry for entry in transferable
+                             if entry.remote_destination != listing_destination)
+        layout = {'path': listing_destination, 'sha256': listing.sha256}
         async def weights(action):
             await check_fence()
             result = await run_remote(connection, ['python3', helper, '--root',
                 connection.remote_root + '/cache/artifacts/v1'],
-                input_bytes=json.dumps(dict(action=action, entries=list(bundle.weight_layout))).encode(), timeout=3600)
+                input_bytes=json.dumps(dict(action=action, layout=layout)).encode(), timeout=3600)
             await check_fence()
             response = json.loads(result.stdout)
             if response.get('root') != bundle.envelope.environment['BMS_WEIGHTS']:
@@ -280,16 +459,27 @@ p.mkdir(mode=0o700,exist_ok=False)
         await progress(dict(phase='checking', artifact=None, message='Resolving installed model weights'))
         observed = await weights('weights_probe')
         if observed['state'] == 'missing':
-            receipts = await _cache_artifacts(connection=connection, artifacts=bundle.runtime_weights,
-                operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
+            # The packed shared tree is one object the worker unpacks itself;
+            # only the rows it does not carry keep the per-file relay path.
+            delivered = await _install_weight_archive(connection=connection, helper=helper,
+                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence)
+            pending = [entry for entry in bundle.runtime_weights
+                       if delivered is None or entry.sha256 not in delivered]
+            if pending:
+                receipts += await _cache_artifacts(connection=connection, artifacts=pending,
+                    operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
             if (await weights('weights_install'))['state'] != 'ready':
                 raise ValueError('Shared model weights were not installed')
+            receipts += [dict(name=entry.remote_destination.removeprefix(connection.remote_root + '/'),
+                              sha256=entry.sha256, size_bytes=entry.size_bytes)
+                         for entry in bundle.runtime_weights
+                         if delivered is not None and entry.sha256 in delivered]
         elif observed['state'] != 'ready':
             raise ValueError('Shared model weights are damaged')
         else:
-            receipts = [dict(name=e.remote_destination.removeprefix(connection.remote_root + '/'),
-                             sha256=e.sha256, size_bytes=e.size_bytes) for e in bundle.runtime_weights]
-    receipts += await _cache_artifacts(connection=connection, artifacts=cache_transfer_artifacts(bundle),
+            receipts += [dict(name=e.remote_destination.removeprefix(connection.remote_root + '/'),
+                              sha256=e.sha256, size_bytes=e.size_bytes) for e in bundle.runtime_weights]
+    receipts += await _cache_artifacts(connection=connection, artifacts=transferable,
                                       operation_id=bundle.attempt_id, progress=progress,
                                       check_fence=check_fence, materialize=True, helper=helper,
                                       links=links, runtime_root=bundle.remote_runtime_dir)

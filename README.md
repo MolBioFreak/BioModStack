@@ -18,6 +18,14 @@ BMS is designed around a simple separation of responsibilities:
   and instrument-facing capabilities use explicit contracts rather than ad-hoc
   scripts or direct UI-to-host control.
 
+## Start here
+
+For a new Development installation, begin with
+[Nonproduction Installation](docs/Nonproduction_Installation.md). For existing
+installations, use the managed launcher and verify the selected runtime before
+starting work. The [documentation index](docs/README.md) links the operating and
+scientific contracts; [AGENTS.md](AGENTS.md) defines contribution and service rules.
+
 ## What is in this repository
 
 The tracked repository is intentionally limited to the source required to build,
@@ -38,9 +46,14 @@ and the same typed API used by AI agents. A model is incomplete until its full
 parameter, execution, data, analysis, visualization, capture, and result surface
 has passed live acceptance.
 
-Generated output, model weights, caches, databases, results, local logs,
-credentials, installation-specific configuration, and historical planning
-material do not belong in the repository.
+Local output, downloaded model weights, caches, databases, results, credentials,
+and installation-specific configuration do not belong in Git. Approved release
+assets and controlled scientific fixtures are explicit exceptions, not permission
+to commit arbitrary packages or logs. The
+[repository maintenance guide](docs/Repository_Maintenance.md) explains the
+hash-bound exceptions, hygiene checks, and source-record regeneration. Active
+plans and source-bound contracts remain until their controlled retirement; Git
+history is the archive for obsolete material.
 
 ## Supported product areas
 
@@ -75,18 +88,32 @@ Operator surface
 The API/web service owns interactive application state and service-facing
 contracts. Scientific execution is deliberately separated from the web
 container so that workflow dependencies, accelerators, reference data, and
-host-native execution can be managed explicitly. A push to Git does not deploy
-a service; deployed revision, service owner, health, and data identity must be
-verified separately.
+host-native execution can be managed explicitly. A Git push is not deployment
+evidence. A configured Development synchronizer may consume `test`; deployed
+revision, service owner, health, and data identity must still be verified separately.
 
 ## Getting started
 
-Use a clean checkout and the repository's locked dependency manifests. Configure
-your installation through the supported install profile and environment files;
-do not put host paths, service addresses, or credentials in source-controlled
-files.
+Use an isolated checkout of `test` for Development, not the deployment-owned
+working directory. Managed Development requires the Linux/base interpreter and
+user-systemd prerequisites in the
+[installation guide](docs/Nonproduction_Installation.md). Start with the
+inspection and dependency-planning commands; these do not start services:
 
-The standard launcher supports managed development and container runtime modes:
+```bash
+./start_ui.sh discover --runtime dev --json
+./start_ui.sh plan --runtime dev --json
+./start_ui.sh python-plan --json
+./start_ui.sh frontend-plan --json
+```
+
+Follow that guide for the explicit dependency-bootstrap, local install-document,
+configuration-preview, and apply steps. Do not substitute an ad-hoc Uvicorn/Vite
+process or rewrite the lockfiles. Python and frontend prerequisite state is
+managed outside the source; local workspace dependency links remain untracked.
+Keep host paths, service addresses, and credentials out of source-controlled files.
+
+Once setup is complete, the standard launcher manages Development explicitly:
 
 ```bash
 ./start_ui.sh start --runtime dev
@@ -94,7 +121,9 @@ The standard launcher supports managed development and container runtime modes:
 ./start_ui.sh stop --runtime dev
 ```
 
-For the managed container runtime, substitute `container` for `dev`:
+For an installation configured for the managed container runtime, select
+`container` explicitly. This is not a shortcut for first-time setup or production
+promotion:
 
 ```bash
 ./start_ui.sh start --runtime container
@@ -133,13 +162,41 @@ and retirement rules.
 | Managed service launcher | [`start_ui.sh`](start_ui.sh) |
 | Service/runtime management | [`biomodstack_services.py`](biomodstack_services.py) |
 | Runtime/install-profile resolution | [`biomodstack_runtime_profile.py`](biomodstack_runtime_profile.py) |
-| Workflow entrypoint | [`main.nf`](main.nf) |
+| Workflow dispatch | [`platform/api/services/workflow_adapter_registry.py`](platform/api/services/workflow_adapter_registry.py) and [`workflows/`](workflows/) |
+| Legacy-compatible workflow wrapper | [`main.nf`](main.nf) |
 | API | [`platform/api/main.py`](platform/api/main.py) |
 | Frontend | [`platform/frontend/src/App.tsx`](platform/frontend/src/App.tsx) |
 | Electron launcher | [`start_ui_electron.sh`](start_ui_electron.sh) |
 | Runtime composition | [`compose.core-runtime.yml`](compose.core-runtime.yml) |
 
+## Repository layout
+
+| Owner | Contents |
+| --- | --- |
+| `platform/api`, `platform/frontend` | Managed API and hosted workbench source/tests |
+| `platform/desktop-electron`, `platform/mobile-cordova` | Optional clients and first-party plugins |
+| `packages` | Shared libraries |
+| `workflows`, `modules`, `lib` | Scientific workflow implementation |
+| `config`, `schemas` | Runtime settings and versioned contracts |
+| `apptainer`, `containers`, `docker` | Reproducible runtime definitions, not local images |
+| `scripts`, `tests`, `docs` | Supported tools, regression fixtures, and current guidance |
+| `artifacts/android` | Approved release payloads with exact-byte exceptions |
+
 ## Validation
+
+After staging the intended changes, run the repository checks from the root:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_repository_*.py' -v
+python3 scripts/check_repository_hygiene.py
+git diff --cached --check
+```
+
+The scanner examines the index, not untracked or unstaged work. It is not a
+complete secret/history audit or proof that every source file is necessary.
+Source-tree edits also require the existing runtime implementation record to be
+regenerated and validated before integration; see
+[Repository Maintenance](docs/Repository_Maintenance.md).
 
 Run the smallest relevant validation for the changed owner surface. For API
 work, use the locked development environment:

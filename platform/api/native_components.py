@@ -85,10 +85,11 @@ PROCESS_CONTRACTS = {
     'modules/ngs/bam_prepare.nf:ValidateMappedBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'validated-source.bam'), path(bai, stageAs: 'validated-source.bam.bai')", "path reference, stageAs: 'expected-reference.fasta'"), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "bam_mapped_check.log", emit: log'), (), ()),
     'modules/ngs/bam_prepare.nf:BamToFastqForQC': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "reads_for_qc.fastq", emit: fastq', 'path "bam_to_fastq_for_qc.log", emit: log'), (), ()),
     'modules/ngs/bam_prepare.nf:PrepareReferenceForIGV': (('dorado_cpu',), ("path reference, stageAs: 'expected-reference-source.fasta'",), ('path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "reference_prepare.log", emit: log'), (), ()),
-    'modules/ngs/clone_validation.nf:RunCloneValidation': (('wf_clone',), ('tuple path(bam), val(reference_fasta)',), ('path "wf_clone_out", emit: out', 'path "wf_clone.log", emit: log', 'path "runtime_provenance.json", emit: runtime_provenance', 'path "wf_clone_out/wf-clone-validation-report.html", emit: report', 'path "wf_clone_out/sample_status.txt", emit: sample_status'), (), ()),
-    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'path "verification_input", emit: verification_input', 'path "per_base_support.tsv", emit: per_base_support', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), (), ()),
+    'modules/ngs/clone_validation.nf:RunCloneValidation': (('wf_clone',), ('tuple path(bam), val(reference_fasta)',), ('path "wf_clone_out", emit: out', 'path "wf_clone.log", emit: log', 'path "runtime_provenance.json", emit: runtime_provenance', 'path "input_model_provenance.json", emit: input_model_provenance', 'path "wf_clone_out/wf-clone-validation-report.html", emit: report', 'path "wf_clone_out/sample_status.txt", emit: sample_status'), ('scripts/validate_clone_input_model.py', 'scripts/validate_wf_clone_runtime.py'), ()),
+    'modules/ngs/clone_validation.nf:CloneValidationAdapter': (('fastq_qc_cpu',), ('path result_root', 'path runtime_provenance', 'tuple path(aligned_bam), path(aligned_bai)', "path reference, stageAs: 'authoritative_reference.fasta'"), ('path "adapter_manifest.json", emit: manifest', 'path "verification_input", emit: verification_input', 'path "per_base_support.tsv", emit: per_base_support', 'path "alignment_stats.tsv", emit: alignment_stats', 'path "dimer_breakpoint_call.tsv", emit: breakpoint_call', 'path "dimer_secondary_summary.tsv", emit: secondary_summary'), ('scripts/adapt_wf_clone_validation.py', 'scripts/build_construct_verification_input.py', 'scripts/build_fastq_support_tables.py'), ()),
+    'modules/ngs/clone_validation.nf:ComparePlasmidConsensus': (('fastq_qc_cpu',), ('path verification_input', 'path read_consensus'), ("path 'compared_verification_input', emit: verification_input", "path 'compared_verification_input/consensus_comparison.json', emit: comparison"), ('scripts/compare_plasmid_consensus.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
     'modules/ngs/comparison_panel_attribution.nf:ComparisonPanelAttribution': (('local_cpu',), ('path fastq', 'path expected_reference', 'path snapshot'), ("path 'comparison_panel.fasta', emit: reference", "path 'comparison_panel_expected_reference.fasta', emit: expected_reference", "path 'comparison_panel_source.fastq', emit: source_fastq", "path 'comparison_panel_normalized.fastq', emit: normalized_fastq", "path 'comparison_panel_occurrence_map.json', emit: occurrence_map", "path 'comparison_panel.bam', emit: bam", "path 'comparison_panel.bam.bai', emit: bai", "path 'comparison_panel_summary.json', emit: summary"), (), ()),
-    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), (), ()),
+    'modules/ngs/construct_verify.nf:ConstructVerify': (('fastq_qc_cpu',), ('path reference', 'path verification_input', 'path per_base_support', 'tuple path(aligned_bam), path(aligned_bai)', 'path alignment_stats', 'path dimer_breakpoint_call', 'path dimer_secondary_summary'), ('path "verification", emit: verification_dir', 'path "verification/qc_manifest.json", emit: manifest', 'path "verification/verification_summary.tsv", emit: summary', 'path "verification/variants.vcf", emit: variants', 'path "verification/per_base_metrics.tsv", emit: per_base_metrics', 'path "verification/evidence.html", emit: evidence_html'), ('scripts/build_construct_topology_evidence.py', 'scripts/verify_construct.py', 'scripts/plasmid_evidence.py', 'scripts/plasmid_circular.py'), ()),
     'modules/ngs/dorado_align.nf:DoradoAlign': (('dorado_cpu',), ('path bam', 'path reference'), ('tuple path("aligned.bam"), path("aligned.bam.bai"), emit: aligned', 'path "reference.fasta", emit: reference_copy', 'path "reference.fasta.fai", emit: reference_index', 'path "align.log", emit: log', 'path "qc_manifest.json", emit: primary_manifest, optional: true'), (), ()),
     'modules/ngs/dorado_basecall.nf:DoradoPreflight': (('local_cpu',), ('path pod5_dir',), ('path "dorado_preflight.json", emit: manifest',), ('scripts/dorado_p4_preflight.py',), ()),
     'modules/ngs/dorado_basecall.nf:DoradoBasecall': (('dorado_gpu', 'gpu'), ('path pod5_dir', 'path preflight_json'), ('path "calls.bam", emit: bam', 'path "basecall.log", emit: log', 'path "dorado_preflight.json", emit: preflight', 'path "dorado_runtime_provenance.json", emit: provenance', 'path "sequencing_summary.tsv", emit: summary, optional: true'), (), ()),
@@ -823,7 +824,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         after = a.chain(['RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'])
         if p.get('bcp_repo_path'):
             a.asset('runtime_data', None, 'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental', 'bcp_repo_path')
-        a.msa('boltz2', ('RunBoltzCPExperimental',))
+        from services.model_msa_handoff import fold_cp_msa_intent
+        from component_runtime import NativeArtifactRole
+        service = fold_cp_msa_intent(p, tuple(role.role_id for role in roles
+            if role.component_key == 'RunBoltzCPExperimental' and role.direction == 'input'))
+        services.append(service)
+        roles.append(NativeArtifactRole('boltz_cp_experimental:msa_artifacts',
+            'RunBoltzCPExperimental', 'input', 'native_chain_alignments', service.authority,
+            requiredness='required' if service.state != 'disabled' else 'optional',
+            format='bms.boltz-cp-msa-inputs.v1', identity_authority=service.authority))
         if p.get('run_frustrampnn') is not False:
             a.frustra(after)
         return True
@@ -1087,7 +1096,8 @@ def _append_ngs(a, workflow, yes):
             after = a.chain(['PrepareBamForAnalysis'], after)
     elif bam:
         after = a.chain(['DoradoAlign' if reference and yes('bam_force_realign') else 'PrepareBamForAnalysis'])
-        if reference and workflow in {'ont_construct_screening', 'wf_clone_validation', 'ont_methylation_analysis'}:
+        if reference and (workflow == 'ont_methylation_analysis' or
+                (workflow in {'ont_construct_screening', 'wf_clone_validation'} and not yes('bam_force_realign'))):
             after = a.chain(['ValidateMappedBam'], after)
     elif fastq:
         after = a.chain(['FastqAlign'])
@@ -1103,15 +1113,36 @@ def _append_ngs(a, workflow, yes):
             a.stage('ModkitPileup', after)
             a.stage('ModkitSummary', after)
         return True
-    if workflow == 'wf_clone_validation' or (workflow == 'ont_construct_screening' and yes('run_assembly')):
-        clone = a.chain(['RunCloneValidation'], after)
-        # This is an existing nested pinned workflow, not an arbitrary runner.
-        a.asset('runtime_data', 'wf-clone-validation', 'modules/ngs/clone_validation.nf:/mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1')
-        a.unresolved('RunCloneValidation', 'dependency_closure',
-            'modules/ngs/clone_validation.nf:RunCloneValidation',
-            'Bind existing wf-clone runtime release and all selected nested process SIFs from native runtime provenance before provisioning')
-        if workflow == 'wf_clone_validation':
-            a.chain(['CloneValidationAdapter', 'ConstructVerify'], clone)
+    if workflow in {'wf_clone_validation', 'ont_construct_screening'}:
+        # These entrypoints share the assembled/read-guided evidence graph.
+        # QC false deliberately leaves the adapter's structural screen unavailable.
+        run_qc = p.get('run_fastq_qc') is not False
+        assembly = workflow == 'wf_clone_validation' or yes('run_assembly')
+        adapter = ()
+        if assembly:
+            clone = a.chain(['RunCloneValidation'], after)
+            a.asset('runtime_data', 'wf-clone-validation',
+                'modules/ngs/clone_validation.nf:/mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1')
+            a.unresolved('RunCloneValidation', 'dependency_closure',
+                'modules/ngs/clone_validation.nf:RunCloneValidation',
+                'Bind existing wf-clone runtime release and all selected nested process SIFs from native runtime provenance before provisioning')
+            adapter = a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *after))))
+        qc, dimer_after = (), ()
+        if run_qc:
+            reads = a.chain(['BamToFastqForQC'], after) if not fastq else ()
+            dimer_after = a.chain(['FastqDimerAnalysis', 'BuildDimerCanonicalOutputs'], reads)
+            qc = a.chain(['FastqPlasmidQC'], tuple(dict.fromkeys((*after, *reads))))
+            if workflow == 'ont_construct_screening' and p.get('comparison_panel_snapshot'):
+                a.stage('ComparisonPanelAttribution', reads)
+        verification_input = adapter if assembly else qc
+        if assembly and run_qc:
+            verification_input = a.chain(['ComparePlasmidConsensus'], (*adapter, *qc))
+        if assembly or run_qc:
+            # Inputs also include adapter support/stats and the real dimer tables;
+            # comparison output alone is not the verifier's dependency closure.
+            a.chain(['ConstructVerify'], tuple(dict.fromkeys(
+                (*after, *adapter, *verification_input, *dimer_after))))
+        return True
     if workflow == 'ont_plasmid_qc' and bam and reference:
         a.stage('PrepareReferenceForIGV')
     # FASTQ QC always creates native dimer evidence; plasmid/construct do so

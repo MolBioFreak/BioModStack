@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "path": "artifacts/android/BioModStack-0.4.13-internal-update.apk",
+      "sha256": "a11564e14bd84adf1c3b21020d15013332ad94dc87d7c4fa5fe03b5e3616df13",
+      "reason": "Approved hash-bound internal-update release asset; artifacts/android/README.md defines its role."
+    },
+    {
+      "path": "artifacts/android/BioModStack-debug-phone-2026.06.09-molbio-drag-header-beta-007.apk",
+      "sha256": "021472cae04f2c55a774c15021ab5f479d94bb2f98751f78627aad8332c91343",
+      "reason": "Existing approved historical phone APK. Retention is documented in artifacts/android/README.md; an owner-reviewed retirement must remove this exception too."
+    },
+    {
+      "path": "tests/fixtures/boltzgen_617e549/installed_source.zip",
+      "sha256": "dacf205f79e7de856b1ce62fdfa7460d528fb027c0f42701b27c5ba11e774075",
+      "reason": "Pinned installed-source fixture used by platform/api/tests/test_boltzgen_native_scalars.py; documented in docs/S01_BoltzGen_Native_Scalars.md."
+    },
+    {
+      "path": "platform/api/tests/fixtures/conformational_mapping/confornets/complete/native/confornets_commands.log",
+      "sha256": "727b70d9545a1a2181e4bc5e05e603e354e5e4a5bdc5990d9a648655544d3a7c",
+      "reason": "Controlled scientific test fixture referenced by sibling artifact_manifest.json and provenance.json; not a local runtime log."
+    },
+    {
+      "path": "platform/api/tests/fixtures/conformational_mapping/confornets/complete/inputs/checkpoint.pt",
+      "sha256": "c05605510f48cd05303c09f8408bac207f2608e259f2568f5d02bef58ca211d3",
+      "reason": "Tiny controlled ConforNETs test fixture, not model weights. Preserve with the complete conformational-mapping fixture and its manifests."
+    },
+    {
+      "path": "platform/api/tests/fixtures/conformational_mapping/confornets/complete/native/raw/state.pt",
+      "sha256": "670021ffaa253b900ea06256701520c4576b477cf5a0c598777aa3a6ff2a4164",
+      "reason": "Tiny controlled ConforNETs test fixture, not model weights. Preserve with the complete conformational-mapping fixture and its manifests."
+    }
+  ]
+}

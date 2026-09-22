@@ -714,30 +714,20 @@ async def test_typed_cancellation_persists_joint_intent_before_external_stop(
 
         monkeypatch.setattr(job_control, "cancel_nextflow_job", stop)
         async with factory() as session:
-            if stopped:
-                assert await cm.cancel_request("request", _request(principal="alice"), session) == {
-                    "request_id": "request", "status": "cancelled",
-                }
-            else:
-                with pytest.raises(HTTPException) as pending:
-                    await cm.cancel_request("request", _request(principal="alice"), session)
-                assert pending.value.status_code == 409
-                assert pending.value.detail["code"] == "CANCELLATION_INCOMPLETE"
+            # Operator cancellation is terminal even when the owned unit never
+            # reports inactive-and-empty; the reconciler owns remote cleanup.
+            assert await cm.cancel_request("request", _request(principal="alice"), session) == {
+                "request_id": "request", "status": "cancelled",
+            }
         assert calls == ["run"]
         async with factory() as observer:
             job = await observer.get(Job, "job")
             typed = await observer.get(ConformationalMappingRequest, "request")
-            if stopped:
-                assert (job.status, job.queue_status, typed.status, typed.progress_json["phase"]) == (
-                    "cancelled", "cancelled", "cancelled", "cancelled",
-                )
-                assert job.assigned_gpu is None
-                assert job.params["cancellation_receipt"]["state"] == "completed"
-            else:
-                assert (job.status, job.queue_status, typed.status, typed.progress_json["phase"]) == (
-                    "running", "cancelling", "running", "cancellation_requested",
-                )
-                assert job.assigned_gpu == 0
-                assert job.completed_at is None
+            assert (job.status, job.queue_status, typed.status, typed.progress_json["phase"]) == (
+                "cancelled", "cancelled", "cancelled", "cancelled",
+            )
+            assert job.assigned_gpu is None
+            assert job.params["cancellation_receipt"]["state"] == "completed"
+            assert job.params["cancellation_receipt"]["remote_stop_verified"] is stopped
     finally:
         await engine.dispose()

@@ -212,7 +212,13 @@ async def cancel_job_lineage(
                 bool(target and target.leased_job_id == job.id),
             )
 
-    incomplete: list[str] = []
+    # Operator cancellation is terminal on request. The owned unit is stopped
+    # best-effort here, but an unverified stop never holds the job open: the job
+    # is terminalized immediately, its lease is released, and the reconciler
+    # reaps any surviving writer. Waiting on remote quiescence meant a single
+    # unit that refused to report empty left the cancellation permanently
+    # pending with no supported recovery.
+    remote_stop_unverified: list[str] = []
     for job in cancellable:
         if not job.nextflow_run_id:
             continue
@@ -222,20 +228,11 @@ async def cancel_job_lineage(
             logger.warning("[CANCEL] Failed to stop owned unit for %s: %s", job.id, exc)
             stopped_and_empty = False
         if not stopped_and_empty:
-            incomplete.append(job.id)
-
-    if incomplete:
-        if commit:
-            await session.commit()
-        else:
-            await session.flush()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "CANCELLATION_INCOMPLETE",
-                "message": "Cancellation remains pending until every owned unit is inactive and its cgroup is empty",
-                "job_ids": incomplete,
-            },
+            remote_stop_unverified.append(str(job.id))
+    if remote_stop_unverified:
+        logger.warning(
+            "[CANCEL] Terminalizing with unverified remote stop; reconciler owns remote cleanup: %s",
+            remote_stop_unverified,
         )
 
     completed_at = datetime.utcnow()
@@ -256,6 +253,10 @@ async def cancel_job_lineage(
                 "state": "completed",
                 "completed_at": terminal_time.isoformat() + "Z",
                 "run_identity": str(job.nextflow_run_id or receipt.get("run_identity") or ""),
+                # Whether the owned unit reported inactive-and-empty before the
+                # terminal publication. False means the reconciler still owns
+                # remote cleanup for this job.
+                "remote_stop_verified": str(job.id) not in remote_stop_unverified,
             }
         )
         params["cancellation_receipt"] = receipt

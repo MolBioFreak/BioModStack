@@ -128,7 +128,28 @@ PY
     mkdir -p staged_input
     if [ -d ${inputConfigPath} ]; then
         cp -R ${inputConfigPath} staged_input/input_bundle
-        DATA_ARG="\$TASK_ROOT/staged_input/input_bundle"
+        # The Fold-CP application refuses any directory entry that is not a
+        # .fasta/.yaml file, and a prepared bundle also carries its alignments
+        # and operation records beside the config. Hand the application the
+        # single native config file instead; the config's relative MSA paths
+        # still resolve next to it. A bundle without a config, or with several,
+        # keeps the directory the application can only refuse, so fail early and
+        # name the reason.
+        config_count=0
+        for candidate in "staged_input/input_bundle"/*.yaml "staged_input/input_bundle"/*.yml; do
+            [ -f "\$candidate" ] || continue
+            config_count=\$((config_count + 1))
+            staged_config="\$candidate"
+        done
+        if [ "\$config_count" -eq 0 ]; then
+            echo "Boltz-CP input bundle carries no native .yaml config" >&2
+            exit 1
+        fi
+        if [ "\$config_count" -gt 1 ]; then
+            echo "Boltz-CP input bundle carries \$config_count native configs; the application accepts one" >&2
+            exit 1
+        fi
+        DATA_ARG="\$TASK_ROOT/\$staged_config"
     else
         staged_file="\$(basename ${inputConfigPath})"
         cp ${inputConfigPath} "staged_input/\$staged_file"
@@ -146,7 +167,7 @@ from lib.portable_inputs import bind_native_document
 root, original = Path(sys.argv[2]), Path(sys.argv[3]).resolve()
 files = sorted(root.rglob('*.yaml')) + sorted(root.rglob('*.yml')) if root.is_dir() else [root]
 for path in files:
-    owner = original / path.relative_to(root) if root.is_dir() else original
+    owner = original / (path.relative_to(root) if root.is_dir() else path.name)
     document = yaml.safe_load(path.read_text())
     bound = bind_native_document(document, 'boltz-yaml', owner=owner)
     path.write_text(yaml.safe_dump(bound, sort_keys=False))

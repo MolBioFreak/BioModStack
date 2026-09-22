@@ -124,11 +124,76 @@ def release_digest(manifest):
     return hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+# Request documents the managed helper reads back from the worker. The helper's
+# declared request budget is bounded, so a manifest whose inline form would exceed
+# it is published here once and passed by reference; the helper re-verifies the
+# digest, and the manifest identity checks below are unchanged.
+REQUEST_DOCUMENT_DIRECTORY = 'requests'
+
+_REQUEST_DOCUMENT_WRITER = """import hashlib,os,pathlib,sys,tempfile
+p=pathlib.Path(sys.argv[1]);expected=sys.argv[2];data=sys.stdin.buffer.read()
+if hashlib.sha256(data).hexdigest()!=expected: raise RuntimeError('request document identity mismatch')
+q=pathlib.Path('/')
+for part in p.parent.parts[1:]:
+ q=q/part
+ if q.is_symlink(): raise RuntimeError('unsafe request document path')
+ q.mkdir(mode=0o700,exist_ok=True)
+fd,t=tempfile.mkstemp(prefix='.request-document-',dir=p.parent)
+try:
+ with os.fdopen(fd,'wb') as f: f.write(data);f.flush();os.fsync(f.fileno())
+ os.chmod(t,0o400);os.replace(t,p)
+finally:
+ if os.path.exists(t): os.unlink(t)
+"""
+
+
+def request_document_reference(document):
+    """Canonical bytes and the closed by-reference form for one request document."""
+    from tools.bms_managed_runtime import MAX_DOCUMENT_BYTES
+    payload = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
+    if len(payload) > MAX_DOCUMENT_BYTES:
+        raise ValueError('Managed request document exceeds the declared document budget')
+    return {'sha256': hashlib.sha256(payload).hexdigest()}, payload
+
+
+async def _reference_request_documents(connection, request, check_fence):
+    """Publish request documents that cannot travel inline, and pass references.
+
+    Below the declared helper request budget the existing inline form is sent
+    byte-for-byte; above it every document in the request is published once and
+    referenced by path and digest, so the request no longer grows with row count.
+    """
+    from tools.bms_managed_runtime import MAX_REQUEST_BYTES
+    keys = [key for key in ('manifest', 'manifests') if key in request]
+    if not keys or len(json.dumps(request).encode()) <= MAX_REQUEST_BYTES:
+        return request
+    from . import cache
+    root = f'{connection.remote_root.rstrip("/")}/managed-assets/v1/{REQUEST_DOCUMENT_DIRECTORY}'
+    referenced = dict(request)
+    for key in keys:
+        documents = request[key] if key == 'manifests' else [request[key]]
+        replaced = []
+        for document in documents:
+            reference, payload = request_document_reference(document)
+            path = f'{root}/{reference["sha256"]}.json'
+            await check_fence()
+            await cache.run_remote(connection, ['python3', '-c', _REQUEST_DOCUMENT_WRITER,
+                                                path, reference['sha256']],
+                                   input_bytes=payload, timeout=3600)
+            await check_fence()
+            replaced.append({'path': path, 'sha256': reference['sha256']})
+        referenced[key] = replaced if key == 'manifests' else replaced[0]
+    if len(json.dumps(referenced).encode()) > MAX_REQUEST_BYTES:
+        raise ValueError('Managed request exceeds the declared helper request budget')
+    return referenced
+
+
 async def helper_call(connection, request, check_fence):
     from . import cache
     cache_tool = await cache._install_helper(connection, check_fence)
     tool = await cache._install_helper(connection, check_fence, 'bms_managed_runtime.py')
     await check_fence()
+    request = await _reference_request_documents(connection, request, check_fence)
     result = await cache.run_remote(connection, ['python3', tool, '--root',
         connection.remote_root + '/managed-assets/v1', '--cache-helper', cache_tool],
         input_bytes=json.dumps(request).encode(), timeout=3600)

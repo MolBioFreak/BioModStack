@@ -38,6 +38,7 @@ async def test_eight_gpu_payload_incremental_fresh_admission_and_expiry(monkeypa
     store.entries[mod.identity(worker)] = state
     async def remote(*args, **kwargs):
         assert kwargs['timeout'] == 6
+        assert kwargs['establishment_timeout'] == 30
         assert args[1] == ['python3', '-', '/opt/biomodstack']
         return SimpleNamespace(stdout=json.dumps(fixture()))
     monkeypatch.setattr(mod, 'run_remote', remote)
@@ -71,6 +72,54 @@ async def test_missing_vram_never_authorizes_admission(monkeypatch):
     assert not (await targets.remote_target_telemetry(worker))['available']
     worker.host = 'new.example.test'
     assert not store.read(worker)['available']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error,message', [
+    (mod.RemoteConnectionError('private detail'), 'Remote SSH establishment failed or timed out'),
+    (mod.RemoteExecutionTimeout('private detail'), 'Remote telemetry execution timed out'),
+    (ValueError('private detail'), 'Remote collection failed or timed out'),
+])
+async def test_failure_classification_backoff_and_no_stale_success(monkeypatch, error, message):
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    store.entries[mod.identity(worker)] = state
+    async def remote(*args, **kwargs): raise error
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    for attempt in range(5):
+        await store.collect(worker, state)
+        value = store.read(worker)
+        assert not value['available'] and value['gpus'] == []
+        assert value['error'] == message and state['raw'] is None
+        assert 19 < state['due'] - time.monotonic() <= 60
+    seq, stamp, sample = state['history'][-1]
+    state['history'][-1] = (seq, stamp - 25, sample)
+    assert store.read(worker)['error'] == message
+
+
+@pytest.mark.asyncio
+async def test_handshake_time_is_not_observation_age_and_setup_is_independent(monkeypatch):
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    worker.state = 'probing'
+    # Monitoring is authenticated attachment, not runtime readiness.
+    worker.provider_metadata['setup'] = {'started_at': 'generation', 'phase': 'transferring'}
+    worker.provider_metadata['attachment'] = {
+        'telemetry': True, 'started_at': 'generation', 'fingerprint': worker.host_key_sha256,
+        **{key: getattr(worker, key) for key in ('host', 'port', 'username', 'remote_root')},
+    }
+    assert targets.telemetry_eligible(worker)
+    store.entries[mod.identity(worker)] = state
+    clock = [100.0]
+    monkeypatch.setattr(mod.time, 'monotonic', lambda: clock[0])
+    async def remote(*args, **kwargs):
+        clock[0] = 125.0
+        return SimpleNamespace(stdout=json.dumps(fixture()), command_started=124.0)
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    await store.collect(worker, state)
+    assert state['history'][-1][1] == 124.0
+    assert state['history'][-1][2]['available']
+    assert state['due'] == 135.0
+    # The original freshness window has not increased.
+    assert mod.FRESH_SECONDS == 20.0
 
 
 def test_deltas_first_sample_reset_and_unknown():

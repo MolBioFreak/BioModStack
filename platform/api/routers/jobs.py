@@ -482,6 +482,37 @@ def _coerce_nonempty_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _managed_resume_output_dir(value: Any) -> str | None:
+    """Validate a resume destination without creating or relocating any data.
+
+    Resume outputs belong below this deployment's results root. Input/weight
+    roots being readable does not authorize writing workflow outputs into them.
+    """
+    if value is None:
+        return None
+    def refuse(code: str, message: str) -> NoReturn:
+        raise HTTPException(status_code=422, detail={"code": code, "message": message})
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        refuse("RESUME_SOURCE_INVALID", "resume_source_dir must name an existing managed result directory.")
+    try:
+        path = Path(value).expanduser()
+        root = get_results_dir().resolve()
+        if not path.is_absolute() or ".." in path.parts:
+            refuse("RESUME_SOURCE_INVALID", "resume_source_dir must be an absolute managed result path without traversal.")
+        if any(part.is_symlink() for part in (path, *path.parents)):
+            refuse("RESUME_SOURCE_SYMLINK", "resume_source_dir must not traverse a symlink.")
+        resolved = path.resolve()
+        if resolved == root or not resolved.is_relative_to(root):
+            refuse("RESUME_SOURCE_OUTSIDE_MANAGED_STORAGE",
+                   "resume_source_dir is outside this deployment's managed results; select a current retained job to resume.")
+        if not resolved.is_dir():
+            refuse("RESUME_SOURCE_UNAVAILABLE", "The managed resume result directory is missing or is not a directory.")
+        return str(resolved)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail={"code": "RESUME_SOURCE_UNAVAILABLE",
+            "message": "The managed resume result directory cannot be inspected."}) from exc
+
+
 def _copy_present_params(source: Dict[str, Any], dest: Dict[str, Any], keys: tuple[str, ...]) -> None:
     for key in keys:
         if key in source:
@@ -1766,7 +1797,20 @@ def _normalize_boltz_cp_params_for_validation(
     size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
         normalized.get("bcp_size_cp")
     )
-    if gpu_ids:
+    requested_cp = normalized.get("size_cp", normalized.get("bcp_size_cp"))
+    if requested_cp not in (None, ""):
+        from services.nextflow import _derive_boltz_cp_gpu_launch_settings
+        try:
+            gpu_ids, size_cp = _derive_boltz_cp_gpu_launch_settings(
+                pinned_gpus=normalized.get("pinned_gpus"),
+                requested_size_cp=requested_cp,
+                fallback_gpu_ids=gpu_ids,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if gpu_ids:
+            normalized["gpu_ids"] = gpu_ids
+    elif gpu_ids:
         gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
         if gpu_count > 0:
             size_cp = _largest_square_divisor(gpu_count, size_cp)
@@ -5893,6 +5937,7 @@ async def preview_job_execution_plan(
     experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     """Browser and agent use the exact same typed, nonexecuting preview."""
+    _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     job_data = job_data.model_copy(deep=True)
     if job_data.launch_context_id:
         if current_launch_context_id.get() != job_data.launch_context_id:
@@ -5930,6 +5975,8 @@ async def _create_job(
     _approved_execution_plan: Any = Depends(lambda: None),
 ):
     """Create and queue a new pipeline job."""
+    # Reject stale/foreign resume paths before preview, job rows or output writes.
+    _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     from services import core_protein_scientific_contract as scientific_contract
     try:
         # Also covers internal callers that mutate/model_construct JobCreate,
@@ -6634,9 +6681,9 @@ async def _create_job(
                 mode=job_data.mode,
                 params=job_params,
             )
-            resume_source_dir = _coerce_nonempty_text(job_params.get("resume_source_dir"))
+            resume_source_dir = _managed_resume_output_dir(job_params.get("resume_source_dir"))
             if resume_source_dir and num_jobs == 1:
-                output_dir = str(Path(resume_source_dir).expanduser())
+                output_dir = resume_source_dir
 
         if msa_job:
             sequence_for_hash = str(job_params.get('sequence') or job_params.get('sequence_input') or '')
@@ -6736,7 +6783,11 @@ async def _create_job(
             provenance_payload[alignment_access.PROVENANCE_DIGEST_KEY] = capability_digest
             provenance_payload[alignment_access.PROVENANCE_SCHEME_KEY] = alignment_access.SCHEME
 
-        os.makedirs(output_dir, exist_ok=True)
+        if job_params.get("resume_source_dir") and num_jobs == 1:
+            # Recheck at the write boundary; never mkdir a missing resume root.
+            output_dir = _managed_resume_output_dir(job_params["resume_source_dir"])
+        else:
+            os.makedirs(output_dir, exist_ok=True)
         
         # Determine queue status: if MSA job exists, this job waits for it
         initial_queue_status = 'pending_msa' if msa_job else 'queued'

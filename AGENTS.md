@@ -67,6 +67,36 @@ not `import.meta.env.DEV`, for Development-specific UI defaults.
 - Run `git diff --check` before every commit. Do not stage virtual environments, dependency directories, build output, results, model weights, databases, or logs.
 - Treat a successful command as insufficient when subordinate readiness, cleanup, authorization, or artifact checks report failure or ambiguity.
 
+### Native samtools dependency for construct-verification tests
+
+`uv` supplies the locked Python environment, not a host `samtools` executable.
+`platform/api/tests/test_construct_verification_phase2.py` resolves samtools when
+BAM-backed tests actually need it. An explicitly set `BMS_TEST_SAMTOOLS` (executable
+path or command name) takes precedence over `samtools` on `PATH`. It is passed as
+one executable, never as a shell command or a string containing flags.
+
+Without an override and without samtools on `PATH`, only BAM-backed tests skip,
+with an explicit dependency reason; the pure-Python tests still run. Use `-rs`
+to display skips. A set but empty, missing, or non-executable override is a clear
+test failure, not a skip or silent fallback. Skipped native tests are **not run**,
+not evidence that the native checks passed.
+
+For a real-tool Development run, from `platform/api`, select an existing approved
+samtools installation explicitly when it is outside `PATH`:
+
+```bash
+export BMS_TEST_SAMTOOLS="/absolute/path/to/samtools"
+uv run --frozen --group dev python -m pytest \
+  tests/test_construct_verification_phase2.py -q -rs --capture=no
+```
+
+A CI lane claiming native-tool coverage must provision samtools and set this
+variable to its actual executable (or ensure the tool is on `PATH`), then inspect
+the skip counts. With no native tool provisioned, a passing exit code with skips
+is a partial test run, not native verification. Do not export a host-specific path
+as a universal service default or change the verifier's scientific checks to
+compensate for a missing test dependency.
+
 ## Code-retirement rule
 
 Deprecated source must be removed from `test` once an audit proves it is not required by current runtime entrypoints, dependency manifests, schemas, tests, supported workflows, or explicit migration/recovery needs. Do not retain dead code for archaeology; Git history is the archive. Remove associated stale tests, docs, package metadata, and UI references in the same change, then validate the surviving supported path.

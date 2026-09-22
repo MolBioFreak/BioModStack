@@ -11,15 +11,27 @@ import json
 import os
 import stat
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
 from .shared_runtime_images import (
     SharedRuntimeImageError as Error, _absolute, _digest, _directory, _file,
     _check_file, _check_directory, _hash, _same, _identity, _member,
-    _DIRECTORY_FLAGS, verify_image,
+    _DIRECTORY_FLAGS, _FILE_FLAGS, verify_image,
 )
 from . import runtime_image_lifecycle as lifecycle
+
+
+def parallel_workers():
+    """Use 80% of this host's cores for the whole-image passes.
+
+    Inventorying and hashing an extracted rootfs is a per-file pass over tens of
+    thousands of entries and gigabytes of content; leaving it on one core makes
+    every execution wait minutes for a machine that is otherwise idle. Extracting
+    an image uses the same share.
+    """
+    return max(1, int((os.cpu_count() or 1) * 0.8))
 
 FICLONE = 0x40049409
 
@@ -99,6 +111,7 @@ def _inventory(path, *, freeze=False, identities=None):
     Hardlinks are allowed only when every link is contained in this rootfs.
     """
     entries, links, original_modes, hashes = {}, {}, {}, {}
+    stamps, pending = {}, {}
 
     def record(relative, info, target=None):
         if identities is not None:
@@ -143,15 +156,13 @@ def _inventory(path, *, freeze=False, identities=None):
                     mode = readable(fd, child, 0o400)
                     with _member(fd, child) as (source, observed):
                         stamp = _identity(observed)
-                        digest = hashes.get(stamp)
-                        if digest is None:
-                            digest = hashes[stamp] = _hash(source)
-                        row = {"kind": "file", "mode": mode,
-                               "sha256": digest, "size": observed.st_size}
+                        row = {"kind": "file", "mode": mode, "size": observed.st_size}
                         record(rel, observed)
                         key = (observed.st_dev, observed.st_ino)
                         links.setdefault(key, []).append((rel, observed.st_nlink))
                         entries[rel] = row
+                        stamps[rel] = stamp
+                        pending.setdefault(stamp, rel)
                 else:
                     raise Error("unsupported special entry in extracted rootfs: " + rel)
             if not _same(before, os.fstat(fd)) or not _same(
@@ -162,6 +173,29 @@ def _inventory(path, *, freeze=False, identities=None):
     with _directory(path.parent) as parent:
         walk(parent, path.name, '.')
         _check_directory(path.parent, parent)
+    if pending:
+        # One hash per unique inode, in parallel, each re-checked against the
+        # identity observed during the walk so a swap cannot be hashed as if it
+        # were the frozen member.
+        def digest_member(item):
+            stamp, rel = item
+            fd = os.open(path / rel, _FILE_FLAGS)
+            try:
+                before = os.fstat(fd)
+                if _identity(before) != stamp:
+                    raise Error('derived rootfs member changed before hashing')
+                digest = _hash(fd)
+                if not _same(before, os.fstat(fd)):
+                    raise Error('derived rootfs member changed while hashing')
+                return stamp, digest
+            finally:
+                os.close(fd)
+
+        with ThreadPoolExecutor(max_workers=parallel_workers()) as pool:
+            for stamp, digest in pool.map(digest_member, sorted(pending.items())):
+                hashes[stamp] = digest
+    for rel, stamp in stamps.items():
+        entries[rel]['sha256'] = hashes[stamp]
     for group in links.values():
         if any(count != len(group) for _, count in group):
             raise Error("derived rootfs has an external hardlink")

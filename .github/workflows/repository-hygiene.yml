@@ -1,0 +1,24 @@
+name: Repository hygiene
+
+on:
+  push:
+    branches: [test, test-repository-cleanup-20260921]
+  pull_request:
+    branches: [test, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4; same pin as existing review lane
+        with:
+          persist-credentials: false
+      - name: Test repository hygiene rules
+        run: python3 -m unittest discover -s tests -p 'test_repository_*.py' -v
+      - name: Check tracked paths and approved exceptions
+        run: python3 scripts/check_repository_hygiene.py

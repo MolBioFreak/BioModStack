@@ -2,6 +2,7 @@
 import errno
 import hashlib
 import importlib.util
+import json
 import multiprocessing
 import os
 from pathlib import Path
@@ -564,14 +565,30 @@ def test_parent_renamed_during_copy_cannot_activate(tree, monkeypatch):
     assert marker.read_bytes() == before
 
 
-def test_preupload_peak_budget_is_conservative_and_not_reserved(tree):
+@pytest.mark.parametrize('state,copies', [('cold', 3), ('cached', 1), ('installed', 0)])
+def test_preupload_peak_budget_is_conservative_and_not_reserved(tree, state, copies):
     m, cache, root, make, prior, marker = tree
+    before = marker.read_bytes()
+    if state == 'installed':
+        manifest = prior
+    elif state == 'cached':
+        manifest = make(b'cached but not installed')
+    else:
+        # No upload or cache publication: exercise the real cold admit path.
+        data = b'neither cached nor installed'
+        manifest = dict(prior, artifacts=[dict(prior['artifacts'][0],
+            sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data))])
     with cache.directory(root) as parent:
-        budget = m.check_space(parent, prior, prior['artifacts'])
-    admitted = m.admit(root, prior, m.boot_id(), cache)['admission']
-    assert admitted['additional_copy_bytes'] == 3 * budget['additional_copy_bytes']
+        budget = m.check_space(parent, manifest, manifest['artifacts'])
+    admitted = m.admit(root, manifest, m.boot_id(), cache)['admission']
+    assert admitted['additional_copy_bytes'] == copies * budget['additional_copy_bytes']
+    assert admitted['metadata_allowance_bytes'] == budget['metadata_allowance_bytes'] > 0
     assert admitted['reservation'] is False
-    assert admitted['headroom_bytes'] == 1024 * 1024 * 1024
+    assert admitted['headroom_bytes'] == m.MIN_HEADROOM == 1024 * 1024 * 1024
+    assert admitted['required_available_bytes'] == (admitted['additional_copy_bytes']
+        + admitted['metadata_allowance_bytes'] + admitted['headroom_bytes'])
+    assert marker.read_bytes() == before  # Admission must not activate a release.
+    assert m.observe(root, prior, cache)['state'] == 'verified'
 
 
 def test_preupload_rejects_cache_on_another_device(tree, monkeypatch):
@@ -625,3 +642,97 @@ def test_critical_bytes_without_qualification_are_not_ready(critical_package, mo
     observed = managed.observe(root, manifest, cache)
     assert observed['state'] == 'unverified'
     assert all(row['state'] == 'verified' for row in observed['artifacts'])
+
+
+def production_release_manifest(count=88037):
+    """Production-shaped provider release manifest: weights plus the shared images."""
+    from test_artifact_cache import production_weight_rows
+    rows = [dict(name='weights/' + row['name'], sha256=row['sha256'],
+                 size_bytes=row['size_bytes'], mode=row['mode'])
+            for row in production_weight_rows(count)]
+    rows.append(dict(name='containers/fold-cp.sif', sha256='7' * 64, size_bytes=10446983168,
+                     mode=0o444, kind='runtime_image'))
+    rows.append(dict(name='containers/frustrampnn.sif', sha256='8' * 64, size_bytes=10201653248,
+                     mode=0o444, kind='runtime_image'))
+    return dict(selection=dict(kind='workflow', model_id='a' * 64),
+                source_revision='b' * 40, source_tree='c' * 40, artifacts=rows)
+
+
+def write_request_document(root, document):
+    """Publish one request document exactly as the controller's writer does."""
+    payload = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
+    return write_document_bytes(root / 'requests', payload)
+
+
+def write_document_bytes(directory, payload):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (hashlib.sha256(payload).hexdigest() + '.json')
+    path.write_bytes(payload)
+    return {'path': str(path), 'sha256': hashlib.sha256(payload).hexdigest()}
+
+
+def test_request_budget_is_declared_and_not_truncated(tmp_path):
+    """An over-budget request reports its code; it is never parsed from a truncation."""
+    import subprocess, sys
+    managed = load('bms_managed_runtime')
+    over = json.dumps(dict(action='install', boot_id='0' * 36,
+                           manifest={'artifacts': [], 'padding': 'x' * (managed.MAX_REQUEST_BYTES + 1)})).encode()
+    result = subprocess.run([sys.executable, str(TOOLS / 'bms_managed_runtime.py'),
+                             '--root', str(tmp_path / 'managed-assets/v1'),
+                             '--cache-helper', str(TOOLS / 'bms_artifact_cache.py')],
+                            input=over, capture_output=True)
+    assert result.returncode == 1
+    assert json.loads(result.stderr) == {'state': 'failed', 'error': 'request_too_large'}
+    assert b'JSONDecodeError' not in result.stderr
+
+
+def test_production_manifest_is_resolved_by_reference(tmp_path):
+    """The 88,039-row release manifest does not depend on helper stdin size."""
+    managed, cache = load('bms_managed_runtime'), load('bms_artifact_cache')
+    root = tmp_path / 'managed-assets/v1'
+    manifest = production_release_manifest()
+    assert len(json.dumps(dict(action='admit', manifest=manifest)).encode()) > managed.MAX_REQUEST_BYTES
+    reference = write_request_document(root, manifest)
+    request = {'action': 'admit', 'manifest': reference, 'boot_id': '0' * 36}
+    assert len(json.dumps(request).encode()) < 1024
+    resolved = managed.resolve_manifest(request['manifest'], root, cache)
+    assert resolved == manifest
+    assert managed.validate_manifest(resolved, cache) == reference['sha256']
+    # the inline form is still accepted, and is what small manifests use
+    assert managed.resolve_manifest(manifest, root, cache) is manifest
+
+
+@pytest.mark.parametrize('damage, code', [
+    ('content', 'document_identity_mismatch'),
+    ('name', 'invalid_reference'),
+    ('absent', 'document_unavailable'),
+    ('outside_root', 'invalid_reference'),
+    ('truncated', 'invalid_request_document'),
+    ('oversized', 'document_too_large'),
+])
+def test_request_document_damage_is_refused_by_name(tmp_path, damage, code):
+    managed, cache = load('bms_managed_runtime'), load('bms_artifact_cache')
+    root = tmp_path / 'managed-assets/v1'
+    manifest = production_release_manifest(count=4)
+    reference = write_request_document(root, manifest)
+    if damage == 'content':
+        Path(reference['path']).write_bytes(b'{}')
+    elif damage == 'name':
+        moved = Path(reference['path']).with_name('manifest.json')
+        Path(reference['path']).replace(moved)
+        reference = dict(reference, path=str(moved))
+    elif damage == 'absent':
+        Path(reference['path']).unlink()
+    elif damage == 'outside_root':
+        outside = write_request_document(tmp_path / 'elsewhere', manifest)
+        reference = outside
+    elif damage == 'truncated':
+        payload = b'{"selection": {"kind": "workflow"}'
+        reference = write_document_bytes(Path(reference['path']).parent, payload)
+    else:
+        payload = b'x' * (managed.MAX_DOCUMENT_BYTES + 1)
+        reference = write_document_bytes(Path(reference['path']).parent, payload)
+    with pytest.raises(managed.RequestBudgetError) as error:
+        managed.resolve_manifest(reference, root, cache)
+    assert error.value.code == code
+    assert error.value.code in managed.REQUEST_CODES

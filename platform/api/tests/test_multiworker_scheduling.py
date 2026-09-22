@@ -452,7 +452,18 @@ async def test_attachment_is_target_scoped_and_preserves_other_active_worker(wor
         manifest, artifacts, _, _ = critical_package
         async def helper(*args, **kwargs): return {"boot_id": "fixture-boot"}
         async def activate(*args, **kwargs):
-            return SimpleNamespace(model_dump=lambda **kw: {"state": "ready"})
+            # Typed fixture for the actual qualified-release boundary. No CUDA
+            # executes here; real backend qualification belongs to its own tests.
+            return managed_inventory.ManagedRelease(
+                selection=manifest['selection'],
+                critical=dict(requirements=manifest['critical']['requirements'],
+                    observed=dict(backend='apptainer', cuda='BMS_CUDA_OK',
+                                  nextflow='BMS_NEXTFLOW_INTERPRETERS_OK'), compatible=True),
+                release_sha256=managed_inventory.release_digest(manifest),
+                source_revision=manifest['source_revision'], source_tree=manifest['source_tree'],
+                state='verified', artifacts=[dict(
+                    **{key: row[key] for key in ('name', 'sha256', 'size_bytes')}, state='verified')
+                    for row in manifest['artifacts']])
         async def observe(*args, **kwargs):
             return SimpleNamespace(boot_id="fixture-boot", critical_runtime_ready=True,
                                    model_dump=lambda **kw: {"boot_id": "fixture-boot"})
@@ -463,6 +474,8 @@ async def test_attachment_is_target_scoped_and_preserves_other_active_worker(wor
         monkeypatch.setattr(cache, "_cache_artifacts", noop)
         response = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id="2"))
         assert response.active and response.state == "ready"
+        assert response.capabilities['readiness']['container_backend'] == 'apptainer'
+        assert response.capabilities['readiness']['container_qualification'] == 'BMS_CUDA_OK'
         assert (await session.execute(select(ExecutionTarget.__table__).where(ExecutionTarget.id == "vast:1"))).one() == before
         assert (await session.execute(select(Job.__table__).order_by(Job.id))).all() == jobs_before
         assert (await session.get(ExecutionTarget, "vast:2")).leased_job_id is None

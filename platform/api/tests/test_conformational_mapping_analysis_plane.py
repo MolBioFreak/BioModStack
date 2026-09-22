@@ -239,11 +239,11 @@ def test_production_cm_runner_preserves_input_symlinks_until_no_follow_rejection
         os.open(container, os.O_RDONLY), "a" * 64,
     ))
     monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/apptainer")
-    monkeypatch.setattr(module, "_container_sha256", lambda *_args, **_kwargs: (
-        FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256
-        if _args[2] == FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_path
-        else FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256
-    ))
+    monkeypatch.setattr(module._frustrampnn_runtime, "_container_sha256_many",
+        lambda _apptainer, _container, paths, **_kwargs: {
+            paths[0]: FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
+            paths[1]: FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256,
+        })
     inference_calls: list[object] = []
 
     def inference_must_not_run(*args, **kwargs):
@@ -307,13 +307,12 @@ def test_cm_analysis_plane_omits_state_artifact_index_member_without_comparison_
         lambda *_args: (os.open(container, os.O_RDONLY), "a" * 64),
     )
     monkeypatch.setattr(
-        module,
-        "_container_sha256",
-        lambda _apptainer, _container, internal_path, **_kwargs: (
-            FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256
-            if internal_path == FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_path
-            else FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256
-        ),
+        module._frustrampnn_runtime,
+        "_container_sha256_many",
+        lambda _apptainer, _container, paths, **_kwargs: {
+            paths[0]: FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
+            paths[1]: FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_sha256,
+        },
     )
     monkeypatch.setattr(
         module,
@@ -365,6 +364,8 @@ def test_cm_analysis_plane_closes_pinned_container_when_asset_verification_fails
     class SpyPin:
         def __init__(self, fd: int, sha256: str):
             self.fd = fd; self.sha256 = sha256
+            self.closed = False
+            self.proc_path = Path(f"/proc/self/fd/{fd}")
         def close(self) -> None:
             closed.append(self.fd)
             os.close(self.fd)
@@ -372,7 +373,11 @@ def test_cm_analysis_plane_closes_pinned_container_when_asset_verification_fails
     monkeypatch.setattr(module, "_open_verified_container", lambda *_args: (descriptor, "a" * 64))
     monkeypatch.setattr(module._frustrampnn_runtime, "PinnedContainer", SpyPin)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/apptainer")
-    monkeypatch.setattr(module, "_container_sha256", lambda *_args, **_kwargs: "0" * 64)
+    monkeypatch.setattr(module._frustrampnn_runtime, "_container_sha256_many",
+        lambda _apptainer, _container, paths, **_kwargs: {
+            paths[0]: FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
+            paths[1]: "0" * 64,
+        })
     monkeypatch.setattr(sys, "argv", [
         "run_conformational_mapping_analysis_plane.py",
         "--request", str(request), "--runtime-registry", str(registry),

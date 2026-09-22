@@ -482,6 +482,88 @@ def prepare_boltz_roster(params, destination, *, roster=None):
             'boltz_prepared_msa_sha256': digest(path.read_bytes())}
 
 
+def fold_cp_msa_settings(params):
+    from component_runtime import _LAUNCH_BINDING_KEYS
+    return {k: v for k, v in params.items()
+            if k.startswith(('msa_', 'colabfold_', 'boltz_'))
+            and not k.endswith(('_path', '_dir')) and k not in _LAUNCH_BINDING_KEYS}
+
+
+def fold_cp_msa_intent(params, input_roles):
+    """Input preparation, not an MSA request for future prediction outputs."""
+    from component_runtime import ExternalServiceIntent, canonical_bytes
+    return ExternalServiceIntent('boltz_cp_experimental:msa', params.get('msa_provider'),
+        'platform/api/services/model_msa_handoff.py:prepare_boltz_cp_bundle; '
+        'platform/api/services/msa_preparation.py; modules/boltz_cp_experimental.nf:RunBoltzCPExperimental',
+        canonical_bytes(fold_cp_msa_settings(params)), input_roles,
+        ('boltz_cp_experimental:msa_artifacts',),
+        'planned_from_native_inputs' if enabled(params.get('boltz_use_msa')) else 'disabled')
+
+
+def bind_prepared_fold_cp_plan(invocation, supplied):
+    """Verify the controller package against the once-compiled native inputs."""
+    from dataclasses import replace
+    from biomodstack_boltz_msa import resolve_boltz_config
+    plan = invocation.execution_plan
+    if plan is None:
+        raise ValueError('Prepared Fold-CP MSA requires its selected execution plan')
+    native = invocation.native_parameters
+    root = Path(supplied['bcp_input_path'])
+    output = Path(native['out_dir'])
+    if (not root.is_absolute() or any(p.is_symlink() for p in (root, *root.parents))
+            or not root.resolve().is_relative_to(output.resolve())):
+        raise ValueError('Prepared MSA transport unavailable outside compiled job output')
+    manifest_path = root / 'msa-inputs.json'
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError('Prepared MSA manifest must be a regular native input')
+    sha = supplied['boltz_prepared_msa_sha256']
+    if digest(manifest_path.read_bytes()) != sha:
+        raise ValueError('Prepared Fold-CP MSA manifest digest mismatch')
+    manifest = json.loads(manifest_path.read_bytes())
+    if (manifest.get('schema') != 'bms.boltz-cp-msa-inputs.v1'
+            or manifest.get('settings') != fold_cp_msa_settings(native)):
+        raise ValueError('Prepared Fold-CP MSA schema/scientific settings mismatch')
+    services = [s for s in plan.metadata.external_services if s.logical_id == 'boltz_cp_experimental:msa']
+    identity = 'sha256:' + sha
+    if len(services) != 1 or services[0].state == 'disabled':
+        raise ValueError('Prepared Fold-CP MSA has no selected service')
+    if services[0].operation_identity not in (None, identity):
+        raise ValueError('Prepared MSA plan operation identity changed')
+    records = manifest.get('configs', [])
+    names = [r['path'] for r in records]
+    actual = sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.suffix in {'.yaml', '.yml'})
+    if not names or len(set(names)) != len(names) or sorted(names) != actual:
+        raise ValueError('Prepared Fold-CP native config roster mismatch')
+    if services[0].operation_identity is None:
+        source = Path(native['bcp_input_path'])
+        files = sorted(source.rglob('*.yaml')) + sorted(source.rglob('*.yml')) if source.is_dir() else [source]
+        expected = {str(p.relative_to(source)) if source.is_dir() else p.name: digest(p.read_bytes()) for p in files}
+        if {r['path']: r['source_sha256'] for r in records} != expected:
+            raise ValueError('Prepared Fold-CP native source identity mismatch')
+        import yaml
+        for path in files:
+            name = str(path.relative_to(source)) if source.is_dir() else path.name
+            original = yaml.safe_load(path.read_text())
+            prepared = yaml.safe_load((root / name).read_text())
+            for document in (original, prepared):
+                for entry in document['sequences']:
+                    if 'protein' in entry:
+                        protein = entry['protein']
+                        if protein.get('msa') != 'empty':
+                            protein.pop('msa', None)
+            if original != prepared:
+                raise ValueError('Prepared Fold-CP native scientific input mismatch')
+    for name in names:
+        resolve_boltz_config(root / name, root=root, manifest_sha256=sha)
+    authority = 'biomodstack_boltz_msa.py:resolve_boltz_config'
+    return replace(plan, metadata=replace(plan.metadata,
+        external_services=tuple(replace(s, state='prepared', operation_identity=identity)
+            if s.logical_id == services[0].logical_id else s for s in plan.metadata.external_services),
+        artifact_roles=tuple(replace(r, identity_authority=authority,
+            native_declaration='msa-inputs.json@' + identity)
+            if r.role_id == 'boltz_cp_experimental:msa_artifacts' else r for r in plan.metadata.artifact_roles)))
+
+
 def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
     """Package every native config separately, retaining file and chain identity."""
     import yaml
@@ -520,7 +602,8 @@ def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
         target.write_text(yaml.safe_dump(payload, sort_keys=False))
         records.append({'path': str(relative), 'source_sha256': digest(path.read_bytes()),
                         'sha256': digest(target.read_bytes()), 'chains': chains, 'provenance': receipt})
-    manifest = {'schema': 'bms.boltz-cp-msa-inputs.v1', 'configs': records}
+    manifest = {'schema': 'bms.boltz-cp-msa-inputs.v1', 'configs': records,
+                'settings': fold_cp_msa_settings(params)}
     manifest_path = destination / 'msa-inputs.json'
     manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
     return {**params, 'bcp_input_path': str(destination.resolve()),

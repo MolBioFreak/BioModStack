@@ -796,19 +796,19 @@ def test_command_rejects_path_collisions_and_unsafe_bind_paths(tmp_path: Path, c
         )
 
 
-def test_cm_compatibility_wrappers_delegate_to_neutral_runtime() -> None:
+def test_cm_authentication_delegates_to_neutral_runtime() -> None:
     runtime = _runtime()
     cm = importlib.import_module("scripts.run_conformational_mapping_analysis_plane")
     assert cm._open_verified_container.__module__ == cm.__name__
     assert cm._sha256_fd.__module__ == cm.__name__
-    assert cm._container_sha256.__module__ == cm.__name__
+    assert not hasattr(cm, "_container_sha256")
     assert cm._frustrampnn_command.__module__ == cm.__name__
 
     source = Path(cm.__file__).read_text(encoding="utf-8")
-    wrapper_region = source[source.index("def _container_sha256"):source.index("def main")]
+    wrapper_region = source[source.index("def _sha256_fd"):source.index("def main")]
     assert "_frustrampnn_runtime.open_verified_container" in wrapper_region
     assert "_frustrampnn_runtime.sha256_fd" in wrapper_region
-    assert "_frustrampnn_runtime.container_sha256" in wrapper_region
+    assert "_frustrampnn_runtime.verify_container_assets" in wrapper_region
     assert "_frustrampnn_runtime.build_frustrampnn_command" in wrapper_region
     assert "O_NOFOLLOW" not in wrapper_region
     assert "hashlib.sha256" not in wrapper_region

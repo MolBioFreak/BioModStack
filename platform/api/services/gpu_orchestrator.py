@@ -2803,10 +2803,22 @@ class GPUOrchestrator:
                     job_params = _normalize_job_params(job.params)
                     requested_remote_gpus = _normalize_pinned_gpus(
                         job_params.get("pinned_gpus") or job_params.get("bcp_gpu_ids")
+                        or (job_params.get("gpu_ids") if job.model_id == "boltz_cp_experimental" else None)
                     )
                     if gpu_consuming and not requested_remote_gpus and isinstance(job.pinned_gpu, int):
                         requested_remote_gpus = [int(job.pinned_gpu)]
                     requested_remote_gpus = sorted(set(requested_remote_gpus or []))
+                    if job.model_id == "boltz_cp_experimental":
+                        from services.nextflow import _derive_boltz_cp_gpu_launch_settings
+                        try:
+                            _derive_boltz_cp_gpu_launch_settings(
+                                pinned_gpus=requested_remote_gpus,
+                                requested_size_cp=job_params.get("bcp_size_cp", job_params.get("size_cp")),
+                            )
+                        except ValueError as exc:
+                            job.remote_state = "waiting_remote_gpu"
+                            job.error_message = str(exc)
+                            continue
                     remote_gpu = requested_remote_gpus[0] if requested_remote_gpus else None
                     if any(gpu_id < 0 or gpu_id >= gpu_count for gpu_id in requested_remote_gpus):
                         job.remote_state = "waiting_remote_gpu"

@@ -23,6 +23,43 @@ import uuid
 
 CHUNK = 1024 * 1024
 
+# Declared budgets. The stdin request document must stay small: any larger payload
+# is published as a worker-side file and passed by reference, never inlined.
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
+# Declared budget for one referenced worker-side document (the bundle's runtime
+# listing and the weight layout it carries). validate_manifest bounds a layout at
+# 100,000 rows, so the declared closure is well inside this bound.
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+# Declared budgets for the packed shared weight tree. Its members are accepted
+# only by matching a row of the authenticated weight layout, so the archive's own
+# digest is the transport identity and the layout stays the content authority. A
+# bounded number of small accompanying members (an index or a packer manifest)
+# may ride along; they are counted and never published.
+ARCHIVE_SCHEMA = 'bms.weight-archive.v1'
+MAX_UNMATCHED_ARCHIVE_MEMBERS = 64
+MAX_UNMATCHED_ARCHIVE_BYTES = 1024 * 1024
+
+# Closed diagnostic code set for these budgets. Each code is a fixed safe string,
+# never constructed from request contents, paths or external prose.
+REQUEST_CODES = {
+    'request_too_large': 'helper request exceeds the declared request byte budget',
+    'document_too_large': 'referenced document exceeds the declared document byte budget',
+    'invalid_reference': 'referenced document declaration is invalid',
+    'document_unavailable': 'referenced document is unavailable',
+    'document_identity_mismatch': 'referenced document identity does not match its digest',
+    'invalid_weight_layout_document': 'referenced weight layout document is invalid',
+}
+
+
+class RequestBudgetError(ValueError):
+    """Typed helper failure carrying one closed-set diagnostic code."""
+
+    def __init__(self, code):
+        if code not in REQUEST_CODES:
+            raise ValueError('unknown_request_code')
+        super().__init__(REQUEST_CODES[code])
+        self.code = code
+
 
 @contextmanager
 def directory(path, *, create=False):
@@ -118,11 +155,82 @@ def weight_layout(entries):
     return hashlib.sha256(payload).hexdigest(), rows, payload
 
 
+def archive_rows(rows):
+    """Layout rows that can be carried by a packed archive, keyed by their digest.
+
+    Link rows project a target string rather than member content, so they are not
+    archive members. One digest may only ever name one size.
+    """
+    expected = {}
+    for row in rows:
+        if 'target' in row:
+            continue
+        previous = expected.setdefault(row['sha256'], row)
+        if previous['size_bytes'] != row['size_bytes']:
+            raise ValueError('conflicting_weight_members')
+    return expected
+
+
+LAYOUT_DOCUMENT = '.bms-runtime-images.json'
+LAYOUT_SCHEMA = 'bms.runtime-image-references.v1'
+
+
+def read_document(path, limit=MAX_DOCUMENT_BYTES):
+    """Read one declared, bounded worker-side document without following links."""
+    path = PurePosixPath(str(path))
+    with directory(path.parent) as parent:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    try:
+        regular(fd)
+        if os.fstat(fd).st_size > limit:
+            raise RequestBudgetError('document_too_large')
+        data = bytearray()
+        while chunk := os.read(fd, min(CHUNK, limit + 1 - len(data))):
+            data.extend(chunk)
+            if len(data) > limit:
+                raise RequestBudgetError('document_too_large')
+        return bytes(data)
+    finally:
+        os.close(fd)
+
+
+def weight_layout_reference(reference):
+    """Resolve a by-reference weight layout from the worker's runtime listing.
+
+    The listing is the document bundle.py already writes into the attempt runtime
+    directory and records in the authenticated envelope, so the request carries a
+    path and digest instead of every row. Document identity, schema, placement and
+    row shape are re-verified here before the rows are used for the shared view.
+    """
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}
+            or not isinstance(reference['sha256'], str)
+            or not re.fullmatch('[0-9a-f]{64}', reference['sha256'])):
+        raise RequestBudgetError('invalid_reference')
+    path = PurePosixPath(str(reference['path']))
+    if not path.is_absolute() or '..' in path.parts or path.name != LAYOUT_DOCUMENT:
+        raise RequestBudgetError('invalid_reference')
+    try:
+        payload = read_document(path)
+    except FileNotFoundError:
+        raise RequestBudgetError('document_unavailable') from None
+    if hashlib.sha256(payload).hexdigest() != reference['sha256']:
+        raise RequestBudgetError('document_identity_mismatch')
+    try:
+        document = json.loads(payload)
+    except ValueError:
+        raise RequestBudgetError('invalid_weight_layout_document') from None
+    if (not isinstance(document, dict) or document.get('schema') != LAYOUT_SCHEMA
+            or document.get('runtime_root') != str(path.parent)
+            or not isinstance(document.get('weights'), list)):
+        raise RequestBudgetError('invalid_weight_layout_document')
+    return document['weights']
+
+
 class Cache:
     def __init__(self, root, events=None):
         self.root = PurePosixPath(str(root))
         self.events = events or (lambda value: None)
-        for name in ('objects/sha256', 'incoming', 'locks', 'weights'):
+        for name in ('objects/sha256', 'incoming', 'locks', 'weights', 'archives'):
             with directory(self.root / name, create=True):
                 pass
 
@@ -344,14 +452,262 @@ class Cache:
                     os.fsync(parent)
         return dict(state='ready', root=str(root), sha256=digest)
 
+    def archive_root(self, archive):
+        return self.root / 'archives' / archive['sha256']
+
+    def archive_record(self, archive, layout_sha256):
+        """The completion record for one archive pass, or None.
+
+        Every object in the content store is verified on its own, but only this
+        record is evidence that a pass finished over the whole declared layout.
+        A record that does not name exactly this archive and this layout is not
+        one, so a stale record can never certify a different pass.
+        """
+        try:
+            payload = read_document(self.archive_root(archive) / 'complete.json')
+        except (FileNotFoundError, RequestBudgetError, OSError):
+            return None
+        try:
+            record = json.loads(payload)
+        except ValueError:
+            return None
+        if (not isinstance(record, dict) or record.get('schema') != ARCHIVE_SCHEMA
+                or record.get('archive') != {'sha256': archive['sha256'],
+                                              'size_bytes': archive['size_bytes']}
+                or record.get('layout_sha256') != layout_sha256
+                or not isinstance(record.get('matched'), list)
+                or not isinstance(record.get('missing'), list)
+                or type(record.get('unmatched')) is not int or record['unmatched'] < 0
+                or not all(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value)
+                           for value in record['matched'] + record['missing'])):
+            return None
+        return record
+
+    def object_present(self, row):
+        """Metadata-only presence, as the warm weight-view lookup already relies
+        on; complete bytes are still verified by weights() before publication."""
+        with self.objects(row) as parent:
+            try:
+                info = os.stat(row['sha256'], dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return False
+        return stat.S_ISREG(info.st_mode) and info.st_size == row['size_bytes']
+
+    def absent_objects(self, digests, expected):
+        return sorted(digest for digest in digests
+                      if digest in expected and not self.object_present(expected[digest]))
+
+    def archive_started(self, item):
+        """Whether any pass for this archive identity ever created worker state."""
+        with directory(self.root / 'archives') as parent:
+            try:
+                os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return False
+        return True
+
+    def archive_state(self, archive, layout_reference):
+        """Report the packed-archive pass for an already-authenticated layout.
+
+        'ready' requires a record naming exactly this archive and layout, with
+        every object it claims still present. 'partial' means a pass started and
+        did not complete. 'missing' means nothing of this archive was unpacked.
+        A partial pass is therefore never read as a complete weight tree, and no
+        view exists until weights() publishes one from verified objects.
+        """
+        item = artifact(archive)
+        layout_sha256, rows, _ = weight_layout(weight_layout_reference(layout_reference))
+        expected = archive_rows(rows)
+        with self.locked(dict(sha256='archive-' + item['sha256'], size_bytes=0)):
+            record = self.archive_record(item, layout_sha256)
+            if record is None:
+                started = self.archive_started(item)
+                return dict(state='partial' if started else 'missing', archive=item,
+                            layout_sha256=layout_sha256, matched=[], missing=[], absent=[])
+            absent = self.absent_objects(record['matched'], expected)
+            return dict(state='partial' if absent else 'ready', archive=item,
+                        layout_sha256=layout_sha256, matched=record['matched'],
+                        missing=record['missing'], absent=absent)
+
+    def unpack_weight_archive(self, archive, operation_id, batch_id, layout_reference):
+        """Publish one packed archive's members into the content store.
+
+        The archive's own bytes are authenticated against the declared object
+        identity before a single member is read, and each member is accepted only
+        by matching a row of the authenticated weight layout by digest, published
+        under that digest. A truncated, foreign or extra-laden archive can only
+        yield fewer verified objects, never wrong ones. The view is still
+        published by weights() from verified objects, so an interrupted pass
+        cannot present a partial weight tree as complete.
+        """
+        item = artifact(archive)
+        layout_sha256, rows, _ = weight_layout(weight_layout_reference(layout_reference))
+        expected = archive_rows(rows)
+        try:
+            source = self.incoming_batch(operation_id, batch_id) / item['sha256']
+        except FileNotFoundError:
+            raise ValueError('archive_source_unavailable') from None
+        with self.locked(dict(sha256='archive-' + item['sha256'], size_bytes=0)):
+            record = self.archive_record(item, layout_sha256)
+            if record is not None and not self.absent_objects(record['matched'], expected):
+                return dict(state='ready', archive=item, layout_sha256=layout_sha256,
+                            matched=record['matched'], missing=record['missing'],
+                            unmatched=record['unmatched'])
+            try:
+                with directory(source.parent) as incoming:
+                    fd = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=incoming)
+            except FileNotFoundError:
+                raise ValueError('archive_source_unavailable') from None
+            with os.fdopen(fd, 'rb') as stream:
+                regular(stream.fileno())
+                # Authenticate the transport bytes before reading any member.
+                if not verified(stream.fileno(), item):
+                    raise ValueError('archive_identity_mismatch')
+                stream.seek(0)
+                matched, unmatched = self._unpack_members(stream, expected, item)
+            if not matched:
+                raise ValueError('archive_carries_no_declared_member')
+            missing = sorted(set(expected) - matched)
+            self._write_archive_record(item, layout_sha256, sorted(matched), missing, unmatched)
+            return dict(state='ready', archive=item, layout_sha256=layout_sha256,
+                        matched=sorted(matched), missing=missing, unmatched=unmatched)
+
+    def _unpack_members(self, stream, expected, item):
+        import tarfile
+        stage = self.archive_root(item) / ('stage-' + uuid.uuid4().hex)
+        with directory(stage, create=True):
+            pass
+        # Member data can never exceed the declared size of the archive itself, so
+        # any subset of the tree is acceptable and a larger stream is not.
+        budget = item['size_bytes']
+        extracted, unmatched_members, unmatched_bytes = 0, 0, 0
+        matched = set()
+        try:
+            with tarfile.open(fileobj=stream, mode='r|*') as archive:
+                for member in archive:
+                    if member.isdir():
+                        continue
+                    if not member.isfile() or member.size < 0:
+                        raise ValueError('unsupported_archive_member')
+                    extracted += member.size
+                    if extracted > budget:
+                        raise ValueError('archive_payload_exceeds_layout')
+                    digest, size, staged = self._stage_member(archive, member, stage)
+                    row = expected.get(digest)
+                    if row is not None and row['size_bytes'] != size:
+                        raise ValueError('archive_member_size_mismatch')
+                    if row is None:
+                        self._discard(stage, staged)
+                        unmatched_members += 1
+                        unmatched_bytes += size
+                        if (unmatched_members > MAX_UNMATCHED_ARCHIVE_MEMBERS
+                                or unmatched_bytes > MAX_UNMATCHED_ARCHIVE_BYTES):
+                            raise ValueError('unexpected_archive_member')
+                        self.emit(dict(sha256=digest, size_bytes=size), 'ignored')
+                        continue
+                    self._publish_archive_object(row, staged, stage)
+                    matched.add(digest)
+                    self.emit(row, 'published', cache_hit=False)
+        except tarfile.TarError:
+            raise ValueError('archive_stream_invalid') from None
+        finally:
+            self._discard_stage(stage)
+        return matched, unmatched_members
+
+    def _stage_member(self, archive, member, stage):
+        """Stream one member to private staging, hashing its bytes as they arrive."""
+        source = archive.extractfile(member)
+        if source is None:
+            raise ValueError('unreadable_archive_member')
+        name = 'member-' + uuid.uuid4().hex
+        digest, done = hashlib.sha256(), 0
+        with directory(stage) as parent:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                         dir_fd=parent)
+            try:
+                while chunk := source.read(CHUNK):
+                    done += len(chunk)
+                    if done > member.size:
+                        raise ValueError('archive_member_size_mismatch')
+                    digest.update(chunk)
+                    view = memoryview(chunk)
+                    while view:
+                        count = os.write(fd, view)
+                        if count <= 0:
+                            raise ValueError('archive_write_failed')
+                        view = view[count:]
+                if done != member.size:
+                    raise ValueError('archive_member_size_mismatch')
+                # Content objects are immutable and read-only in the CAS.
+                os.fchmod(fd, 0o444)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        return digest.hexdigest(), done, name
+
+    def _publish_archive_object(self, row, staged, stage):
+        """Move hashed staging bytes to the digest that names them, atomically."""
+        with self.objects(row) as parent:
+            if self.object_present(row):
+                # Identical content already published by an earlier pass.
+                self._discard(stage, staged)
+                return False
+            with directory(stage) as staging:
+                os.rename(staged, row['sha256'], src_dir_fd=staging, dst_dir_fd=parent)
+                os.fsync(parent)
+        return True
+
+    def _discard(self, stage, name):
+        try:
+            with directory(stage) as parent:
+                os.unlink(name, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+
+    def _discard_stage(self, stage):
+        try:
+            with directory(stage) as parent:
+                for name in os.listdir(parent):
+                    os.unlink(name, dir_fd=parent)
+        except FileNotFoundError:
+            return
+        with directory(stage.parent) as parent:
+            os.rmdir(stage.name, dir_fd=parent)
+
+    def _write_archive_record(self, archive, layout_sha256, matched, missing, unmatched):
+        payload = json.dumps(dict(schema=ARCHIVE_SCHEMA,
+                                  archive={'sha256': archive['sha256'],
+                                           'size_bytes': archive['size_bytes']},
+                                  layout_sha256=layout_sha256, matched=matched,
+                                  missing=missing, unmatched=unmatched),
+                             sort_keys=True, separators=(',', ':')).encode()
+        with directory(self.archive_root(archive), create=True) as parent:
+            temporary = '.partial-' + uuid.uuid4().hex
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                         dir_fd=parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fchmod(stream.fileno(), 0o444)
+                    os.fsync(stream.fileno())
+                # Publication of the record is the only completeness boundary.
+                os.replace(temporary, 'complete.json', src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
+            finally:
+                self._discard(self.archive_root(archive), temporary)
+
     def execute_runtime(self, manifest, command, expected_sha256):
         path = Path(manifest)
         with directory(path.parent) as parent:
             fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             with os.fdopen(fd, 'rb') as stream:
                 regular(stream.fileno())
-                payload = stream.read(8 * 1024 * 1024 + 1)
-                if len(payload) > 8 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != expected_sha256:
+                payload = stream.read(MAX_DOCUMENT_BYTES + 1)
+                if len(payload) > MAX_DOCUMENT_BYTES:
+                    raise RequestBudgetError('document_too_large')
+                if hashlib.sha256(payload).hexdigest() != expected_sha256:
                     raise ValueError('runtime_manifest_identity_mismatch')
                 references = json.loads(payload)
         if references['schema'] != 'bms.runtime-image-references.v1':
@@ -698,9 +1054,9 @@ def main():
                 os.write(fd, (json.dumps(value, sort_keys=True) + '\n').encode())
             finally:
                 os.close(fd)
-    payload = sys.stdin.buffer.read(8 * 1024 * 1024 + 1)
-    if len(payload) > 8 * 1024 * 1024:
-        raise ValueError('request_too_large')
+    payload = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    if len(payload) > MAX_REQUEST_BYTES:
+        raise RequestBudgetError('request_too_large')
     request = json.loads(payload)
     cache = Cache(args.root, events)
     action = request['action']
@@ -723,7 +1079,23 @@ def main():
     elif action == 'materialize_links':
         result = {'artifacts': [cache.materialize_link(row['artifact'], row['destination'], request['destination_root'], row['target']) for row in request['entries']]}
     elif action in {'weights_probe', 'weights_install'}:
-        result = cache.weights(request['entries'], install=action == 'weights_install')
+        # Exactly one declared layout form: inline rows, or a by-reference
+        # listing whose digest is verified before its rows are used.
+        declared = [key for key in ('entries', 'layout') if key in request]
+        if len(declared) != 1:
+            raise ValueError('invalid_weight_request')
+        entries = (request['entries'] if declared[0] == 'entries'
+                   else weight_layout_reference(request['layout']))
+        result = cache.weights(entries, install=action == 'weights_install')
+    elif action in {'weights_archive_probe', 'unpack_weights_archive'}:
+        # One packed archive replaces the per-file relay of the shared weight
+        # tree; the payload is one cache object, referenced by its declared
+        # identity and checked against the same authenticated layout.
+        if action == 'weights_archive_probe':
+            result = cache.archive_state(request['archive'], request['layout'])
+        else:
+            result = cache.unpack_weight_archive(request['archive'], request['operation_id'],
+                                                 request['batch_id'], request['layout'])
     elif action == 'materialize_many':
         result = {'artifacts': [cache.materialize_entry(row, request['destination_root']) for row in request['entries']]}
     elif action == 'materialize':
@@ -738,5 +1110,7 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         # Paths, request contents and transport URLs never enter diagnostic output.
-        print(json.dumps({'state': 'failed', 'error': type(exc).__name__}), file=sys.stderr)
+        # Declared-budget failures report their closed-set code, never a bare type.
+        error = exc.code if isinstance(exc, RequestBudgetError) else type(exc).__name__
+        print(json.dumps({'state': 'failed', 'error': error}), file=sys.stderr)
         raise SystemExit(1)

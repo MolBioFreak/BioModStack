@@ -576,25 +576,46 @@ def _input_assets(
     prepared = params.get("bcp_input_path")
     if prepared and params.get("boltz_prepared_msa_sha256"):
         prepared_root = Path(prepared)
+        if (not prepared_root.is_absolute()
+                or not any(prepared_root.resolve() != root and _under(prepared_root, root)
+                           for root in input_roots)
+                or any(part.is_symlink() for part in (prepared_root, *prepared_root.parents))):
+            raise RemoteBundleError("Prepared Fold-CP root is outside managed storage or traverses a symlink")
         manifest_path = prepared_root / "msa-inputs.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise RemoteBundleError("Prepared Fold-CP manifest must be a regular file")
         if _sha256_file(manifest_path) != params["boltz_prepared_msa_sha256"]:
             raise RemoteBundleError("Prepared Fold-CP manifest identity changed")
         manifest = json.loads(manifest_path.read_bytes())
         if manifest.get("schema") == "bms.boltz-cp-msa-inputs.v1":
             requested = json.loads(native_invocation.requested_json)
-            original = Path(requested.get("bcp_input_path") or requested.get("input_path") or "")
-            if not original.is_absolute() or not any(_under(original, root) for root in input_roots):
+            declared_source = requested.get("bcp_input_path") or requested.get("input_path")
+            original = Path(declared_source) if declared_source else None
+            if original is not None and (not original.is_absolute()
+                    or not any(_under(original, root) for root in input_roots)):
                 raise RemoteBundleError("Prepared Fold-CP configs have no trusted native source owner")
             for config in manifest["configs"]:
                 relative = PurePosixPath(config["path"])
-                if relative.is_absolute() or ".." in relative.parts:
+                if (relative.is_absolute() or ".." in relative.parts
+                        or not relative.parts or relative.as_posix() != config["path"]):
                     raise RemoteBundleError("Prepared Fold-CP config escapes its root")
-                source = original / str(relative) if original.is_dir() else original
-                if any(part.is_symlink() for part in (source, *source.parents)):
-                    raise RemoteBundleError("Fold-CP source owner traverses a symlink")
-                if _sha256_file(source) != config["source_sha256"]:
-                    raise RemoteBundleError("Prepared Fold-CP source owner identity changed")
-                document_owners[str(prepared_root / str(relative))] = str(source)
+                packaged = prepared_root / str(relative)
+                if any(part.is_symlink() for part in (packaged, *packaged.parents)):
+                    raise RemoteBundleError("Prepared Fold-CP config traverses a symlink")
+                if not packaged.is_file() or _sha256_file(packaged) != config["sha256"]:
+                    raise RemoteBundleError("Prepared Fold-CP packaged config identity changed")
+                # A fresh request has no source path: native preparation creates
+                # the config. Its sealed packaged bytes own relative references.
+                # An explicitly supplied source retains its independent identity
+                # and remains the owner of non-MSA references (e.g. templates).
+                source = packaged
+                if original is not None:
+                    source = original / str(relative) if original.is_dir() else original
+                    if any(part.is_symlink() for part in (source, *source.parents)):
+                        raise RemoteBundleError("Fold-CP source owner traverses a symlink")
+                    if not source.is_file() or _sha256_file(source) != config["source_sha256"]:
+                        raise RemoteBundleError("Prepared Fold-CP source owner identity changed")
+                document_owners[str(packaged.resolve())] = str(source)
     try:
         discovered = discover_native_input_references(
             native_invocation.model_id, native_invocation.mode, params,
@@ -1102,7 +1123,7 @@ def prepare_remote_bundle(
             if record.link_target is None:
                 weights.append(CacheTransferArtifact(weight_sources[record.relative_path],
                     shared_weights + '/' + record.relative_path.removeprefix('runtime/weights/'),
-                    record.sha256, record.size_bytes, record.mode, 'runtime'))
+                    record.sha256, record.size_bytes, record.mode, 'weights'))
     if images or weight_entries:
         manifest = staging_root / ".bms-runtime-images.json"
         manifest.write_bytes(_canonical_bytes({

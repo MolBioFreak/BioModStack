@@ -2190,8 +2190,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
             const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
-            expect(move.disabled).toBe(true);
-            expect(move.title).toBe('Existing deck command requires reconciliation; do not resubmit.');
+            expect(move.disabled).toBe(false);
+            expect(String(move.title ?? '')).not.toContain('requires reconciliation');
             expect(panel.textContent).toContain(failed.command_id);
             expect(api.post).not.toHaveBeenCalled();
         } finally {
@@ -2208,7 +2208,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         catalogDashboard().latest_receipts = receipts;
         await act(async () => root.render(<BioXpCockpit />));
         const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
-        expect(panel.textContent).toContain('Existing deck command requires reconciliation');
+        const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
+        expect(panel.textContent).not.toContain('Existing deck command requires reconciliation');
+        expect(move.disabled).toBe(false);
         expect(state.receiptHookCalls).toContainEqual({ commandId: failed.command_id, generation: 1, enabled: true });
         expect(state.receiptHookCalls.some(call => receipts.some(row => row.action_id === 'oem.deck.collect_authority' && row.command_id === call.commandId))).toBe(false);
         expect(state.deckInvokeCalls).toHaveLength(0);
@@ -2376,7 +2378,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it.each([
         ['oem.deck._mov_execution', 'dispatched', false, null],
         ['oem.deck._finite_operation', 'ambiguous', true, 'recovery_required'],
-    ])('polls canonical internal deck work and blocks only recovery faults: %s', async (actionId, status, terminal, completionClass) => {
+    ])('polls canonical internal deck work; terminal recovery faults never gate motion: %s', async (actionId, status, terminal, completionClass) => {
         const internalReceipt = {
             command_id: 'canonical-internal-deck-command', action_id: actionId,
             status, terminal, sequence: 73, completion_class: completionClass, error: null,
@@ -2387,8 +2389,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('Deck Movement')) as HTMLElement;
         const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        expect(move.disabled).toBe(terminal);
-        if (terminal) expect(panel.textContent).toContain('Existing deck command requires reconciliation; do not resubmit.');
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).not.toContain('Existing deck command requires reconciliation; do not resubmit.');
         expect(panel.textContent).not.toContain(actionId);
         expect(state.receiptHookCalls).toContainEqual({ commandId: 'canonical-internal-deck-command', generation: 1, enabled: true });
 
@@ -2434,10 +2436,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await render(); await advance();
             const panel = container.querySelector('[data-testid="oem-deck-movement"]')!;
             const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move to destination')!;
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false); // an unresolved historical outcome never gates new movement
             payload = resolved;
             await advance(); refreshAuthority(); await render();
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false); // resolution display awaits authority; admission does not
             catalogDashboard().deck!.semantic_state_revision = resolved.deck_movement!.recovery_resolution!.semantic_state_revision;
             refreshAuthority(); await render();
             expect(move.disabled).toBe(false);
@@ -2445,7 +2447,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             expect(panel.textContent).toContain(resolved.command_id);
             expect(calls).toBeGreaterThanOrEqual(2);
             fail = true; await advance(); refreshAuthority(); await render();
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false); // receipt query failure surfaces evidence state, never gates movement
             fail = false; state.statusError = true; state.connectionReachable = false;
             await render(); await advance();
             expect(move.disabled).toBe(true);
@@ -2490,11 +2492,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await render();
         const panel = [...container.querySelectorAll('section')].find(node => node.textContent?.includes('Deck Movement'))!;
         const move = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Move to destination')!;
-        expect(move.disabled).toBe(true);
+        expect(move.disabled).toBe(false); // unresolved history never gates new movement
         const resolution = { command_id: receipt.command_id, decision_id: 'home-decision', semantic_state_revision: 18, transition_sequence: 2 };
         receipt.deck_movement.recovery_resolution = resolution;
         await render();
-        expect(move.disabled).toBe(true); // current revision 17 predates reconciliation
+        expect(move.disabled).toBe(false); // display awaits the recovery revision; admission no longer does
         catalogDashboard().deck!.semantic_state_revision = 18;
         await render();
         expect(move.disabled).toBe(false);
@@ -2505,7 +2507,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         for (const bad of [{ ...resolution, command_id: 'other' }, { ...resolution, transition_sequence: 0 }, null]) {
             receipt.deck_movement.recovery_resolution = bad;
             await render();
-            expect(move.disabled).toBe(true);
+            expect(move.disabled).toBe(false); // malformed history decodes to no resolution and cannot gate movement
+            expect(panel.textContent).not.toContain('Earlier move reconciled.');
             expect(state.deckInvokeCalls).toHaveLength(0);
         }
         receipt.deck_movement.recovery_resolution = resolution;

@@ -106,11 +106,22 @@ def _normalize(item: dict[str, Any]) -> DiscoveredExecutionTarget:
     if gpu_ram is not None and gpu_ram < 1024:
         gpu_ram *= 1024
     host, port = _ssh_endpoint(item)
+    # At most the preferred direct mapping and the provider's SSH proxy.
+    # Never guess ports or retain arbitrary provider payloads.
+    endpoints = []
+    for candidate_host, candidate_port in (
+        (host, port),
+        (str(item.get("ssh_host") or "").strip(), _valid_port(item.get("ssh_port"))),
+    ):
+        endpoint = {"host": candidate_host, "port": candidate_port}
+        if candidate_host and candidate_port and endpoint not in endpoints:
+            endpoints.append(endpoint)
     raw_gpu_count = _number(item.get("num_gpus") or item.get("gpu_count"), integer=True)
     gpu_count = int(raw_gpu_count) if raw_gpu_count is not None else 0
     return DiscoveredExecutionTarget(
         provider="vast",
         provider_instance_id=str(raw_id),
+        ssh_endpoints=endpoints,
         name=(str(item.get("label") or item.get("name") or "").strip() or None),
         provider_state=provider_state,
         host=host,

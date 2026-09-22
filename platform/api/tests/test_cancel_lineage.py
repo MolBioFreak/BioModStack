@@ -149,7 +149,7 @@ async def test_repeat_cancellation_is_idempotent_and_clears_stale_runtime_state(
 
 
 @pytest.mark.asyncio
-async def test_failed_stop_remains_cancelling_with_requested_receipt(
+async def test_failed_stop_still_terminalizes_with_unverified_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,16 +176,18 @@ async def test_failed_stop_remains_cancelling_with_requested_receipt(
         )
         await session.commit()
 
-        with pytest.raises(HTTPException) as raised:
-            await cancel_job_lineage("pending-cancel", session)
-        assert raised.value.status_code == 409
-        job = await session.get(Job, "pending-cancel")
+        # An owned unit that never reports inactive-and-empty must not hold the
+        # operator's cancellation open: the job is terminal on request and the
+        # receipt records that the remote stop was not verified.
+        job, _lineage = await cancel_job_lineage("pending-cancel", session)
         assert job is not None
-        assert job.status == "running"
-        assert job.queue_status == "cancelling"
-        assert job.assigned_gpu == 0
-        assert job.completed_at is None
-        assert job.params["cancellation_receipt"]["state"] == "requested"
+        assert job.status == "cancelled"
+        assert job.queue_status == "cancelled"
+        assert job.assigned_gpu is None
+        assert job.completed_at is not None
+        receipt = job.params["cancellation_receipt"]
+        assert receipt["state"] == "completed"
+        assert receipt["remote_stop_verified"] is False
 
     await engine.dispose()
 

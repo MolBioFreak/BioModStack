@@ -40,8 +40,11 @@ async function mount(initialValues: Record<string, unknown> = {}) {
     await flush();
     return { renderer, submissions, drafts, resolveConfig, close: async () => { await act(async () => renderer.unmount()); client.clear(); post.mockRestore(); } };
 }
+function labelText(node: ReactTestInstance): string {
+    return node.children.map(child => typeof child === 'string' ? child : labelText(child as ReactTestInstance)).join('');
+}
 function control(renderer: ReactTestRenderer, label: string) {
-    const row = renderer.root.findAllByType('label').find(n => n.children.some(c => typeof c === 'string' && c === label));
+    const row = renderer.root.findAllByType('label').find(n => labelText(n).startsWith(label));
     assert.ok(row, label);
     return row.find(n => n.type === 'input' || n.type === 'select');
 }

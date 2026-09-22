@@ -785,6 +785,59 @@
                     "hidden": true
                 }
             }
+        },
+        "protenix_parameters": {
+            "title": "Protenix Parameters",
+            "type": "object",
+            "description": "Protenix parameters, including the MSA inputs the controller hands to the pipeline. Fold-CP runs through the same Protenix parameter surface, and these names are read at config time, so they must be declared here or Nextflow rejects the run before it starts.",
+            "default": "",
+            "properties": {
+                "protenix_container_path": {
+                    "type": "string",
+                    "default": null,
+                    "description": "Reviewed Protenix container image used for remote execution.",
+                    "hidden": true
+                },
+                "protenix_weights": {
+                    "type": "string",
+                    "default": null,
+                    "description": "Root directory holding the Protenix/Fold-CP weight set.",
+                    "hidden": true
+                },
+                "protenix_use_msa": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether Protenix consumes an MSA. When false the MSA lanes are skipped.",
+                    "hidden": true
+                },
+                "protenix_msa_backend": {
+                    "type": "string",
+                    "default": "auto",
+                    "enum": ["auto", "local", "colabfold_api", "neurosnap_api", "neurosnap"],
+                    "description": "MSA backend Protenix uses when it consumes an MSA.",
+                    "hidden": true
+                },
+                "protenix_prepared_msa_dir": {
+                    "type": "string",
+                    "default": null,
+                    "description": "Directory of prepared MSA inputs supplied by the controller for this run.",
+                    "hidden": true
+                }
+            }
+        },
+        "scheduler_assignment_parameters": {
+            "title": "Scheduler Assignment Parameters",
+            "type": "object",
+            "description": "Physical device identities the external scheduler assigns and the pipeline reads at config time. These are system-owned values, never operator scientific settings.",
+            "default": "",
+            "properties": {
+                "frustrampnn_physical_gpu_id": {
+                    "type": "string",
+                    "default": null,
+                    "description": "Scheduler-assigned physical GPU id for CanonicalFrustraMPNN. Required when the frustrampnn GPU lane is active.",
+                    "hidden": true
+                }
+            }
         }
     },
     "allOf": [
@@ -814,6 +867,12 @@
         },
         {
             "$ref": "#/definitions/cluster_parameters"
+        },
+        {
+            "$ref": "#/definitions/protenix_parameters"
+        },
+        {
+            "$ref": "#/definitions/scheduler_assignment_parameters"
         }
     ]
 }

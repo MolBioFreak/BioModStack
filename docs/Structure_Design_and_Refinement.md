@@ -1,8 +1,8 @@
 # Structure Design and Refinement
 
-This document describes the live structure-design surface exposed by BioModStack.
-It is capability-first: it focuses on workflows, model families, and launcher
-surfaces that are actually present in the repo and model registry today.
+This document describes the structure-design source contracts in BioModStack.
+Workflow and registry presence is not a claim of deployed or scientifically
+qualified capability. Acquisition, admission, and live acceptance remain separate.
 
 ## Mandatory model-control policy
 
@@ -24,13 +24,17 @@ consumer tranches are considered seamless integration work.
 
 ### Antibody de novo and refinement
 
-Primary workflow:
+Registry and parent workflow:
 
-- [workflows/antibody_child.nf](../workflows/antibody_child.nf)
+- [Antibody / nanobody model configuration](../platform/api/config/models/antibody_denovo.yaml)
+- [workflows/antibody_denovo.nf](../workflows/antibody_denovo.nf)
+
+[workflows/antibody_child.nf](../workflows/antibody_child.nf) is the internal
+validation/scoring child, not the user-facing parent entrypoint.
 
 Entry modes include:
 
-- `antibody_refinement_pipeline`
+- `antibody_denovo_pipeline`
 - `antibody_refinement_pipeline`
 
 Current pipeline shape:
@@ -50,28 +54,12 @@ Important notes:
 - RF3 exists as a generic structure predictor but should not be described here
   as the main antibody-validator backend
 
-### Antibody toolkit
-
-Primary workflow:
-
-- [workflows/antibody_design.nf](../workflows/antibody_design.nf)
-
-Live modes include:
-
-- structure prediction
-- inverse folding
-- stability prediction
-- de novo generation
-
-This is a broader antibody-engineering surface than the staged de novo/refine
-pipeline above.
-
 ### Generic structure prediction and validation
 
-BioModStack exposes one Structure Prediction surface through
-[main.nf](../main.nf), the model registry under
-[platform/api/config/models](../platform/api/config/models), and the structure
-prediction modules.
+BioModStack exposes one Structure Prediction surface through the API model
+registry under [platform/api/config/models](../platform/api/config/models) and
+[workflow-specific dispatch](../platform/api/services/workflow_adapter_registry.py).
+[main.nf](../main.nf) is a compatibility wrapper, not the universal API launch path.
 
 Current registry-backed predictor families:
 
@@ -128,8 +116,9 @@ Current backend coverage from the live model config:
   unconditional, ligand-conditioned, DNA-conditioned, RNA-conditioned, and
   custom-JSON launches
 
-See [Experimental Protein CAD Workflow](Experimental_Protein_CAD_Workflow.md)
-for the dependency matrix and runtime notes.
+Use the linked model configuration and workflow for the supported parameter and
+execution contracts. Runtime availability must be checked through the managed
+capability/preflight surfaces; no live acceptance is implied here.
 
 ### Protein Hunter Experimental
 
@@ -160,8 +149,9 @@ Purpose:
 - sidechain packing
 - optional AF2 self-consistency evaluation of designed outputs
 
-See [Caliby Experimental Workflow](Caliby_Experimental_Workflow.md) for the
-current integration state and gaps.
+The linked model configuration is the source contract. Treat this as an
+experimental integration and verify its runtime prerequisites and acceptance
+state before use.
 
 ### NVIDIA Fold-CP
 
@@ -196,16 +186,6 @@ related child/orchestrator paths.
 Primary registry entry:
 
 - [platform/api/config/models/rfdiffusion.yaml](../platform/api/config/models/rfdiffusion.yaml)
-
-### retired binder workflow
-
-Primary workflow:
-
-- [workflows/retired binder workflow_design.nf](../workflows/retired binder workflow_design.nf)
-
-Purpose:
-
-- minibinder and peptide-binder design against a target structure
 
 ### BoltzGen
 
@@ -248,7 +228,6 @@ Docking support includes:
 
 - RFantibody
 - RFdiffusion
-- retired binder workflow
 - BoltzGen
 - Oligo Designer / RFDpoly
 - La-Proteina

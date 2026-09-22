@@ -11,6 +11,7 @@ import shlex
 import signal
 import tempfile
 import sys
+import time
 
 from .result_generation import durable_json, transfer_marker
 from .transfer_supervisor import SCHEMA, process_identity
@@ -20,10 +21,76 @@ from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 from paths import get_data_root
+from tools.bms_artifact_cache import REQUEST_CODES as CACHE_REQUEST_CODES
+from tools.bms_managed_runtime import REQUEST_CODES as MANAGED_REQUEST_CODES
 
 
 class RemoteTransportError(RuntimeError):
     pass
+
+
+MAX_DIAGNOSTIC_BYTES = 512
+_HELPER_FAILURE_ADVICE = {
+    'request_too_large': 'The helper request exceeds its control-message budget; verify the by-reference producer before retrying.',
+    'document_too_large': 'The referenced manifest exceeds the document budget; reduce or revise the dependency closure before retrying.',
+    'invalid_reference': 'The controller supplied an invalid document reference; rebuild the preview and verify the producer.',
+    'document_unavailable': 'The referenced document is missing; verify staging and obtain a fresh preview before retrying.',
+    'document_identity_mismatch': 'Document integrity verification failed; investigate the changed bytes and re-preview before retrying.',
+    'invalid_weight_layout_document': 'The weight-layout document is incompatible; verify the source and helper versions.',
+    'invalid_request_document': 'The referenced document is invalid; verify the source and helper versions.',
+}
+
+# Accepted codes are owned by the independently installed helpers. Advice may
+# refine their fixed text but cannot admit an undeclared diagnostic. Newly
+# declared codes retain a safe message even before operator advice is added;
+# the parity regression requires that advice to be reviewed before integration.
+HELPER_FAILURE_MESSAGES = {
+    code: _HELPER_FAILURE_ADVICE.get(code, message)
+    for code, message in (CACHE_REQUEST_CODES | MANAGED_REQUEST_CODES).items()
+}
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate diagnostic key')
+        result[key] = value
+    return result
+
+
+def helper_failure_code(stderr: str) -> str | None:
+    """Decode only the final closed helper envelope; ignore untrusted prose."""
+    line = stderr.rstrip('\r\n').rsplit('\n', 1)[-1]
+    if not line or len(line.encode('utf-8')) > MAX_DIAGNOSTIC_BYTES:
+        return None
+    try:
+        value = json.loads(line, object_pairs_hook=_unique_object)
+    except (ValueError, RecursionError):
+        return None
+    if (not isinstance(value, dict) or set(value) != {'state', 'error'}
+            or value['state'] != 'failed' or not isinstance(value['error'], str)
+            or value['error'] not in HELPER_FAILURE_MESSAGES):
+        return None
+    return value['error']
+
+
+class RemoteHelperError(RemoteTransportError):
+    """A known worker error, safe to persist without retaining remote stderr."""
+    def __init__(self, code: str):
+        if not isinstance(code, str) or code not in HELPER_FAILURE_MESSAGES:
+            raise ValueError('Unknown remote helper failure code')
+        self.code = code
+        self.user_message = f'Remote helper [{code}]: {HELPER_FAILURE_MESSAGES[code]}'
+        super().__init__(self.user_message)
+
+
+class RemoteExecutionTimeout(RemoteTransportError):
+    """An established remote command exceeded its execution budget."""
+
+
+class RemoteHostKeyUnavailable(RemoteTransportError):
+    """No key received; only initial, unpinned discovery may try another route."""
 
 
 class RemoteConnectionError(RemoteTransportError):
@@ -78,6 +145,7 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    command_started: float | None = None
 
 
 def known_hosts_path() -> Path:
@@ -106,6 +174,13 @@ def private_key_path() -> Path:
 def _ssh_base(connection: RemoteConnection) -> list[str]:
     return [
         "ssh",
+        "-F", "/dev/null",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "IdentityAgent=none",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
         "-i",
         str(private_key_path()),
         "-p",
@@ -225,7 +300,8 @@ async def cancel_owned_transfer(destination: Path, *, timeout: float = 5.0) -> b
     return await asyncio.to_thread(request)
 
 
-async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
+async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60,
+               establishment_timeout: float | None = None) -> CommandResult:
     process = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
@@ -233,9 +309,31 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
+    command_started = None
+    establishing = establishment_timeout is not None
+    # Drain stderr from launch, including while awaiting the authenticated shell.
+    # Never parse/log SSH debug output or allow it to fill the pipe.
+    stderr_task = asyncio.create_task(process.stderr.read()) if establishing else None
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
-    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        if establishing:
+            marker = await asyncio.wait_for(process.stdout.readline(), establishment_timeout)
+            if marker != b"BMS_COMMAND_READY\n":
+                await asyncio.wait_for(process.wait(), timeout=2)
+                raise RemoteConnectionError("Remote SSH connection or authentication failed")
+            command_started = time.monotonic()
+            establishing = False
+            async def communicate():
+                if input_bytes is not None:
+                    process.stdin.write(input_bytes)
+                    await process.stdin.drain()
+                    process.stdin.close()
+                stdout = await process.stdout.read()
+                await process.wait()
+                return stdout, await stderr_task
+            stdout, stderr = await asyncio.wait_for(communicate(), timeout)
+        else:
+            stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
+    except BaseException as exc:
         async def stop_group() -> None:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -260,8 +358,20 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
         cleanup.result()
         if isinstance(exc, asyncio.CancelledError):
             raise
+        if not isinstance(exc, asyncio.TimeoutError):
+            raise
+        if establishment_timeout is not None:
+            if establishing:
+                raise RemoteConnectionError("Remote SSH establishment timed out") from None
+            raise RemoteExecutionTimeout("Remote command execution timed out") from None
         raise RemoteTransportError("Remote transport timed out") from None
+    finally:
+        if stderr_task is not None:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
     return CommandResult(
+        command_started=command_started,
         returncode=int(process.returncode or 0),
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),
@@ -269,23 +379,40 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
 
 
 async def capture_host_key(host: str, port: int) -> tuple[str, str]:
-    scan = await _run(
-        ["ssh-keyscan", "-t", "ed25519", "-p", str(port), "-T", "10", host],
-        timeout=15,
-    )
+    try:
+        scan = await _run(
+            ["ssh-keyscan", "-t", "ed25519", "-p", str(port), "-T", "10", host],
+            timeout=15,
+        )
+    except RemoteTransportError as exc:
+        if str(exc) != "Remote transport timed out":
+            raise
+        raise RemoteHostKeyUnavailable("Unable to read the remote SSH host key") from exc
     lines = sorted(
         line.strip()
         for line in scan.stdout.splitlines()
         if line.strip() and not line.startswith("#")
     )
-    if scan.returncode != 0 or not lines:
-        raise RemoteTransportError("Unable to read the remote SSH host key")
+    if not lines:
+        raise RemoteHostKeyUnavailable("Unable to read the remote SSH host key")
+    if scan.returncode != 0:
+        raise RemoteTransportError("Remote SSH host key is malformed")
     line = lines[0]
     parts = line.split()
     if len(parts) < 3:
         raise RemoteTransportError("Remote SSH host key is malformed")
     fingerprint = _host_key_digest(parts[2])
     return line, fingerprint
+
+
+async def host_key_is_pinned(host: str, port: int) -> bool:
+    # Include keys retained after an authentication/root-check failure, before
+    # the target's authenticated attachment fingerprint could be committed.
+    token = host if port == 22 else f"[{host}]:{port}"
+    found = await _run(["ssh-keygen", "-F", token, "-f", str(known_hosts_path())], timeout=5)
+    if found.returncode not in (0, 1):
+        raise RemoteTransportError("Unable to inspect pinned SSH host keys")
+    return found.returncode == 0
 
 
 async def persist_host_key(line: str, fingerprint: str) -> None:
@@ -362,20 +489,31 @@ async def run_remote(
     *,
     timeout: float = 60,
     input_bytes: bytes | None = None,
+    establishment_timeout: float | None = None,
 ) -> CommandResult:
     if not argv or any("\x00" in str(value) for value in argv):
         raise RemoteTransportError("Invalid remote command")
     if connection.provision_operation_id is not None:
         argv = _provision_argv(connection, connection.provision_operation_id, "run", argv)
     remote_command = " ".join(shlex.quote(str(value)) for value in argv)
+    options = {}
+    if establishment_timeout is not None:
+        # The shell marker precedes exec and stdin consumption. Only callers
+        # explicitly opting into phased deadlines change their timeout contract.
+        remote_command = "printf 'BMS_COMMAND_READY\\n'; exec " + remote_command
+        options['establishment_timeout'] = establishment_timeout
     result = await _run(
         [*_ssh_base(connection), remote_command],
         input_bytes=input_bytes,
         timeout=timeout,
+        **options,
     )
     if result.returncode == 255:
         raise RemoteConnectionError("Remote SSH connection or authentication failed")
     if result.returncode != 0:
+        code = helper_failure_code(result.stderr)
+        if code is not None:
+            raise RemoteHelperError(code)
         controlled = _controlled_remote_failure(result.stdout)
         detail = result.stderr.strip().splitlines()[-1:] or ["remote command failed"]
         raise RemoteTransportError(controlled or detail[0][:500])

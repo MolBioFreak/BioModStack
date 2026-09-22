@@ -113,36 +113,6 @@ process ProtenixPredict {
         echo "[PROTENIX] Template database detected: \$template_file"
     fi
 
-    # Fail fast if GPU architecture is unsupported by the container's torch build.
-    python3 - << 'PY'
-import re
-import sys
-
-try:
-    import torch
-except Exception as exc:
-    print(f"[PROTENIX] ERROR: Could not import torch: {exc}")
-    raise SystemExit(87)
-
-if not torch.cuda.is_available():
-    print("[PROTENIX] WARNING: torch.cuda.is_available() is false; continuing")
-    raise SystemExit(0)
-
-major, minor = torch.cuda.get_device_capability(0)
-device_arch = f"sm_{major}{minor}"
-supported = set()
-for arch in torch.cuda.get_arch_list():
-    match = re.search(r"sm_(\\d+)", arch)
-    if match:
-        supported.add(f"sm_{match.group(1)}")
-
-if supported and device_arch not in supported:
-    print(f"[PROTENIX] ERROR: GPU architecture {device_arch} is unsupported by this torch build: {sorted(supported)}")
-    raise SystemExit(88)
-
-print(f"[PROTENIX] torch={torch.__version__} cuda={torch.version.cuda} device_arch={device_arch} supported={sorted(supported)}")
-PY
-
     echo "[PROTENIX] Requested model: ${model_name} | Effective model: ${effective_model}"
     echo "[PROTENIX] Seeds: ${seeds} | Samples: ${n_sample} | Steps: ${n_step} | Cycles: ${n_cycle}"
     echo "[PROTENIX] MSA: ${use_msa} | Template: ${use_template} | Cache: ${enable_cache} | Fusion: ${enable_fusion}"
@@ -457,36 +427,6 @@ process ProtenixFromComplex {
     if [ "${requested_template}" = "true" ] && [ "${anchor_target}" != "true" ]; then
         echo "[PROTENIX-COMPLEX] Generic template DB conditioning enabled for this run; no explicit target anchoring is applied." | tee -a protenix_complex.log
     fi
-
-    # Fail fast if GPU architecture is unsupported by the container's torch build.
-    python3 - << 'PY'
-import re
-import sys
-
-try:
-    import torch
-except Exception as exc:
-    print(f"[PROTENIX-COMPLEX] ERROR: Could not import torch: {exc}")
-    raise SystemExit(87)
-
-if not torch.cuda.is_available():
-    print("[PROTENIX-COMPLEX] WARNING: torch.cuda.is_available() is false; continuing")
-    raise SystemExit(0)
-
-major, minor = torch.cuda.get_device_capability(0)
-device_arch = f"sm_{major}{minor}"
-supported = set()
-for arch in torch.cuda.get_arch_list():
-    match = re.search(r"sm_(\\d+)", arch)
-    if match:
-        supported.add(f"sm_{match.group(1)}")
-
-if supported and device_arch not in supported:
-    print(f"[PROTENIX-COMPLEX] ERROR: GPU architecture {device_arch} is unsupported by this torch build: {sorted(supported)}")
-    raise SystemExit(88)
-
-print(f"[PROTENIX-COMPLEX] torch={torch.__version__} cuda={torch.version.cuda} device_arch={device_arch} supported={sorted(supported)}")
-PY
 
     echo "[PROTENIX-COMPLEX] Requested model: ${model_name} | Effective model: ${effective_model}"
     echo "[PROTENIX-COMPLEX] Seeds: ${seeds} | Samples: ${n_sample} | Steps: ${n_step} | Cycles: ${n_cycle}"

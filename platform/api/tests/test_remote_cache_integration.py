@@ -193,12 +193,14 @@ async def test_warm_probe_and_materialize_use_bounded_batches(tmp_path, monkeypa
                                  operation_id=str(uuid.uuid4()), progress=progress,
                                  check_fence=cache._noop, materialize=True)
     assert [len(r['artifacts']) for r in calls if r['action'] == 'probe'] == [257]
-    assert [len(r['entries']) for r in calls if r['action'] == 'materialize_many'] == [128, 128, 1]
+    # Batches run concurrently now, so completion order is not an assertion;
+    # the batch composition still is.
+    assert sorted(len(r['entries']) for r in calls if r['action'] == 'materialize_many') == [1, 128, 128]
     assert len(calls) == 4
     assert events == ([{'phase': 'checking', 'artifact': None,
-                        'message': 'Verifying cached artifact batch'}]
+                        'message': 'Verifying 257 cached artifact identities across 1 page(s)'}]
                       + [{'phase': 'verifying', 'artifact': None,
-                          'message': 'Materializing verified artifact batch'}] * 3)
+                          'message': 'Materializing 257 verified artifact(s) in 3 batch(es)'}])
 
 
 @pytest.mark.parametrize('identity_matches', [True, False])
@@ -270,6 +272,14 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert not (Path(second.remote_runtime_dir) / 'weights').exists()
     assert sum(row['action'] == 'weights_install' for row in calls) == 1
     assert sum(row['action'] == 'weights_probe' for row in calls) == 2
+    # The layout is passed by reference to the attempt's authenticated listing and
+    # never inlined in the request; the real helper verified each declared digest.
+    referenced = [row for row in calls if row['action'] in {'weights_probe', 'weights_install'}]
+    assert len(referenced) == 3
+    for row in referenced:
+        path = Path(row['layout']['path'])
+        assert 'entries' not in row and path.name == '.bms-runtime-images.json'
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == row['layout']['sha256']
     # No cached model object is copied into any attempt.
     assert not any('/weights/' in row['destination'] for call in calls if call['action'] == 'materialize_many' for row in call['entries'])
     assert (Path(second.remote_source_dir) / 'main.nf').is_file()

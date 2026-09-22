@@ -1,0 +1,122 @@
+name: Remote bridge review
+
+on:
+  push:
+    branches: [test-remote-bridge-repairs-20260917, test-remote-bridge-integration-20260920, test, test-repository-cleanup-20260921]
+  workflow_dispatch:
+
+# No deployment, provider credentials, rental operations, or repository writes.
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record exact source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/remote-bridge-evidence"
+          mkdir -p "$evidence"
+          git rev-parse HEAD > "$evidence/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$evidence/tree.txt"
+          git cat-file commit HEAD > "$evidence/commit.object"
+          git archive --format=tar HEAD | gzip > "$evidence/source.tar.gz"
+          git diff --check 9ad10eea97cf784da47b07d6d9b2896da35e455e..HEAD
+          if test -f platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json; then
+            echo 'record_free=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'record_free=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: '0.12.17'
+          python-version: '3.12'
+          enable-cache: false
+      - name: Generate companion only from a record-free committed archive
+        if: steps.source.outputs.record_free == 'true'
+        working-directory: platform/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/remote-bridge-evidence"
+          frozen="$RUNNER_TEMP/remote-bridge-frozen"
+          mkdir -p "$frozen"
+          tar -xzf "$evidence/source.tar.gz" -C "$frozen"
+          uv run --frozen --group dev python \
+            "$frozen/scripts/build_ngs_molbio_runtime_implementation_record.py" \
+            --successor-source-commit "$(cat "$evidence/commit.txt")" \
+            --successor-source-tree "$(cat "$evidence/tree.txt")" \
+            --successor-commit-object "$evidence/commit.object"
+          cp "$frozen/platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json" "$evidence/"
+          echo 'Generated source binding only; a separately committed bound tip must pass all review gates.'
+      - name: Run locked source, provisioning, transport and multiworker gates
+        if: steps.source.outputs.record_free == 'false'
+        working-directory: platform/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install locked dependencies before entering a genuinely route-free
+          # namespace. Never disable the repository's collection-time guards.
+          uv sync --frozen --group dev
+          parent_namespace="$(readlink /proc/self/ns/net)"
+          sudo env HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" UV_PYTHON="$UV_PYTHON" UV_CACHE_DIR="$UV_CACHE_DIR" \
+            _BIOXP_PYTEST_NETNS=1 _BIOXP_PYTEST_PARENT_NETNS="$parent_namespace" \
+            unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
+            timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv -o faulthandler_timeout=90 \
+            tests/test_remote_provision_isolation.py \
+            tests/test_remote_inventory_supersession.py \
+            tests/test_remote_incremental_admission.py \
+            tests/test_remote_helper_diagnostics.py \
+            tests/test_managed_runtime_safety.py \
+            tests/test_ngs_molbio_runtime_record_builder.py \
+            tests/test_remote_managed_inventory.py \
+            tests/test_remote_preloading.py \
+            tests/test_vast_auto_setup.py \
+            tests/test_remote_cache_integration.py \
+            tests/test_remote_runtime_images.py \
+            tests/test_remote_runner_integrity.py \
+            tests/test_artifact_cache.py \
+            tests/test_cache_batches.py \
+            tests/test_multiworker_scheduling.py \
+            tests/test_multiworker_migration.py \
+            tests/test_managed_ssh_transport.py \
+            tests/test_vast_ssh_endpoint_selection.py \
+            tests/test_hf_worker_acquisition.py \
+            tests/test_remote_telemetry.py \
+            --junitxml="$RUNNER_TEMP/remote-bridge-evidence/junit-review.xml"
+      - name: Validate the updater's exact committed-source authority
+        if: always() && steps.source.outputs.record_free == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import importlib.util, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          path = root / 'scripts/biomodstack_dev_sync.py'
+          spec = importlib.util.spec_from_file_location('review_dev_sync', path)
+          module = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = module
+          spec.loader.exec_module(module)
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          result = module.validate_candidate_runtime_authority(root, revision)
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'remote-bridge-evidence'
+          (evidence / 'updater-authority.json').write_text(json.dumps(
+              {'revision': revision, 'result': result}, indent=2, sort_keys=True) + '\n')
+          print(json.dumps({'revision': revision, 'updater_authority': 'accepted'}))
+          PYCODE
+      - name: Preserve revision and case-level evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: remote-bridge-review-${{ github.sha }}
+          path: ${{ runner.temp }}/remote-bridge-evidence/
+          retention-days: 14
+          if-no-files-found: error

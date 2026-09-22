@@ -9,8 +9,17 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+# Support direct CLI and runpy callers from arbitrary working directories.
+# Resolve only this checked source directory, never a request-supplied path.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
+
+from plasmid_evidence import StructuralEvidenceUnavailable, validate_structural_rows
 
 CIGAR_TOKEN = re.compile(r"(\d+)([MIDNSHP=X])")
 REFERENCE_CONSUMING = frozenset("MDN=X")
@@ -240,12 +249,24 @@ def derive_topology_evidence(
         reference_length=reference_length,
         edge=edge,
     )
-    secondary = secondary_rows[0] if secondary_rows else {}
-    non_boundary_split = int_field(secondary, "non_boundary_split_reads")
-    aligned_dimer_reads = int_field(secondary, "aligned_dimer_reads")
-    anomaly_denominator = aligned_dimer_reads or mapped_unique_reads
-    anomaly_fraction = non_boundary_split / anomaly_denominator if anomaly_denominator else 0.0
-    contradictory = any(breakpoint_is_contradictory(row) for row in breakpoint_rows)
+    try:
+        screen = validate_structural_rows(breakpoint_rows, secondary_rows, reference_length)
+    except StructuralEvidenceUnavailable as exc:
+        return {
+            "schema": "biomodstack.construct_topology_evidence.v1",
+            "state": "unavailable",
+            "reason": str(exc),
+            "expected_topology": "circular",
+            "evidence_basis": "primary_and_supplementary_alignment_edges_plus_dimer_screen",
+            "origin_spanning_reads": origin_spanning,
+            "mapped_unique_reads": mapped_unique_reads,
+            "alignment_records": alignment_records,
+            "edge_window_bp": edge,
+        }
+    non_boundary_split = screen["non_boundary_split_reads"]
+    aligned_dimer_reads = screen["aligned_dimer_reads"]
+    anomaly_fraction = screen["secondary_anomaly_fraction"]
+    contradictory = screen["contradictory_breakpoint_evidence"]
 
     return {
         "schema": "biomodstack.construct_topology_evidence.v1",

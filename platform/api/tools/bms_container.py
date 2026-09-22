@@ -34,6 +34,46 @@ from scripts.lib import runtime_image_lifecycle as lifecycle
 from scripts.lib.shared_runtime_images import _directory, _file, _check_file
 import bms_remote_worker as owner
 
+LOOPBACK_HOSTS = '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n'
+
+
+def hosts_file_content(hostname=None):
+    """Name resolution content for one execution container.
+
+    The container's own hostname is mapped too: torch's rendezvous endpoint is
+    built from the host name when the supervisor sets no MASTER_ADDR, and a name
+    that resolves nowhere fails the run the same way `localhost` did.
+    """
+    hostname = os.uname().nodename if hostname is None else hostname
+    return LOOPBACK_HOSTS + '127.0.0.1 ' + hostname + '\n'
+
+
+def name_resolution_bindings(private, resolver=None, hostname=None):
+    """Give the container working name resolution.
+
+    udocker runs with --nosysdirs, which leaves /etc/hosts and /etc/resolv.conf
+    as empty placeholders. Anything that resolves a name inside the container
+    then fails: torch's rendezvous on localhost dies with gai error -3 before any
+    rank starts, and in-container clients cannot reach a host by name. Bind a
+    generated loopback hosts file, and the host resolver only when it actually
+    carries configuration. No host hosts/resolver content is copied otherwise.
+    """
+    hosts = private / 'etc-hosts'
+    hosts.write_text(hosts_file_content(hostname))
+    hosts.chmod(0o444)
+    bindings = [(str(hosts), '/etc/hosts')]
+    resolver = Path('/etc/resolv.conf') if resolver is None else Path(resolver)
+    if resolver.is_file() and resolver.stat().st_size > 0:
+        bindings.append((str(resolver), '/etc/resolv.conf'))
+    return bindings
+
+
+def host_system_bindings(private):
+    """Kernel interfaces plus name resolution for every container execution."""
+    bindings = [(p, p) for p in ('/proc', '/sys', '/dev') if Path(p).exists()]
+    bindings.extend(name_resolution_bindings(private))
+    return bindings
+
 
 @dataclass
 class Invocation:
@@ -132,7 +172,10 @@ def sif_partition_offset(fd, read=None):
 def extract_sif(fd, destination):
     source = f'/proc/self/fd/{fd}'
     offset = sif_partition_offset(fd)
-    subprocess.run(['unsquashfs', '-no-progress', '-processors', '2', '-d', str(destination), '-o', offset, source],
+    # An image extraction is the slowest single pass of a first execution. Use the
+    # host's own share of cores (80%) instead of a hardcoded 2.
+    workers = str(views.parallel_workers())
+    subprocess.run(['unsquashfs', '-no-progress', '-processors', workers, '-d', str(destination), '-o', offset, source],
                    check=True, pass_fds=(fd,), stdout=sys.stderr)
 
 
@@ -351,7 +394,7 @@ def execute(invocation, identity):
                 resolved = node.resolve(strict=True)
                 mount = resolved if resolved.is_dir() else resolved.parent
                 volumes.append((str(mount), str(mount)))
-        volumes.extend((p, p) for p in ('/proc', '/sys', '/dev') if Path(p).exists())
+        volumes.extend(host_system_bindings(private))
         shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
         shared = Path(shared).absolute() if shared else None
         requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
