@@ -10,6 +10,7 @@ import stat
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 from paths import get_code_root
@@ -166,7 +167,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     # offline; selected bulk misses alone consult controller-owned cloud config.
     # Keep small support files batched rather than doing thousands of HTTP calls.
     bulk = {key(e) for e in objects if states[key(e)] != 'cache_hit'
-            and e.role in {'image', 'runtime', 'source'} and e.size_bytes >= HF_MIN_BYTES}
+            and e.role in hf_assets.DELIVERY_ROLES and e.size_bytes >= HF_MIN_BYTES}
     hf_enabled = bool(bulk) and hf_assets.configuration() is not None
     indices = {}
     for index, entry in enumerate(artifacts):
@@ -315,6 +316,80 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     return receipts
 
 
+def _weights_archive_artifact():
+    """The declared packed shared weight tree, or None when none is configured.
+
+    It is published out of band, so there is no local source to publish from: an
+    absent object fails visibly instead of being uploaded from the controller.
+    """
+    identity = hf_assets.weights_archive()
+    if identity is None:
+        return None
+    digest, size = identity
+    return SimpleNamespace(source=Path('/nonexistent-bms-weight-archive'), role='weights',
+                           sha256=digest, size_bytes=size)
+
+
+async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence):
+    """Obtain the shared weight tree as one object, then unpack it on the worker.
+
+    Returns the digests the archive delivered into the worker content store, or
+    None when no packed archive is declared. Those files never travel through
+    the controller: the worker verifies every member against the bundle's own
+    authenticated weight layout, and only then publishes the shared view.
+    """
+    archive = _weights_archive_artifact()
+    if archive is None or hf_assets.configuration() is None:
+        return None
+    detail = {'sha256': archive.sha256, 'size_bytes': archive.size_bytes}
+    root = f'{connection.remote_root}/cache/artifacts/v1'
+
+    async def call(request):
+        await check_fence()
+        result = await run_remote(connection, ['python3', helper, '--root', root],
+                                  input_bytes=json.dumps(request).encode(), timeout=3600)
+        await check_fence()
+        return json.loads(result.stdout)
+
+    def announce(message):
+        return progress(dict(phase='transferring', artifact=None, message=message))
+
+    # A finished pass is its own evidence. The worker answers from the record it
+    # wrote, so a retried stage installs the shared view from the objects that
+    # are already verified instead of downloading the whole archive again.
+    observed = await call({'action': 'weights_archive_probe', 'archive': detail, 'layout': layout})
+    if observed.get('state') == 'ready':
+        await announce('Shared weight archive is already unpacked on the worker')
+        return set(observed.get('matched', ()))
+
+    batch_id = uuid.uuid4().hex
+    owner = {'operation_id': operation_id, 'batch_id': batch_id}
+    await call({'action': 'prepare_incoming', **owner})
+    await announce('Preparing private Hugging Face weight archive delivery')
+    acquired = {}
+    for _renewal in range(2):
+        sources = await hf_assets.prepare_sources([archive], check_fence=check_fence)
+        if (False, archive.sha256) not in sources:
+            raise ValueError('Hugging Face weight archive is unavailable')
+        await announce('Downloading shared weight archive from Hugging Face')
+        acquired = await call({'action': 'acquire_hf', 'artifact': detail, **owner,
+                               'source': sources[(False, archive.sha256)]})
+        # Same finite fresh-link renewal as every other HF acquisition; neither
+        # expiry nor cancellation publishes an unverified partial.
+        if acquired.get('state') != 'source_expired':
+            break
+    if (acquired.get('state') != 'downloaded' or acquired.get('sha256') != archive.sha256
+            or acquired.get('size_bytes') != archive.size_bytes):
+        raise ValueError('Hugging Face weight archive acquisition did not verify')
+    await announce('Unpacking shared model weights from the archive')
+    unpacked = await call({'action': 'unpack_weights_archive', 'archive': detail,
+                          'layout': layout, **owner})
+    if unpacked.get('state') != 'ready' or unpacked.get('archive') != detail:
+        raise ValueError('Shared weight archive was not unpacked completely')
+    await call({'action': 'remove_incoming', **owner})
+    return set(unpacked.get('matched', ()))
+
+
 async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence=_noop):
     """Stage eligible source/runtime leaves; executor retains inputs/support-python.
 
@@ -384,10 +459,21 @@ p.mkdir(mode=0o700,exist_ok=False)
         await progress(dict(phase='checking', artifact=None, message='Resolving installed model weights'))
         observed = await weights('weights_probe')
         if observed['state'] == 'missing':
-            receipts += await _cache_artifacts(connection=connection, artifacts=bundle.runtime_weights,
-                operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
+            # The packed shared tree is one object the worker unpacks itself;
+            # only the rows it does not carry keep the per-file relay path.
+            delivered = await _install_weight_archive(connection=connection, helper=helper,
+                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence)
+            pending = [entry for entry in bundle.runtime_weights
+                       if delivered is None or entry.sha256 not in delivered]
+            if pending:
+                receipts += await _cache_artifacts(connection=connection, artifacts=pending,
+                    operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence, helper=helper)
             if (await weights('weights_install'))['state'] != 'ready':
                 raise ValueError('Shared model weights were not installed')
+            receipts += [dict(name=entry.remote_destination.removeprefix(connection.remote_root + '/'),
+                              sha256=entry.sha256, size_bytes=entry.size_bytes)
+                         for entry in bundle.runtime_weights
+                         if delivered is not None and entry.sha256 in delivered]
         elif observed['state'] != 'ready':
             raise ValueError('Shared model weights are damaged')
         else:
