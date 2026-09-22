@@ -958,16 +958,14 @@ export function BioXpCockpit() {
         || deckReceipt?.error?.code === 'reconciliation_required'
         || deckReceipt?.completion_class === 'recovery_required'));
 
-    // An observed command in progress is not a recovery failure. Surface its
-    // lifecycle before transient readiness loss caused by that same command;
-    // neither this wording nor a receipt can grant new movement admission.
-    const dashboardDeckFault = dashboardDeckReceipt != null
-        && (dashboardDeckReceipt.command_id !== effectiveDeckCommandId || !deckRecoveryResolved)
-        && (dashboardDeckReceipt.status === 'ambiguous' || dashboardDeckReceipt.completion_class === 'recovery_required'
-            || dashboardDeckReceipt.error?.code === 'reconciliation_required');
-    const deckCommandDisabledReason = deckRecoveryRequired || dashboardDeckFault
-        ? 'Existing deck command requires reconciliation; do not resubmit.' : null;
-    const deckDisabledReason = deckCommandDisabledReason ?? (!v2AuthorityCoherent
+    // Deck movement is gated only by live, fresh authority: catalog/dashboard
+    // coherence, the robot's own action admission, destination authority, and
+    // the robot-reported deck semantic state. Retained ambiguous or
+    // recovery-required receipts are history: they stay observable (receipt
+    // polling, recovery panel) but never disable a new movement. The robot's
+    // admission re-evaluates current state on every submission, so a stale
+    // record cannot wedge the deck lane.
+    const deckDisabledReason = (!v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
             ? 'Fresh matching catalog and dashboard deck authority is unavailable.'
