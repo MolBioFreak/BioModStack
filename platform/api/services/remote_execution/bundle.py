@@ -515,6 +515,8 @@ def _input_assets(
     output_dir: Path,
     references: list[dict[str, Any]] | None = None,
     runtime_references: dict[str, dict[str, Any]] | None = None,
+    selected_staging: Path | None = None,
+    selected_remote_attempt: str | None = None,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
@@ -538,6 +540,9 @@ def _input_assets(
             raise RemoteBundleError(f"Native runtime field has no selected dependency binding: {key}")
     candidates = list(_flatten_strings({key: value for key, value in params.items()
                                    if key not in destinations and key not in runtime_fields
+                                   and not (key == 'ligandmpnn_interface_selection'
+                                            and native_invocation.model_id == 'ligandmpnn'
+                                            and native_invocation.mode == 'interface_context')
                                    and not (key == 'pdb_paths' and native_invocation.model_id == 'template_antibody_denovo'
                                             and native_invocation.mode == 'maturation_child')}))
     if (native_invocation.model_id == 'template_antibody_denovo'
@@ -663,11 +668,66 @@ def _input_assets(
         if not any(_under(root, allowed) and root != allowed for allowed in input_roots):
             raise RemoteBundleError('Selected blind pose directory is outside managed inputs')
         selected[root] = f"blind-pose/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+    if (native_invocation.model_id, native_invocation.mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_publication import KEY, verify_binding
+        binding = json.loads(native_invocation.requested_json).get(KEY)
+        if not isinstance(binding, dict) or binding.get('manifest') != params.get('interface_context_manifest'):
+            raise RemoteBundleError('Selected interface-context manifest differs from request')
+        verify_binding(binding)
+        root = Path(binding['manifest']).parent
+        if not any(_under(root, allowed) and root != allowed for allowed in input_roots):
+            raise RemoteBundleError('Selected interface-context directory is outside managed inputs')
+        if selected_staging is None or selected_remote_attempt is None:
+            raise RemoteBundleError('Selected interface-context staging directory is missing')
+        relative = f"ligandmpnn-selection/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+        remote_dir = f"{selected_remote_attempt}/bundle/inputs/{relative}"
+        staged = _stage_ligandmpnn_selection(binding, selected_staging, remote_dir)
+        selected = {path: value for path, value in selected.items()
+                    if path != root and not _under(path, root)}
+        selected[staged] = relative
+        for reference in discovered:
+            path = Path(reference['source_path'])
+            if path == root or _under(path, root):
+                replacement = staged / path.relative_to(root)
+                reference['source_path'] = str(replacement)
+                reference['sha256'] = _sha256_file(replacement)
+                reference['size_bytes'] = replacement.stat().st_size
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
                 if not any(parent in selected for parent in path.parents)}
     return [(path, relative) for path, relative in sorted(selected.items(), key=lambda item: str(item[0]))]
+
+def _stage_ligandmpnn_selection(binding: dict, staging: Path, remote_dir: str) -> Path:
+    """Relocate both documents, retaining original source and request identities."""
+    from services.ligandmpnn_interface_publication import verify_binding
+    verify_binding(binding)
+    root = Path(binding['manifest']).parent
+    expected = {Path(binding['manifest'])}
+    for row in binding['sources'].values():
+        expected.update((Path(row['path']), Path(row['request'])))
+    if {path for path in root.rglob('*') if not path.is_dir()} != expected or any(
+        path.is_symlink() for path in root.rglob('*')):
+        raise RemoteBundleError('Selected interface-context directory changed')
+    staged = staging / 'ligandmpnn-selection'
+    shutil.copytree(root, staged, symlinks=False)
+    records = []
+    for index, candidate in enumerate(binding['candidate_ids']):
+        original = binding['sources'][candidate]
+        source = staged / Path(original['path']).relative_to(root)
+        request = staged / Path(original['request']).relative_to(root)
+        if _sha256_file(source) != original['sha256'] or _sha256_file(request) != original['request_sha256']:
+            raise RemoteBundleError('Selected interface-context source changed during staging')
+        source_remote = remote_dir + '/' + source.relative_to(staged).as_posix()
+        request_remote = remote_dir + '/' + request.relative_to(staged).as_posix()
+        data = json.loads(request.read_bytes())
+        data['structure_path'] = source_remote
+        request.write_bytes((json.dumps(data, sort_keys=True, allow_nan=False) + '\n').encode())
+        records.append({'invocation_id': f'{index:03d}', 'request_path': request_remote,
+                        'source_path': source_remote})
+    manifest = staged / Path(binding['manifest']).relative_to(root)
+    manifest.write_bytes((json.dumps(records, sort_keys=True) + '\n').encode())
+    return staged
 
 
 def _rewrite(value: str, path_map: dict[str, str]) -> str:
@@ -1249,6 +1309,7 @@ def prepare_remote_bundle(
         runtime_paths=runtime_paths,
         output_dir=local_output,
         references=native_references, runtime_references=runtime_references,
+        selected_staging=staging_root, selected_remote_attempt=remote_attempt,
     )
     input_records: list[RemoteFileRecord] = []
     input_transfers: list[TransferPlan] = []
@@ -1275,6 +1336,9 @@ def prepare_remote_bundle(
         remote_destination = f"{remote_attempt}/bundle/{prefix}"
         input_transfers.append(TransferPlan(path, remote_destination))
         input_path_map[str(path.resolve())] = remote_destination
+        if (job.model_id, job.mode) == ('ligandmpnn', 'interface_context') and path.name == 'ligandmpnn-selection':
+            original_root = Path(effective_params['interface_context_manifest']).parent
+            input_path_map[str(original_root)] = remote_destination
 
     verify_approved_native_inputs(job, runtime_references, input_hashes)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
