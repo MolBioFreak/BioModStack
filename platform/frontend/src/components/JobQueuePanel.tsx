@@ -466,8 +466,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running' && !remoteResultsState(j));
     const remoteTransitions = [
-        { phase: 'preparing', label: 'Preparing remote jobs' },
-        { phase: 'cancelling', label: 'Cancelling remote jobs' },
+        { phase: 'preparing' },
+        { phase: 'cancelling' },
     ].map(group => ({ ...group, jobs: visibleQueue.filter(j => j.execution_target_id && j.queue_status === group.phase) }));
     const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
     const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
@@ -616,10 +616,15 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                         </div>
                     ) : (
                         <div className="space-y-3">
-                            {awaitingJobs.length > 0 && (
-                                <div>
-                                    <h4 className="text-xs font-semibold text-emerald-300 mb-1 uppercase tracking-wide">Remote results</h4>
+                            {(awaitingJobs.length > 0 || remoteTransitions.some(group => group.jobs.length > 0)) && (
+                                <div aria-label="Remote job phases">
+                                    <h4 className="text-xs font-semibold text-emerald-300 mb-1 uppercase tracking-wide">Remote jobs</h4>
                                     <div className="space-y-1">
+                                        {remoteTransitions.flatMap(group => group.jobs.map(job => (
+                                            <JobRow key={job.id} job={job} onCancel={() => cancelMutation.mutate(job.id)}
+                                                isPending={isPending || group.phase === 'cancelling'}
+                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
+                                        )))}
                                         {awaitingJobs.map(job => (
                                             <div key={job.id} className="bg-slate-700/30 rounded-lg p-3">
                                                 <Link to={`/jobs/${job.id}`} className="text-sm font-medium text-white hover:underline">{getDisplayJobName(job)}</Link>
@@ -629,19 +634,6 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                     </div>
                                 </div>
                             )}
-                            {remoteTransitions.filter(group => group.jobs.length > 0).map(group => (
-                                <div key={group.phase}>
-                                    <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">{group.label}</h4>
-                                    <div className="space-y-1">
-                                        {group.jobs.map(job => (
-                                            <JobRow key={job.id} job={job}
-                                                onCancel={() => cancelMutation.mutate(job.id)}
-                                                isPending={isPending || group.phase === 'cancelling'}
-                                                elapsedNowMs={elapsedNowMs} gpuCatalog={gpuCatalog} liveGpuOptions={liveGpuOptions} />
-                                        ))}
-                                    </div>
-                                </div>
-                            ))}
                             {/* Running Jobs */}
                             {runningJobs.length > 0 && (
                                 <div>

@@ -18,7 +18,7 @@ vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLoc
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'model', model_id: 'esmfold2' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }];
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
 const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
@@ -37,7 +37,7 @@ const disclose = async (label: string) => { await act(async () => {
   const details = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.startsWith(label))!;
   details.open = !details.open; details.dispatchEvent(new Event('toggle')); await settle();
 }); };
-const select = async (label: string, value: string) => { await act(async () => { const s = container.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!; s.value = value; s.dispatchEvent(new Event('change', { bubbles: true })); await settle(); }); };
+const select = async (label: string, value: string) => { if (label === 'Provision model' && !container.querySelector('[aria-label="Provision model"]')) await select('Provision scope', 'model'); await act(async () => { const s = container.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!; s.value = value; s.dispatchEvent(new Event('change', { bubbles: true })); await settle(); }); };
 beforeEach(() => {
   target = { ...ready }; posts = []; changed.mockClear();
   window.history.replaceState({}, '', '/submit');
@@ -45,7 +45,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   api.defaults.adapter = async config => {
-    if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'boltz2', name: 'Boltz-2' }, { id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
+    if (config.method === 'get') return response(config.url === '/api/models' ? [{ id: 'boltz2', name: 'Boltz-2' }, { id: 'protenix', name: 'Protenix' }, { id: 'esmfold2', name: 'ESMFold2' }, { id: 'foldcp', name: 'FoldCP' }, { id: 'unsupported', name: 'Other registered model' }] : config.url === '/api/templates' ? [{ id: 'molecular_dynamics', name: 'Molecular Dynamics' }] : config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
     const body = config.data ? JSON.parse(String(config.data)) : undefined;
     posts.push({ url: String(config.url), body });
     if (config.url === '/api/jobs/execution-plan/preview') return response({ schema: 'bms.job.execution-preview.v1', approval_digest: 'd'.repeat(64), admissible: true,
@@ -166,8 +166,10 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   await render();
   expect(container.textContent).toContain('It does not launch a job, run inference or establish scientific readiness');
   expect(container.textContent).toContain('Installed artifacts are unknown');
-  expect(button('Start provision').disabled).toBe(true);
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
+  expect(button('Start provision')).toBeUndefined();
   await select('Provision model', 'protenix');
+  expect(button('Start provision').disabled).toBe(true);
   expect(posts).toEqual([]);
   await click('Preview artifact downloads', true);
   expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'model', model_id: 'protenix' } }]);
@@ -198,18 +200,18 @@ it('invalidates preview on model, image scope, endpoint and observed source chan
   expect(posts.at(-1)?.body).toEqual({ kind: 'image', model_id: 'protenix' });
   target = { ...target, host: 'replacement' }; await render();
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
   await select('Provision model', 'protenix'); await click('Preview artifact downloads');
   target = { ...target, preload: { operation_id: 'another', selection: catalog[0], source_revision: 'd'.repeat(40), source_tree: 'e'.repeat(40), request_sha256: 'f'.repeat(64), phase: 'source_download_ready', artifact: null, message: 'Previous cache ready', started_at: '2026-01-01', updated_at: '2026-01-01' } }; await render();
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
   await select('Provision model', 'protenix'); await click('Preview artifact downloads');
   expect(button('Start provision').disabled).toBe(false);
   target = { ...target, preload: { ...target.preload!, source_tree: 'f'.repeat(40) } }; await render();
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
   await select('Provision model', 'protenix'); await click('Preview artifact downloads');
   target = { ...target, id: 'vast:456' }; await render();
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
 });
 
 it('discards a late preview after selection change and requires explicit preview retry after an API error', async () => {
@@ -258,7 +260,7 @@ it('surfaces catalog failure with explicit retry and no provision side effects',
     ? Promise.reject(new Error('Catalog unavailable')) : originalGet(url, config));
   await render();
   expect(container.textContent).toContain('Catalog unavailable');
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
   expect(get.mock.calls.filter(([url]) => String(url).endsWith('/catalog'))).toHaveLength(1);
   get.mockRestore(); await click('Retry catalog');
   await select('Provision model', 'protenix');
@@ -274,7 +276,7 @@ it('does not restore an old target preview when its request resolves after endpo
   target = { ...target, host_key_sha256: 'd'.repeat(64) }; await render();
   await act(async () => { resolve(response(preview(catalog[0]))); await settle(); });
   expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
-  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Start provision')).toBeUndefined();
 });
 
 it.each(['busy', 'running', 'inactive'])('blocks provisioning when worker is %s', async state => {
@@ -378,8 +380,23 @@ it('invalidates the picker preview immediately on execution-policy and target ch
   expect(posts).toHaveLength(2);
 });
 
+it('shows FoldCP image-only scope without implying its weights are prepared', async () => {
+  await render();
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
+  await select('Provision model', 'foldcp');
+  expect(container.textContent).toContain('FoldCP (not available in this scope)');
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  await select('Provision scope', 'image');
+  await select('Provision model', 'foldcp');
+  expect(container.textContent).toContain('Container image only (not weights)');
+  expect(button('Preview artifact downloads').disabled).toBe(false);
+  expect(posts).toEqual([]);
+});
+
 it('discovers the shared launcher workflows and full model registry without granting unsupported preparation', async () => {
   await render();
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
+  await select('Provision scope', 'model');
   expect(container.textContent).toContain('Other registered model (not available in this scope)');
   await select('Provision model', 'unsupported');
   expect(button('Preview artifact downloads').disabled).toBe(true);
@@ -419,10 +436,11 @@ it('leads with the running preparation, its verified bytes and the stop control'
   await render();
   expect(container.textContent).toContain('Downloading assets');
   expect(container.textContent).toContain('1 of 2 artifacts verified');
-  expect(container.textContent).toContain('1,234 bytes of 3,234 bytes (38%)');
+  expect(container.textContent).toContain('1,234 bytes verified of 3,234 bytes declared');
+  expect(container.textContent).toContain('Transfer progress and rate are not reported');
   expect(container.textContent).toContain('2m 0s elapsed');
-  expect(container.textContent).toContain('MB/s average');
-  expect(container.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('38');
+  expect(container.textContent).not.toContain('MB/s average');
+  expect(container.querySelector('[role="progressbar"]')).toBeNull();
   expect(container.textContent!.indexOf('Downloading assets')).toBeLessThan(container.textContent!.indexOf('Provision scope'));
   expect(button('Cancel provision')).toBeTruthy();
   expect(posts).toEqual([]);

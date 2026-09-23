@@ -88,7 +88,7 @@ export function IndependentProvisionPanel(props: Props) {
   return <ProvisionChooser key={binding} {...props} />;
 }
 function ProvisionChooser({ target, onChanged }: Props) {
-  const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('model');
+  const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('workflow');
   const [modelId, setModelId] = useState('');
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
   const models = useQuery({ queryKey: ['models'], queryFn: () => fetchModels(), retry: false });
@@ -107,11 +107,11 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
     <h4 className="font-medium">Worker preparation</h4>
-    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Choose a model for its runtime assets or a workflow to derive exact dependencies.</p>
+    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Configure a workflow for exact dependencies; model and image scopes prepare only the reviewed assets listed for that scope.</p>
     {live && <PreparationStatus target={target} onChanged={onChanged} />}
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
-        <option value="workflow">Workflow (exact dependencies)</option><option value="model">Model (runtime + scientific assets)</option><option value="image">Container image only</option>
+        <option value="workflow">Workflow (exact dependencies)</option><option value="model">Model (reviewed managed assets only)</option><option value="image">Container image only (not weights)</option>
       </select></label>
       <label className="text-sm">{kind === 'workflow' ? 'Preparation workflow' : 'Provision model'}<select aria-label={kind === 'workflow' ? 'Preparation workflow' : 'Provision model'} className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={kind !== 'workflow' && (models.isPending || models.isError)}>
         <option value="">Select a model or workflow</option>
@@ -245,11 +245,8 @@ function PreparationStatus({ target, onChanged }: Props) {
   const declared = artifacts.reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
   const verified = artifacts.filter(artifact => artifact.state === 'verified').reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
   const verifiedCount = artifacts.filter(artifact => artifact.state === 'verified').length;
-  const verifiedAll = artifacts.length > 0 && verifiedCount === artifacts.length;
-  const percent = declared > 0 ? Math.round((verified / declared) * 100) : null;
+  // Receipts only report completed objects, not live transfer bytes or throughput.
   const elapsed = elapsedLabel(operation.started_at, operation.updated_at);
-  const rate = verified > 0 && operation.started_at && operation.updated_at && Date.parse(operation.updated_at) > Date.parse(operation.started_at)
-    ? verified / ((Date.parse(operation.updated_at) - Date.parse(operation.started_at)) / 1000) : null;
   async function requestCancel() {
     if (lock.current || !cancellable || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;
@@ -261,10 +258,7 @@ function PreparationStatus({ target, onChanged }: Props) {
       <p className="font-medium">{PHASE_LABELS[operation.phase] ?? operation.phase}{operation.artifact ? ` — ${operation.artifact}` : ''}</p>
       <p className="text-xs text-[var(--text-muted)]">{ACTIVE_PHASES.includes(operation.phase) ? 'Running' : 'Last preparation'}{elapsed ? ` · ${elapsed} elapsed` : ''}</p>
     </div>
-    {declared > 0 && <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? 0} aria-label="Verified bytes" className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-primary)]">
-      <div className={verifiedAll ? 'h-1.5 rounded-full bg-[var(--success)]' : 'h-1.5 rounded-full bg-[var(--accent-primary)]'} style={{ width: `${percent ?? 0}%` }} />
-    </div>}
-    <p>{verifiedCount} of {artifacts.length || 1} artifact{artifacts.length === 1 ? '' : 's'} verified{declared > 0 ? ` · ${bytes(verified)} of ${bytes(declared)}${percent != null ? ` (${percent}%)` : ''}` : ''}{rate ? ` · ${Math.max(1, Math.round(rate / 1024 / 1024))} MB/s average` : ''}</p>
+    <p>{verifiedCount} of {artifacts.length} artifacts verified{declared > 0 ? ` · ${bytes(verified)} verified of ${bytes(declared)} declared` : ''}. Transfer progress and rate are not reported.</p>
     <p className="text-xs text-[var(--text-muted)]">{operation.message}{operation.sequence != null ? ` · Sequence ${operation.sequence}` : ''} · Started {operation.started_at} · Last worker update {operation.updated_at}</p>
     {artifacts.length > 0 && <ArtifactDetails label="Artifact progress" count={artifacts.length}>{() => <ul aria-label="Artifact progress">{artifacts.map(artifact => <li key={artifact.name} className="break-all">{artifact.name} · {ARTIFACT_STATE_LABELS[artifact.state] ?? artifact.state} · {bytes(artifact.size_bytes)} declared · SHA256 {artifact.sha256}</li>)}</ul>}</ArtifactDetails>}
     <p className="text-xs text-[var(--text-muted)]">States are reported worker activity; completed verified objects are retained for retry.</p>
