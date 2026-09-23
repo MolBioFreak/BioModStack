@@ -64,7 +64,15 @@ def supervise(marker: Path, control_fd: int, handoff_fd: int, argv: list[str]) -
         record.update(phase="quiescent", quiescence="no-writer")
         durable_json(marker, record)
         return 125
-    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        # Popen did not return a writer; keep an explicit no-writer receipt so
+        # an exec failure cannot permanently fence this result destination.
+        record.update(phase="quiescent", quiescence="no-writer")
+        durable_json(marker, record)
+        control.close()
+        raise
     record["writer"] = process_identity(child.pid)
     durable_json(marker, record)
     interrupted = False

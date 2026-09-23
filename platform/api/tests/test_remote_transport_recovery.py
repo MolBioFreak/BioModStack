@@ -208,6 +208,24 @@ def test_controller_dies_before_supervisor_launch_never_starts_writer(tmp_path):
     gen.prepare_transfer(tmp_path)
 
 
+@pytest.mark.asyncio
+async def test_failed_writer_exec_releases_no_writer_fence_for_retry(tmp_path):
+    gen.begin_transfer(tmp_path)
+    bad = await transport._run_owned([str(tmp_path / 'missing-executable')], tmp_path, timeout=5)
+    assert bad.returncode != 0
+    assert record(tmp_path)['phase'] == 'quiescent'
+    assert record(tmp_path)['quiescence'] == 'no-writer'
+    assert 'writer' not in record(tmp_path)
+    gen.end_transfer(tmp_path)
+    gen.begin_transfer(tmp_path)
+    good = await transport._run_owned(
+        [sys.executable, '-c', "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('ok')", str(tmp_path / 'result')],
+        tmp_path, timeout=5)
+    assert good.returncode == 0
+    gen.end_transfer(tmp_path)
+    assert (tmp_path / 'result').read_text() == 'ok'
+
+
 def test_pre_spawn_crash_and_late_launcher_cannot_spawn(tmp_path):
     gen.begin_transfer(tmp_path)
     assert record(tmp_path)['handoff'] == 'kernel-lock-v1'

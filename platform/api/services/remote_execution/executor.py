@@ -1879,8 +1879,9 @@ async def _service_remote_external_inputs(session, job, status) -> None:
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
-    if job.queue_status not in {"cancelling", "cancelled"} and job.status != "cancelled":
-        await _recover_result_generation(session, job)
+    # A cancellation after the output rename but before its DB commit must
+    # restore the prior visible result, not leave an uncommitted generation.
+    await _recover_result_generation(session, job)
     if job.queue_status not in {"cancelling", "cancelled"} and job.status != "cancelled" and job.remote_state in {'checkpoint_resume_requested', 'checkpoint_resume_uncertain'}:
         return await _recover_remote_checkpoint(session, job)
     pending = (job.provenance or {}).get('component_retry') or {}

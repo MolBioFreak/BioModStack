@@ -330,6 +330,49 @@ async def test_process_death_before_and_after_database_commit(store, tmp_path, c
             assert (incoming / "first.txt").read_text() == "first"
 
 
+@pytest.mark.asyncio
+async def test_cancellation_recovers_uncommitted_visible_generation(store, tmp_path, monkeypatch):
+    from services import job_control
+
+    async with store() as session:
+        job = await session.get(Job, "job")
+        job.output_dir = str(tmp_path / "output")
+        job.status = job.queue_status = "running"
+        job.remote_state = "returning"
+        output = Path(job.output_dir)
+        output.mkdir()
+        (output / "old.txt").write_text("good")
+        _, incoming, _ = package(job)
+        await session.commit()
+        snapshot = job_at(tmp_path)
+    pid = os.fork()
+    if pid == 0:
+        gen._checkpoint = lambda name: os._exit(73) if name == "new_moved" else None
+        gen.publish(snapshot, incoming)
+        os._exit(74)
+    assert os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 73
+    assert (output / "first.txt").read_text() == "first"
+    async def unavailable_stop(*_):
+        return False
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", unavailable_stop)
+    async with store() as session:
+        await job_control.cancel_job_lineage("job", session)
+        assert (await session.get(Job, "job")).status == "cancelled"
+    assert (output / "first.txt").read_text() == "first"
+    async with store() as session:
+        job = await session.get(Job, "job")
+        # Compute has released its lease; cancellation still owns local return.
+        target = await session.get(ex.ExecutionTarget, "target")
+        target.leased_job_id = "successor"
+        await session.commit()
+        await ex.reconcile_remote_job(session, job)
+        assert job.status == "cancelled"
+    assert (output / "old.txt").read_text() == "good"
+    assert not (output / "first.txt").exists()
+    assert (incoming / "first.txt").read_text() == "first"
+    assert not gen.journal_path(snapshot).exists()
+
+
 def test_api_death_before_transport_spawn_recovers_but_legacy_retains_fence(tmp_path):
     job = job_at(tmp_path)
     _, incoming, _ = package(job)
