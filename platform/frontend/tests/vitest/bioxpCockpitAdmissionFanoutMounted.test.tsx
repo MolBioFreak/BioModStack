@@ -423,6 +423,9 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     const real = await importOriginal<typeof import('../../src/lib/bioxpClient')>();
     return ({
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
+    useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+    useBioXpWorkflowJob: () => ({ data: undefined, isError: false }),
+    useSubmitBioXpProtocol: () => ({ isPending: false, mutateAsync: vi.fn() }),
     BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
     BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
     BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,

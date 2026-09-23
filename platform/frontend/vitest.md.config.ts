@@ -62,6 +62,7 @@ export default defineConfig({
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
             './tests/vitest/bioxpDeckQueueMounted.test.tsx',
             './tests/vitest/bioxpWorkflowControlsMounted.test.tsx',
+            './tests/vitest/bioxpTransferControlsMounted.test.tsx',
             './tests/vitest/bioxpCockpitAdmissionFanoutMounted.test.tsx',
             './tests/vitest/bioxpCameraMounted.test.tsx',
             './tests/vitest/bioxpCameraTransitMounted.test.tsx',
