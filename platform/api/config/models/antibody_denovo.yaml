@@ -2,13 +2,13 @@
 # Two-phase pipeline: Generation → Validation & Scoring
 
 id: antibody_denovo
-name: De Novo Nanobody Toolkit
+name: De Novo Binder Design
 version: 1.0.0
 category: antibody_design
 description: >
-  De novo nanobody design toolkit with multiple upstream generators.
-  Use RFantibody, BoltzGen nanobody generation, or seeded PPIFlow generation, then reopen selected outputs
-  in Antibody Refinement for staged redesign, validation, and downstream review.
+  Binder design entrypoint with existing antibody-specific RFantibody and BoltzGen VHH generation,
+  plus seeded PPIFlow generation on supported antibody-target complexes. Review selected outputs
+  before compatible refinement; these modes do not provide generic binder generation.
 
 workflow_type: pipeline
 container: apptainer/antibody_tools.sif

@@ -39,7 +39,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     },
     {
         workflowId: 'antibody_denovo',
-        label: 'De Novo Nanobody Toolkit',
+        label: 'De Novo Binder Design',
         modelTopics: ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'],
         sourceFiles: [
             'platform/api/config/models/antibody_denovo.yaml',

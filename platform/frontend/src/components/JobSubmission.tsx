@@ -459,10 +459,10 @@ export function JobSubmission() {
                 if (data.name) setJobName(data.name);
 
                 // Determine routing
-                if (data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
+                if (data.model_id === 'antibody_denovo' || data.model_id === 'template_antibody_denovo' || data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
-                    setClonedValues({ ...data.params, name: data.name });
+                    setClonedValues({ ...data.params, name: data.name, ...(data.mode !== undefined ? { mode: data.mode } : {}) });
                 }
                 else if (data.params?.mutagenesis_variants) {
                     setWizardMode('templates');
