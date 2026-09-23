@@ -8,14 +8,14 @@ import { WORKFLOW_MODEL_INVENTORY } from '../src/components/workflowModelInvento
 
 const readSource = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts), 'utf8');
 const retiredBinderId = 'bind' + 'craft';
-const forbiddenTokens = [retiredBinderId];
 
-test('BindCraft is absent from active launcher and inventory surfaces', () => {
+test('retired binder v1 identifier stays absent while the BC2 draft routes through the binder launcher', () => {
   const submissionSource = readSource('src', 'components', 'JobSubmission.tsx').toLowerCase();
-
-  for (const token of forbiddenTokens) {
-    assert.equal(isDedicatedLauncherTemplate(token), false);
-    assert.equal(WORKFLOW_MODEL_INVENTORY.some((entry) => entry.workflowId === token), false);
-    assert.equal(submissionSource.includes(token), false);
-  }
+  const launcherSource = readSource('src', 'components', 'AntibodyDenovoTemplate.tsx').toLowerCase();
+  assert.equal(isDedicatedLauncherTemplate(retiredBinderId), false);
+  assert.equal(WORKFLOW_MODEL_INVENTORY.some((entry) => entry.workflowId === retiredBinderId), false);
+  assert.equal(submissionSource.includes(`'${retiredBinderId}'`), false);
+  assert.match(submissionSource, /bindcraft2: 'antibody_denovo'/);
+  assert.match(launcherSource, /bindcraft2settings/);
+  assert.match(launcherSource, /native-settings/);
 });

@@ -459,7 +459,12 @@ export function JobSubmission() {
                 if (data.name) setJobName(data.name);
 
                 // Determine routing
-                if (data.model_id === 'antibody_denovo' || data.model_id === 'template_antibody_denovo' || data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
+                if (data.model_id === 'bindcraft2') {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('antibody_denovo');
+                    setClonedValues({ ...data.params, name: data.name, denovo_generator: 'bindcraft2', mode: data.mode });
+                }
+                else if (data.model_id === 'antibody_denovo' || data.model_id === 'template_antibody_denovo' || data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
                     setClonedValues({ ...data.params, name: data.name, ...(data.mode !== undefined ? { mode: data.mode } : {}) });
@@ -595,6 +600,7 @@ export function JobSubmission() {
     // Dedicated launcher templates that use specialized components instead of API-driven config
     const dedicatedTemplateByModelId: Record<string, string> = {
         template_antibody_denovo: 'antibody_denovo',
+        bindcraft2: 'antibody_denovo',
         boltzgen: 'antibody_denovo',
 
         protein_modification_experimental: 'protein_modification_experimental',
@@ -689,6 +695,7 @@ export function JobSubmission() {
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
                 ...(isLegacyFoldCp ? { pred_method: 'fold_cp' } : {}),
                 ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
+                ...(templateModelId === 'bindcraft2' ? { denovo_generator: 'bindcraft2' } : {}),
                 structure_launch_variant: template.params?.structure_launch_variant,
             });
             setJobName(loadedJobName);

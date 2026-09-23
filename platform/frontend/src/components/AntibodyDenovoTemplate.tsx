@@ -43,6 +43,7 @@ import {
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { hydrateInitialStageSelection, resolveExistingDeNovoGenerator, type ExistingDeNovoGenerator } from './deNovoGeneratorSelection';
 import { DeNovoModalityNotice } from './DeNovoModalityNotice';
+import { BindCraft2Settings, type BC2Inventory, type BC2Request } from './BindCraft2Settings';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -285,6 +286,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         return parsed.toLocaleString();
     }, [refinementSavedFilterSetCreatedAt]);
     const [deNovoGenerator, setDeNovoGenerator] = useState<DeNovoGenerator | null>(() => resolveExistingDeNovoGenerator(initialValues));
+    const [bc2Settings, setBc2Settings] = useState<BC2Request>(() =>
+        initialValues?.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)
+            ? initialValues.bindcraft2_settings as BC2Request : {});
+    const [bc2Inventory, setBc2Inventory] = useState<BC2Inventory | null>(null);
+    const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
+    useEffect(() => {
+        if (deNovoGenerator !== 'bindcraft2') return;
+        const controller = new AbortController();
+        fetch('/api/models/bindcraft2/native-settings', { signal: controller.signal })
+            .then(async response => {
+                if (!response.ok) throw new Error(`Native settings discovery unavailable (${response.status})`);
+                return response.json();
+            })
+            .then(data => {
+                if (!data.settings?.fields || data.model_id !== 'bindcraft2') throw new Error('Invalid BindCraft2 settings discovery');
+                setBc2Inventory(data.settings as BC2Inventory);
+                setBc2DiscoveryError(null);
+            })
+            .catch(error => { if (!controller.signal.aborted) setBc2DiscoveryError(String(error)); });
+        return () => controller.abort();
+    }, [deNovoGenerator]);
     const [deNovoStageSelection, setDeNovoStageSelection] = useState<Record<DeNovoOrchestrationStage, boolean>>(() => hydrateDeNovoStageSelection(initialValues));
 
     useEffect(() => {
@@ -369,6 +391,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         setFampnnOverrides(initialValues?.fampnn_analysis_overrides);
         if (initialValues) {
             setDeNovoGenerator(resolveExistingDeNovoGenerator(initialValues));
+            if (initialValues.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)) {
+                setBc2Settings(initialValues.bindcraft2_settings as BC2Request);
+            }
             setDeNovoStageSelection(hydrateDeNovoStageSelection(initialValues));
         }
     }, [initialValues]);
@@ -2402,6 +2427,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </p>
                 )}
             </div>
+            <button type="button" onClick={() => setDeNovoGenerator('bindcraft2')}
+                className="mt-3 rounded-xl border p-4 text-left" style={themedInsetStyle}>
+                <span className="font-medium">BindCraft2 campaign (draft only)</span>
+                <p className="text-xs">Native campaign settings; not an antibody refinement preset. Execution is not available here.</p>
+            </button>
         </div>
     ) : null;
 
@@ -2410,6 +2440,34 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             value={frustrampnnSettings}
             onChange={setFrustrampnnSettings}
         />
+    );
+
+    if (!isRefinementMode && deNovoGenerator === 'bindcraft2') return (
+        <section aria-label="BindCraft2 campaign draft" className="rounded-xl border p-6 space-y-4" style={themedPanelStyle}>
+            <button type="button" onClick={onBack}>Back to workflows</button>
+            <h2 className="text-xl font-semibold">De Novo Binder Design · BindCraft2</h2>
+            <p>Native campaign draft. No BindCraft2 job is submitted by this launcher. Candidate review and compatible downstream operations remain separate from the native campaign.</p>
+            <button type="button" onClick={() => setDeNovoGenerator('rfantibody')}>Choose RFantibody</button>{' · '}
+            <button type="button" onClick={() => setDeNovoGenerator('boltzgen')}>Choose BoltzGen VHH</button>{' · '}
+            <button type="button" onClick={() => setDeNovoGenerator('ppiflow')}>Choose seeded PPIFlow</button>
+            <label className="block">Draft name <input aria-label="Draft name" value={jobName} onChange={event => setJobName(event.target.value)} /></label>
+            {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} />
+                : <p role="status">{bc2DiscoveryError ?? 'Loading model-owned settings inventory…'}</p>}
+            <details><summary>Saved native request preview (not executable)</summary>
+                <pre>{JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: bc2Settings } }, null, 2)}</pre>
+            </details>
+            <button type="button" onClick={() => setShowTemplateManager(true)}>Save campaign draft</button>
+            <TemplateManagerModal isOpen={showTemplateManager} onClose={() => setShowTemplateManager(false)}
+                onSelect={template => {
+                    const params = template.params || {};
+                    if (resolveExistingDeNovoGenerator(params) !== 'bindcraft2') return;
+                    setJobName(params.job_name ?? template.name);
+                    setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
+                        ? params.bindcraft2_settings : {});
+                }}
+                currentParams={{ job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings }}
+                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />
+        </section>
     );
 
     return (
@@ -5444,6 +5502,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
                         if (!isRefinementMode) {
                             setDeNovoGenerator(resolveExistingDeNovoGenerator(p));
+                            if (p.bindcraft2_settings && typeof p.bindcraft2_settings === 'object' && !Array.isArray(p.bindcraft2_settings)) {
+                                setBc2Settings(p.bindcraft2_settings);
+                            }
                             loaded.push('denovo_generator');
                             setDeNovoStageSelection(hydrateDeNovoStageSelection(p));
                             if (

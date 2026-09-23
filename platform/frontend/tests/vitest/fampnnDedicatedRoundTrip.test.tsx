@@ -89,6 +89,28 @@ it('selected post-round subset is sent intact to iteration rather than a generat
     expect(mocks.iteration.mock.calls[0][0]).toMatchObject({ source_job_id: 'round-two',
         design_ids: ['candidate-2', 'candidate-4'], action: 'ui_refinement' });
 });
+it('mounted BC2 saved campaign keeps native draft separate and never submits antibody refinement', async () => {
+    const settings = { max_trajectories: 11, trajectory_only: false, binder_lengths: [55, 75] };
+    const inventory = { upstream_commit: 'pin', fields: {
+        max_trajectories: { native_key: 'max_trajectories', observed_types: ['integer'], has_native_default: false, native_default: null, status: 'typed' },
+        trajectory_only: { native_key: 'trajectory_only', observed_types: ['boolean'], has_native_default: true, native_default: true, status: 'typed' },
+    }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
+    const discovery = vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: false, settings: inventory }) }));
+    vi.stubGlobal('fetch', discovery);
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
+    expect(document.querySelector('[aria-label="BindCraft2 campaign draft"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="max_trajectories"]')).not.toBeNull();
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!)).toMatchObject({
+        denovo_generator: 'bindcraft2', bindcraft2_settings: settings,
+    });
+    expect(document.body.textContent).not.toContain('Launch Antibody Refinement');
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.iteration).not.toHaveBeenCalled();
+    expect(discovery).toHaveBeenCalledWith('/api/models/bindcraft2/native-settings', expect.any(Object));
+    await act(async () => mocks.select({ name: 'reopened', params: { denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 0, trajectory_only: false } } }));
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).bindcraft2_settings).toEqual({ max_trajectories: 0, trajectory_only: false });
+});
+
 const mutation = { mutation: [{ chain_id: 'H', author_number: 0, insertion_code: 'A' }] };
 it('antibody refinement preserves mutation-only scope through actual iteration and saved-template callbacks', async () => {
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: 'fampnn', fampnn_analysis_overrides: mutation }} />, true);
