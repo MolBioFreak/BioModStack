@@ -51,6 +51,7 @@ class NativeDocument:
     format: str
     retained_design: str | None = None  # only verified native CIF metadata can bind a document
     attempt_sha256: str | None = None
+    target_state: str | None = None  # current producer does not stamp state identity
 
 
 @dataclass(frozen=True)
@@ -352,3 +353,44 @@ def read_native_publication(root: Path) -> NativePublication:
     if any((root / arm).is_symlink() or not (root / arm).is_dir() for arm in arms):
         raise NativeResultError("missing or unsafe sweep arm directory")
     return NativePublication(tuple(_arm(root, root / arm, arm) for arm in arms if arm is not None))
+
+
+def native_result_page(publication: NativePublication, *, arm: str | None = None,
+                       stage: Literal["trajectory", "draw", "retained", "attempt", "document"] = "trajectory",
+                       offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    """Bounded JSON projection of the verified native reader, not a score store."""
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        raise NativeResultError("invalid native page bounds")
+    if stage not in ("trajectory", "draw", "retained", "attempt", "document"):
+        raise NativeResultError("invalid native stage")
+    matches = [item for item in publication.arms if item.name == arm]
+    if len(matches) != 1:
+        raise NativeResultError("unknown native arm")
+    selected = matches[0]
+    rows = {"trajectory": selected.trajectories, "draw": selected.draws,
+            "retained": selected.retained, "attempt": selected.attempts,
+            "document": selected.documents}[stage]
+
+    def project(item: NativeRow | NativeAttempt | NativeDocument) -> dict[str, Any]:
+        if isinstance(item, NativeRow):
+            return {"design": item.design, "stage": item.stage, "arm": item.arm,
+                    "trajectory_design": item.trajectory_design, "scored_design": item.scored_design,
+                    "attempt_sha256": item.attempt_sha256, "recipe_hash": item.recipe_hash,
+                    "values": item.values, "targets": [{"name": n, "weight": w} for n, w in item.targets],
+                    "target_readings": item.target_readings, "sequence": item.sequence,
+                    "outcome": item.outcome, "failed_filters": list(item.failed_filters),
+                    "terminated": item.terminated, "rank": item.rank}
+        if isinstance(item, NativeAttempt):
+            return {"design": item.design, "trajectory": item.trajectory,
+                    "recipe_hash": item.recipe_hash, "effective_settings": item.effective_settings,
+                    "drawn": item.drawn, "sha256": item.sha256}
+        return {"path": item.path, "sha256": item.sha256, "format": item.format,
+                "retained_design": item.retained_design, "attempt_sha256": item.attempt_sha256,
+                "target_state": item.target_state}
+
+    return {"schema": "bindcraft2.native-readback.v1", "arm": arm, "stage": stage,
+            "offset": offset, "limit": limit, "total": len(rows),
+            "accounting": selected.accounting,
+            "arms": [{"name": item.name, "accounting": item.accounting} for item in publication.arms],
+            "metadata": selected.metadata,
+            "rows": [project(item) for item in rows[offset:offset + limit]]}

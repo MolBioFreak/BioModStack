@@ -9,10 +9,11 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from services.bindcraft2_native_results import NativeResultError, read_native_publication
+from services.bindcraft2_native_results import NativeResultError, native_result_page, read_native_publication
 
 
 def table(path: Path, rows: list[dict]) -> None:
@@ -247,6 +248,28 @@ def test_sidecar_present_but_unstamped_trajectory_is_unqualified(tmp_path):
     assert arm.attempts and arm.trajectories[0].attempt_sha256 is None
     assert all(row.attempt_sha256 is None for row in arm.draws + arm.retained)
     assert all(document.retained_design is None for document in arm.documents)
+
+
+def test_bounded_readback_retains_native_metrics_settings_and_unknown_state(tmp_path):
+    digest = stamped_campaign(tmp_path)
+    publication = read_native_publication(tmp_path)
+    draws = native_result_page(publication, stage="draw", offset=1, limit=1)
+    assert draws["total"] == 3 and len(draws["rows"]) == 1
+    assert draws["rows"][0]["design"] == "t_candidate2"
+    assert draws["rows"][0]["attempt_sha256"] == digest
+    retained = native_result_page(publication, stage="retained", limit=2)
+    assert [row["scored_design"] for row in retained["rows"]] == ["t_candidate2", "t_candidate1"]
+    assert [row["rank"] for row in retained["rows"]] == [2, 1]
+    documents = native_result_page(publication, stage="document", limit=10)
+    assert documents["total"] == 4
+    assert all(row["target_state"] is None for row in documents["rows"])
+    assert native_result_page(publication, stage="attempt")["rows"][0]["effective_settings"]["mpnn_temperature"] == 0.3
+    assert native_result_page(publication, stage="trajectory")["accounting"]["claimed_attempts"] is None
+    bad_pages: list[dict[str, Any]] = [{"limit": 101}, {"limit": 0}, {"offset": -1},
+                                       {"limit": True}, {"stage": "fake"}, {"arm": "wrong"}]
+    for kwargs in bad_pages:
+        with pytest.raises(NativeResultError):
+            native_result_page(publication, **kwargs)
 
 
 def test_malformed_producer_join_is_not_accepted_as_ordinal(tmp_path):
