@@ -26,6 +26,7 @@ The conversational label “version 2” is not a product name, code namespace, 
 2. **BC2 is missing.** Its complete native campaign surface must be integrated, including unscaffolded/scaffolded formats, conformational objectives, multi-target/detarget inputs, presets, advanced scientific settings, sweeps, adaptive attempts, native outputs and resume behavior. A VHH-only wrapper or raw-JSON-only editor is not sufficient.
 3. **Existing execution contains real defects.** Hidden profile overrides, unknown-validator fallback, synthetic sequence fallback, implicit redesign, chain-role substitution, sample loss and stale validation labels can change or misrepresent the requested work. These defects are in scope for correction, not grandfathered into the new workflow.
 4. **Candidate identity and continuation are fragile.** Filename/stem inference, incomplete source ownership, inconsistent selection materialization and generic result flattening cannot reliably retain states, samples and multiple refinement rounds. Optional analysis must not roll back usable generator results.
+   The current iteration API also admits only antibody-looking roots and launches an antibody-specific refinement job; generic continuation needs a server-side route, not just an unlocked button.
 5. **Refinement mechanisms are entangled.** Side-chain repack, anchor analysis, partial-flow backbone refinement, sequence redesign, prediction and diagnostic analysis need independent selection and truthful output identity. Generalizing the loop must not falsely generalize an antibody-specific checkpoint.
 6. **Remote operation is not just an image deployment.** The same scientific request must execute through existing local and bridge owners, using only selected dependencies, shared assets, persistent compatible caches, precise resume semantics and reopenable returned results. Warm-start overhead must be measured and unnecessary repeated work removed.
 7. **Documentation confuses implementation with qualification.** Generic constrained FA-MPNN, a Caliby parent-workflow path and substantial FrustraMPNN/result infrastructure already exist. They should be reused and qualified rather than reimplemented. Project catalogue unavailability is not proof that a core-job runner is absent.
@@ -36,7 +37,7 @@ The conversational label “version 2” is not a product name, code namespace, 
 
 Preserve RFantibody, BoltzGen and seeded PPIFlow as distinct choices and routes. Reuse existing general de novo/RFD3 capabilities where applicable rather than displacing or duplicating them. BC2 is a peer option, not an obligatory stage, replacement generator or add-on restricted to VHH.
 
-Select modality/objective first; expose the selected model's relevant controls and real compatibility constraints. Selecting a new modality must not silently coerce an old request. A seeded route remains visibly seeded. Existing jobs, templates and results remain interpretable.
+Select modality/objective first; expose the selected model's relevant controls and real compatibility constraints. Selecting a new modality must not silently coerce an old request. A seeded route remains visibly seeded. Existing jobs, templates and results remain interpretable. The disabled historical `binder_design.yaml` template is not this product and must not be enabled as a shortcut.
 
 ### Complete BC2 integration
 
@@ -52,11 +53,11 @@ Deliver general constrained sequence redesign, independently selectable repack a
 
 For an exact candidate/context, valid failure of both requested, qualified blind-recovery and LigandMPNN-context checks means computational rejection under the selected policy. Mixed evidence remains mixed; skipped, errored or inconclusive checks are not scientific failures. Preserve raw evidence and the unchanged candidate. LigandMPNN's supplied-geometry compatibility evidence is not independent pose recovery or proof of binding.
 
-Preserve parents and all round/sample/state identities. A changed sequence or structure creates a descendant with fresh validation state. The user can repeat the loop, compare parent and descendants, and stop without being forced through another model.
+Preserve parents and all round/sample/state identities. A changed sequence or structure creates a descendant with fresh validation state. The user can repeat the loop, compare parent and descendants, and stop without being forced through another model. Qualify the selected LigandMPNN checkpoint for the claimed protein-interface task before allowing a binary diagnostic verdict; ordinary chemistry-context design remains a separate Foundry obligation, not proof of this check.
 
 ### Per-model results and reliable selection
 
-Reuse existing Job/Design, scientific artifacts, native result adapters and review infrastructure. Add BC2-native attempt/draw/retained-sequence/state records; do not invent a universal binder score or parallel candidate database.
+Reuse existing Job/Design, scientific artifacts, native result adapters and review infrastructure. Add BC2-native attempt/draw/retained-sequence/state records and make campaign/per-attempt settings visible from job details; do not invent a universal binder score or parallel candidate database. BC2 handoff acceptance needs a real BC2 candidate, not an unrelated generator's refinement result.
 
 Keep native CIF/mmCIF authoritative. `Design.pdb_path` already stores those formats despite its legacy name. Fix actual PDB-only consumers; convert only at an operation that truly requires it. No fabricated structures for failed or structureless attempts.
 
@@ -66,8 +67,8 @@ Use the same compiled scientific invocation and model result adapter for either 
 
 ## Implementation and completion
 
-Eight bounded implementation lanes cover launcher/requests, refinement/blind checks, selection/results, existing alternatives/analyses, BC2 native execution, BC2 publication, bridge/runtime/performance, and LigandMPNN validation. They work concurrently with sole-writer file ownership and one parent integrator. The linked SOW supplies copy-ready prompts and explicit pass/fail conditions. Reuse the existing review evidence; no ceremonial second review is required merely to inspect code. Resolve concrete shared interfaces early; consequential scientific choices remain Christian's decisions and block only their dependent work.
+Eight bounded implementation lanes cover launcher/requests, refinement/blind checks, selection/results, existing alternatives/analyses, BC2 native execution, BC2 publication, bridge/runtime/performance, and LigandMPNN validation. They work concurrently with sole-writer file ownership and one parent integrator. The linked SOW supplies copy-ready prompts and explicit pass/fail conditions. Reuse the existing review evidence; no ceremonial second review is required merely to inspect code. Freeze concrete shared interfaces before dependent production edits; present the complex-contact and diagnostic-policy choices early. Those consequential scientific choices remain Christian's decisions and block only their dependent work. The experimental LigandMPNN diagnostic still needs an executable route under Foundry; its existing chemistry-mode registry row is not that route.
 
 Acceptance covers the **whole workflow**: all existing generators, full native BC2, modality-aware controls, repeated optional refinement, repaired defects, per-model results, local execution, remote execution and measured warm behavior. An unavailable in-scope operation is unfinished work, not a completed feature because a disabled selector explains it.
 
-Simplify the machinery, not the product. Reuse global configuration/result facilities and preserve their applicable guarantees without turning this upgrade into an unrelated platform rewrite. Licensing restrictions on third-party invocable BC2 functionality remain distinct from authorized internal local/private-remote use.
+Simplify the machinery, not the product. Reuse global configuration/result facilities and preserve their applicable guarantees without turning this upgrade into an unrelated platform rewrite. Confirm the actual audience before making BC2 invocable: licensing restrictions on third-party hosted functionality remain distinct from authorized internal local/private-remote use.
