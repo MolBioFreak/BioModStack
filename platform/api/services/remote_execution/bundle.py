@@ -960,10 +960,13 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         shutil.copyfile(archive, staged)
         if _sha256_file(staged) != expected:
             raise RemoteBundleError('Cached source archive changed during staging')
-        if extract:
-            _safe_extract(staged, source_root)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
+    # Only the shared archive/copy needs serialization. Extraction writes into
+    # this attempt's private tree; holding the revision lock here stalls every
+    # other warm launch on an unrelated attempt's extraction.
+    if extract:
+        _safe_extract(staged, source_root)
     return expected
 
 

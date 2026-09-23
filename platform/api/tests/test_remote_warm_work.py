@@ -95,6 +95,31 @@ def test_source_archive_reuse_private_trees_and_rebuild_corruption(tmp_path, mon
     assert third.joinpath('workflow.nf').read_text() != first.joinpath('workflow.nf').read_text()
 
 
+def test_source_extraction_does_not_hold_shared_revision_lock(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    (repo / 'workflow.nf').write_text('process RUN { script: "echo ok" }\n')
+    subprocess.run(['git', '-C', str(repo), 'add', 'workflow.nf'], check=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                    'commit', '-qm', 'fixture'], check=True)
+    revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    data = tmp_path / 'data'
+    actual_extract = bundle._safe_extract
+
+    def extract_without_serializing_attempts(archive, destination):
+        lock_path = data / 'remote-execution/source-archives' / (revision + '.lock')
+        with lock_path.open('a+b') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        actual_extract(archive, destination)
+
+    monkeypatch.setattr(bundle, '_safe_extract', extract_without_serializing_attempts)
+    bundle._staged_source_archive(repo, data, revision, tmp_path / 'attempt1')
+    bundle._staged_source_archive(repo, data, revision, tmp_path / 'attempt2')
+    assert (tmp_path / 'attempt1/workflow.nf').read_bytes() == (tmp_path / 'attempt2/workflow.nf').read_bytes()
+
+
 def test_source_archive_retention_skips_in_use_revision(tmp_path):
     revisions = [f'{number:040x}' for number in range(4)]
     archives = [tmp_path / (revision + '.tar.gz') for revision in revisions]
