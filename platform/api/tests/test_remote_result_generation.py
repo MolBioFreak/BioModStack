@@ -42,6 +42,34 @@ def package(job, *, state="succeeded"):
     return manifest, incoming, status.model_copy(update={"result_manifest_sha256": digest})
 
 
+@pytest.mark.asyncio
+async def test_automatic_returning_recovers_once_after_controller_death(store, monkeypatch):
+    await ready(store)
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        job.params = dict(job.params or {}, remote_result_policy='automatic')
+        job.status = job.queue_status = 'running'
+        job.remote_state = 'returning'
+        await session.commit()
+    called = []
+    async def resumed(job_id, identity, guard):
+        called.append((job_id, identity))
+        guard.__exit__(None, None, None)
+    monkeypatch.setattr(ex, '_run_requested_pull', resumed)
+    tasks = BackgroundTasks()
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        assert await ex.reconcile_remote_job(session, job, background_tasks=tasks)
+        assert job.provenance['remote_result_resume_attempted'] == ex._pull_identity(job)
+    await tasks()
+    assert len(called) == 1 and called[0][0] == 'job'
+    # Another crash does not start an unbounded automatic transfer loop.
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        assert await ex.reconcile_remote_job(session, job, background_tasks=BackgroundTasks())
+        assert job.remote_state == 'result_pull_failed'
+
+
 @pytest.mark.parametrize("point", ["prepared", "prior_moved", "new_moved"])
 @pytest.mark.parametrize("prior", [False, True])
 def test_process_death_at_each_publication_boundary(tmp_path, point, prior):

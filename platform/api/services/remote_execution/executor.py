@@ -1705,7 +1705,8 @@ async def reconcile_remote_job(session: AsyncSession, job: Job, *, background_ta
     # Release the observation guard before entering the same reservation lane
     # used by manual pulls. Refresh persisted authority, including revocation.
     job = await session.get(Job, job_id, populate_existing=True)
-    if job is None or job.remote_state != "results_available" or not automatic_result_return_enabled(job):
+    if (job is None or job.remote_state not in {"results_available", "returning"}
+            or not automatic_result_return_enabled(job)):
         return changed
     from fastapi import BackgroundTasks
 
@@ -1861,9 +1862,13 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             return released or changed
         return changed
     if job.remote_state == "returning":
-        if (job.status, job.queue_status) != ("running", "running"):
-            return False
-        return await _pull_failure(session, job, "Result pull interrupted; choose Retry pull")
+        if not automatic_result_return_enabled(job):
+            return await _pull_failure(session, job, "Result pull interrupted; choose Retry pull")
+        if (job.provenance or {}).get("remote_result_resume_attempted") == _pull_identity(job):
+            return await _pull_failure(session, job, "Automatic result pull recovery interrupted; choose Retry pull")
+        # The previous controller may have died mid-transfer. The same attempt
+        # guard and transfer journal resume it after the guard becomes free.
+        return False
     if job.awaiting_stage == "remote_results":
         return False
     expected_run_id = str(job.nextflow_run_id or "")
@@ -2091,7 +2096,8 @@ async def _pull_failure(session, job, message):
 
 async def request_remote_result_pull(session, job, background_tasks, *, automatic=False):
     """Reserve transfer before responding; keep the process lock through completion."""
-    if automatic and (job.remote_state != "results_available" or not automatic_result_return_enabled(job)):
+    if automatic and (job.remote_state not in {"results_available", "returning"}
+                      or not automatic_result_return_enabled(job)):
         return False
     if (not job.execution_target_id or not job.remote_attempt_id
             or not all(isinstance(value, str) and value.strip() and value != "None"
@@ -2116,19 +2122,30 @@ async def request_remote_result_pull(session, job, background_tasks, *, automati
             if automatic:
                 return False
             raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
-        if automatic and (job.remote_state != "results_available"
-                          or not automatic_result_return_enabled(job)
-                          or (job.status, job.queue_status) != ("awaiting_input", "completed")):
+        resuming = automatic and job.remote_state == "returning"
+        if automatic and not automatic_result_return_enabled(job):
+            return False
+        if resuming:
+            # One durable recovery reservation only. A second controller crash
+            # leaves explicit Retry pull available instead of a blind loop.
+            if ((job.provenance or {}).get("remote_result_resume_attempted") == identity
+                    or (job.status, job.queue_status) != ("running", "running")):
+                return False
+        elif automatic and (job.remote_state != "results_available"
+                            or (job.status, job.queue_status) != ("awaiting_input", "completed")):
             return False
         if (job.status not in {"awaiting_input", "running"}
                 or job.remote_state not in {"results_available", "result_pull_failed", "returning"}
                 or job.awaiting_stage != "remote_results"
                 or not job.awaiting_input or job.awaiting_payload != _pull_identity(job)):
             raise RemoteExecutionError("Job is not awaiting an explicit result pull")
-        if not await _publish_remote_transition(session, job, {
+        changes = {
             "status": "running", "queue_status": "running", "remote_state": "returning",
             "error_message": None,
-        }, require_lease=False):
+        }
+        if resuming:
+            changes["provenance"] = dict(job.provenance or {}, remote_result_resume_attempted=identity)
+        if not await _publish_remote_transition(session, job, changes, require_lease=False):
             raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
         background_tasks.add_task(_run_requested_pull, str(job.id), _pull_identity(job), guard)
         scheduled = True
