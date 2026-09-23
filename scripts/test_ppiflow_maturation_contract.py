@@ -16,7 +16,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 sys.modules.setdefault("pyrosetta", types.SimpleNamespace(rosetta=types.SimpleNamespace()))
 
 from anchors_to_ppiflow_positions import build_positions
-from prepare_ppiflow_maturation import _build_anchor_payload
+from prepare_ppiflow_maturation import _build_anchor_payload, _parse_position_spec
 
 
 class _FakePdbInfo:
@@ -84,7 +84,7 @@ def test_build_anchor_payload_keeps_movable_candidates_out_of_effective_anchors(
         interface_residues=[1, 2, 3],
         binder_residue_scores=binder_scores,
         energy_threshold=-5.0,
-        movable_positions={("H", 27)},
+        movable_positions={("H", 27, "")},
         antibody_chains=["H"],
         antigen_chains=["A"],
         region_mode="selected_cdrs",
@@ -98,6 +98,17 @@ def test_build_anchor_payload_keeps_movable_candidates_out_of_effective_anchors(
     assert payload["anchors_include_movable_positions"] is False
     assert [(entry["chain"], entry["resnum"]) for entry in payload["anchors"]] == [("H", 50)]
     assert [(entry["chain"], entry["resnum"]) for entry in payload["movable_anchor_candidates"]] == [("H", 27)]
+
+
+def test_anchor_membership_distinguishes_insertion_codes() -> None:
+    pose = _FakePose({1: ("H", 100, "", "Y"), 2: ("H", 100, "A", "W")})
+    scores = {("H", 100, ""): -8.0, ("H", 100, "A"): -8.0}
+    payload = _build_anchor_payload(
+        pose, [1, 2], scores, -5.0, _parse_position_spec("H100A"),
+        ["H"], ["T"], "selected_cdrs", ["H3"],
+    )
+    assert [(row["resnum"], row["icode"]) for row in payload["anchors"]] == [(100, "")]
+    assert [(row["resnum"], row["icode"]) for row in payload["movable_anchor_candidates"]] == [(100, "A")]
 
 
 def test_filter_maturation_fails_when_requested_objective_disagrees_with_score_json(tmp_path: Path) -> None:
@@ -157,7 +168,7 @@ def test_score_maturation_payload_documents_local_non_af3_objective() -> None:
 
 
 def test_ppiflow_workflow_propagates_objective_and_uses_zero_preserving_defaults() -> None:
-    workflow_text = (REPO_ROOT / "workflows" / "antibody_child.nf").read_text(encoding="utf-8")
+    workflow_text = (REPO_ROOT / "workflows" / "antibody_denovo.nf").read_text(encoding="utf-8")
     module_text = (REPO_ROOT / "modules" / "ppiflow.nf").read_text(encoding="utf-8")
 
     for process_name in ("process SpawnMaturationJobs {", "process SpawnValidatedMaturationJobs {"):

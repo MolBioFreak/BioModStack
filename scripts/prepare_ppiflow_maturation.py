@@ -162,32 +162,25 @@ def _compute_interface_pair_energy_breakdown(
     return total_score, interface_residues, binder_residue_scores, pair_payload
 
 
-def _parse_position_spec(position_spec: str) -> Set[Tuple[str, int]]:
-    residues: Set[Tuple[str, int]] = set()
+def _parse_position_spec(position_spec: str) -> Set[ResidueKey]:
+    import re
+
+    residues: Set[ResidueKey] = set()
     for token in (position_spec or "").split(","):
         token = token.strip()
         if not token:
             continue
-        chain_id = token[0]
-        raw = token[1:]
-        if "-" in raw:
-            start_text, end_text = raw.split("-", 1)
-            try:
-                start = int(start_text)
-                end = int(end_text)
-            except ValueError:
-                continue
-            for resnum in range(min(start, end), max(start, end) + 1):
-                residues.add((chain_id, int(resnum)))
+        match = re.fullmatch(r"([A-Za-z0-9])(-?\d+)([A-Za-z]?)", token)
+        if match:
+            residues.add((match.group(1), int(match.group(2)), match.group(3)))
             continue
-        number = ""
-        for char in raw:
-            if char.isdigit() or (char == "-" and not number):
-                number += char
-            else:
-                break
-        if number:
-            residues.add((chain_id, int(number)))
+        interval = re.fullmatch(r"([A-Za-z0-9])(-?\d+)-(-?\d+)", token)
+        if interval:
+            start, end = int(interval.group(2)), int(interval.group(3))
+            for resnum in range(min(start, end), max(start, end) + 1):
+                residues.add((interval.group(1), resnum, ""))
+            continue
+        raise ValueError(f"Invalid PPIFlow residue identity: {token!r}")
     return residues
 
 
@@ -196,7 +189,7 @@ def _build_anchor_payload(
     interface_residues: Sequence[int],
     binder_residue_scores: Dict[ResidueKey, float],
     energy_threshold: float,
-    movable_positions: Set[Tuple[str, int]],
+    movable_positions: Set[ResidueKey],
     antibody_chains: Sequence[str],
     antigen_chains: Sequence[str],
     region_mode: str,
@@ -222,7 +215,7 @@ def _build_anchor_payload(
             "aa": pose.residue(resi).name1(),
             "interface_contribution": contribution,
             "chain_role": "antibody",
-            "movable_region_member": (chain_id, resnum) in movable_positions,
+            "movable_region_member": key in movable_positions,
         }
         anchor_candidates.append(record)
         if record["movable_region_member"]:
@@ -302,17 +295,18 @@ def main() -> None:
     scorefxn(input_pose)
 
     detected_chains = get_chain_ids(input_pose)
-    antibody_chains = [chain for chain in antibody_chains if chain in detected_chains]
-    if not antibody_chains:
-        if not detected_chains:
-            raise SystemExit("[PPIFlow] No chains detected in pose")
-        antibody_chains = [detected_chains[0]]
-
-    antigen_chains = [chain for chain in antigen_chains if chain in detected_chains and chain not in antibody_chains]
+    if not antibody_chains or len(set(antibody_chains)) != len(antibody_chains):
+        raise SystemExit("[PPIFlow] Antibody chain roles must be explicit and distinct")
+    missing = set(antibody_chains + antigen_chains) - set(detected_chains)
+    if missing:
+        raise SystemExit(f"[PPIFlow] Requested chains absent from pose: {sorted(missing)}")
+    if set(antibody_chains) & set(antigen_chains):
+        raise SystemExit("[PPIFlow] Antibody and antigen chain roles overlap")
     if not antigen_chains:
-        antigen_chains = [chain for chain in detected_chains if chain not in antibody_chains]
-        if not antigen_chains:
-            raise SystemExit("[PPIFlow] No antigen chains detected in pose")
+        candidates = set(detected_chains) - set(antibody_chains)
+        if len(candidates) != 1:
+            raise SystemExit(f"[PPIFlow] Antigen chain role ambiguous: {sorted(candidates)}")
+        antigen_chains = sorted(candidates)
 
     ppiflow_positions, all_cdr_positions, err = build_ppiflow_region_spec(
         args.pdb,
