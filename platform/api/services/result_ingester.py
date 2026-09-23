@@ -6855,6 +6855,12 @@ async def ingest_loose_files(
     plr_final_path = None
     current_model_id = str(getattr(current_job, "model_id", "") or "").strip().lower() if current_job is not None else ""
     current_mode = str(getattr(current_job, "mode", "") or "").strip().lower() if current_job is not None else ""
+    is_fold_cp = (
+        current_model_id == "boltz_cp_experimental"
+        or str(job_params.get("pred_method") or "").lower() == "fold_cp"
+        or str(job_params.get("structure_launch_variant") or "").lower() == "boltz_cp_experimental"
+        or str(job_params.get("rfd_mode") or "").lower() == "boltz_cp_experimental"
+    )
     if current_job is not None and (
         current_model_id == "protein_local_redesign"
         or (
@@ -6886,6 +6892,9 @@ async def ingest_loose_files(
         search_paths = [boltzgen_filtered_path]
     else:
         search_paths = [
+            # Fold-CP publishes confidence and structures into separate trees.
+            # Scope this to Fold-CP so unrelated engines cannot cross-pair names.
+            *([output_path / "json_files" / "predictions"] if is_fold_cp else []),
             output_path / "pdb_files" / "predictions",
             output_path / "pdb_files" / "validated_designs",
             output_path / "pdb_files",
@@ -6931,7 +6940,7 @@ async def ingest_loose_files(
         if not search_dir.exists():
             continue
         
-        recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts
+        recursive_scan = search_dir.name in {"pdb_files", "validated_designs", "collected"} or "collected" in search_dir.parts or (is_fold_cp and search_dir == output_path / "json_files" / "predictions")
         json_files = set(list(search_dir.rglob("confidence_*.json")) if recursive_scan else list(search_dir.glob("confidence_*.json")))
         boltz_aligned_jsons = list(search_dir.rglob("*_boltzpred.json")) if recursive_scan else list(search_dir.glob("*_boltzpred.json"))
         json_files.update(boltz_aligned_jsons)
@@ -6959,7 +6968,34 @@ async def ingest_loose_files(
                 if not re.search(r'_\d+$', design_name):
                     print(f"[Ingester] Skipping input template: {design_name}")
                     continue
-                
+
+                # Fold-CP publishes confidence and structures into separate trees.
+                # Restrict native nested matches to the corresponding DP shard.
+                fold_cp_structure = None
+                if is_fold_cp and search_dir == output_path / "json_files" / "predictions":
+                    relative_parent = json_file.parent.relative_to(search_dir)
+                    for structure_root in (output_path / "cif_files" / "predictions", output_path / "pdb_files" / "predictions"):
+                        scope = structure_root / relative_parent
+                        if not scope.is_dir():
+                            continue
+                        direct = [scope / f"{artifact_name}.cif", scope / f"{artifact_name}.pdb"]
+                        matches = [candidate for candidate in direct if candidate.is_file()]
+                        if not matches and relative_parent != Path('.'):
+                            matches = sorted(scope.rglob(f"{artifact_name}.cif")) + sorted(scope.rglob(f"{artifact_name}.pdb"))
+                        if len(matches) > 1:
+                            raise ValueError(f"Ambiguous Fold-CP structures for {json_file}: {matches}")
+                        if matches:
+                            fold_cp_structure = matches[0]
+                            relative_structure = fold_cp_structure.relative_to(structure_root)
+                            if relative_structure.parent != Path('.'):
+                                import hashlib
+                                sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", relative_structure.with_suffix('').as_posix())[:100]
+                                digest = hashlib.sha256(relative_structure.as_posix().encode()).hexdigest()[:12]
+                                design_name = f"foldcp_{sanitized}_{digest}"
+                            break
+                    if fold_cp_structure is None:
+                        continue
+
                 if design_name in ingested_names:
                     metric_results_found = True
                     continue
@@ -6982,7 +7018,7 @@ async def ingest_loose_files(
                     output_path / "pdb_files" / "predictions" / f"{design_name}_boltzpred.pdb",
                     output_path / "pdb_files" / "predictions" / f"{design_name}.pdb",
                 ]
-                structure_path = next((candidate for candidate in structure_candidates if candidate.exists()), None)
+                structure_path = fold_cp_structure or next((candidate for candidate in structure_candidates if candidate.exists()), None)
 
                 if structure_path is None:
                     continue
