@@ -114,6 +114,10 @@ def prepare_transfer(incoming: Path) -> None:
     The lock excludes an unfinished launcher and an inherited supervisor, not
     an already-spawned writer. Never unlink the lock inode or infer PID death.
     """
+    # An absent staging directory cannot contain an earlier transfer fence.
+    # Inspecting a returning attempt must not create one merely to check it.
+    if not checked(incoming).parent.exists():
+        return
     with transfer_handoff(incoming):
         marker = transfer_marker(incoming)
         if marker.exists():

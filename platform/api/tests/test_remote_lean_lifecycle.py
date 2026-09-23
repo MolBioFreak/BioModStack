@@ -1,6 +1,7 @@
 """Fail-closed controller cancellation and mutation ownership regressions."""
 import asyncio
 import threading
+from pathlib import Path
 
 
 import pytest
@@ -140,7 +141,7 @@ async def test_cancelled_return_without_compute_lease_waits_for_local_writer(sto
 
 @pytest.mark.asyncio
 async def test_auto_resume_waits_for_transfer_marker_without_spending_retry(store, tmp_path, monkeypatch):
-    # Reuse the real result staging identity and a same-boot incomplete marker.
+    # A handed-off supervisor, unlike a never-spawned launcher, may own a writer.
     monkeypatch.setattr(ex, "get_data_root", lambda: tmp_path)
     async with store() as s:
         job = await s.get(Job, "job")
@@ -157,6 +158,11 @@ async def test_auto_resume_waits_for_transfer_marker_without_spending_retry(stor
         incoming = gen.staging_path(job, digest)
     incoming.parent.mkdir(parents=True, exist_ok=True)
     gen.begin_transfer(incoming)
+    gen.durable_json(gen.transfer_marker(incoming), {
+        "schema": "bms.local-result-transport.v1", "phase": "supervising",
+        "destination": str(incoming),
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+    })
     tasks = BackgroundTasks()
     async with store() as s:
         job = await s.get(Job, "job")
@@ -164,3 +170,9 @@ async def test_auto_resume_waits_for_transfer_marker_without_spending_retry(stor
         assert "remote_result_resume_attempted" not in job.provenance
         assert job.remote_state == "returning" and not tasks.tasks
     assert gen.transfer_marker(incoming).exists()
+
+
+def test_transfer_inspection_with_no_staging_directory_is_read_only(tmp_path):
+    incoming = tmp_path / "uncreated" / "incoming"
+    gen.prepare_transfer(incoming)
+    assert not incoming.parent.exists()

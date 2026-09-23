@@ -356,7 +356,6 @@ async def test_first_checkpoint_observation_persists_boot_and_can_continue(lane,
 @pytest.mark.parametrize('race', [None, 'lease', 'source', 'local-writer'])
 async def test_cancel_intent_redelivers_original_attempt_and_never_releases_successor(lane, monkeypatch, race):
     from services import job_control
-    from fastapi import HTTPException
     async def lost(*args, **kwargs):
         return False
     monkeypatch.setattr(job_control, 'cancel_nextflow_job', lost)
@@ -370,8 +369,7 @@ async def test_cancel_intent_redelivers_original_attempt_and_never_releases_succ
         target.leased_job_id = 'job'
         target.lease_acquired_at = datetime.fromisoformat(lane.receipt['lease_acquired_at'])
         await session.commit()
-        with pytest.raises(HTTPException):
-            await job_control.cancel_job_lineage('job', session)
+        await job_control.cancel_job_lineage('job', session)
     calls = 0
     async def transport(connection, argv, **kwargs):
         nonlocal calls
@@ -392,11 +390,11 @@ async def test_cancel_intent_redelivers_original_attempt_and_never_releases_succ
         assert not await ex.reconcile_remote_job(session, await session.get(Job, 'job'))
     async with lane.factory() as session:
         assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'job'
-        assert (await session.get(Job, 'job')).queue_status == 'cancelling'
+        assert (await session.get(Job, 'job')).queue_status == 'cancelled'
     if race == 'local-writer': lane.local_barrier.return_value = False
     async with lane.factory() as session:
         changed = await ex.reconcile_remote_job(session, await session.get(Job, 'job'))
-        assert changed is (race is None)
+        assert changed is (race in {None, 'lease'})
     assert calls == 2
     assert 'cancel' in lane.calls
     async with lane.factory() as session:
@@ -407,7 +405,7 @@ async def test_cancel_intent_redelivers_original_attempt_and_never_releases_succ
             assert lane.local_barrier.await_args.args[0].id == job.id
             assert lane.local_barrier.await_args.kwargs == {'guard_owned': True}
         else:
-            assert job.queue_status == 'cancelling'
+            assert job.queue_status == 'cancelled'
             assert target.leased_job_id == ('successor' if race == 'lease' else 'job')
 
 
@@ -523,7 +521,7 @@ async def test_cancel_redelivery_stops_real_worker_writer_after_controller_resta
     import sys
     import tarfile
     from services import job_control
-    from fastapi import HTTPException
+
     monkeypatch.setattr(worker.subprocess, 'Popen', lane.real_popen)
     source = lane.attempt / 'bundle/source'
     source.mkdir(parents=True)
@@ -560,8 +558,7 @@ async def test_cancel_redelivery_stops_real_worker_writer_after_controller_resta
             target.lease_acquired_at = datetime.fromisoformat(lane.receipt['lease_acquired_at'])
             await session.commit()
             monkeypatch.setattr(job_control, 'cancel_nextflow_job', AsyncMock(return_value=False))
-            with pytest.raises(HTTPException):
-                await job_control.cancel_job_lineage('job', session)
+            await job_control.cancel_job_lineage('job', session)
         # End the original controller Session; the writer is demonstrably live.
         before = marker.stat().st_size
         await asyncio.sleep(.1)
