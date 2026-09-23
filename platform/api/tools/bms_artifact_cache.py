@@ -277,9 +277,23 @@ class Cache:
         return {**item, 'state': 'cache_hit'}
 
     def ingest_runtime(self, item, source):
-        if self.probe_runtime(item)['state'] == 'cache_hit':
-            runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+        # A warm ingest needs one authoritative hash under the lifecycle lock,
+        # not probe_runtime's full hash followed by ensure_lease's full hash.
+        # Presence is determined by the digest directory, never by a missing
+        # runtime.sif inside a damaged published generation.
+        parent = self.image_path(item).parent
+        with directory(parent.parent, create=True) as fd:
+            try:
+                os.stat(parent.name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                present = False
+            else:
+                present = True
+        if present:
+            _, identities = runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
                 owner='cache-artifact:' + item['sha256'])
+            if identities[item['sha256']]['size'] != item['size_bytes']:
+                raise ValueError('runtime_image_size_mismatch')
             return {**item, 'state': 'ready', 'cache_hit': True}
         # One private upload -> one independently copied immutable object. Never
         # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
@@ -1006,8 +1020,9 @@ class Cache:
         with self.locked(item), self.objects(item) as objects:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
             try:
-                if not verified(fd, item, lambda **kw: self.emit(item, **kw)):
-                    raise ValueError('corrupt_object')
+                # _publish_copy hashes the exact bytes it copies before atomic
+                # publication. A separate pre-read only hashes the same object
+                # twice and does not strengthen the use-boundary check.
                 self.emit(item, 'materializing')
                 with directory(destination.parent, create=True) as parent:
                     self._publish_copy(fd, parent, destination.name, item, mode)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 
 import json
 import os
@@ -897,6 +898,47 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
+_SOURCE_ARCHIVE_DIGESTS: dict[str, str] = {}
+
+
+def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
+                           source_root: Path) -> str:
+    """Reuse a verified revision-keyed archive; extract into a private tree."""
+    cache_root = data_root / 'remote-execution' / 'source-archives'
+    cache_root.mkdir(parents=True, exist_ok=True)
+    archive = cache_root / (revision + '.tar.gz')
+    key = str(archive)
+    with (cache_root / (revision + '.lock')).open('a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # The expected digest is held by this process, not loaded from a
+        # writable sidecar. After a restart regenerate from the Git object.
+        expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        if archive.is_symlink() or (archive.exists() and not archive.is_file()):
+            raise RemoteBundleError('Unsafe cached source archive')
+        if not archive.exists() or not expected or _sha256_file(archive) != expected:
+            temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
+            try:
+                with temporary.open('xb') as output:
+                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision],
+                                   cwd=repo_root, check=True, stdout=output,
+                                   stderr=subprocess.PIPE, timeout=300)
+                    output.flush()
+                    os.fsync(output.fileno())
+                expected = _sha256_file(temporary)
+                os.replace(temporary, archive)
+                _SOURCE_ARCHIVE_DIGESTS[key] = expected
+            finally:
+                temporary.unlink(missing_ok=True)
+        # Each attempt owns its archive as well as its writable extracted tree.
+        staged = source_root / '.bms-source.tar.gz'
+        source_root.mkdir(parents=True, exist_ok=False)
+        shutil.copyfile(archive, staged)
+        if _sha256_file(staged) != expected:
+            raise RemoteBundleError('Cached source archive changed during staging')
+        _safe_extract(staged, source_root)
+    return expected
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -944,7 +986,6 @@ def prepare_remote_bundle(
     staging_root = data_root / "remote-execution" / "staging" / attempt_id
     staging_root.mkdir(parents=True, exist_ok=False)
     source_root = staging_root / "source"
-    archive_path = staging_root / "source.tar.gz"
     revision = str(job.execution_source_revision or "").strip()
     inherited_tree = str(job.execution_source_tree or "").strip()
     if not _SOURCE_IDENTITY_RE.fullmatch(revision) or not _SOURCE_IDENTITY_RE.fullmatch(
@@ -961,23 +1002,8 @@ def prepare_remote_bundle(
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
-    # Git emits deterministic gzip bytes for this revision; hash the transported
-    # archive, retaining the complete tree and the same format used by prewarm.
-    with archive_path.open("wb") as archive_handle:
-        completed = subprocess.run(
-            ["git", "archive", "--format=tar.gz", "-6", revision],
-            cwd=repo_root,
-            check=True,
-            stdout=archive_handle,
-            stderr=subprocess.PIPE,
-            timeout=300,
-        )
-        if completed.returncode != 0:
-            raise RemoteBundleError("Unable to archive the committed BMS source")
-    source_archive_sha256 = _sha256_file(archive_path)
-    _safe_extract(archive_path, source_root)
-    archive_copy = source_root / ".bms-source.tar.gz"
-    archive_path.replace(archive_copy)
+    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root)
+    archive_copy = source_root / '.bms-source.tar.gz'
 
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"
