@@ -34,7 +34,12 @@ def test_fail_closed_unknown_nested_and_types():
                        {'filters': {'unlisted': {'threshold': 0.7}}},
                        {'losses': {'interface_contacts': {'params': {'wrong': 2}}}},
                        {'targets': [{'name': 'x', 'target_path': 'a.cif', 'bogus': 3}]},
-                       {'parameter_sweep': {'axes': []}}, {'binder_shapes': []}):
+                       {'parameter_sweep': {'axes': ['unknown']}},
+                       {'parameter_sweep': {'levels': [0]}},
+                       {'parameter_sweep': {'max_arms': 0}},
+                       {'parameter_sweep': {'multiplier': 2, 'levels': [0.5]}},
+                       {'parameter_sweep': {'bogus': 1}},
+                       {'binder_shapes': []}):
         with pytest.raises(ValueError):
             validate_request({**base, **additional})
 
@@ -54,6 +59,34 @@ def test_request_effective_identity_and_presets(tmp_path):
     assert compiled['request_sha256'] != compiled['effective_sha256']
     with pytest.raises(ValueError, match='unknown preset'):
         validate_request({'max_trajectories': 2, 'modality': ['invented']})
+
+
+def test_sweep_admits_only_finite_aggregate(tmp_path):
+    request = {'max_trajectories': 7, 'parameter_sweep': {'axes': ['weights_interface_contacts'], 'levels': [0.5, 2.0]}}
+    arms = lambda _: (('baseline', {}), ('low', {}), ('high', {}))
+    resolved = lambda native: dict(native)
+    result = compile_typed(request, tmp_path / 'campaign', resolved, arms)
+    assert result['sweep_budget'] == {'arms': 3, 'per_arm': 2, 'aggregate_allowance': 6}
+    assert result['native_request']['parameter_sweep'] == request['parameter_sweep']
+    with pytest.raises(ValueError, match='exceeding requested'):
+        compile_typed({**request, 'max_trajectories': 2}, tmp_path / 'campaign', resolved, arms)
+
+
+def test_pinned_native_sweep_budget_if_available(tmp_path):
+    if not os.environ.get('BMS_TEST_BC2_UPSTREAM'):
+        pytest.skip('pinned native interpreter not configured')
+    python = os.environ['BMS_TEST_BC2_PYTHON']
+    request = {'max_trajectories': 7, 'modality': ['binder'],
+               'parameter_sweep': {'axes': ['weights_interface_contacts'], 'levels': [0.5, 2.0]}}
+    def native(native_request):
+        code = 'import json,sys; from bindcraft.settings import load_settings; print(json.dumps(load_settings(json.load(sys.stdin))))'
+        return json.loads(subprocess.check_output([python, '-c', code], input=json.dumps(native_request), text=True))
+    def arms(effective):
+        code = 'import json,sys; from bindcraft.parameter_sweep import parameter_sweep_arms; print(json.dumps(parameter_sweep_arms(json.load(sys.stdin))))'
+        return json.loads(subprocess.check_output([python, '-c', code], input=json.dumps(effective), text=True))
+    compiled = compile_typed(request, tmp_path / 'campaign', native, arms)
+    assert compiled['sweep_budget'] == {'arms': 3, 'per_arm': 2, 'aggregate_allowance': 6}
+    assert len(arms(compiled['effective_settings'])) == 3
 
 
 def test_pinned_native_differential_if_available(tmp_path):

@@ -55,7 +55,6 @@ def test_compilation_is_bounded_and_preserves_nested_science(tmp_path):
 
 @pytest.mark.parametrize("native_input", [
     {"max_trajectories": None}, {"max_trajectories": 0}, {"max_trajectories": True},
-    {"max_trajectories": 2, "parameter_sweep": {}},
     {"max_trajectories": 2, "project_folder": "/tmp/mine"},
     {"max_trajectories": 2, "resume": True},
 ])

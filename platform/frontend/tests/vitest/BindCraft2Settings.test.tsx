@@ -11,6 +11,8 @@ const inventory: BC2Inventory = {
     trajectory_only: { native_key: 'trajectory_only', observed_types: ['boolean'], has_native_default: true, native_default: false, status: 'typed' },
     unresolved: { native_key: 'unresolved', observed_types: [], has_native_default: false, native_default: null, status: 'unresolved' },
     filters: { native_key: 'filters', observed_types: ['object'], has_native_default: true, native_default: { i_pTM: { threshold: 0.7, higher: true } }, status: 'typed' },
+    parameter_sweep: { native_key: 'parameter_sweep', observed_types: ['object'], has_native_default: false, native_default: null, status: 'typed' },
+    weights_interface_contacts: { native_key: 'weights_interface_contacts', observed_types: ['number'], has_native_default: false, native_default: null, status: 'typed' },
     gpu_ids: { native_key: 'gpu_ids', observed_types: [], has_native_default: false, native_default: null, status: 'unresolved' },
   },
   presets: {}, paratope_conformations: ['extended', 'folded_back'], registered_metrics: { filters: { i_pTM: { params: { prediction_state: { default_literal: 'complex', source_default: "'complex'" } } }, Binder_RMSD: { params: {} } }, losses: {} },
@@ -28,6 +30,20 @@ describe('BC2 model-owned operator adapter', () => {
     expect(html).toContain('Unsupported typed control / unresolved source type')
     expect(html).not.toContain('aria-label="gpu_ids"')
     expect(html).toContain('model execution is not enabled')
+  })
+
+  it('edits native sweep controls without inventing an arm budget', async () => {
+    const changes: Record<string, unknown>[] = []
+    let tree: ReturnType<typeof create> | undefined
+    await act(async () => { tree = create(createElement(BindCraft2Settings, {
+      inventory, value: { max_trajectories: 7, parameter_sweep: { axes: [], max_arms: 5 } },
+      onChange: next => changes.push(next),
+    })) })
+    await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.axes' }).props.onChange({ currentTarget: { selectedOptions: [{ value: 'weights_interface_contacts' }] } }) })
+    expect(changes[0].parameter_sweep).toEqual({ axes: ['weights_interface_contacts'], max_arms: 5 })
+    await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.max_arms' }).props.onChange({ currentTarget: { value: '3' } }) })
+    expect(changes[1].parameter_sweep).toEqual({ axes: [], max_arms: 3 })
+    await act(async () => { tree!.unmount() })
   })
 
   it('uses native filter cutoffs or requires an explicit one, never inventing zero', async () => {

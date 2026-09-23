@@ -1,12 +1,24 @@
 --- a/bindcraft/campaign.py
 +++ b/bindcraft/campaign.py
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
  import os
 +import json
 +import hashlib
++import math
  import threading
  import time
  import jax
+@@ -26,1 +29,10 @@
++def _bms_receipt_json(value):
++    # Preserve native nonfinite "unrejecting" thresholds without invalid JSON.
++    if isinstance(value, float) and not math.isfinite(value):
++        return {'$bc2_nonfinite_float': 'NaN' if math.isnan(value) else ('Infinity' if value > 0 else '-Infinity')}
++    if isinstance(value, dict):
++        return {key: _bms_receipt_json(item) for key, item in value.items()}
++    if isinstance(value, (tuple, list)):
++        return [_bms_receipt_json(item) for item in value]
++    return value
+ def campaign_trajectory_budget(settings: dict) -> int | None:
 @@ -173,6 +175,19 @@
          if not campaign_progress.claim_recipe(identity):
              print(trajectory_already_designed(name), flush=True)
@@ -15,7 +27,7 @@
 +        # Recipe hashes intentionally exclude some scientific settings.
 +        attempt_bytes = json.dumps({'schema_version': 1, 'design': name,
 +                                    'trajectory': trajectory_number, 'recipe_hash': identity,
-+                                    'effective_settings': tuned_settings, 'drawn': drawn},
++                                    'effective_settings': _bms_receipt_json(tuned_settings), 'drawn': _bms_receipt_json(drawn)},
 +                                   sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 +        attempt_sha256 = hashlib.sha256(attempt_bytes).hexdigest()
 +        attempt_dir = os.path.join(trajectories_dir, '!_BMS_Attempts')

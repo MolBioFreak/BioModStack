@@ -10,7 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from services.bindcraft2_native import compile_for_native, write_compilation
+from services.bindcraft2_native import write_compilation
+from services.bindcraft2_typed import compile_typed
 
 # Native environment overrides can silently replace operator settings. Refuse those
 # until each is assigned a typed BMS setting or scheduler-only ownership.
@@ -30,7 +31,7 @@ def main() -> None:
         parser.error("unbound native overrides: " + ", ".join(conflicts))
     project = args.project_folder.resolve()
     request = json.loads(args.request.read_text())
-    compiled = compile_for_native(request, project)
+    compiled = compile_typed(request, project)
     if project.exists() and any(project.iterdir()):
         parser.error("existing BC2 campaign needs immutable-request resume admission; not implemented")
     project.mkdir(parents=True, exist_ok=True)
