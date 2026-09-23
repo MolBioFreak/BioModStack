@@ -70,7 +70,7 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
                       mode='campaign', params={}, output_dir=str(root))
             session.add(job)
             await session.commit()
-            assert await ingest_job_results(job.id, str(root), session) == 0
+            assert await ingest_job_results(job.id, str(root), session) == (0 if zero else 1)
             publication, receipt = await read_published_native_results(job, session)
             page = await read_bindcraft2_result_page(job, session, stage='retained', limit=1)
             assert page['schema'] == 'bindcraft2.native-readback.v1'
@@ -103,13 +103,26 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
                     assert artifact.sha256 == structure['sha256']
             count = len((await session.scalars(select(JobArtifact))).all())
             assert count == len(receipt['files'])
-            assert await ingest_job_results(job.id, str(root), session) == 0
+            assert await ingest_job_results(job.id, str(root), session) == (0 if zero else 1)
             assert len((await session.scalars(select(JobArtifact))).all()) == count
-            assert not (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
+            designs = (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
+            assert len(designs) == (0 if zero else 1)
+            if not zero:
+                assert designs[0].id == receipt['candidates'][0]['design_id']
+                assert designs[0].pdb_path.endswith('.cif')
+                assert designs[0].provenance['scored_design'] == 't_candidate2'
             await session.commit()
         async with factory() as session:
             job = await session.get(Job, 'bc')
             assert (await read_published_native_results(job, session))[1] == receipt
+            if not zero:
+                persisted = await session.get(Design, receipt['candidates'][0]['design_id'])
+                persisted.provenance = {**persisted.provenance, 'scored_design': 'invented'}
+                await session.flush()
+                with pytest.raises(PublicationError, match='Design lineage changed'):
+                    await read_published_native_results(job, session)
+                await session.rollback()
+                job = await session.get(Job, 'bc')
             if not zero:
                 mutated = dict(receipt)
                 mutated['candidates'] = [{**receipt['candidates'][0], 'native_rank': 99}]
@@ -169,7 +182,7 @@ async def test_returned_tree_has_same_scientific_readback(tmp_path):
                           remote_attempt_id='remote-attempt' if name == 'remote' else None)
                 session.add(job)
                 await session.flush()
-                assert await ingest_job_results(job.id, str(root), session, commit=False) == 0
+                assert await ingest_job_results(job.id, str(root), session, commit=False) == 1
                 pages[name] = await read_bindcraft2_result_page(job, session, stage='document')
                 if name == 'local':
                     local_publication, local_receipt = await read_published_native_results(job, session)
