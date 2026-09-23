@@ -37,7 +37,12 @@ def test_remote_selected_documents_and_command_are_relocated(tmp_path, monkeypat
     assert request['source_sha256'] == hashlib.sha256(Path(roster['source_path']).read_bytes()).hexdigest()
     effective = stager.stage(Path(roster['request_path']), Path(roster['source_path']), tmp_path / 'effective.json')
     assert effective['candidate_id'] == native['candidate_id']
-    translated = _rewrite(binding['manifest'], {str(Path(binding['manifest']).parent): str(remote)})
+    command = ['nextflow', 'run', 'workflows/ligandmpnn_interface_context.nf',
+               '--interface_context_manifest', binding['manifest']]
+    translated_command = [_rewrite(argument, {str(Path(binding['manifest']).parent): str(remote)})
+                          for argument in command]
+    assert translated_command[:4] == command[:4]
+    translated = translated_command[4]
     assert translated == str(remote / 'selected.json')
     assert json.loads(Path(translated).read_text()) == [roster]
     assert original_manifest == Path(binding['manifest']).read_bytes()
