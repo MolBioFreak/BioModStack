@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, Job, JobArtifact
 from services.bindcraft2_publication import PublicationError, read_published_native_results
+from services.bindcraft2_result_readback import read_bindcraft2_result_page
 from services.result_ingester import ingest_job_results
 
 
@@ -64,6 +65,12 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
             await session.commit()
             assert await ingest_job_results(job.id, str(root), session) == 0
             publication, receipt = await read_published_native_results(job, session)
+            page = await read_bindcraft2_result_page(job, session, stage='retained', limit=1)
+            assert page['schema'] == 'bindcraft2.native-readback.v1'
+            assert page['total'] == (0 if zero else 1)
+            assert page['selection']['eligible'] is False
+            if not zero:
+                assert page['rows'][0]['scored_design'] == 't_candidate2'
             arm = publication.arms[0]
             assert arm.accounting == {'claimed_attempts': 2, 'emitted_trajectories': 1,
                                       'scored_draws': 0 if zero else 2, 'passing_draws': 0 if zero else 1,
@@ -90,6 +97,8 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
                 structure.write_text(structure.read_text() + '# tampered\n')
                 with pytest.raises(PublicationError, match='bytes'):
                     await read_published_native_results(job, session)
+                with pytest.raises(PublicationError, match='bytes'):
+                    await read_bindcraft2_result_page(job, session, stage='document')
                 with pytest.raises(PublicationError, match='replay changed'):
                     await ingest_job_results(job.id, str(root), session)
     finally:
@@ -128,6 +137,7 @@ async def test_returned_tree_has_same_scientific_readback(tmp_path):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
+            pages = {}
             for name, root in (('local', local), ('remote', returned)):
                 job = Job(id=name, name=name, status='completed', model_id='bindcraft2',
                           mode='campaign', params={}, output_dir=str(root),
@@ -135,10 +145,12 @@ async def test_returned_tree_has_same_scientific_readback(tmp_path):
                 session.add(job)
                 await session.flush()
                 assert await ingest_job_results(job.id, str(root), session, commit=False) == 0
+                pages[name] = await read_bindcraft2_result_page(job, session, stage='document')
                 if name == 'local':
                     local_publication, local_receipt = await read_published_native_results(job, session)
                 else:
                     remote_publication, remote_receipt = await read_published_native_results(job, session)
+            assert pages['local'] == pages['remote']
             assert local_publication == remote_publication
             assert local_receipt['arms'] == remote_receipt['arms']
             assert local_receipt['files'] == remote_receipt['files']
