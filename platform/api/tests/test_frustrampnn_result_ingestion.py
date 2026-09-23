@@ -1114,7 +1114,7 @@ async def test_finalizer_owns_manifest_transaction_and_marks_replay_idempotent(
         assert job is not None
         first = await finalize_successful_job(job, str(tmp_path), session)
         assert first.completed is True
-        assert first.design_count == 1
+        assert first.design_count == 2  # native loose-file import plus seeded Design
         assert job.provenance["result_integrity"]["idempotent_prior_results"] is False
 
     async with db() as session:
@@ -1126,12 +1126,12 @@ async def test_finalizer_owns_manifest_transaction_and_marks_replay_idempotent(
         await session.commit()
         replay = await finalize_successful_job(job, str(tmp_path), session)
         assert replay.completed is True
-        assert replay.design_count == 1
+        assert replay.design_count == 2
         assert job.provenance["result_integrity"]["idempotent_prior_results"] is True
 
 
 @pytest.mark.asyncio
-async def test_parent_manifest_creates_deterministic_design_before_canonical_ingestion(
+async def test_parent_manifest_requires_native_design_before_canonical_ingestion(
     tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job_id = "job-parent-identity"
@@ -1152,6 +1152,11 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
         manifests=[bundle / MANIFEST_PATH],
     )
 
+    # Simulate the native producer publication; the optional stage cannot mint it.
+    async with db() as session:
+        session.add(Design(id=candidate_id, job_id=job_id, name="rank_0", pdb_path=str(source)))
+        await session.commit()
+
     from services import result_ingester
 
     real_ingest = result_ingester.ingest_frustrampnn_result_bundle
@@ -1167,7 +1172,7 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
 
     monkeypatch.setattr(result_ingester, "ingest_frustrampnn_result_bundle", assert_design_first)
     async with db() as session:
-        assert await ingest_job_results(job_id, str(job_root), session, commit=False) == 1
+        await ingest_job_results(job_id, str(job_root), session, commit=False)
         design = await session.get(Design, candidate_id)
         assert design is not None
         assert design.id == candidate_id
@@ -1178,12 +1183,12 @@ async def test_parent_manifest_creates_deterministic_design_before_canonical_ing
         await session.rollback()
 
     async with db() as verification:
-        assert await verification.get(Design, candidate_id) is None
+        assert await verification.get(Design, candidate_id) is not None
         assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
 
 @pytest.mark.asyncio
-async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
+async def test_complex_parent_manifest_attaches_to_exact_native_source_design(
     tmp_path: Path, db
 ) -> None:
     job_id = "job-complex-parent-identity"
@@ -1206,7 +1211,17 @@ async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
     )
 
     async with db() as session:
-        assert await ingest_job_results(job_id, str(job_root), session, commit=False) == 1
+        session.add(Design(id=candidate_id, job_id=job_id, name="complex", pdb_path=str(source),
+                           artifact_class="predicted_structure", source_stage_family="complex_prediction",
+                           source_stage_mode="complex_prediction:boltz:protein_only"))
+        await session.commit()
+
+    # Isolate the component join from the generic legacy loose-file scanner;
+    # the producer's exact native Design was committed above.
+    async with db() as session:
+        from services.result_ingester import _ingest_explicit_frustrampnn_results
+        job = await session.get(Job, job_id)
+        assert await _ingest_explicit_frustrampnn_results(job, job_root, session, commit=False) == 1
         design = await session.get(Design, candidate_id)
         assert design is not None
         assert design.job_id == job_id
@@ -1218,12 +1233,12 @@ async def test_complex_parent_manifest_creates_exact_frustrampnn_source_design(
         await session.rollback()
 
     async with db() as verification:
-        assert await verification.get(Design, candidate_id) is None
+        assert await verification.get(Design, candidate_id) is not None
         assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
 
 @pytest.mark.asyncio
-async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundle_failure(
+async def test_parent_candidate_set_preserves_primary_designs_on_late_bundle_failure(
     tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job_id = "job-parent-rollback"
@@ -1283,7 +1298,7 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
 
     async with db() as verification:
         for candidate_id in (candidate_a, candidate_b):
-            assert await verification.get(Design, candidate_id) is None
+            assert await verification.get(Design, candidate_id) is not None
         for invocation_id in (invocation_a, invocation_b):
             assert await verification.get(FrustraMPNNResult, (job_id, invocation_id)) is None
 
@@ -1370,9 +1385,9 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
         assert design.name == "duplicate-basename"
         assert design.plddt_overall == pytest.approx(91.25)
         assert design.mpnn_score == pytest.approx(-1.75)
-        assert design.source_stage == "frustrampnn_candidate"
-        assert design.source_stage_family == "protein_design"
-        assert design.source_stage_mode == "protein_design:af2_terminal"
+        assert design.source_stage is None  # native primary, not optional analysis
+        assert design.provenance["all_designs_metadata"]["producer_stage"] == "protein_design:af2_terminal"
+        assert design.provenance["all_designs_metadata"]["producer_candidate_key"] == candidate_key
         assert await session.get(FrustraMPNNResult, (job_id, invocation_id)) is not None
         count = (
             await session.execute(
