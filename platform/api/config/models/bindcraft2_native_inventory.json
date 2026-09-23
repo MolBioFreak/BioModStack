@@ -1,0 +1,1162 @@
+{
+  "coverage_status": "INCOMPLETE: registries, generated keys, nested parameters, types, UI/API and native differential tests pending",
+  "default_sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22",
+  "default_values": {
+    "archive_trajectories": false,
+    "attention_backend": "auto",
+    "autotune": true,
+    "betasheet_reopt_extra_anneal_steps": 0,
+    "betasheet_reopt_extra_refine_steps": 0,
+    "betasheet_reopt_trigger": 0.15,
+    "bigbang_initialization": false,
+    "design_dropout": true,
+    "design_recycles": 1,
+    "desperation": true,
+    "enough_passing_sequences": 3,
+    "filters": {
+      "Backbone_Clashes": {
+        "higher": false,
+        "threshold": 0
+      },
+      "Interface_Residues": {
+        "higher": true,
+        "threshold": 7
+      },
+      "Unbound_Binder_pLDDT": {
+        "higher": true,
+        "threshold": 0.8
+      },
+      "i_pAE": {
+        "higher": false,
+        "threshold": 0.35
+      },
+      "i_pTM": {
+        "higher": true,
+        "threshold": 0.7
+      },
+      "pTM": {
+        "higher": true,
+        "threshold": 0.55
+      }
+    },
+    "forced_targeting": false,
+    "hash_design_names": true,
+    "initial_guess": false,
+    "kept_sequences": 1,
+    "losses": {
+      "binder_contacts": {
+        "params": {
+          "chain": "binder",
+          "prediction_state": "complex"
+        }
+      },
+      "binder_helicity": {
+        "params": {
+          "chain": "binder",
+          "prediction_state": "complex"
+        }
+      },
+      "binder_pae": {
+        "params": {
+          "chain": "binder",
+          "prediction_state": "complex"
+        }
+      },
+      "compactness": {
+        "params": {
+          "chain": "binder",
+          "prediction_state": "complex"
+        }
+      },
+      "interface_contacts": {
+        "params": {
+          "contacts_per_residue": 2,
+          "cutoff": 20.0
+        }
+      },
+      "plddt_loss": {
+        "params": {
+          "chain": "binder",
+          "prediction_state": "complex"
+        }
+      }
+    },
+    "min_iptm_anneal": 0.5,
+    "min_iptm_final": 0.7,
+    "min_iptm_harden": 0.5,
+    "min_iptm_mutate": 0.5,
+    "min_plddt_anneal": 0.65,
+    "min_plddt_final": 0.7,
+    "min_plddt_harden": 0.65,
+    "min_plddt_mutate": 0.6,
+    "min_plddt_refine": 0.6,
+    "min_plddt_screen": 0.6,
+    "mpnn_model": "v_48_020",
+    "mpnn_variant": "negative",
+    "redesign_interface": false,
+    "relax_accepted_designs": false,
+    "resume": true,
+    "save_binder_monomers": true,
+    "save_design_animations": false,
+    "save_design_frames": false,
+    "save_design_sequences": false,
+    "save_failed_refolds": true,
+    "save_failed_trajectories": true,
+    "save_loss_plots": false,
+    "sequence_candidates": 10,
+    "subbatch_size": "auto",
+    "target_flexibility": 0.0,
+    "trajectory_only": false,
+    "use_cueq": false,
+    "validation_crop_flank": 5,
+    "validation_recycles": 3,
+    "weights_binder_contacts": 1.0,
+    "weights_binder_helicity": -0.3,
+    "weights_binder_pae": 0.4,
+    "weights_compactness": 0.5,
+    "weights_interface_contacts": 1.0,
+    "weights_interface_pae": 0.1,
+    "weights_iptm_loss": 0.05,
+    "weights_plddt_loss": 0.1
+  },
+  "preset_only_not_in_reference": [
+    "paratope_conformations",
+    "settings"
+  ],
+  "presets": {
+    "core": {
+      "benchmark": {
+        "keys": [
+          "autotune",
+          "campaign_seed",
+          "desperation"
+        ],
+        "nested": {},
+        "sha256": "8b5685b6e52812829aba55acf691ee3a719279204a88ee184268a921cd53d357"
+      },
+      "default": {
+        "keys": [
+          "archive_trajectories",
+          "attention_backend",
+          "autotune",
+          "betasheet_reopt_extra_anneal_steps",
+          "betasheet_reopt_extra_refine_steps",
+          "betasheet_reopt_trigger",
+          "bigbang_initialization",
+          "design_dropout",
+          "design_recycles",
+          "desperation",
+          "enough_passing_sequences",
+          "filters",
+          "forced_targeting",
+          "hash_design_names",
+          "initial_guess",
+          "kept_sequences",
+          "losses",
+          "min_iptm_anneal",
+          "min_iptm_final",
+          "min_iptm_harden",
+          "min_iptm_mutate",
+          "min_plddt_anneal",
+          "min_plddt_final",
+          "min_plddt_harden",
+          "min_plddt_mutate",
+          "min_plddt_refine",
+          "min_plddt_screen",
+          "mpnn_model",
+          "mpnn_variant",
+          "redesign_interface",
+          "relax_accepted_designs",
+          "resume",
+          "save_binder_monomers",
+          "save_design_animations",
+          "save_design_frames",
+          "save_design_sequences",
+          "save_failed_refolds",
+          "save_failed_trajectories",
+          "save_loss_plots",
+          "sequence_candidates",
+          "subbatch_size",
+          "target_flexibility",
+          "trajectory_only",
+          "use_cueq",
+          "validation_crop_flank",
+          "validation_recycles",
+          "weights_binder_contacts",
+          "weights_binder_helicity",
+          "weights_binder_pae",
+          "weights_compactness",
+          "weights_interface_contacts",
+          "weights_interface_pae",
+          "weights_iptm_loss",
+          "weights_plddt_loss"
+        ],
+        "nested": {
+          "filters": [
+            "Backbone_Clashes",
+            "Interface_Residues",
+            "Unbound_Binder_pLDDT",
+            "i_pAE",
+            "i_pTM",
+            "pTM"
+          ],
+          "losses": [
+            "binder_contacts",
+            "binder_helicity",
+            "binder_pae",
+            "compactness",
+            "interface_contacts",
+            "plddt_loss"
+          ]
+        },
+        "sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22"
+      },
+      "reference": {
+        "keys": [
+          "settings"
+        ],
+        "nested": {
+          "settings": [
+            "aa_bias",
+            "anneal_steps",
+            "archive_trajectories",
+            "attention_backend",
+            "auto_multi_gpu",
+            "autotune",
+            "autotune_loss_weights",
+            "betasheet_reopt_extra_anneal_steps",
+            "betasheet_reopt_extra_refine_steps",
+            "betasheet_reopt_recycles",
+            "betasheet_reopt_trigger",
+            "bigbang",
+            "bigbang_initialization",
+            "binder_chain",
+            "binder_lengths",
+            "binder_name",
+            "binder_scaffold",
+            "binder_shapes",
+            "campaign_name",
+            "campaign_seed",
+            "compile_next_length",
+            "copies",
+            "crop_fasta_sequence",
+            "cyclic_offset_mode",
+            "cyclize_peptide",
+            "design_dropout",
+            "design_models",
+            "design_recycles",
+            "design_workers",
+            "desperation",
+            "desperation_trajectories",
+            "detarget_check_interval",
+            "disulfide_distance",
+            "disulfide_sequence_separation",
+            "disulfide_sigma",
+            "disulfide_staple",
+            "disulfide_temperature",
+            "domain_contact_cutoff",
+            "domain_linker_fix_cut",
+            "domain_linker_gap",
+            "domain_linker_helix_weight",
+            "domain_linker_sharpness",
+            "domain_pae_margin",
+            "domain_rg_weight",
+            "domain_sep_weight",
+            "enough_passing_sequences",
+            "exposed_loops_distinguish_sheets",
+            "exposed_loops_measure",
+            "filters",
+            "forced_targeting",
+            "forced_targeting_shell",
+            "gpu_ids",
+            "harden_steps",
+            "hash_design_names",
+            "humanization_coupling_weight",
+            "humanization_hydro_weight",
+            "humanization_mhc2_weight",
+            "humanization_species",
+            "humanize",
+            "idr_crop_count",
+            "induced_fit_delta",
+            "induced_fit_interface_cutoff",
+            "induced_fit_monomer_adaptive",
+            "induced_fit_monomer_chunk",
+            "induced_fit_monomer_plddt",
+            "induced_fit_monomer_steps",
+            "induced_fit_mpnn_designed_share",
+            "induced_fit_mpnn_shell",
+            "induced_fit_mpnn_threshold",
+            "induced_fit_steps",
+            "induced_fit_tm_target",
+            "initial_guess",
+            "interface_contact_distance",
+            "kept_sequences",
+            "length_bucket_size",
+            "losses",
+            "max_binder_chain_breaks_final",
+            "max_binder_free_cysteines_final",
+            "max_coldspot_contact_final",
+            "max_cyclic_closure_distance_final",
+            "max_detarget_interface_residues_final",
+            "max_detarget_iptm",
+            "max_detarget_iptm_anneal",
+            "max_detarget_iptm_final",
+            "max_detarget_iptm_harden",
+            "max_detarget_iptm_mutate",
+            "max_detarget_iptm_refine",
+            "max_detarget_iptm_screen",
+            "max_detarget_rounds",
+            "max_domain_size",
+            "max_domains",
+            "max_exposed_loop_fraction_final",
+            "max_helix_fraction_final",
+            "max_induced_fit_tm_final",
+            "max_interdomain_contact_final",
+            "max_ipae_final",
+            "max_mhc_anchor_score_final",
+            "max_off_epitope_contact_final",
+            "max_off_paratope_contact_final",
+            "max_oligomer_symmetry_rmsd_final",
+            "max_protease_site_score_final",
+            "max_scaffold_framework_rmsd_final",
+            "max_surface_hydrophobicity_final",
+            "max_termini_distance_final",
+            "max_terminus_exposure_final",
+            "max_trajectories",
+            "max_workers_per_gpu",
+            "min_binder_disulfides_final",
+            "min_c_terminus_away_cosine_final",
+            "min_domain_separation_ratio_final",
+            "min_domain_size",
+            "min_epitope_residues_contacted_final",
+            "min_framework_packing_final",
+            "min_hotspot_contact_final",
+            "min_induced_fit_interface_rmsd_final",
+            "min_interface_buried_area_final",
+            "min_iptm_anneal",
+            "min_iptm_final",
+            "min_iptm_harden",
+            "min_iptm_mutate",
+            "min_iptm_refine",
+            "min_iptm_screen",
+            "min_monomer_plddt_final",
+            "min_n_terminus_away_cosine_final",
+            "min_plddt_anneal",
+            "min_plddt_final",
+            "min_plddt_harden",
+            "min_plddt_mutate",
+            "min_plddt_refine",
+            "min_plddt_screen",
+            "min_ptm_final",
+            "min_receptor_chains_contacted_final",
+            "min_scaffold_sequence_retained_final",
+            "min_target_crop_length_final",
+            "min_target_plddt_final",
+            "min_termini_away_cosine_final",
+            "mixed_topology",
+            "mpnn_fix_linker",
+            "mpnn_model",
+            "mpnn_variant",
+            "multitarget_best_round",
+            "multitarget_cumulative_filter",
+            "multitarget_filter_models",
+            "multitarget_merged_gradient_budget",
+            "multitarget_merged_gradients",
+            "multitarget_rounds_per_target",
+            "multitarget_steps",
+            "multitarget_swap_patience",
+            "multitarget_swap_threshold",
+            "multitarget_tied_redesign",
+            "multitarget_warmup_patience",
+            "mutate_positions",
+            "mutate_steps",
+            "n_domains",
+            "non_contact_distance",
+            "number_of_final_designs",
+            "oligomer_tie",
+            "parameter_sweep",
+            "project_folder",
+            "protease_stable",
+            "redesign_interface",
+            "refine_steps",
+            "relax_accepted_designs",
+            "relax_learning_rate",
+            "relax_min_sep",
+            "relax_overlap_tol",
+            "relax_restraint_backbone",
+            "relax_restraint_sidechain",
+            "relax_steps",
+            "relax_weight_bond",
+            "relax_weight_clash",
+            "resume",
+            "save_binder_monomers",
+            "save_design_animations",
+            "save_design_frames",
+            "save_design_sequences",
+            "save_design_trajectory",
+            "save_failed_refolds",
+            "save_failed_trajectories",
+            "save_loss_plots",
+            "screen_steps",
+            "sequence_candidates",
+            "sparse_output",
+            "subbatch_size",
+            "target_chain",
+            "target_flexibility",
+            "targets",
+            "termini_accessible",
+            "termini_distance_threshold",
+            "termini_together",
+            "trajectory_only",
+            "use_cueq",
+            "validation_crop_flank",
+            "validation_model",
+            "validation_models",
+            "validation_recycles",
+            "weights_binder_coldspot",
+            "weights_binder_contacts",
+            "weights_binder_helicity",
+            "weights_binder_intra_coldspot",
+            "weights_binder_intra_hotspot",
+            "weights_binder_pae",
+            "weights_c_terminus_away",
+            "weights_coldspot_repel",
+            "weights_collective_softness",
+            "weights_com_distance",
+            "weights_compactness",
+            "weights_distogram_cce",
+            "weights_disulfide",
+            "weights_experimentally_resolved",
+            "weights_exposed_loops",
+            "weights_exposed_termini",
+            "weights_fold_switching",
+            "weights_humanization",
+            "weights_induced_fit_global",
+            "weights_induced_fit_interface",
+            "weights_interface_contacts",
+            "weights_interface_pae",
+            "weights_iptm_loss",
+            "weights_multidomain",
+            "weights_n_terminus_away",
+            "weights_non_contact",
+            "weights_non_helical",
+            "weights_plddt_loss",
+            "weights_protease_sites",
+            "weights_ptm_loss",
+            "weights_sequence_entropy",
+            "weights_target_helicity",
+            "weights_target_plddt",
+            "weights_target_rigidity",
+            "weights_target_rmsd",
+            "weights_termini_angle",
+            "weights_termini_distance",
+            "worker_launch_stagger",
+            "workers_per_gpu"
+          ]
+        },
+        "sha256": "9a664de69968f2dffe6c2beff167cd256d0c11d3b5f2e2c9a1358a557d372263"
+      }
+    },
+    "modality": {
+      "ARP": {
+        "keys": [
+          "aa_bias",
+          "binder_scaffold",
+          "design_models",
+          "max_scaffold_framework_rmsd_final",
+          "min_monomer_plddt_final",
+          "min_scaffold_sequence_retained_final",
+          "mutate_positions",
+          "validation_model"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C",
+            "F",
+            "W",
+            "Y"
+          ]
+        },
+        "sha256": "dc63f2f16f70e8856d357d33e073d64cf60df5a1533268f422e61d9b64af5713"
+      },
+      "Fab": {
+        "keys": [
+          "aa_bias",
+          "binder_scaffold",
+          "design_models",
+          "max_scaffold_framework_rmsd_final",
+          "min_monomer_plddt_final",
+          "min_scaffold_sequence_retained_final",
+          "mutate_positions",
+          "validation_model"
+        ],
+        "nested": {
+          "aa_bias": [
+            "F",
+            "W",
+            "Y"
+          ]
+        },
+        "sha256": "4abb11b396e177ebbd3a54fe995a5393208208f2fba48ee6c90785c7aff1bf71"
+      },
+      "VHH": {
+        "keys": [
+          "aa_bias",
+          "binder_scaffold",
+          "design_models",
+          "min_monomer_plddt_final",
+          "min_scaffold_sequence_retained_final",
+          "mutate_positions",
+          "paratope_conformations",
+          "validation_model",
+          "weights_binder_coldspot",
+          "weights_binder_intra_coldspot"
+        ],
+        "nested": {
+          "aa_bias": [
+            "F",
+            "W",
+            "Y"
+          ]
+        },
+        "sha256": "158740024164b9d245345dcbcf3cd920c695c3f30ba98c24f81db02a114cc332"
+      },
+      "binder": {
+        "keys": [
+          "aa_bias",
+          "binder_lengths",
+          "filters",
+          "min_monomer_plddt_final"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C"
+          ],
+          "filters": [
+            "Binder_RMSD"
+          ]
+        },
+        "sha256": "6bf615fb45e4b312fac84be39173c45b7ed65169d440e992485922bc9efcd50a"
+      },
+      "cyclic_peptide": {
+        "keys": [
+          "aa_bias",
+          "binder_lengths",
+          "cyclize_peptide",
+          "filters",
+          "max_ipae_final",
+          "refine_steps",
+          "validation_model",
+          "weights_compactness",
+          "weights_iptm_loss"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C"
+          ],
+          "filters": [
+            "Unbound_Binder_pLDDT",
+            "pTM"
+          ]
+        },
+        "sha256": "151d3b9b9ce5e47381ec163a386eb5ad8846242cb5c3470ece2f7c3c35f6e1b4"
+      },
+      "fold_switch": {
+        "keys": [
+          "filters",
+          "induced_fit_tm_target",
+          "max_induced_fit_tm_final",
+          "weights_induced_fit_global"
+        ],
+        "nested": {
+          "filters": [
+            "Binder_RMSD"
+          ]
+        },
+        "sha256": "7db5a06582df9d2a96145b64c5ca764465e81d63052b093765a05ea6e83e9fbf"
+      },
+      "homo_oligomer": {
+        "keys": [
+          "binder_lengths",
+          "copies",
+          "filters",
+          "min_monomer_plddt_final"
+        ],
+        "nested": {
+          "filters": [
+            "Binder_RMSD"
+          ]
+        },
+        "sha256": "71ccfe37a01fd108c6b69819811ad32b33ac30eaea2d5ea384aa0f66c43821a0"
+      },
+      "induced_fit": {
+        "keys": [
+          "filters",
+          "induced_fit_delta",
+          "min_induced_fit_interface_rmsd_final",
+          "weights_induced_fit_interface"
+        ],
+        "nested": {
+          "filters": [
+            "Binder_RMSD"
+          ]
+        },
+        "sha256": "75872ebd027827118f82c939300cae691015df778401c2dab46fd3e5dc43905d"
+      },
+      "large_binder": {
+        "keys": [
+          "anneal_steps",
+          "binder_lengths",
+          "design_models",
+          "filters",
+          "harden_steps",
+          "min_monomer_plddt_final",
+          "min_plddt_mutate",
+          "min_plddt_refine",
+          "min_plddt_screen",
+          "mutate_steps",
+          "refine_steps",
+          "screen_steps",
+          "validation_model",
+          "weights_binder_contacts",
+          "weights_binder_helicity",
+          "weights_binder_pae",
+          "weights_compactness",
+          "weights_interface_contacts",
+          "weights_interface_pae",
+          "weights_iptm_loss",
+          "weights_plddt_loss"
+        ],
+        "nested": {
+          "filters": [
+            "Binder_RMSD"
+          ]
+        },
+        "sha256": "70f4bd93c4bb13326f6715bc529d4c9232ba5d71bda59716efcd90ff7bbcadfb"
+      },
+      "multidomain": {
+        "keys": [
+          "aa_bias",
+          "anneal_steps",
+          "binder_lengths",
+          "design_recycles",
+          "domain_contact_cutoff",
+          "domain_linker_helix_weight",
+          "domain_pae_margin",
+          "domain_rg_weight",
+          "domain_sep_weight",
+          "harden_steps",
+          "max_domain_size",
+          "max_domains",
+          "max_interdomain_contact_final",
+          "max_ipae_final",
+          "min_domain_separation_ratio_final",
+          "min_domain_size",
+          "min_monomer_plddt_final",
+          "min_plddt_final",
+          "min_ptm_final",
+          "mutate_steps",
+          "n_domains",
+          "refine_steps",
+          "screen_steps",
+          "weights_binder_contacts",
+          "weights_binder_pae",
+          "weights_compactness",
+          "weights_multidomain"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C"
+          ]
+        },
+        "sha256": "bc5e6d3960b94fb8ea52460bef8a245371981341355d2805699a284dcaba2b4a"
+      },
+      "peptide": {
+        "keys": [
+          "aa_bias",
+          "binder_lengths",
+          "filters",
+          "max_ipae_final",
+          "refine_steps",
+          "validation_model",
+          "weights_compactness",
+          "weights_iptm_loss"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C"
+          ],
+          "filters": [
+            "Unbound_Binder_pLDDT",
+            "pTM"
+          ]
+        },
+        "sha256": "474a4e97a633e4933a37c190247676bbb5b0e6521c81492960e8a14177781341"
+      },
+      "scFv": {
+        "keys": [
+          "aa_bias",
+          "binder_scaffold",
+          "design_models",
+          "max_scaffold_framework_rmsd_final",
+          "min_monomer_plddt_final",
+          "min_scaffold_sequence_retained_final",
+          "mutate_positions",
+          "validation_model"
+        ],
+        "nested": {
+          "aa_bias": [
+            "F",
+            "W",
+            "Y"
+          ]
+        },
+        "sha256": "dd43c61f91e10f4516a52fbf1fd3dba4f80397c9f50e6b52b7c1de461bbc63a8"
+      }
+    },
+    "property": {
+      "bigbang": {
+        "keys": [
+          "bigbang_initialization"
+        ],
+        "nested": {},
+        "sha256": "aedc7572bbb3b69420187c89a985d75035027be5b7ffccf129065a4825d1d0ee"
+      },
+      "disulfide_staple": {
+        "keys": [
+          "aa_bias",
+          "disulfide_distance",
+          "disulfide_sequence_separation",
+          "min_binder_disulfides_final",
+          "weights_disulfide"
+        ],
+        "nested": {
+          "aa_bias": [
+            "C"
+          ]
+        },
+        "sha256": "80508e75ae48abe4ab8c5fc9f12d7e28f8782a3c86689926bd6701686baf137c"
+      },
+      "forced_targeting": {
+        "keys": [
+          "forced_targeting",
+          "min_hotspot_contact_final"
+        ],
+        "nested": {},
+        "sha256": "d2fbf6ccd469cf77ca035e47bae161f7ae408d58ab4e3e3282c50208bc7a96b2"
+      },
+      "humanize": {
+        "keys": [
+          "humanization_coupling_weight",
+          "humanization_mhc2_weight",
+          "humanization_species",
+          "max_mhc_anchor_score_final",
+          "weights_humanization"
+        ],
+        "nested": {},
+        "sha256": "2a2b41628e1bd30705054ac9c2896df651c58b187884b81072d5c012c621c2da"
+      },
+      "initial_guess": {
+        "keys": [
+          "initial_guess"
+        ],
+        "nested": {},
+        "sha256": "7ec55a4217c755be6da07fdd811090352abe983efb71512ca4ae54352b6700d1"
+      },
+      "mixed_topology": {
+        "keys": [
+          "filters",
+          "max_helix_fraction_final",
+          "weights_binder_helicity",
+          "weights_non_helical"
+        ],
+        "nested": {
+          "filters": [
+            "Binder_BetaSheet_Fraction"
+          ]
+        },
+        "sha256": "91c772032dc2cdfb931d90aba5d7f6cf0e808ddcae874f4c58676ce9ae0b72f8"
+      },
+      "protease_stable": {
+        "keys": [
+          "exposed_loops_distinguish_sheets",
+          "exposed_loops_measure",
+          "max_exposed_loop_fraction_final",
+          "max_protease_site_score_final",
+          "max_terminus_exposure_final",
+          "weights_exposed_loops",
+          "weights_exposed_termini",
+          "weights_protease_sites"
+        ],
+        "nested": {},
+        "sha256": "0ad9af9cf28edc10aa3b9402f7b15d38bb0617107d6e09e84ca2907616dfc073"
+      },
+      "termini_accessible": {
+        "keys": [
+          "min_c_terminus_away_cosine_final",
+          "min_n_terminus_away_cosine_final",
+          "min_termini_away_cosine_final",
+          "weights_c_terminus_away",
+          "weights_n_terminus_away",
+          "weights_termini_angle"
+        ],
+        "nested": {},
+        "sha256": "7b929f6bcaf563545450c24a667c8ff57f8f6e477f521411bc3c05e2643fa600"
+      },
+      "termini_together": {
+        "keys": [
+          "max_termini_distance_final",
+          "termini_distance_threshold",
+          "weights_termini_distance"
+        ],
+        "nested": {},
+        "sha256": "c88bebb6377677b112f8da05c0aee3a732ab2537241cec5820a90c19c4eb39e5"
+      }
+    },
+    "target": {
+      "dynorphin_a": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "27f9151808ccb25b90f4f7be9e02b51a01d92732d5652b037b7e174ed1ad198f"
+      },
+      "hIL2R": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "31b2c7a14b89800834411346593e7b4f15fbfb6e56e95f520e5b004b3e202683"
+      },
+      "hIL7RA": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "92e35ec6611be6e5e8c1fe283c160f1d4228a3ffd511d2ff242ab22d0f62e0e5"
+      },
+      "hPD1": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "35dc6dc18757be4c445f1ea12a1a98cfb179affdbcf2fb9585af6c970d2d059a"
+      },
+      "hPDL1": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "39869560758b861b45ad7148bf0886c1af5d63a38cf59934d00d9b6d3c1be8d6"
+      },
+      "mPDL1": {
+        "keys": [
+          "targets"
+        ],
+        "nested": {},
+        "sha256": "d5dc22107a825f57a1efcab989aca5fdea1fb3b26ac76629fdf23dad965fb81b"
+      }
+    }
+  },
+  "reference_fields": [
+    "aa_bias",
+    "anneal_steps",
+    "archive_trajectories",
+    "attention_backend",
+    "auto_multi_gpu",
+    "autotune",
+    "autotune_loss_weights",
+    "betasheet_reopt_extra_anneal_steps",
+    "betasheet_reopt_extra_refine_steps",
+    "betasheet_reopt_recycles",
+    "betasheet_reopt_trigger",
+    "bigbang",
+    "bigbang_initialization",
+    "binder_chain",
+    "binder_lengths",
+    "binder_name",
+    "binder_scaffold",
+    "binder_shapes",
+    "campaign_name",
+    "campaign_seed",
+    "compile_next_length",
+    "copies",
+    "crop_fasta_sequence",
+    "cyclic_offset_mode",
+    "cyclize_peptide",
+    "design_dropout",
+    "design_models",
+    "design_recycles",
+    "design_workers",
+    "desperation",
+    "desperation_trajectories",
+    "detarget_check_interval",
+    "disulfide_distance",
+    "disulfide_sequence_separation",
+    "disulfide_sigma",
+    "disulfide_staple",
+    "disulfide_temperature",
+    "domain_contact_cutoff",
+    "domain_linker_fix_cut",
+    "domain_linker_gap",
+    "domain_linker_helix_weight",
+    "domain_linker_sharpness",
+    "domain_pae_margin",
+    "domain_rg_weight",
+    "domain_sep_weight",
+    "enough_passing_sequences",
+    "exposed_loops_distinguish_sheets",
+    "exposed_loops_measure",
+    "filters",
+    "forced_targeting",
+    "forced_targeting_shell",
+    "gpu_ids",
+    "harden_steps",
+    "hash_design_names",
+    "humanization_coupling_weight",
+    "humanization_hydro_weight",
+    "humanization_mhc2_weight",
+    "humanization_species",
+    "humanize",
+    "idr_crop_count",
+    "induced_fit_delta",
+    "induced_fit_interface_cutoff",
+    "induced_fit_monomer_adaptive",
+    "induced_fit_monomer_chunk",
+    "induced_fit_monomer_plddt",
+    "induced_fit_monomer_steps",
+    "induced_fit_mpnn_designed_share",
+    "induced_fit_mpnn_shell",
+    "induced_fit_mpnn_threshold",
+    "induced_fit_steps",
+    "induced_fit_tm_target",
+    "initial_guess",
+    "interface_contact_distance",
+    "kept_sequences",
+    "length_bucket_size",
+    "losses",
+    "max_binder_chain_breaks_final",
+    "max_binder_free_cysteines_final",
+    "max_coldspot_contact_final",
+    "max_cyclic_closure_distance_final",
+    "max_detarget_interface_residues_final",
+    "max_detarget_iptm",
+    "max_detarget_iptm_anneal",
+    "max_detarget_iptm_final",
+    "max_detarget_iptm_harden",
+    "max_detarget_iptm_mutate",
+    "max_detarget_iptm_refine",
+    "max_detarget_iptm_screen",
+    "max_detarget_rounds",
+    "max_domain_size",
+    "max_domains",
+    "max_exposed_loop_fraction_final",
+    "max_helix_fraction_final",
+    "max_induced_fit_tm_final",
+    "max_interdomain_contact_final",
+    "max_ipae_final",
+    "max_mhc_anchor_score_final",
+    "max_off_epitope_contact_final",
+    "max_off_paratope_contact_final",
+    "max_oligomer_symmetry_rmsd_final",
+    "max_protease_site_score_final",
+    "max_scaffold_framework_rmsd_final",
+    "max_surface_hydrophobicity_final",
+    "max_termini_distance_final",
+    "max_terminus_exposure_final",
+    "max_trajectories",
+    "max_workers_per_gpu",
+    "min_binder_disulfides_final",
+    "min_c_terminus_away_cosine_final",
+    "min_domain_separation_ratio_final",
+    "min_domain_size",
+    "min_epitope_residues_contacted_final",
+    "min_framework_packing_final",
+    "min_hotspot_contact_final",
+    "min_induced_fit_interface_rmsd_final",
+    "min_interface_buried_area_final",
+    "min_iptm_anneal",
+    "min_iptm_final",
+    "min_iptm_harden",
+    "min_iptm_mutate",
+    "min_iptm_refine",
+    "min_iptm_screen",
+    "min_monomer_plddt_final",
+    "min_n_terminus_away_cosine_final",
+    "min_plddt_anneal",
+    "min_plddt_final",
+    "min_plddt_harden",
+    "min_plddt_mutate",
+    "min_plddt_refine",
+    "min_plddt_screen",
+    "min_ptm_final",
+    "min_receptor_chains_contacted_final",
+    "min_scaffold_sequence_retained_final",
+    "min_target_crop_length_final",
+    "min_target_plddt_final",
+    "min_termini_away_cosine_final",
+    "mixed_topology",
+    "mpnn_fix_linker",
+    "mpnn_model",
+    "mpnn_variant",
+    "multitarget_best_round",
+    "multitarget_cumulative_filter",
+    "multitarget_filter_models",
+    "multitarget_merged_gradient_budget",
+    "multitarget_merged_gradients",
+    "multitarget_rounds_per_target",
+    "multitarget_steps",
+    "multitarget_swap_patience",
+    "multitarget_swap_threshold",
+    "multitarget_tied_redesign",
+    "multitarget_warmup_patience",
+    "mutate_positions",
+    "mutate_steps",
+    "n_domains",
+    "non_contact_distance",
+    "number_of_final_designs",
+    "oligomer_tie",
+    "parameter_sweep",
+    "project_folder",
+    "protease_stable",
+    "redesign_interface",
+    "refine_steps",
+    "relax_accepted_designs",
+    "relax_learning_rate",
+    "relax_min_sep",
+    "relax_overlap_tol",
+    "relax_restraint_backbone",
+    "relax_restraint_sidechain",
+    "relax_steps",
+    "relax_weight_bond",
+    "relax_weight_clash",
+    "resume",
+    "save_binder_monomers",
+    "save_design_animations",
+    "save_design_frames",
+    "save_design_sequences",
+    "save_design_trajectory",
+    "save_failed_refolds",
+    "save_failed_trajectories",
+    "save_loss_plots",
+    "screen_steps",
+    "sequence_candidates",
+    "sparse_output",
+    "subbatch_size",
+    "target_chain",
+    "target_flexibility",
+    "targets",
+    "termini_accessible",
+    "termini_distance_threshold",
+    "termini_together",
+    "trajectory_only",
+    "use_cueq",
+    "validation_crop_flank",
+    "validation_model",
+    "validation_models",
+    "validation_recycles",
+    "weights_binder_coldspot",
+    "weights_binder_contacts",
+    "weights_binder_helicity",
+    "weights_binder_intra_coldspot",
+    "weights_binder_intra_hotspot",
+    "weights_binder_pae",
+    "weights_c_terminus_away",
+    "weights_coldspot_repel",
+    "weights_collective_softness",
+    "weights_com_distance",
+    "weights_compactness",
+    "weights_distogram_cce",
+    "weights_disulfide",
+    "weights_experimentally_resolved",
+    "weights_exposed_loops",
+    "weights_exposed_termini",
+    "weights_fold_switching",
+    "weights_humanization",
+    "weights_induced_fit_global",
+    "weights_induced_fit_interface",
+    "weights_interface_contacts",
+    "weights_interface_pae",
+    "weights_iptm_loss",
+    "weights_multidomain",
+    "weights_n_terminus_away",
+    "weights_non_contact",
+    "weights_non_helical",
+    "weights_plddt_loss",
+    "weights_protease_sites",
+    "weights_ptm_loss",
+    "weights_sequence_entropy",
+    "weights_target_helicity",
+    "weights_target_plddt",
+    "weights_target_rigidity",
+    "weights_target_rmsd",
+    "weights_termini_angle",
+    "weights_termini_distance",
+    "worker_launch_stagger",
+    "workers_per_gpu"
+  ],
+  "reference_only_not_statically_known": [
+    "anneal_steps",
+    "harden_steps",
+    "max_detarget_iptm_anneal",
+    "max_detarget_iptm_final",
+    "max_detarget_iptm_harden",
+    "max_detarget_iptm_mutate",
+    "max_detarget_iptm_refine",
+    "max_detarget_iptm_screen",
+    "min_c_terminus_away_cosine_final",
+    "min_iptm_refine",
+    "min_iptm_screen",
+    "min_n_terminus_away_cosine_final",
+    "mutate_steps",
+    "refine_steps",
+    "screen_steps",
+    "weights_binder_coldspot",
+    "weights_binder_intra_coldspot",
+    "weights_binder_intra_hotspot",
+    "weights_c_terminus_away",
+    "weights_coldspot_repel",
+    "weights_collective_softness",
+    "weights_com_distance",
+    "weights_distogram_cce",
+    "weights_disulfide",
+    "weights_experimentally_resolved",
+    "weights_exposed_loops",
+    "weights_exposed_termini",
+    "weights_fold_switching",
+    "weights_humanization",
+    "weights_induced_fit_global",
+    "weights_induced_fit_interface",
+    "weights_multidomain",
+    "weights_n_terminus_away",
+    "weights_non_contact",
+    "weights_non_helical",
+    "weights_protease_sites",
+    "weights_ptm_loss",
+    "weights_sequence_entropy",
+    "weights_target_helicity",
+    "weights_target_plddt",
+    "weights_target_rigidity",
+    "weights_target_rmsd",
+    "weights_termini_angle",
+    "weights_termini_distance"
+  ],
+  "reference_sha256": "9a664de69968f2dffe6c2beff167cd256d0c11d3b5f2e2c9a1358a557d372263",
+  "source_sha256": "d88f87212929bfc7a8ae186189eab70a527d04aa2d89f5d6adee1f6af4993cfa",
+  "statically_known_not_in_reference": [
+    "core",
+    "modality",
+    "paratope_conformations",
+    "target"
+  ],
+  "target_fields": [
+    "chains",
+    "coldspots",
+    "hotspots",
+    "name",
+    "objective",
+    "target_path",
+    "weight"
+  ],
+  "upstream_commit": "d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
+}
