@@ -1133,9 +1133,23 @@ export interface BioXpWorkflowJob {
             stage_states: Record<string, { current_action_id: string | null; pause_marker_action_id: string | null }>;
             workflow?: BioXpWorkflowState | null;
             source_model?: BioXpWorkflowSourceModel;
+            action_results?: Record<string, unknown>[];
         };
     };
 }
+export interface BioXpTransferPreflight {
+    connection_generation: number;
+    ownership_generation: number;
+    observed_deck: { position_table_revision: string; destination_catalog_revision: string; current_location: string | null; semantic_state_revision: number; ambiguity_state: string };
+    preflight: { reference_snapshot: { ok: boolean; persisted: boolean; verified: boolean; durable_clean: boolean; rows: Record<string, { axis: string; state: string; source: string; updated_at: string; state_version: number }> }; artifact_refs: string[] };
+}
+export async function getBioXpTransferPreflight(generation: number): Promise<BioXpTransferPreflight> {
+    const { data } = await api.get<BioXpTransferPreflight>('/api/bioxp/protocols/transfer-preflight', {
+        params: { expected_connection_generation: generation },
+    });
+    return data;
+}
+
 export interface BioXpWorkflowInput {
     source_type: 'native' | 'oem_xml';
     document?: Record<string, unknown> | null;
