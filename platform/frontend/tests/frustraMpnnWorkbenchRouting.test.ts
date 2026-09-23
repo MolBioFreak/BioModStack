@@ -13,6 +13,9 @@ test('direct and conformational-mapping results mount the same global FrustraMPN
     const reviewExport = source('src/components/frustrampnn/FrustraMpnnReviewExportPanel.tsx');
 
     assert.match(shared, /data-frustrampnn-workbench="global"/);
+    assert.match(shared, /data-frustrampnn-inference-scope="chain-local"/);
+    assert.match(shared, /not direct target-conditioned inference, binding evidence,/);
+    assert.match(shared, /never joined into one chain/);
     assert.match(shared, /lazy\(\(\) => import\('\.\.\/FrustraMpnnResultsViewer\.js'\)\)/);
     assert.match(shared, /<FrustraMpnnResultsViewer/);
     assert.match(direct, /<FrustraMpnnWorkbench[\s\S]*job=\{activeJob\}/);

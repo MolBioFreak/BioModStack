@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 API_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_ROOT = API_ROOT.parents[1] / "scripts"
@@ -15,7 +17,8 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from filter_caliby import main as filter_caliby_main
-from caliby_runtime import normalize_sampling_results
+from caliby_runtime import normalize_sampling_results, remap_constraint_dataframe_to_cleaned_paths
+from prep_caliby_binder_constraints import build_constraints
 from prep_caliby_antibody_constraints import main as prep_caliby_constraints_main
 
 
@@ -34,6 +37,45 @@ def _write_minimal_complex_pdb(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_binder_constraints_lock_exact_nonbinder_chains(tmp_path: Path) -> None:
+    _write_minimal_complex_pdb(tmp_path / "candidate.pdb")
+    rows = build_constraints(tmp_path, "H", "A", "H2")
+    assert len(rows) == 1
+    assert rows[0]["fixed_pos_seq"] == "A1-2,H1-1,H3-3"
+    assert rows[0]["fixed_pos_scn"] == rows[0]["fixed_pos_seq"]
+    assert build_constraints(tmp_path, "H", "A")[0]["fixed_pos_seq"] == "A1-2"
+    with pytest.raises(ValueError, match="absent"):
+        build_constraints(tmp_path, "B", "A")
+    with pytest.raises(ValueError, match="overlap"):
+        build_constraints(tmp_path, "H", "H")
+    with pytest.raises(ValueError, match="design positions"):
+        build_constraints(tmp_path, "H", "A", "H99")
+    with pytest.raises(ValueError, match="invalid"):
+        build_constraints(tmp_path, "H", "A", "H2,garbage")
+
+
+def test_caliby_cardinality_and_chain_rename_fail_closed(tmp_path: Path) -> None:
+    source = tmp_path / "candidate.pdb"
+    _write_minimal_complex_pdb(source)
+    kwargs = dict(output_pdb_dir=tmp_path, output_meta_dir=tmp_path,
+                  prefix="caliby", source="caliby", stage_mode="sequence_design")
+    with pytest.raises(ValueError, match="paired"):
+        normalize_sampling_results(results={"example_id": ["candidate"], "out_pdb": []}, **kwargs)
+    with pytest.raises(ValueError, match="cardinality"):
+        normalize_sampling_results(results={"example_id": ["candidate"], "out_pdb": [str(source)],
+                                            "seq": ["A", "B"]}, **kwargs)
+    cleaned = tmp_path / "cleaned"
+    cleaned.mkdir()
+    changed = cleaned / "candidate.pdb"
+    changed.write_text(source.read_text().replace(" GLY H", " GLY B").replace(" SER H", " SER B")
+                       .replace(" TYR H", " TYR B"))
+    import pandas as pd
+    constraints = pd.DataFrame([{"pdb_key": "candidate", "fixed_pos_seq": "A1-2"}])
+    with pytest.raises(ValueError, match="changed chain IDs"):
+        remap_constraint_dataframe_to_cleaned_paths(constraints, original_paths=[str(source)],
+                                                     cleaned_paths=[str(changed)])
 
 
 def test_prep_caliby_antibody_constraints_emits_native_columns(tmp_path: Path, monkeypatch) -> None:
