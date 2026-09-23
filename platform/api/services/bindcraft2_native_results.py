@@ -13,6 +13,8 @@ import csv
 import hashlib
 import json
 import math
+import re
+import shlex
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -38,6 +40,8 @@ class NativeRow:
     terminated: str | None = None
     # A recipe hash is a native trajectory join key, NOT a complete settings digest.
     trajectory_design: str | None = None
+    scored_design: str | None = None  # explicit producer association only
+    attempt_sha256: str | None = None  # qualified full effective-settings snapshot
 
 
 @dataclass(frozen=True)
@@ -45,7 +49,18 @@ class NativeDocument:
     path: str  # relative to the sealed publication root; NOT a subject join
     sha256: str
     format: str
+    retained_design: str | None = None  # only verified native CIF metadata can bind a document
+    attempt_sha256: str | None = None
 
+
+@dataclass(frozen=True)
+class NativeAttempt:
+    design: str
+    trajectory: int
+    recipe_hash: str
+    effective_settings: dict[str, Any]
+    drawn: dict[str, Any]
+    sha256: str
 
 @dataclass(frozen=True)
 class NativeArm:
@@ -56,8 +71,7 @@ class NativeArm:
     retained: tuple[NativeRow, ...]
     documents: tuple[NativeDocument, ...]
     metadata: dict[str, Any] | None
-    # The producer has not supplied per-attempt settings or candidate->seq joins.
-    # Do not synthesize either from recipe hashes, labels, sequence or rank.
+    attempts: tuple[NativeAttempt, ...] = ()
 
     @property
     def accounting(self) -> dict[str, int | None]:
@@ -68,7 +82,7 @@ class NativeArm:
             "passing_draws": sum(row.outcome == "passed" for row in self.draws),
             "rejected_draws": sum(row.outcome == "rejected" for row in self.draws),
             "retained_sequences": len(self.retained),
-            "unresolved_retained_draw_joins": len(self.retained),
+            "unresolved_retained_draw_joins": sum(row.scored_design is None for row in self.retained),
         }
 
 
@@ -141,8 +155,58 @@ def _rows(path: Path, arm: str | None, stage: Literal["trajectory", "draw", "ret
         return tuple(rows)
 
 
-def _documents(root: Path, arm_root: Path) -> tuple[NativeDocument, ...]:
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_CANDIDATE = re.compile(r"[1-9][0-9]*\Z")
+
+
+def _attempts(folder: Path) -> dict[str, NativeAttempt]:
+    directory = folder / "1_Trajectories" / "!_BMS_Attempts"
+    if not directory.exists():
+        return {}
+    if directory.is_symlink() or not directory.is_dir():
+        raise NativeResultError(f"unsafe attempt directory: {directory}")
+    attempts = {}
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+            raise NativeResultError(f"unsafe attempt sidecar: {path}")
+        raw = path.read_bytes()
+        try:
+            payload = json.loads(raw)
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        except (ValueError, UnicodeError, TypeError) as exc:
+            raise NativeResultError(f"invalid attempt sidecar: {path}") from exc
+        if raw != canonical + b"\n" or not isinstance(payload, dict) or set(payload) != {"schema_version", "design", "trajectory", "recipe_hash", "effective_settings", "drawn"}:
+            raise NativeResultError(f"noncanonical attempt sidecar: {path}")
+        design = payload["design"]
+        trajectory = payload["trajectory"]
+        if (type(payload["schema_version"]) is not int or payload["schema_version"] != 1
+                or type(design) is not str or design != path.stem
+                or type(trajectory) is not int or trajectory < 1
+                or not isinstance(payload["recipe_hash"], str) or not payload["recipe_hash"]
+                or not isinstance(payload["effective_settings"], dict) or not isinstance(payload["drawn"], dict)):
+            raise NativeResultError(f"invalid attempt identity/settings: {path}")
+        attempts[design] = NativeAttempt(design, trajectory, payload["recipe_hash"],
+                                         payload["effective_settings"], payload["drawn"],
+                                         hashlib.sha256(canonical).hexdigest())
+    return attempts
+
+
+def _cif_metadata(path: Path) -> dict[str, str]:
+    # Native write_structure emits a scalar _bindcraft category in the model block.
+    # Only producer-stamped fields are interpreted; other mmCIF data is untouched.
+    metadata = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("_bindcraft."):
+            parts = shlex.split(line, comments=False)
+            if len(parts) != 2 or parts[0] in metadata:
+                raise NativeResultError(f"invalid BindCraft CIF metadata: {path}")
+            metadata[parts[0]] = parts[1]
+    return {key.removeprefix("_bindcraft."): value for key, value in metadata.items()}
+
+
+def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> tuple[NativeDocument, ...]:
     documents = []
+    retained_by_name = {row.design: row for row in retained}
     for stage in ("1_Trajectories", "2_Refolded", "3_Ranked", "trajectories", "refolded", "accepted"):
         folder = arm_root / stage
         if not folder.exists():
@@ -153,9 +217,25 @@ def _documents(root: Path, arm_root: Path) -> tuple[NativeDocument, ...]:
             if path.is_symlink():
                 raise NativeResultError(f"unsafe native artifact: {path}")
             if path.is_file() and path.suffix.lower() in (".cif", ".mmcif", ".pdb", ".ent"):
-                documents.append(NativeDocument(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest(), path.suffix.lower().lstrip(".")))
+                retained_design = attempt_sha = None
+                if stage in ("3_Ranked", "accepted") and path.suffix.lower() in (".cif", ".mmcif"):
+                    stamp = _cif_metadata(path)
+                    design = stamp.get("design")
+                    if design in retained_by_name:
+                        row = retained_by_name[design]
+                        stamped_candidate = stamp.get("bms_scored_candidate")
+                        stamped_digest = stamp.get("bms_attempt_sha256")
+                        if stamped_candidate or stamped_digest:
+                            if (stamped_candidate != row.values.get("bms_scored_candidate")
+                                    or stamped_digest != row.values.get("bms_attempt_sha256")):
+                                raise NativeResultError(f"contradictory retained CIF metadata: {path}")
+                            if row.scored_design is not None and row.attempt_sha256 is not None:
+                                retained_design, attempt_sha = design, row.attempt_sha256
+                    elif stamp.get("bms_scored_candidate") or stamp.get("bms_attempt_sha256"):
+                        raise NativeResultError(f"orphan producer-stamped CIF: {path}")
+                documents.append(NativeDocument(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest(),
+                                                path.suffix.lower().lstrip("."), retained_design, attempt_sha))
     return tuple(documents)
-
 
 def _is_number(value: str) -> bool:
     try:
@@ -183,12 +263,69 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
         return tuple(replace(row, trajectory_design=trajectory_hashes[row.recipe_hash][0])
                      if row.recipe_hash and len(trajectory_hashes.get(row.recipe_hash, ())) == 1 else row for row in rows)
 
+    attempts = _attempts(folder)
+    trajectory_by_name = {row.design: row for row in trajectories}
+    qualified_trajectories = []
+    for row in trajectories:
+        digest = row.values.get("bms_attempt_sha256")
+        attempt = attempts.get(row.design)
+        if digest and (not _DIGEST.fullmatch(digest) or
+                       (attempt is not None and (digest != attempt.sha256 or row.recipe_hash != attempt.recipe_hash
+                                                 or row.values.get("trajectory") != str(attempt.trajectory)))):
+            raise NativeResultError(f"contradictory trajectory attempt: {row.design}")
+        qualified_trajectories.append(replace(row, attempt_sha256=digest) if attempt and digest else row)
+    # Sidecars for interrupted claims have no trajectory row; they do not change accounting.
+    trajectories = tuple(qualified_trajectories)
+    trajectory_by_name = {row.design: row for row in trajectories}
+    draws = attach(draws)
+    qualified_draws = []
+    for row in draws:
+        match = re.fullmatch(r"(.+)_candidate[1-9][0-9]*", row.design)
+        source = trajectory_by_name.get(match.group(1)) if match else None
+        if source and source.recipe_hash == row.recipe_hash and source.attempt_sha256:
+            qualified_draws.append(replace(row, trajectory_design=source.design,
+                                           attempt_sha256=source.attempt_sha256))
+        else:
+            qualified_draws.append(row)
+    draws = tuple(qualified_draws)
+    draw_by_name = {row.design: row for row in draws}
+    qualified_retained = []
+    used_draws = set()
+    for row in attach(retained):
+        candidate = row.values.get("bms_scored_candidate")
+        digest = row.values.get("bms_attempt_sha256")
+        if candidate or digest:
+            if not candidate or not _CANDIDATE.fullmatch(candidate) or not digest or not _DIGEST.fullmatch(digest):
+                raise NativeResultError(f"incomplete retained producer identity: {row.design}")
+            # Only explicit native design identities may establish a join, never rank,
+            # sequence, recipe hash, or _seqN position.
+            match = re.fullmatch(r"(.+)_seq[0-9]+", row.design)
+            if not match:
+                raise NativeResultError(f"invalid retained design: {row.design}")
+            trajectory = match.group(1)
+            scored = f"{trajectory}_candidate{candidate}"
+            draw = draw_by_name.get(scored)
+            source = trajectory_by_name.get(trajectory)
+            if (draw is None or draw.outcome != "passed" or scored in used_draws
+                    or source is None or draw.recipe_hash != row.recipe_hash
+                    or source.recipe_hash != row.recipe_hash):
+                raise NativeResultError(f"contradictory scored/retained join: {row.design}")
+            used_draws.add(scored)
+            attempt = attempts.get(trajectory)
+            if attempt and source.attempt_sha256 and digest != attempt.sha256:
+                raise NativeResultError(f"contradictory retained attempt: {row.design}")
+            qualified_retained.append(replace(row, trajectory_design=trajectory, scored_design=scored,
+                                              attempt_sha256=digest if attempt and source.attempt_sha256 else None))
+        else:
+            qualified_retained.append(row)
+    retained = tuple(qualified_retained)
     state = _json(folder / ".campaign_state.json")
     claimed = state.get("trajectories") if state is not None else None
     if claimed is not None and (type(claimed) is not int or claimed < 0 or claimed < len(trajectories)):
         raise NativeResultError(f"invalid claimed trajectory count: {folder}")
-    return NativeArm(name, claimed, trajectories, attach(draws), attach(retained), _documents(root, folder), _json(folder / "campaign_metadata.json"))
-
+    return NativeArm(name, claimed, trajectories, draws, retained,
+                     _documents(root, folder, retained), _json(folder / "campaign_metadata.json"),
+                     tuple(attempts.values()))
 
 def read_native_publication(root: Path) -> NativePublication:
     """Read a stable/sealed native output directory; caller verifies ownership.

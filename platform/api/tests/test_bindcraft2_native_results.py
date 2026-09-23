@@ -6,6 +6,7 @@ bindcraft/campaign.py:169-222 and bindcraft/MPNN_stage.py:255-287.
 """
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -121,3 +122,139 @@ def test_symlinked_structure_and_invalid_state_refused(tmp_path):
     (tmp_path / ".campaign_state.json").write_text('{"trajectories":-1}')
     with pytest.raises(NativeResultError, match="claimed"):
         read_native_publication(tmp_path)
+
+
+def producer_attempt(root, design="t"):
+    payload = {"schema_version": 1, "design": design, "trajectory": 7, "recipe_hash": "recipe",
+               "effective_settings": {"mpnn_temperature": 0.3, "filter_settings": {"i_pTM": 0.7}},
+               "drawn": {"binder_length": 72}}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    path = root / "1_Trajectories/!_BMS_Attempts" / f"{design}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(canonical + b"\n")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def stamped_campaign(root, *, sidecar=True, stamp=True):
+    digest = producer_attempt(root) if sidecar else "a" * 64
+    table(root / "1_Trajectories/!_Trajectories.csv", [
+        {"design": "t", "hash": "recipe", "trajectory": "7", "bms_attempt_sha256": digest}])
+    table(root / "2_Refolded/!_Refolded.csv", [
+        {"design": f"t_candidate{i}", "hash": "recipe", "outcome": "rejected" if i == 3 else "passed"}
+        for i in (1, 2, 3)])
+    rows = [{"design": f"t_seq{i}", "hash": "recipe", "rank": str(2 - i)} for i in (0, 1)]
+    if stamp:
+        for row, candidate in zip(rows, (2, 1)):
+            row.update(bms_scored_candidate=str(candidate), bms_attempt_sha256=digest)
+    table(root / "3_Ranked/!_Ranked.csv", rows)
+    for design, candidate in (("t_seq0", 2), ("t_seq1", 1)):
+        for state in ("targetA", "targetB"):
+            metadata = (f"_bindcraft.design {design}\n_bindcraft.bms_scored_candidate {candidate}\n"
+                        f"_bindcraft.bms_attempt_sha256 {digest}\n") if stamp else ""
+            (root / "3_Ranked" / f"{design}_{state}.cif").write_text("data_model\n" + metadata + "_atom_site.id 1\n")
+    return digest
+
+
+def test_explicit_sort_truncation_and_target_state_documents(tmp_path):
+    digest = stamped_campaign(tmp_path)
+    arm = read_native_publication(tmp_path).arms[0]
+    assert [row.scored_design for row in arm.retained] == ["t_candidate2", "t_candidate1"]
+    assert [row.rank for row in arm.retained] == [2, 1]
+    assert arm.accounting["unresolved_retained_draw_joins"] == 0
+    assert arm.attempts[0].effective_settings["filter_settings"]["i_pTM"] == 0.7
+    assert arm.attempts[0].sha256 == arm.trajectories[0].attempt_sha256 == digest
+    assert all(row.attempt_sha256 == digest for row in arm.retained)
+    assert all(row.attempt_sha256 == digest for row in arm.draws)
+    assert sorted(doc.retained_design for doc in arm.documents) == ["t_seq0"] * 2 + ["t_seq1"] * 2
+    assert all(doc.attempt_sha256 == digest for doc in arm.documents)
+    assert arm.accounting["retained_sequences"] == 2
+
+
+@pytest.mark.parametrize("sidecar,stamp", [(False, True), (True, False), (False, False)])
+def test_missing_hook_parts_never_qualify_structure(tmp_path, sidecar, stamp):
+    stamped_campaign(tmp_path, sidecar=sidecar, stamp=stamp)
+    arm = read_native_publication(tmp_path).arms[0]
+    assert all(doc.retained_design is None and doc.attempt_sha256 is None for doc in arm.documents)
+    if not sidecar:
+        assert all(row.attempt_sha256 is None for row in arm.retained)
+    if not stamp:
+        assert all(row.scored_design is None for row in arm.retained)
+        assert arm.accounting["unresolved_retained_draw_joins"] == 2
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("digest", "attempt"), ("trajectory", "attempt"), ("hash", "attempt"),
+    ("missing_draw", "scored/retained"), ("rejected_draw", "scored/retained"),
+    ("duplicate_join", "scored/retained"), ("retained_digest", "attempt"),
+    ("cif_candidate", "CIF"), ("cif_digest", "CIF"), ("cif_design", "CIF"),
+])
+def test_producer_contradictions_refused(tmp_path, change, expected):
+    digest = stamped_campaign(tmp_path)
+    trajectory = tmp_path / "1_Trajectories/!_Trajectories.csv"
+    ranked = tmp_path / "3_Ranked/!_Ranked.csv"
+    draws = tmp_path / "2_Refolded/!_Refolded.csv"
+    if change in ("digest", "trajectory", "hash"):
+        rows = list(csv.DictReader(trajectory.open()))
+        rows[0][{"digest": "bms_attempt_sha256", "trajectory": "trajectory", "hash": "hash"}[change]] = "b" * 64 if change == "digest" else "bad"
+        table(trajectory, rows)
+    elif change in ("missing_draw", "duplicate_join", "retained_digest"):
+        rows = list(csv.DictReader(ranked.open()))
+        if change == "missing_draw": rows[0]["bms_scored_candidate"] = "4"
+        elif change == "duplicate_join": rows[1]["bms_scored_candidate"] = "2"
+        else: rows[0]["bms_attempt_sha256"] = "b" * 64
+        table(ranked, rows)
+    elif change == "rejected_draw":
+        rows = list(csv.DictReader(draws.open()))
+        rows[1]["outcome"] = "rejected"
+        table(draws, rows)
+    else:
+        path = tmp_path / "3_Ranked/t_seq0_targetA.cif"
+        old = {"cif_candidate": "_bindcraft.bms_scored_candidate 2",
+               "cif_digest": f"_bindcraft.bms_attempt_sha256 {digest}",
+               "cif_design": "_bindcraft.design t_seq0"}[change]
+        path.write_text(path.read_text().replace(old, old.split()[0] + " wrong"))
+    with pytest.raises(NativeResultError, match=expected):
+        read_native_publication(tmp_path)
+
+
+def test_interrupted_sidecar_not_claimed_or_emitted(tmp_path):
+    producer_attempt(tmp_path, design="interrupted")
+    arm = read_native_publication(tmp_path).arms[0]
+    assert len(arm.attempts) == 1
+    assert arm.accounting["claimed_attempts"] is None
+    assert arm.accounting["emitted_trajectories"] == 0
+
+
+def test_sidecar_canonical_bytes_and_unsafe_link_refused(tmp_path):
+    producer_attempt(tmp_path)
+    path = tmp_path / "1_Trajectories/!_BMS_Attempts/t.json"
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(NativeResultError, match="noncanonical"):
+        read_native_publication(tmp_path)
+    path.unlink()
+    path.symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(NativeResultError, match="unsafe"):
+        read_native_publication(tmp_path)
+
+
+def test_sidecar_present_but_unstamped_trajectory_is_unqualified(tmp_path):
+    stamped_campaign(tmp_path)
+    path = tmp_path / "1_Trajectories/!_Trajectories.csv"
+    rows = list(csv.DictReader(path.open()))
+    rows[0]["bms_attempt_sha256"] = ""
+    table(path, rows)
+    arm = read_native_publication(tmp_path).arms[0]
+    assert arm.attempts and arm.trajectories[0].attempt_sha256 is None
+    assert all(row.attempt_sha256 is None for row in arm.draws + arm.retained)
+    assert all(document.retained_design is None for document in arm.documents)
+
+
+def test_malformed_producer_join_is_not_accepted_as_ordinal(tmp_path):
+    stamped_campaign(tmp_path)
+    path = tmp_path / "3_Ranked/!_Ranked.csv"
+    for candidate in ("0", "-1", "1.0", "", "002"):
+        rows = list(csv.DictReader(path.open()))
+        rows[0]["bms_scored_candidate"] = candidate
+        table(path, rows)
+        with pytest.raises(NativeResultError):
+            read_native_publication(tmp_path)
