@@ -56,6 +56,34 @@ def test_binder_constraints_lock_exact_nonbinder_chains(tmp_path: Path) -> None:
         build_constraints(tmp_path, "H", "A", "H2,garbage")
 
 
+def test_binder_constraints_reject_unassigned_or_ambiguous_chain_numbers(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate.pdb"
+    _write_minimal_complex_pdb(candidate)
+    with candidate.open("a", encoding="utf-8") as handle:
+        handle.write("ATOM      6  CA  GLY B   1       0.000   2.000   0.000  1.00 50.00           C\n")
+    with pytest.raises(ValueError, match="explicit binder or target role"):
+        build_constraints(tmp_path, "H", "A")
+    assert build_constraints(tmp_path, "H", "A,B", "H2")[0]["fixed_pos_seq"] == "A1-2,B1-1,H1-1,H3-3"
+    with pytest.raises(ValueError, match="range"):
+        build_constraints(tmp_path, "H", "A,B", "H3-2")
+    candidate.write_text(candidate.read_text().replace(" H   ", " 1   "), encoding="utf-8")
+    assert build_constraints(tmp_path, "1", "A,B", "12")[0]["fixed_pos_seq"] == "11-1,13-3,A1-2,B1-1"
+    candidate.write_text(candidate.read_text().replace("SER 1   2", "SER 1   2A"), encoding="utf-8")
+    with pytest.raises(ValueError, match="insertion codes"):
+        build_constraints(tmp_path, "1", "A,B", "12")
+
+
+def test_binder_module_requires_roles_and_does_not_force_off_native_controls() -> None:
+    module = (API_ROOT.parents[1] / "modules/caliby.nf").read_text(encoding="utf-8")
+    binder = module.split("process RunCalibyBinder {", 1)[1].split("process FilterCaliby {", 1)[0]
+    assert "explicit binder_chains and target_chains" in binder
+    assert "--design-positions" in binder
+    assert "--run-self-consistency-eval false" not in binder
+    assert "--self-consistency-use-multimer" in binder
+    assert "--sampling-overrides-json" in binder
+    assert "set -euo pipefail" in binder
+
+
 def test_caliby_cardinality_and_chain_rename_fail_closed(tmp_path: Path) -> None:
     source = tmp_path / "candidate.pdb"
     _write_minimal_complex_pdb(source)
@@ -66,6 +94,12 @@ def test_caliby_cardinality_and_chain_rename_fail_closed(tmp_path: Path) -> None
     with pytest.raises(ValueError, match="cardinality"):
         normalize_sampling_results(results={"example_id": ["candidate"], "out_pdb": [str(source)],
                                             "seq": ["A", "B"]}, **kwargs)
+    with pytest.raises(ValueError, match="missing output structure"):
+        normalize_sampling_results(results={"example_id": ["candidate"],
+                                            "out_pdb": [str(tmp_path / "absent.pdb")]}, **kwargs)
+    with pytest.raises(ValueError, match="reused an output structure"):
+        normalize_sampling_results(results={"example_id": ["candidate_1", "candidate_2"],
+                                            "out_pdb": [str(source), str(source)]}, **kwargs)
     cleaned = tmp_path / "cleaned"
     cleaned.mkdir()
     changed = cleaned / "candidate.pdb"

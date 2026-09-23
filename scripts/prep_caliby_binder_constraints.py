@@ -32,18 +32,33 @@ def build_constraints(input_dir: Path, binder_chains: str, target_chains: str, d
     # Explicit positions only; no invented geometric interface cutoff.
     selected: dict[str, set[int]] = {}
     if design_positions:
-        from prep_antibody_constraints import parse_chain_position_spec
-        if any(not re.fullmatch(r"[A-Za-z][0-9]+(?:-[0-9]+)?", token.strip())
-               for token in design_positions.split(",")):
-            raise ValueError("invalid binder design position")
-        selected = {key: set(value) for key, value in parse_chain_position_spec(design_positions).items()}
+        selected = {}
+        for token in design_positions.split(","):
+            match = re.fullmatch(r"([A-Za-z0-9])([1-9][0-9]*)(?:-([1-9][0-9]*))?", token.strip())
+            if match is None:
+                raise ValueError("invalid binder design position")
+            chain, first, last = match.groups()
+            start, end = int(first), int(last or first)
+            if end < start:
+                raise ValueError("invalid binder design position range")
+            selected.setdefault(chain, set()).update(range(start, end + 1))
         if not selected or not set(selected) <= set(binders):
             raise ValueError("design positions must belong to selected binder chains")
     rows = []
     for pdb in pdbs:
+        # The native constraint columns identify positions by integer PDB number.
+        # Insertion codes and negative/zero numbering cannot be represented here;
+        # accepting them would silently constrain the wrong residue.
+        with pdb.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("ATOM  ") and line[21:22] in set(binders + targets):
+                    if line[26:27].strip() or not line[22:26].strip().isdigit() or int(line[22:26]) < 1:
+                        raise ValueError(f"{pdb.name}: Caliby positional masks require positive PDB numbering without insertion codes")
         observed = parse_pdb_chains(pdb)
         if not set(binders + targets) <= set(observed):
             raise ValueError(f"{pdb.name}: selected binder or target chain is absent")
+        if set(observed) != set(binders + targets):
+            raise ValueError(f"{pdb.name}: every protein chain must have an explicit binder or target role")
         if selected and any(not positions <= set(observed[chain]) for chain, positions in selected.items()):
             raise ValueError(f"{pdb.name}: design positions are not present in the binder")
         if selected and not any(selected.values()):
