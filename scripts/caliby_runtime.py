@@ -298,6 +298,8 @@ def remap_constraint_dataframe_to_cleaned_paths(
 
     original_by_key = {Path(path).stem: Path(path) for path in original_paths}
     cleaned_by_key = {Path(path).stem: Path(path) for path in cleaned_paths}
+    if len(original_by_key) != len(original_paths) or len(cleaned_by_key) != len(cleaned_paths):
+        raise ValueError("Caliby input structure stems must be unique")
     remapped = pos_constraint_df.copy()
 
     for index, row in remapped.iterrows():
@@ -307,29 +309,16 @@ def remap_constraint_dataframe_to_cleaned_paths(
         original_path = original_by_key.get(pdb_key)
         cleaned_path = cleaned_by_key.get(pdb_key)
         if original_path is None or cleaned_path is None:
-            continue
+            raise ValueError(f"Caliby constraint key {pdb_key!r} has no paired original/cleaned structure")
         original_chain_order = parse_chain_order(original_path)
         cleaned_chain_order = parse_chain_order(cleaned_path)
-        if not original_chain_order or not cleaned_chain_order:
+        if not original_chain_order or not cleaned_chain_order or len(original_chain_order) != len(cleaned_chain_order):
+            raise ValueError(f"Caliby constraint key {pdb_key!r} has unresolvable chain identity")
+        if set(original_chain_order) == set(cleaned_chain_order):
             continue
-        if original_chain_order == cleaned_chain_order:
-            continue
-
-        chain_map = {
-            original_chain: cleaned_chain
-            for original_chain, cleaned_chain in zip(original_chain_order, cleaned_chain_order)
-        }
-        if not chain_map:
-            continue
-        for column_name in (
-            "fixed_pos_seq",
-            "fixed_pos_scn",
-            "fixed_pos_override_seq",
-            "pos_restrict_aatype",
-            "symmetry_pos",
-        ):
-            if column_name in remapped.columns:
-                remapped.at[index, column_name] = remap_position_like_spec(row.get(column_name), chain_map)
+        # Positional zipping is not chain-role evidence. A cleaner that renames
+        # chains needs an explicit verified mapping, not guessed binder identity.
+        raise ValueError(f"Caliby cleaned structure changed chain IDs for {pdb_key!r}")
 
     return remapped
 
@@ -417,6 +406,13 @@ def normalize_sampling_results(
     sequences = list(results.get("seq", []))
     energies = list(results.get("U", []))
     input_sequences = list(results.get("input_seq", []))
+    if not example_ids or len(output_paths) != len(example_ids):
+        raise ValueError("Caliby returned no paired example_id/out_pdb records")
+    for field, values in (("seq", sequences), ("U", energies), ("input_seq", input_sequences)):
+        if values and len(values) != len(example_ids):
+            raise ValueError(f"Caliby {field} cardinality does not match structures")
+    if any(not path for path in output_paths):
+        raise ValueError("Caliby returned an empty output structure path")
 
     manifest: list[dict[str, Any]] = []
     sc_metrics = self_consistency or {}
