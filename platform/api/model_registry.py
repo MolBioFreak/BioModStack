@@ -575,6 +575,14 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        # A saved launcher selector is descriptive, not authority to switch the
+        # native mode. Reject contradictory identities at the request boundary.
+        if model_id == 'antibody_denovo' and mode_id in {'nanobody_binder', 'generator_backbone_refine'}:
+            selected = 'boltzgen' if mode_id == 'nanobody_binder' else 'ppiflow'
+            for selector in ('denovo_generator', 'generator'):
+                if params.get(selector) not in (None, '', selected):
+                    errors.append(f"{selector} conflicts with selected {mode_id} mode")
+
         # These are generator modes of the supported antibody workflow, not
         # standalone models or the RFantibody pipeline's target/epitope contract.
         if model_id == 'antibody_denovo' and mode_id == 'nanobody_binder':
