@@ -36,6 +36,14 @@
   },
   "purpose": "Source-derived typed overlays for the immutable pinned native inventory. Native reference null entries do not imply types or defaults; no execution enabled.",
   "top_level_resolved": {
+    "relax_steps": {"observed_types": ["integer"], "runtime_fallback": 200, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,143-151 (optional relaxation; no campaign default)"},
+    "relax_learning_rate": {"observed_types": ["number"], "runtime_fallback": 0.02, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,149 (optional relaxation; no campaign default)"},
+    "relax_restraint_backbone": {"observed_types": ["number"], "runtime_fallback": 10.0, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,127 (optional relaxation; no campaign default)"},
+    "relax_restraint_sidechain": {"observed_types": ["number"], "runtime_fallback": 0.5, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,127 (optional relaxation; no campaign default)"},
+    "relax_weight_bond": {"observed_types": ["number"], "runtime_fallback": 100.0, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,132,139-140 (optional relaxation; no campaign default)"},
+    "relax_weight_clash": {"observed_types": ["number"], "runtime_fallback": 5.0, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,132,139-140 (optional relaxation; no campaign default)"},
+    "relax_overlap_tol": {"observed_types": ["number"], "runtime_fallback": 0.4, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,131 (optional relaxation; no campaign default)"},
+    "relax_min_sep": {"observed_types": ["number"], "runtime_fallback": 2.5, "source": "bindcraft/campaign.py:85-87 -> bindcraft/protein.py:92-94,131 (optional relaxation; no campaign default)"},
     "autotune_loss_weights": {
       "observed_types": [
         "boolean"
@@ -1406,44 +1414,44 @@
       "source_observations": []
     },
     "relax_learning_rate": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,143-151", "fallback_expression": "default_relax_parameters()['learning_rate']"}]
     },
     "relax_min_sep": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,131,143-145", "fallback_expression": "default_relax_parameters()['min_sep']"}]
     },
     "relax_overlap_tol": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,131,143-145", "fallback_expression": "default_relax_parameters()['overlap_tol']"}]
     },
     "relax_restraint_backbone": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,127,143-145", "fallback_expression": "default_relax_parameters()['restraint_backbone']"}]
     },
     "relax_restraint_sidechain": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,127,143-145", "fallback_expression": "default_relax_parameters()['restraint_sidechain']"}]
     },
     "relax_steps": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,143-151", "fallback_expression": "default_relax_parameters()['steps']"}]
     },
     "relax_weight_bond": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,132,139-145", "fallback_expression": "default_relax_parameters()['weight_bond']"}]
     },
     "relax_weight_clash": {
-      "classification": "unresolved_type_without_direct_get_evidence",
-      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
-      "source_observations": []
+      "classification": "typed_optional_native_relaxation",
+      "reason": "Consumed only when relax_accepted_designs is true; campaign has no pinned default, native relaxation supplies the fallback.",
+      "source_observations": [{"source": "bindcraft/campaign.py:85-87; bindcraft/protein.py:92-94,132,139-145", "fallback_expression": "default_relax_parameters()['weight_clash']"}]
     },
     "sparse_output": {
       "classification": "unresolved_type_with_runtime_use",

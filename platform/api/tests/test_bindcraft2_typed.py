@@ -21,7 +21,11 @@ def test_inventory_is_closed_against_native_registry():
     assert 'cutoff' in data['registered_metrics']['filters']['Interface_Residues']['params']
     assert 'weights_interface_contacts' in data['fields']
     assert data['fields']['max_trajectories']['has_native_default'] is False
-    assert len(data['unresolved_fields']) == 16
+    assert len(data['unresolved_fields']) == 8
+    assert set(data['unresolved_fields']) == {'auto_multi_gpu', 'compile_next_length', 'design_workers', 'gpu_ids', 'max_workers_per_gpu', 'project_folder', 'worker_launch_stagger', 'workers_per_gpu'}
+    for name in ('relax_steps', 'relax_learning_rate', 'relax_restraint_backbone', 'relax_restraint_sidechain', 'relax_weight_bond', 'relax_weight_clash', 'relax_overlap_tol', 'relax_min_sep'):
+        assert data['fields'][name]['status'] == 'typed'
+        assert not data['fields'][name]['has_native_default']  # protein fallback is not a campaign preset
     assert data['fields']['binder_shapes']['observed_types'] == ['array']
     assert data['fields']['humanize']['observed_types'] == ['boolean']
     assert data['fields']['number_of_final_designs']['runtime_fallback'] == 1
@@ -45,7 +49,8 @@ def test_fail_closed_unknown_nested_and_types():
                        {'parameter_sweep': {'multiplier': 2, 'levels': [0.5]}},
                        {'parameter_sweep': {'bogus': 1}},
                        {'binder_shapes': [4]}, {'crop_fasta_sequence': [4, 0]},
-                       {'multitarget_filter_models': True}, {'relax_steps': 4}):
+                       {'multitarget_filter_models': True}, {'relax_steps': 1.5},
+                       {'relax_learning_rate': '0.02'}, {'relax_min_sep': float('inf')}):
         with pytest.raises(ValueError):
             validate_request({**base, **additional})
 
@@ -139,6 +144,50 @@ def test_pinned_native_differential_if_available(tmp_path):
     assert serialized['effective_sha256'] == hashlib.sha256(_canonical(compiled['effective_settings'])).hexdigest()
     assert '$bc2_nonfinite_float' in receipt.read_text()
     assert 'NaN' not in receipt.read_text()
+
+def test_native_relaxation_pass_through_and_defaults_if_available(tmp_path):
+    if not os.environ.get('BMS_TEST_BC2_UPSTREAM'):
+        pytest.skip('pinned native interpreter required')
+    python = os.environ['BMS_TEST_BC2_PYTHON']
+    typed = schema()
+    overrides = {'relax_steps': 12, 'relax_learning_rate': 0.03,
+                 'relax_restraint_backbone': 8.0, 'relax_restraint_sidechain': 0.7,
+                 'relax_weight_bond': 90.0, 'relax_weight_clash': 4.0,
+                 'relax_overlap_tol': 0.3, 'relax_min_sep': 2.6}
+    request = {'max_trajectories': 2, 'relax_accepted_designs': True, **overrides}
+    validate_request(request)
+    code = '''import json,sys
+from types import SimpleNamespace
+import bindcraft.campaign as campaign
+from bindcraft.settings import load_settings
+from bindcraft.protein import default_relax_parameters
+request = json.load(sys.stdin)
+resolved = load_settings(request)
+seen = []
+def capture(complex_, params):
+    seen.append(params)
+    return complex_
+campaign.relax_protein_complex = capture
+binder = SimpleNamespace(predictions={'on': SimpleNamespace(protein_complex={}, metrics={})}, metrics={})
+campaign.relaxed_accepted_design(binder, 'on', 'probe', resolved)
+print(json.dumps({'resolved': {k: resolved.get(k) for k in request if k.startswith('relax_')}, 'passed': seen[0], 'defaults': default_relax_parameters(), 'relaxed': binder.metrics['Relaxed']}))'''
+    def run(payload):
+        return json.loads(subprocess.check_output([python, '-c', code], input=json.dumps(payload), text=True,
+                                                  cwd=os.environ['BMS_TEST_BC2_UPSTREAM']))
+    native = run(request)
+    assert native['resolved'] == {'relax_accepted_designs': True, **overrides}
+    assert native['passed'] == {key.removeprefix('relax_'): value for key, value in overrides.items()}
+    assert native['relaxed'] == 1.0
+    for key in overrides:
+        assert typed['fields'][key]['applicable_when'] == {'relax_accepted_designs': True}
+    assert {key: typed['fields']['relax_' + key]['runtime_fallback'] for key in native['defaults']} == native['defaults']
+    resolver = 'import json,sys; from bindcraft.settings import load_settings; print(json.dumps(load_settings(json.load(sys.stdin))))'
+    compiled = compile_typed(request, tmp_path / 'campaign', lambda candidate: json.loads(subprocess.check_output(
+        [python, '-c', resolver], input=json.dumps(candidate), text=True, cwd=os.environ['BMS_TEST_BC2_UPSTREAM'])))
+    assert all(compiled['native_request'][key] == value and compiled['effective_settings'][key] == value for key, value in overrides.items())
+    # Omission uses protein defaults; it is not a materialized campaign default.
+    assert run({'max_trajectories': 2, 'relax_accepted_designs': True})['passed'] == {}
+
 
 @pytest.mark.parametrize('setting,value', [
     ('humanize', True), ('bigbang', True), ('number_of_final_designs', 3),

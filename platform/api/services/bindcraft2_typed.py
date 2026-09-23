@@ -36,6 +36,11 @@ def schema() -> dict:
         field["observed_types"] = descriptor["observed_types"]
         field["source_evidence"] = descriptor["source"]
         field["runtime_fallback"] = descriptor["runtime_fallback"]
+        if key.startswith("relax_"):
+            # These are passed into relax_protein_complex only on the optional
+            # accepted-design path; its defaults are not campaign defaults.
+            field["applicable_when"] = {"relax_accepted_designs": True}
+            field["fallback_authority"] = "bindcraft.protein.default_relax_parameters"
         if "choices" in descriptor:
             field["choices"] = descriptor["choices"]
     data["unresolved_fields"] = sorted(k for k, v in data["fields"].items() if v["status"] != "typed")
@@ -64,7 +69,7 @@ def schema() -> dict:
                 else:
                     descriptor["unresolved_reason"] = "No source-backed JSON type"
     data["typed_evidence"] = evidence
-    data["coverage_status"] = "INCOMPLETE: unresolved native settings and Array mask; not an enabled model"
+    data["coverage_status"] = "INCOMPLETE: eight system-owned inventory fields remain unresolved; in-memory Array mask has no portable typed request; not an enabled model"
     return data
 
 
