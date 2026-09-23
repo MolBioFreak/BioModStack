@@ -53,6 +53,7 @@ class ModelMode(BaseModel):
     name: str
     description: str
     params: List[str] = []  # Parameter names required for this mode
+    selected_only: bool = False  # Launched from an owned Design selection, not a manual Job draft.
 
 
 class NTPTemplate(BaseModel):
@@ -1070,6 +1071,19 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         result_payload = {'native_contract_authority': retrieval_authority,
             'aggregate_schema': 'bms.md.aggregate.v1',
             'completion_authority': 'platform/api/services/md/results.py:completion_barrier'}
+    elif reviewed and (model_id, mode) in {
+            ('ligandmpnn', 'interface_context'), ('esmfold2', 'blind_pose')}:
+        selected_ligand = model_id == 'ligandmpnn'
+        retrieval_authority = ('platform/api/services/ligandmpnn_interface_publication.py:read_selected'
+            if selected_ligand else 'platform/api/services/binder_blind_pose_selected.py:read_selected')
+        result_payload = {
+            'native_contract_authority': retrieval_authority,
+            'publication_authority': retrieval_authority.replace(':read_selected', ':publish_selected'),
+            'selected_schema': ('bms.ligandmpnn.interface-context.experimental.v1' if selected_ligand
+                                else 'bms.blind-pose.selected.v1'),
+            'qualification': 'unclassified',
+            'design_count': 0,
+        }
     elif result.analysis_contract_id is None:
         unresolved(model_id, 'result_contract', retrieval_authority,
                    'Native result resolver does not establish a contract for selected identity')

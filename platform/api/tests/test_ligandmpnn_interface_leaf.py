@@ -50,10 +50,11 @@ def fixture(tmp_path):
     return pdb, snapshot, request
 
 
-def test_legacy_model_modes_unchanged_until_selected_parent_route_is_wired():
+def test_legacy_model_modes_unchanged_with_independent_selected_action():
     model = yaml.safe_load((ROOT / 'platform/api/config/models/ligandmpnn.yaml').read_text())
-    assert {mode['id'] for mode in model['modes']} == {
+    assert {mode['id'] for mode in model['modes'] if mode['id'] != 'interface_context'} == {
         'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
+    assert next(mode for mode in model['modes'] if mode['id'] == 'interface_context')['selected_only']
     assert model['experimental'] is False  # historical modes are not reclassified
 
 

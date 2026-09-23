@@ -6152,6 +6152,10 @@ async def _create_job(
         from services.binder_blind_pose_trust import is_selected_submission
         if not is_selected_submission():
             raise HTTPException(status_code=422, detail='Blind pose requires the selected Design route')
+    if (normalized_model_id, normalized_mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_selection import selected_submission
+        if not selected_submission.get():
+            raise HTTPException(status_code=403, detail='Use the selected interface-context route')
     inherited_source_tree: str | None = None
     selected_execution_target: ExecutionTarget | None = None
     execution_parent: Job | None = None

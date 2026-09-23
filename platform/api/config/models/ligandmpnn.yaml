@@ -55,7 +55,64 @@ modes:
       - target_pdb
       - temperature
 
+  - id: interface_context
+    name: Selected Interface Context
+    description: Post-round masked-patch comparison on the selected Design subset; native samples are unclassified.
+    selected_only: true
+    params:
+      - ligandmpnn_interface_selection
+      - interface_context_manifest
+      - binder_chain
+      - target_chain
+      - target_patch
+      - seed
+      - samples
+      - temperature
+
 params:
+  - name: ligandmpnn_interface_selection
+    type: object
+    description: Server-owned immutable selected Design source/request binding.
+    required: true
+    hidden: true
+
+  - name: interface_context_manifest
+    type: file
+    description: Server-owned private manifest for the selected native inputs.
+    required: true
+    hidden: true
+
+  - name: binder_chain
+    type: string
+    description: Explicit binder chain in each selected Design structure.
+    required: true
+    pattern: '^[A-Za-z0-9]$'
+
+  - name: target_chain
+    type: string
+    description: Explicit target chain in each selected Design structure.
+    required: true
+    pattern: '^[A-Za-z0-9]$'
+
+  - name: target_patch
+    type: string_list
+    description: Explicit target-chain residue IDs for masked-patch sampling.
+    required: true
+
+  - name: seed
+    type: integer
+    description: Native random seed for selected interface-context samples.
+    required: true
+    minimum: 0
+    maximum: 2147483647
+
+  - name: samples
+    type: integer
+    description: Number of native samples per selected condition.
+    required: true
+    minimum: 1
+    maximum: 16
+
   - name: temperature
     type: number
     description: Sampling temperature

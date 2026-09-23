@@ -12,6 +12,7 @@ from services import ligandmpnn_interface_publication as publication
 from services.ligandmpnn_interface_selection import InterfaceContextSelection
 from services.ligandmpnn_interface_selection import selected_submission
 from test_ligandmpnn_interface_leaf import fixture, runner
+from test_core_protein_scientific_admission import admission
 
 
 class Rows:
@@ -39,17 +40,87 @@ def selection(candidate, source='source'):
         'target_patch': ['A3', 'A4'], 'seed': 7, 'samples': 1, 'temperature': 0.1}})
 
 
-def test_selected_route_is_not_publicly_advertised_without_shared_compiler_hooks():
+def test_selected_mode_and_mounted_route_share_server_owned_selection_contract():
     from main import app
     from model_registry import get_registry
     from services.nextflow import resolve_nextflow_entrypoint
     assert resolve_nextflow_entrypoint(effective_profile='ligandmpnn', model_id='ligandmpnn',
                                        mode='interface_context') == 'workflows/ligandmpnn_interface_context.nf'
     registry = get_registry()
+    model = registry.get_model('ligandmpnn')
+    assert model is not None
+    selected_mode = next(mode for mode in model.modes if mode.id == 'interface_context')
+    assert selected_mode.selected_only
     assert registry.validate_job_params('ligandmpnn', 'interface_context',
                                         {'interface_context_manifest': '/managed/selection.json'})
-    assert not any(getattr(inner, 'path', None) == '/api/ligandmpnn/interface-context/selected'
-                   for included in app.routes for inner in getattr(getattr(included, 'original_router', None), 'routes', ()))
+    assert any(inner.path == '/api/ligandmpnn/interface-context/selected'
+               for included in app.routes
+               for inner in getattr(getattr(included, 'original_router', None), 'routes', ()))
+
+
+@pytest.mark.asyncio
+async def test_selected_route_is_reachable_through_actual_asgi_dispatch():
+    import httpx
+    from main import app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url='http://testserver') as client:
+        response = await client.post('/api/ligandmpnn/interface-context/selected', json={})
+    assert response.status_code == 422
+    assert {entry['loc'][-1] for entry in response.json()['detail']} == {
+        'action', 'source_job_id', 'round_id', 'candidate_ids', 'settings'}
+
+
+@pytest.mark.asyncio
+async def test_generic_job_submission_cannot_inject_selected_manifest():
+    from routers import jobs
+    from schemas import JobCreate
+    with pytest.raises(HTTPException) as denied:
+        await jobs._create_job(JobCreate(name='unowned-selection', model_id='ligandmpnn',
+            mode='interface_context', params={'interface_context_manifest': '/tmp/forged.json'}),
+            BackgroundTasks(), None)
+    assert denied.value.status_code == 403
+    assert 'selected interface-context route' in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_selected_route_creates_real_queued_job_and_reopens_owned_settings(admission, tmp_path, monkeypatch):
+    from database import Design, Job
+    from services.nextflow import compile_job_nextflow_invocation
+    from routers import jobs
+    source_pdb, _, native = fixture(tmp_path)
+    monkeypatch.setattr(route, 'get_allowed_roots', lambda: {'selected': tmp_path})
+    monkeypatch.setattr(route, 'resolve_runtime_data_path', lambda path: Path(path).resolve())
+    monkeypatch.setattr(publication, 'get_inputs_dir', lambda: tmp_path / 'managed-inputs')
+    admission.add(Job(id='source', name='native-source', model_id='antibody_denovo',
+                      mode='design', status='completed', params={}))
+    admission.add(Design(id=native['candidate_id'], job_id='source', name='selected',
+                         pdb_path=str(source_pdb)))
+    await admission.commit()
+    request = selection(native['candidate_id'])
+    response = await route.submit_selected(request, BackgroundTasks(), admission)
+    job = await admission.get(Job, response['job'].id)
+    assert (job.model_id, job.mode) == ('ligandmpnn', 'interface_context')
+    assert job.params['selection_source_job_id'] == 'source'
+    assert job.params['lineage_root_job_id'] == 'source'
+    publication.verify_binding(job.params[publication.KEY])
+    invocation = compile_job_nextflow_invocation(job, job.params, str(tmp_path / 'output'))
+    assert invocation.execution_plan is not None and invocation.execution_plan.complete, (
+        None if invocation.execution_plan is None else invocation.execution_plan.blockers)
+    assert {'image:foundry.sif',
+            'support_tool:scripts/stage_ligandmpnn_interface_context.py',
+            'support_tool:scripts/run_ligandmpnn_interface_context.py'} <= {
+                item.logical_id for item in invocation.execution_plan.metadata.dependencies}
+    assert invocation.entrypoint == 'workflows/ligandmpnn_interface_context.nf'
+    assert invocation.native_parameters['interface_context_manifest'] == job.params['interface_context_manifest']
+    assert request.settings.model_dump() == job.params[publication.KEY]['settings']
+    from services.remote_execution.bundle import compile_remote_dependencies
+    remote_command, remote_params = compile_remote_dependencies('ligandmpnn', 'interface_context',
+        list(invocation.command), native_invocation=invocation)
+    assert remote_command[remote_command.index('--interface_context_manifest') + 1] == job.params['interface_context_manifest']
+    assert '--rfd_models' not in remote_command and '--af2_models' not in remote_command
+    assert remote_params['interface_context_manifest'] == job.params['interface_context_manifest']
+    # The queued background task is deliberately not run: native GPU execution
+    # requires a real worker, but admission and its persisted plan are exercised.
 
 
 @pytest.mark.asyncio
@@ -69,10 +140,20 @@ async def test_route_resolves_design_owner_and_binds_typed_request_before_queue(
     async def create_job(request, tasks, session):
         assert selected_submission.get()
         assert request.model_id == 'ligandmpnn' and request.mode == 'interface_context'
+        from model_registry import get_registry
+        assert not get_registry().validate_job_params(request.model_id, request.mode, request.params)
         binding = request.params[publication.KEY]
         publication.verify_binding(binding)
         assert request.params['interface_context_manifest'] == binding['manifest']
         assert binding['settings'] == selection(native['candidate_id']).settings.model_dump()
+        assert all(request.params[key] == value for key, value in binding['settings'].items())
+        from services.nextflow import compile_nextflow_invocation
+        invocation = compile_nextflow_invocation(request.model_id, request.mode, request.params,
+                                                 str(tmp_path / 'output'), job_id='child')
+        assert invocation.entrypoint == 'workflows/ligandmpnn_interface_context.nf'
+        assert invocation.native_parameters['interface_context_manifest'] == binding['manifest']
+        assert '--binder_chain' not in invocation.command
+        assert '--temperature' not in invocation.command
         return SimpleNamespace(id='child')
     monkeypatch.setattr(jobs, 'create_job', create_job)
     response = await route.submit_selected(selection(native['candidate_id']), BackgroundTasks(), session)

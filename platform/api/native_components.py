@@ -36,6 +36,7 @@ PROCESS_CONTRACTS = {
     'modules/boltz.nf:FilterBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_boltz_${task.index}.log"), emit: log', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
     'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('path input_config',), ("path 'cp_results', emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), (), ()),
     'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py',), ('container "${params.container_dir}/bindcraft2.sif"',)),
+    'modules/binder_blind_pose.nf:BinderBlindPoseESMFold2': (('ESMFold2', 'gpu'), ('path selection_manifest', 'path candidate_pdbs', 'path target_pdb'), ("path 'blind_pose_results', emit: results",), ('scripts/run_binder_blind_pose.py',), ('container "${params.container_dir}/esmfold2.sif"',)),
     'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/*.pdb', emit: pdbs, optional: true", "path 'published/*.cif', emit: cifs, optional: true", "path 'published/*.json', emit: jsons, optional: true", "path 'published/*.npz', emit: npzs, optional: true"), (), ()),
     'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', 'path input_pdb', 'path ligand_pdb', 'path dna_structure', 'path target_pdb'), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
     'modules/boltzgen.nf:RunBoltzGen': (('BoltzGen', 'gpu'), ('path yaml_configs',), ('path "output/designs/*.pdb", emit: pdbs, optional: true', 'path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true', 'path "*.log"'), ('scripts/lib/boltzgen_inputs.py',), ()),
@@ -73,6 +74,7 @@ PROCESS_CONTRACTS = {
     'modules/fampnn.nf:RunFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)', 'val analysis_chain_id', 'val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.'), ('tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons', 'path "fampnn_output", emit: raw', 'path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq', 'path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true', 'path "*.log"'), (), ()),
     'modules/fampnn.nf:FilterFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filtered_output/*.json"), emit: jsons, optional: true', 'path ("filter_fampnn_${task.index}.log"), emit: logs'), (), ()),
     'modules/frustrampnn.nf:CanonicalFrustraMPNNTask': (('frustrampnn_gpu',), ('tuple val(component_request_meta), path(source_structure)',), ("tuple path('candidate_bundle/workflow_component_result_v1.json'), \\", "path('candidate_bundle'), \\", "path('candidate_bundle/frustrampnn_result_manifest_v1.json'), emit: result"), ('scripts/run_frustrampnn_component.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
+    'modules/ligandmpnn_interface_context.nf:RunLigandMPNNInterfaceContext': (('gpu',), ('tuple val(invocation_id), path(request_snapshot), path(source_snapshot)',), ("tuple val(invocation_id), path('context_result'), emit: evidence",), ('scripts/stage_ligandmpnn_interface_context.py', 'scripts/run_ligandmpnn_interface_context.py', 'platform/api/services/ligandmpnn_interface_context.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn.nf:CanonicalFrustraMPNNV2Task': (('frustrampnn_gpu',), ('tuple path(component_request), path(source_structure), path(structure_map)',), ("tuple path('candidate_bundle/workflow_component_result_v3.json'), \\", "path('candidate_bundle'), \\", "path('candidate_bundle/frustrampnn_result_manifest_v3.json'), emit: result"), ('scripts/run_frustrampnn_component.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:StageFrustraMPNNParentCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure)',), ("path 'candidate_*', emit: candidate",), ('scripts/stage_frustrampnn_parent_candidate.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
@@ -827,6 +829,18 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         weights = a.asset('weights', 'alphafold/params',
             'modules/bindcraft2.nf:RunBindCraft2:BINDCRAFT_AF2_PARAMS')
         a.stage('RunBindCraft2', extra=(weights,))
+        return True
+
+    if workflow == 'binder_blind_pose' and (model_id, mode) == ('esmfold2', 'blind_pose'):
+        a.stage('BinderBlindPoseESMFold2')
+        return True
+
+    if workflow == 'ligandmpnn_interface_context' and (model_id, mode) == ('ligandmpnn', 'interface_context'):
+        # The leaf invokes Apptainer explicitly rather than via a process
+        # container directive; its exact image still belongs in the closure.
+        image = a.asset('image', 'foundry.sif',
+                        'modules/ligandmpnn_interface_context.nf:RunLigandMPNNInterfaceContext:apptainer exec')
+        a.stage('RunLigandMPNNInterfaceContext', extra=(image,))
         return True
 
     if workflow == 'boltz_cp_experimental':

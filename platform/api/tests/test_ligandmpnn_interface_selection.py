@@ -21,14 +21,17 @@ def selection(candidate_ids):
     })
 
 
-def test_exact_route_is_not_advertised_as_a_legacy_mode():
+def test_exact_route_is_advertised_as_a_distinct_selected_mode():
     from services.nextflow import resolve_nextflow_entrypoint
     import yaml
     root = Path(__file__).resolve().parents[3]
     assert resolve_nextflow_entrypoint(effective_profile='ligandmpnn', model_id='ligandmpnn',
                                        mode='interface_context') == 'workflows/ligandmpnn_interface_context.nf'
     model = yaml.safe_load((root / 'platform/api/config/models/ligandmpnn.yaml').read_text())
-    assert 'interface_context' not in {mode['id'] for mode in model['modes']}
+    selected = next(mode for mode in model['modes'] if mode['id'] == 'interface_context')
+    assert selected['selected_only']
+    assert {mode['id'] for mode in model['modes'] if not mode.get('selected_only')} == {
+        'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
 
 
 @pytest.mark.parametrize('change', [

@@ -212,6 +212,10 @@ def test_compiler_selected_mode_preserves_manifest_and_all_sampling(source, tmp_
     assert normalized.params['blind_pose_candidate_pdbs'] == params['blind_pose_candidate_pdbs']
     assert normalized.params['esmf_seed'] == 17
     invocation = compile_nextflow_invocation('esmfold2', 'blind_pose', normalized.params, str(tmp_path / 'out'), job_id='fixture')
+    assert invocation.execution_plan is not None and invocation.execution_plan.complete, (
+        None if invocation.execution_plan is None else invocation.execution_plan.blockers)
+    assert {'image:esmfold2.sif', 'weights:esmfold2'} <= {
+        item.logical_id for item in invocation.execution_plan.metadata.dependencies}
     assert invocation.entrypoint == 'workflows/binder_blind_pose.nf'
     assert 'esmfold2,workstation_ryzen7960x' in invocation.command
     native = invocation.native_parameters

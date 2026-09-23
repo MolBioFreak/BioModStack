@@ -1,8 +1,4 @@
-"""Prepared typed selected-only LigandMPNN route; deliberately unmounted.
-
-The shared Nextflow profile binding and portable manifest/input rewrite are not
-owned here. Do not mount or advertise this router until those owners land.
-"""
+"""Typed selected-only LigandMPNN interface-context route."""
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -69,8 +65,10 @@ async def submit_selected(selection: InterfaceContextSelection, background_tasks
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
     params = {KEY: binding, 'interface_context_manifest': binding['manifest'],
-              'selection_source_job_id': source.id, 'lineage_root_job_id': root.id,
+              'selection_source_job_id': source.id,
+              'lineage_root_job_id': getattr(source, 'lineage_root_job_id', None) or root.id,
               'result_integrity_requires_designs': False}
+    params.update(selection.settings.model_dump())
     request = JobCreate(name=f'interface-context-{source.id[:8]}', model_id='ligandmpnn',
                         mode='interface_context', params=params)
     token = selected_submission.set(True)

@@ -1769,7 +1769,7 @@ export function JobSubmission() {
                                     >
                                         <option value="" disabled>Select a mode...</option>
                                         {(selectedModel.modes || [])
-                                            .filter((mode: UntypedApiValue) => mode.id !== 'dna_complex') // Deprecated: use Boltz-2 Complex Prediction instead
+                                            .filter((mode: UntypedApiValue) => mode.id !== 'dna_complex' && !mode.selected_only) // Selected-only operations use the Results selection.
                                             .map((mode: UntypedApiValue) => (
                                                 <option key={mode.id} value={mode.id}>
                                                     {mode.name}
