@@ -1,11 +1,11 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
     input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
-    create: vi.fn(), update: vi.fn(), catalog: vi.fn(), products: vi.fn(), analyze: vi.fn(), tmOptions: vi.fn(), demos: vi.fn(), annotationDownload: vi.fn(),
+    create: vi.fn(), update: vi.fn(), get: vi.fn(), catalog: vi.fn(), products: vi.fn(), analyze: vi.fn(), tmOptions: vi.fn(), demos: vi.fn(), annotationDownload: vi.fn(),
 }));
 vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:()=>null}));
 vi.mock('../../src/components/MolBioToolkit/VisibilityPanel', () => ({VisibilityPanel:(props:any)=>{mocks.visibility=props;return null}}));
@@ -17,18 +17,29 @@ vi.mock('../../src/components/MolBioToolkit/AutoAnnotatePanel', () => ({AutoAnno
 vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,()=>null])));
 vi.mock('../../src/components/MolBioToolkit/RnaStructureViewer', () => ({RnaStructureViewer:()=>null}));
 vi.mock('../../src/components/MolBioToolkit/demoConstructs', () => ({loadDemoPlasmids:mocks.demos}));
-vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({useGlobalExperimentContext:()=>({updateQueryParams:()=>{},contextHref:(p:string)=>p})}));
+vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => {
+ const {useNavigate, useLocation} = await import('react-router-dom');
+ return {useGlobalExperimentContext:()=>{
+   const navigate=useNavigate(), location=useLocation();
+   return {updateQueryParams:(updates:Record<string,string|null>)=>{
+     const params=new URLSearchParams(location.search);
+     for(const [key,value] of Object.entries(updates)) {if(value) params.set(key,value);else params.delete(key)}
+     navigate({pathname:location.pathname,search:params.toString()});
+   },contextHref:(p:string)=>p};
+ }};
+});
 vi.mock('../../src/components/MolBioToolkit/utils/annotationSources', async (original) => ({...await original<any>(),fetchAnnotationSourceStatus:vi.fn().mockResolvedValue({}),retrieveNcbiAnnotationSource:mocks.annotationDownload}));
 vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalog:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
-vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
+vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let root:Root, host:HTMLDivElement, client:QueryClient;
+function RouteProbe(){const location=useLocation();return <output data-route-search>{location.search}</output>}
 function deferred<T>() {let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>resolve=r);return {promise,resolve};}
 const saved = {id:'saved-a',name:'A',sequence:'ACGT'.repeat(30),sequence_type:'dna',is_circular:false,features:[],primers:[],version:2};
 async function create(name='A'){await act(async()=>mocks.input.onCreateSequence({name,sequence:'ACGT'.repeat(30),sequenceType:'dna',circular:false}));}
 beforeEach(async()=>{
  localStorage.clear(); window.innerWidth=1400;
- mocks.create.mockReset();mocks.update.mockReset();mocks.catalog.mockReset().mockResolvedValue({catalog:{catalog_id:'test'},items:[]});mocks.products.mockReset().mockResolvedValue({product_release:null});mocks.analyze.mockReset().mockResolvedValue({});mocks.orfs.mockReset().mockReturnValue([]);mocks.demos.mockReset().mockResolvedValue([]);mocks.annotationDownload.mockReset();
+ mocks.create.mockReset();mocks.update.mockReset();mocks.get.mockReset().mockResolvedValue({data:saved});mocks.catalog.mockReset().mockResolvedValue({catalog:{catalog_id:'test'},items:[]});mocks.products.mockReset().mockResolvedValue({product_release:null});mocks.analyze.mockReset().mockResolvedValue({});mocks.orfs.mockReset().mockReturnValue([]);mocks.demos.mockReset().mockResolvedValue([]);mocks.annotationDownload.mockReset();
  mocks.tmOptions.mockReset().mockResolvedValue({data:{algorithms:[{id:'nn_santalucia_hicks_2004',sequence_types:['dna','rna']}],defaults:{}}});
  vi.stubGlobal('fetch',vi.fn().mockImplementation(async (url:string) => {
    if (url.includes('/restriction/products')) {
@@ -41,9 +52,41 @@ beforeEach(async()=>{
    return {ok:true,json:async()=>({workups:[]})};
  }));
  host=document.createElement('div');document.body.append(host);root=createRoot(host);client=new QueryClient({defaultOptions:{queries:{retry:false}}});
- await act(async()=>root.render(<QueryClientProvider client={client}><MemoryRouter><MolBioToolkitV2/></MemoryRouter></QueryClientProvider>));
+ await act(async()=>root.render(<QueryClientProvider client={client}><MemoryRouter><RouteProbe/><MolBioToolkitV2/></MemoryRouter></QueryClientProvider>));
 });
 afterEach(async()=>{await act(async()=>root.unmount());client.clear();host.remove();vi.unstubAllGlobals();});
+it('opening another construct switches the route and closing tabs leaves no phantom sequence',async()=>{
+ expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(0);
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ expect(mocks.header.sequenceData.name).toBe('A');
+ expect(host.querySelector('[data-route-search]')?.textContent).toContain('molbio_sequence_id=saved-a');
+ const demo={name:'Demo B',sequence:'TTTT'.repeat(30),sequenceType:'dna',circular:false,
+   moleculeStrandedness:'double',moleculeOrientation:'not_applicable',features:[],primers:[],translations:[],analysisTracks:[]};
+ await act(async()=>mocks.input.onLoadDemo(demo));
+ expect(mocks.header.sequenceData.name).toBe('Demo B');
+ expect(host.querySelector('[data-route-search]')?.textContent).not.toContain('molbio_sequence_id');
+ expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(2);
+ await act(async()=>host.querySelectorAll<HTMLButtonElement>('button[title="Close workspace"]')[1].click());
+ expect(mocks.header.sequenceData.name).toBe('A');
+ expect(host.querySelector('[data-route-search]')?.textContent).toContain('molbio_sequence_id=saved-a');
+ await act(async()=>host.querySelector<HTMLButtonElement>('button[title="Close workspace"]')!.click());
+ expect(mocks.header.sequenceData.sequence).toBe('');
+ expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(0);
+ expect(host.querySelector('[data-route-search]')?.textContent).not.toContain('molbio_sequence_id');
+});
+it('switches between saved constructs without reopening the previously selected route',async()=>{
+ const second={...saved,id:'saved-b',name:'B',sequence:'TTTT'.repeat(30)};
+ mocks.get.mockImplementation(async(id:string)=>({data:id==='saved-b'?second:saved}));
+ await act(async()=>mocks.input.onSelectSequence('saved-a'));
+ await act(async()=>mocks.input.onSelectSequence('saved-b'));
+ expect(mocks.header.sequenceData.name).toBe('B');
+ expect(host.querySelector('[data-route-search]')?.textContent).toContain('molbio_sequence_id=saved-b');
+ const first=[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.querySelector('.truncate')?.textContent==='A');
+ await act(async()=>first!.click());
+ expect(mocks.header.sequenceData.name).toBe('A');
+ expect(host.querySelector('[data-route-search]')?.textContent).toContain('molbio_sequence_id=saved-a');
+ expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(2);
+});
 it('late save preserves subsequent edits and only clears dirty when submission is unchanged',async()=>{
  await create();const response=deferred<any>();mocks.create.mockReturnValueOnce(response.promise);
  let pending!:Promise<boolean>;await act(async()=>{pending=mocks.header.onSave()});
