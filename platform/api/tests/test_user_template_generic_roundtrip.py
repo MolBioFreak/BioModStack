@@ -32,12 +32,19 @@ async def test_native_binder_template_create_update_list_get_preserve_exact_para
                 "framework_pdb": "inputs/owned-source.pdb",
                 "native_filters": {"accept_zero": 0, "enable_rank": False},
                 "targets": [{"chain": "A", "weight": 0}, {"chain": "B", "weight": 1}],
+                "denovo_generator": "bindcraft2",
+                "bindcraft2_settings": {
+                    "max_trajectories": 12,
+                    "modality": ["binder"],
+                    "targets": [{"name": "on", "target_path": "inputs/on.cif"}],
+                    "filters": {"i_pTM": {"threshold": 0.8, "higher": True}},
+                },
             }
             created = await create_user_template(UserTemplateCreate(
                 name="native bindcraft2 settings",
                 model_id="bindcraft2",
                 base_template_id="antibody_denovo",
-                mode="antibody_denovo_pipeline",
+                mode="campaign",
                 params=params,
             ), session=session)
             assert created.params == params
