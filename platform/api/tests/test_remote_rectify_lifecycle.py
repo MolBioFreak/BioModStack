@@ -209,8 +209,13 @@ async def test_terminal_root_cannot_replay_a_pending_checkpoint(lane, monkeypatc
         await session.commit()
     monkeypatch.setattr(ex, 'run_remote', lane.transport)
     async with lane.factory() as session:
-        assert not await ex.reconcile_remote_job(session, await session.get(Job, 'job'))
-    assert not lane.calls and not lane.spawns
+        changed = await ex.reconcile_remote_job(session, await session.get(Job, 'job'))
+        assert changed is (terminal == 'cancelled')
+    assert not lane.spawns
+    if terminal == 'cancelled':
+        assert 'cancel' in lane.calls
+    else:
+        assert not lane.calls
     async with lane.factory() as session:
         assert (await session.get(Job, 'job')).status == terminal
 

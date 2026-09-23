@@ -449,6 +449,8 @@ async def test_preparing_claim_can_be_cancelled_without_worker_or_lease_leak(sto
         await cancel_job_lineage("job", s)
     async with store() as s:
         assert (await s.get(Job, "job")).status == "cancelled"
+        assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
+        assert await ex.reconcile_remote_job(s, await s.get(Job, "job"))
         assert (await s.get(ExecutionTarget, "target")).leased_job_id is None
 
 
@@ -767,7 +769,7 @@ async def test_bulk_cancel_uses_owned_quiescence_and_attempt_cas(store, monkeypa
     async with store() as session:
         target = await session.get(ExecutionTarget, "target")
         job = await session.get(Job, "job")
-        assert target.leased_job_id == ("job" if replacement else None)
+        assert target.leased_job_id == "job"
         assert job.remote_attempt_id == ("successor" if replacement else "attempt")
 
 
