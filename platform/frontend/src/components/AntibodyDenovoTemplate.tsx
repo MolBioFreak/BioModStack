@@ -1323,7 +1323,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             // Basic params
             if (initialValues.job_name) setJobName(initialValues.job_name);
             else if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
-            if (initialValues.rfantibody_num_designs) setNumDesigns(initialValues.rfantibody_num_designs);
+            if (initialValues.boltzgen_num_designs !== undefined && resolveExistingDeNovoGenerator(initialValues) === 'boltzgen') setNumDesigns(initialValues.boltzgen_num_designs);
+            else if (initialValues.rfantibody_num_designs !== undefined) setNumDesigns(initialValues.rfantibody_num_designs);
             if (initialValues.seqs_per_design) setSeqsPerDesign(initialValues.seqs_per_design);
             if (initialValues.seqs_per_validation_job) setSeqsPerBoltzJob(initialValues.seqs_per_validation_job);
             else if (initialValues.seqs_per_boltz_job) setSeqsPerBoltzJob(initialValues.seqs_per_boltz_job);
@@ -1366,6 +1367,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (initialValues.designs_per_job) setDesignsPerJob(initialValues.designs_per_job);
             if (initialValues.pdbs_per_job) setPdBsPerJob(initialValues.pdbs_per_job);
             else if (initialValues.seqs_per_job) setPdBsPerJob(initialValues.seqs_per_job);
+            if (typeof initialValues.boltzgen_use_framework_template === 'boolean') setBoltzgenUseFrameworkTemplate(initialValues.boltzgen_use_framework_template);
+            if (typeof initialValues.boltzgen_nanobody_framework === 'string') setBoltzgenNanobodyFramework(initialValues.boltzgen_nanobody_framework);
+            if (typeof initialValues.boltzgen_scaffold_length === 'string') setBoltzgenScaffoldLength(initialValues.boltzgen_scaffold_length);
+            if (typeof initialValues.boltzgen_cdr_h1_length === 'string') setBoltzgenCdrH1Length(initialValues.boltzgen_cdr_h1_length);
+            if (typeof initialValues.boltzgen_cdr_h2_length === 'string') setBoltzgenCdrH2Length(initialValues.boltzgen_cdr_h2_length);
+            if (typeof initialValues.boltzgen_cdr_h3_length === 'string') setBoltzgenCdrH3Length(initialValues.boltzgen_cdr_h3_length);
             if (initialValues.boltzgen_batch_size !== undefined) setBoltzgenBatchSize(initialValues.boltzgen_batch_size);
             else if (initialValues.batch_size !== undefined) setBoltzgenBatchSize(initialValues.batch_size);
             if (typeof initialValues.boltzgen_parallel_mode === 'boolean') setBoltzgenParallelMode(initialValues.boltzgen_parallel_mode);
