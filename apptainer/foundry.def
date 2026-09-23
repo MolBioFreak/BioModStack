@@ -45,7 +45,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     
     # Install Foundry with all dependencies (RFD3, RF3, MPNN)
     # Note: This will install torch from PyPI (cu126), we override it below
-    uv pip install --compile --system "rc-foundry[all]"
+    uv pip install --compile --system "rc-foundry[all]==0.1.9"
     
     # Force reinstall PyTorch with CUDA 12.8 (stable cu128 for Blackwell sm_120 support)
     # This overrides the torch version that rc-foundry installed
@@ -55,6 +55,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Download Foundry model weights
     mkdir -p /root/.foundry/checkpoints
     foundry install base-models --checkpoint-dir /root/.foundry/checkpoints || echo "Model download deferred"
+    # The optional interface-context leaf must never silently download its
+    # checkpoint at first run or accept a different scientific weight set.
+    foundry install mpnn --checkpoint-dir /root/.foundry/checkpoints
+    printf '%s  %s\n' \
+        161cd264061fda9680cbb940255522ae42f2966c552d045d87913d9452a80970 \
+        /root/.foundry/checkpoints/ligandmpnn_v_32_010_25.pt | sha256sum -c -
     
     # Create symlinks for consistent paths
     ln -sf /root/.foundry /foundry
