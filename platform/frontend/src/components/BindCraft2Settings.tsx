@@ -20,10 +20,17 @@ export type BC2Request = Record<string, unknown>
 const internal = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length'])
 const selectors = new Set(['core', 'modality', 'target'])
 
-export function BindCraft2Settings({ inventory, value, onChange }: {
-  inventory: BC2Inventory; value: BC2Request; onChange: (next: BC2Request) => void
+export function BindCraft2Settings({ inventory, value, onChange, launchAvailable }: {
+  inventory: BC2Inventory; value: BC2Request; onChange: (next: BC2Request) => void; launchAvailable?: boolean
 }) {
   const set = (key: string, next: unknown) => onChange({ ...value, [key]: next })
+  const numberList = (key: string, current: unknown) => {
+    const values = Array.isArray(current) ? current as (number | '')[] : []
+    return <div>{values.map((item, index) => <label key={index}>{key} {index + 1}<input type="number" step="1" min="1" aria-label={`${key}.${index}`} value={item}
+      onChange={event => set(key, values.map((old, position) => position === index ? Number(event.currentTarget.value) : old))} />
+      <button type="button" onClick={() => set(key, values.filter((_, position) => position !== index))}>Remove</button></label>)}
+      <button type="button" onClick={() => set(key, [...values, ''])}>Add {key}</button></div>
+  }
   const control = (key: string, field: BC2Field) => {
     const type = field.observed_types[0]
     const current = value[key] ?? (field.has_native_default ? field.native_default : undefined)
@@ -60,6 +67,23 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
         <small>Native sweep divides max_trajectories among arms; compilation rejects an aggregate allowance above the requested limit.</small>
       </fieldset>
     }
+    if (key === 'multitarget_rounds_per_target') return <select multiple aria-label={key} value={Array.isArray(current) ? current as string[] : []}
+      onChange={event => set(key, Array.from(event.currentTarget.selectedOptions, option => option.value))}>
+      {['screen', 'refine', 'anneal', 'harden', 'mutate'].map(stage => <option key={stage} value={stage}>{stage}</option>)}
+    </select>
+    if (key === 'binder_shapes') {
+      const groups = (current ?? []) as string[][]
+      return <div>{groups.map((group, index) => <fieldset key={index}><legend>Conformation group {index + 1}</legend>
+        {group.map((state, position) => <label key={position}>State {position + 1}<input aria-label={`binder_shapes.${index}.${position}`} value={state} onChange={event => set(key, groups.map((old, i) => i === index ? old.map((s, j) => j === position ? event.currentTarget.value : s) : old))} />
+          <button type="button" onClick={() => set(key, groups.map((old, i) => i === index ? old.filter((_, j) => j !== position) : old))}>Remove state</button></label>)}
+        <button type="button" onClick={() => set(key, groups.map((old, i) => i === index ? [...old, ''] : old))}>Add state</button>
+        <button type="button" onClick={() => set(key, groups.filter((_, i) => i !== index))}>Remove group</button></fieldset>)}
+        <button type="button" onClick={() => set(key, [...groups, ['']])}>Add conformation group</button></div>
+    }
+    if (key === 'crop_fasta_sequence') return <div><label>Crop mode<select aria-label="crop_fasta_sequence.mode" value={current === false ? 'off' : Array.isArray(current) ? 'range' : 'length'} onChange={event => set(key, event.currentTarget.value === 'off' ? false : event.currentTarget.value === 'range' ? ['', ''] : undefined)}><option value="off">Off</option><option value="length">Exact length</option><option value="range">Range</option></select></label>
+      {Array.isArray(current) ? numberList(key, current) : current !== false && <input aria-label="crop_fasta_sequence.length" type="number" min="1" step="1" value={current as number ?? ''} onChange={event => set(key, Number(event.currentTarget.value))} />}</div>
+    if (key === 'validation_models') return <div><label>Selection<select aria-label="validation_models.mode" value={Array.isArray(current) ? 'named' : 'count'} onChange={event => set(key, event.currentTarget.value === 'named' ? [] : undefined)}><option value="count">Count</option><option value="named">Model names</option></select></label>
+      {Array.isArray(current) ? <div>{current.map((model, index) => <label key={index}>Model {index + 1}<input aria-label={`validation_models.${index}`} value={model} onChange={event => set(key, current.map((old, position) => position === index ? event.currentTarget.value : old))} /><button type="button" onClick={() => set(key, current.filter((_, position) => position !== index))}>Remove</button></label>)}<button type="button" onClick={() => set(key, [...current, ''])}>Add model</button></div> : <input aria-label="validation_models.count" type="number" min="1" step="1" value={current as number ?? ''} onChange={event => set(key, Number(event.currentTarget.value))} />}</div>
     if (key === 'max_trajectories') return <input aria-label={key} type="number" min="1" step="1" required value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
     if (type === 'boolean') return <input aria-label={key} type="checkbox" checked={Boolean(current)} onChange={event => set(key, event.currentTarget.checked)} />
     if (type === 'number' || type === 'integer') return <input aria-label={key} type="number" step={type === 'integer' ? '1' : 'any'} value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
@@ -116,10 +140,10 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
     }
     return <span>Typed nested editor pending; this setting cannot be submitted from this form.</span>
   }
-  return <section aria-label="BindCraft2 settings"><p>Native settings inventory only; model execution is not enabled. Unresolved settings block full parity.</p>
+  return <section aria-label="BindCraft2 settings"><p>{launchAvailable === true ? 'Launcher reports execution available.' : launchAvailable === false ? 'Model execution is not enabled.' : 'Launch availability is determined by the launcher.'} Unresolved settings prevent a full parity claim.</p>
     {Object.entries(inventory.fields).filter(([key]) => !internal.has(key)).map(([key, field]) => {
       const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
-        ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep'].includes(key))
+        ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep', 'binder_shapes', 'validation_models', 'crop_fasta_sequence', 'multitarget_rounds_per_target'].includes(key))
       return <div key={key}><label>{key}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}{!field.has_native_default && field.runtime_fallback !== undefined && <small> Native runtime fallback when omitted: {JSON.stringify(field.runtime_fallback)}</small>}
         {supported ? control(key, field) : <span> Unsupported typed control / unresolved source type</span>}</label></div>
     })}

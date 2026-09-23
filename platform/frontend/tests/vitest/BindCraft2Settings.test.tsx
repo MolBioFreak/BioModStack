@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import React, { createElement, act as domAct, useState } from 'react'
@@ -15,6 +16,10 @@ const inventory: BC2Inventory = {
     filters: { native_key: 'filters', observed_types: ['object'], has_native_default: true, native_default: { i_pTM: { threshold: 0.7, higher: true } }, status: 'typed' },
     parameter_sweep: { native_key: 'parameter_sweep', observed_types: ['object'], has_native_default: false, native_default: null, status: 'typed' },
     weights_interface_contacts: { native_key: 'weights_interface_contacts', observed_types: ['number'], has_native_default: false, native_default: null, status: 'typed' },
+    binder_shapes: { native_key: 'binder_shapes', observed_types: ['array'], has_native_default: false, native_default: null, status: 'typed' },
+    crop_fasta_sequence: { native_key: 'crop_fasta_sequence', observed_types: ['integer', 'array', 'boolean'], has_native_default: false, native_default: null, status: 'typed' },
+    validation_models: { native_key: 'validation_models', observed_types: ['integer', 'array'], has_native_default: false, native_default: null, status: 'typed' },
+    humanize: { native_key: 'humanize', observed_types: ['boolean'], has_native_default: false, native_default: null, status: 'typed' },
     gpu_ids: { native_key: 'gpu_ids', observed_types: [], has_native_default: false, native_default: null, status: 'unresolved' },
   },
   presets: {}, paratope_conformations: ['extended', 'folded_back'], registered_metrics: { filters: {
@@ -37,7 +42,11 @@ describe('BC2 model-owned operator adapter', () => {
     expect(html).toContain('aria-label="filters.i_pTM.threshold"')
     expect(html).toContain('Unsupported typed control / unresolved source type')
     expect(html).not.toContain('aria-label="gpu_ids"')
-    expect(html).toContain('model execution is not enabled')
+    expect(html).toContain('Launch availability is determined by the launcher.')
+    const unavailable = renderToStaticMarkup(createElement(BindCraft2Settings, { inventory, value: {}, onChange: () => {}, launchAvailable: false }))
+    expect(unavailable).toContain('Model execution is not enabled.')
+    const available = renderToStaticMarkup(createElement(BindCraft2Settings, { inventory, value: {}, onChange: () => {}, launchAvailable: true }))
+    expect(available).toContain('Launcher reports execution available.')
   })
 
   it('edits native sweep controls without inventing an arm budget', async () => {
@@ -97,4 +106,26 @@ describe('BC2 model-owned operator adapter', () => {
     domAct(() => root.unmount())
     host.remove()
   })
+})
+
+it('mounted scientific controls emit typed operator edits', () => {
+  let latest: Record<string, unknown> = {}
+  function Form() {
+    const [value, setValue] = useState<Record<string, unknown>>({ max_trajectories: 3, filters: {} })
+    latest = value
+    return <BindCraft2Settings inventory={inventory} value={value} onChange={setValue} />
+  }
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host)
+  domAct(() => root.render(<Form />))
+  try {
+    domAct(() => host.querySelector<HTMLInputElement>('[aria-label="humanize"]')!.click())
+    expect(latest.humanize).toBe(true)
+    domAct(() => Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Add conformation group')!.click())
+    expect(latest.binder_shapes).toEqual([['']])
+    domAct(() => host.querySelector<HTMLInputElement>('[aria-label="filters.i_pTM.enabled"]')!.click())
+    expect((latest.filters as Record<string, unknown>).i_pTM).toEqual({ threshold: 0.7, higher: true })
+    expect(host.querySelector('[aria-label="crop_fasta_sequence.mode"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="validation_models.mode"]')).not.toBeNull()
+  } finally { domAct(() => root.unmount()); host.remove() }
 })

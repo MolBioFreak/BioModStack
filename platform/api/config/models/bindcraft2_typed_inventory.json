@@ -2,11 +2,6 @@
   "metric_exception": {
     "losses.induced_fit_interface.interface_mask": "Array | None is an in-memory JAX mask, not a portable JSON request; no source-backed serialization contract"
   },
-  "top_level_resolved": {
-    "cyclic_offset_mode": {"observed_types": ["string"], "choices": ["distance", "direction", "neighbours"], "runtime_fallback": "direction", "source": "bindcraft/settings.py:CYCLIC_OFFSET_MODES,resolve_cyclic_offset_mode"},
-    "oligomer_tie": {"observed_types": ["string"], "choices": ["none", "symmetric"], "runtime_fallback": "symmetric", "source": "bindcraft/settings.py:OLIGOMER_TIES,resolve_oligomer_tie"},
-    "number_of_final_designs": {"observed_types": ["integer"], "runtime_fallback": 1, "source": "bindcraft/campaign.py:settings.get('number_of_final_designs', 1)"}
-  },
   "metric_expression_types": {
     "BINDER_ALONE": {
       "default": "binder_alone",
@@ -39,7 +34,672 @@
       ]
     }
   },
-  "purpose": "Source-derived annotations only. A null reference entry is not a default or a type. This overlay does not enable execution.",
+  "purpose": "Source-derived typed overlays for the immutable pinned native inventory. Native reference null entries do not imply types or defaults; no execution enabled.",
+  "top_level_resolved": {
+    "autotune_loss_weights": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/parameter_sweep.py:192"
+    },
+    "betasheet_reopt_recycles": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:192"
+    },
+    "bigbang": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "binder_chain": {
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:110; bindcraft/design_identity.py:7"
+    },
+    "binder_name": {
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/campaign_log.py:125; bindcraft/campaign_log.py:128; bindcraft/design_identity.py:7"
+    },
+    "binder_shapes": {
+      "observed_types": [
+        "array"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/loss.py:60; bindcraft/settings.py:304; bindcraft/settings.py:305"
+    },
+    "campaign_name": {
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/campaign_log.py:125; bindcraft/design_identity.py:7"
+    },
+    "crop_fasta_sequence": {
+      "observed_types": [
+        "integer",
+        "array",
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:61; bindcraft/campaign_log.py:147; bindcraft/protein_preparation.py:83"
+    },
+    "cyclic_offset_mode": {
+      "choices": [
+        "distance",
+        "direction",
+        "neighbours"
+      ],
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": "direction",
+      "source": "bindcraft/settings.py:CYCLIC_OFFSET_MODES,resolve_cyclic_offset_mode"
+    },
+    "desperation_trajectories": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/desperation.py:24"
+    },
+    "detarget_check_interval": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "disulfide_sigma": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33"
+    },
+    "disulfide_staple": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "disulfide_temperature": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33"
+    },
+    "domain_linker_fix_cut": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/loss.py:838"
+    },
+    "domain_linker_gap": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/loss.py:837; bindcraft/settings.py:34"
+    },
+    "domain_linker_sharpness": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/loss.py:837; bindcraft/settings.py:34"
+    },
+    "forced_targeting_shell": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:173; bindcraft/settings.py:260; bindcraft/epitope_targeting.py:81"
+    },
+    "humanization_hydro_weight": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33"
+    },
+    "humanize": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "idr_crop_count": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:117; bindcraft/settings.py:270; bindcraft/campaign_log.py:146"
+    },
+    "induced_fit_interface_cutoff": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33"
+    },
+    "induced_fit_monomer_adaptive": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:96"
+    },
+    "induced_fit_monomer_chunk": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:66; bindcraft/trajectory.py:85"
+    },
+    "induced_fit_monomer_plddt": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:96"
+    },
+    "induced_fit_monomer_steps": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/preflight.py:111; bindcraft/trajectory.py:76"
+    },
+    "induced_fit_mpnn_designed_share": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/MPNN_stage.py:166"
+    },
+    "induced_fit_mpnn_shell": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/MPNN_stage.py:166"
+    },
+    "induced_fit_mpnn_threshold": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/MPNN_stage.py:166"
+    },
+    "induced_fit_steps": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:35"
+    },
+    "interface_contact_distance": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33; bindcraft/settings.py:223"
+    },
+    "length_bucket_size": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:496; bindcraft/af2.py:50; bindcraft/parameter_sweep.py:36"
+    },
+    "max_binder_chain_breaks_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:265 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "max_binder_free_cysteines_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:333 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "max_coldspot_contact_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:195; bindcraft/settings.py:274; bindcraft/settings.py:419"
+    },
+    "max_cyclic_closure_distance_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:267"
+    },
+    "max_detarget_interface_residues_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/preflight.py:167; bindcraft/settings.py:200; bindcraft/settings.py:280 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "max_detarget_iptm": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "max_detarget_iptm_anneal": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_iptm_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_iptm_harden": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_iptm_mutate": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_iptm_refine": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_iptm_screen": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "max_detarget_rounds": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "max_off_epitope_contact_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:277; bindcraft/settings.py:419"
+    },
+    "max_off_paratope_contact_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:214; bindcraft/settings.py:254; bindcraft/settings.py:419"
+    },
+    "max_oligomer_symmetry_rmsd_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:246"
+    },
+    "max_surface_hydrophobicity_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:328; bindcraft/settings.py:419"
+    },
+    "min_epitope_residues_contacted_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:278 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "min_framework_packing_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:253; bindcraft/settings.py:419"
+    },
+    "min_interface_buried_area_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:326"
+    },
+    "min_iptm_refine": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "min_iptm_screen": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (generated per-stage threshold)"
+    },
+    "min_receptor_chains_contacted_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:308 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "min_target_crop_length_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:288 (ModalityCheck threshold is converted to float by native filter builder)"
+    },
+    "min_target_plddt_final": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:226; bindcraft/settings.py:309"
+    },
+    "mixed_topology": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "mpnn_fix_linker": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/MPNN_stage.py:148"
+    },
+    "multitarget_best_round": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:115"
+    },
+    "multitarget_cumulative_filter": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:254; bindcraft/design_identity.py:11"
+    },
+    "multitarget_filter_models": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/trajectory.py:182; bindcraft/design_identity.py:11"
+    },
+    "multitarget_merged_gradient_budget": {
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:672"
+    },
+    "multitarget_merged_gradients": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:665"
+    },
+    "multitarget_rounds_per_target": {
+      "observed_types": [
+        "array"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:669"
+    },
+    "multitarget_steps": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:35"
+    },
+    "multitarget_swap_patience": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "multitarget_swap_threshold": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "multitarget_tied_redesign": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/MPNN_stage.py:179; bindcraft/design_identity.py:12"
+    },
+    "multitarget_warmup_patience": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/target_schedule.py:18"
+    },
+    "non_contact_distance": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:33"
+    },
+    "number_of_final_designs": {
+      "observed_types": [
+        "integer"
+      ],
+      "runtime_fallback": 1,
+      "source": "bindcraft/campaign.py:settings.get('number_of_final_designs', 1)"
+    },
+    "oligomer_tie": {
+      "choices": [
+        "none",
+        "symmetric"
+      ],
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": "symmetric",
+      "source": "bindcraft/settings.py:OLIGOMER_TIES,resolve_oligomer_tie"
+    },
+    "protease_stable": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "sparse_output": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:475; bindcraft/design_identity.py:10"
+    },
+    "target_chain": {
+      "observed_types": [
+        "string"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/loss.py:900; bindcraft/trajectory.py:79; bindcraft/settings.py:113"
+    },
+    "termini_accessible": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "termini_together": {
+      "observed_types": [
+        "boolean"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:383 (property preset switch)"
+    },
+    "validation_models": {
+      "observed_types": [
+        "integer",
+        "array"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/preflight.py:25; bindcraft/settings.py:490; bindcraft/settings.py:562"
+    },
+    "weights_binder_intra_hotspot": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_coldspot_repel": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:193; bindcraft/settings.py:194"
+    },
+    "weights_collective_softness": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_com_distance": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_distogram_cce": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_experimentally_resolved": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_fold_switching": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:303"
+    },
+    "weights_non_contact": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:198"
+    },
+    "weights_ptm_loss": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:185"
+    },
+    "weights_sequence_entropy": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_target_helicity": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_target_plddt": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_target_rigidity": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:410 (registered loss weight)"
+    },
+    "weights_target_rmsd": {
+      "observed_types": [
+        "number"
+      ],
+      "runtime_fallback": null,
+      "source": "bindcraft/settings.py:217"
+    }
+  },
   "top_level_unresolved": {
     "auto_multi_gpu": {
       "classification": "system_or_runtime_owned",

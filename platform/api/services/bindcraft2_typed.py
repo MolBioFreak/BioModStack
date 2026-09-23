@@ -27,7 +27,10 @@ def schema() -> dict:
         raise ValueError("BC2 inventory pin mismatch")
     for key, descriptor in evidence["top_level_resolved"].items():
         field = data["fields"][key]
-        if field["status"] != "unresolved" or field["has_native_default"]:
+        if field["status"] == "typed":
+            if field["observed_types"] != descriptor["observed_types"]:
+                raise ValueError(f"{key}: conflicting source-derived types")
+        elif field["status"] != "unresolved" or field["has_native_default"]:
             raise ValueError(f"{key}: source-derived override is stale")
         field["status"] = "typed"
         field["observed_types"] = descriptor["observed_types"]
@@ -162,6 +165,24 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                             _check(entry_value, ["string"], f"{name}.{metric}.{key}")
             else:
                 raise ValueError(f"{name}: nested type not yet qualified")
+        if name == "crop_fasta_sequence":
+            if isinstance(value, list):
+                if len(value) != 2 or any(type(x) is not int or x < 1 for x in value):
+                    raise ValueError("crop_fasta_sequence: positive two-length range required")
+            elif value is not False and (type(value) is not int or value < 1):
+                raise ValueError("crop_fasta_sequence: positive length or false required")
+        if name == "binder_shapes":
+            if not isinstance(value, list) or any(not isinstance(group, list) or any(not isinstance(state, str) for state in group) for group in value):
+                raise ValueError("binder_shapes: groups of named states required")
+        if name == "validation_models":
+            if isinstance(value, list):
+                if any(type(model) not in (int, str) for model in value):
+                    raise ValueError("validation_models: model names or indices required")
+            elif type(value) is not int or value < 1:
+                raise ValueError("validation_models: positive count or model list required")
+        if name == "multitarget_rounds_per_target":
+            if not isinstance(value, list) or any(not isinstance(stage, str) for stage in value):
+                raise ValueError("multitarget_rounds_per_target: expected stage names")
         if isinstance(value, list) and name == "binder_lengths":
             if not value or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in value):
                 raise ValueError("binder_lengths: positive integer lengths required")
@@ -182,7 +203,7 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                     _check(item, ["number"] if key == "weight" else ["string"], f"targets[{index}].{key}")
                 if not all(target.get(key) for key in ("name", "target_path")):
                     raise ValueError(f"targets[{index}]: name and target_path required")
-        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations"):
+        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations", "binder_shapes", "validation_models", "multitarget_rounds_per_target", "crop_fasta_sequence"):
             raise ValueError(f"{name}: element schema not yet qualified")
         if name in ("modality", "core", "target"):
             names = value if isinstance(value, list) else [value]

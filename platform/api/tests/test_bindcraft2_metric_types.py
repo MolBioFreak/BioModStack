@@ -59,5 +59,7 @@ def test_source_annotation_is_not_a_default_for_untyped_campaign_fields():
     assert validate_request({'max_trajectories': 2, 'number_of_final_designs': 1, 'oligomer_tie': 'none'})
     with pytest.raises(ValueError, match='unknown native choice'):
         validate_request({'max_trajectories': 2, 'cyclic_offset_mode': 'invented'})
+    assert data['fields']['binder_shapes']['status'] == 'typed'
+    assert validate_request({'max_trajectories': 2, 'binder_shapes': [['complex']]})
     with pytest.raises(ValueError, match='unresolved native type'):
-        validate_request({'max_trajectories': 2, 'binder_shapes': []})
+        validate_request({'max_trajectories': 2, 'relax_steps': 4})

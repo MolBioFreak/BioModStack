@@ -21,7 +21,9 @@ def test_inventory_is_closed_against_native_registry():
     assert 'cutoff' in data['registered_metrics']['filters']['Interface_Residues']['params']
     assert 'weights_interface_contacts' in data['fields']
     assert data['fields']['max_trajectories']['has_native_default'] is False
-    assert len(data['unresolved_fields']) == 106
+    assert len(data['unresolved_fields']) == 16
+    assert data['fields']['binder_shapes']['observed_types'] == ['array']
+    assert data['fields']['humanize']['observed_types'] == ['boolean']
     assert data['fields']['number_of_final_designs']['runtime_fallback'] == 1
     assert data['fields']['cyclic_offset_mode']['choices'] == ['distance', 'direction', 'neighbours']
     assert data['unresolved_fields']  # cannot advertise full parity
@@ -42,7 +44,8 @@ def test_fail_closed_unknown_nested_and_types():
                        {'parameter_sweep': {'max_arms': 0}},
                        {'parameter_sweep': {'multiplier': 2, 'levels': [0.5]}},
                        {'parameter_sweep': {'bogus': 1}},
-                       {'binder_shapes': []}):
+                       {'binder_shapes': [4]}, {'crop_fasta_sequence': [4, 0]},
+                       {'multitarget_filter_models': True}, {'relax_steps': 4}):
         with pytest.raises(ValueError):
             validate_request({**base, **additional})
 
@@ -97,10 +100,18 @@ def test_pinned_native_differential_if_available(tmp_path):
     if not upstream:
         pytest.skip('set BMS_TEST_BC2_UPSTREAM and BMS_TEST_BC2_PYTHON for native differential')
     python = os.environ['BMS_TEST_BC2_PYTHON']
-    original = json.loads((Path(__file__).parents[1] / 'config/models/bindcraft2_native_inventory.json').read_text())
-    assert inventory(Path(upstream)) == original
-    assert schema()['fields']['aa_bias'] == original['fields']['aa_bias']
-    assert set(schema()['fields']) == set(original['fields'])
+    discovered = inventory(Path(upstream))
+    annotated = json.loads((Path(__file__).parents[1] / 'config/models/bindcraft2_native_inventory.json').read_text())
+    assert set(discovered['fields']) == set(annotated['fields'])
+    for name, original in discovered['fields'].items():
+        assert all(annotated['fields'][name][key] == value for key, value in original.items()
+                   if key not in ('status', 'observed_types'))
+        if original['status'] == 'typed':
+            assert annotated['fields'][name]['observed_types'] == original['observed_types']
+    for key in ('upstream_commit', 'source_sha256', 'registry_sha256', 'default_sha256', 'reference_sha256', 'presets', 'target_fields'):
+        assert annotated[key] == discovered[key]
+    assert schema()['fields']['aa_bias'] == discovered['fields']['aa_bias']
+    assert set(schema()['fields']) == set(discovered['fields'])
     constants = subprocess.check_output([python, '-c',
         "import json; from bindcraft.settings import CYCLIC_OFFSET_MODES, OLIGOMER_TIES; from bindcraft.protein import BINDER_ALONE; from bindcraft.epitope_targeting import EPITOPE_CUTOFF; print(json.dumps([list(CYCLIC_OFFSET_MODES), sorted(OLIGOMER_TIES), BINDER_ALONE, EPITOPE_CUTOFF]))"], text=True)
     modes, ties, binder_alone, epitope_cutoff = json.loads(constants)
@@ -128,3 +139,41 @@ def test_pinned_native_differential_if_available(tmp_path):
     assert serialized['effective_sha256'] == hashlib.sha256(_canonical(compiled['effective_settings'])).hexdigest()
     assert '$bc2_nonfinite_float' in receipt.read_text()
     assert 'NaN' not in receipt.read_text()
+
+@pytest.mark.parametrize('setting,value', [
+    ('humanize', True), ('bigbang', True), ('number_of_final_designs', 3),
+    ('cyclic_offset_mode', 'direction'), ('crop_fasta_sequence', [20, 40]),
+    ('validation_models', 2), ('binder_shapes', [['complex'], ['binder_alone']]),
+    ('multitarget_merged_gradient_budget', 'model_calls'),
+    ('multitarget_rounds_per_target', ['anneal']),
+    ('filters', {'Epitope_Residues_Contacted': {'threshold': 2, 'higher': True, 'params': {'epitope_cutoff': 10.0}}}),
+    ('losses', {'induced_fit_global': {'params': {'reference_state': 'binder_alone'}}}),
+])
+def test_native_resolver_preserves_typed_operator_values(setting, value):
+    upstream = os.environ.get('BMS_TEST_BC2_UPSTREAM')
+    if not upstream:
+        pytest.skip('pinned native checkout required')
+    request = {'max_trajectories': 2, setting: value}
+    validate_request(request)
+    code = 'import json,sys; from bindcraft.settings import load_settings; print(json.dumps(load_settings(json.load(sys.stdin))))'
+    resolved = json.loads(subprocess.check_output([os.environ['BMS_TEST_BC2_PYTHON'], '-c', code],
+                                                input=json.dumps(request), text=True))
+    if setting in ('filters', 'losses'):
+        name = next(iter(value))
+        assert all(resolved[setting][name][key] == item for key, item in value[name].items())
+    else:
+        assert resolved[setting] == value
+
+def test_preset_modality_target_property_layers_against_native():
+    if not os.environ.get('BMS_TEST_BC2_UPSTREAM'):
+        pytest.skip('pinned native checkout required')
+    request = {'max_trajectories': 2, 'modality': ['VHH'], 'target': ['hPD1'],
+               'humanize': True, 'min_interface_buried_area_final': 100.0}
+    validate_request(request)
+    code = 'import json,sys; from bindcraft.settings import load_settings; print(json.dumps(load_settings(json.load(sys.stdin))))'
+    resolved = json.loads(subprocess.check_output([os.environ['BMS_TEST_BC2_PYTHON'], '-c', code],
+                                                input=json.dumps(request), text=True))
+    assert resolved['min_interface_buried_area_final'] == 100.0
+    assert resolved['humanize'] is True
+    assert resolved['binder_scaffold']
+    assert resolved['targets']
