@@ -21,6 +21,9 @@ def test_inventory_is_closed_against_native_registry():
     assert 'cutoff' in data['registered_metrics']['filters']['Interface_Residues']['params']
     assert 'weights_interface_contacts' in data['fields']
     assert data['fields']['max_trajectories']['has_native_default'] is False
+    assert len(data['unresolved_fields']) == 106
+    assert data['fields']['number_of_final_designs']['runtime_fallback'] == 1
+    assert data['fields']['cyclic_offset_mode']['choices'] == ['distance', 'direction', 'neighbours']
     assert data['unresolved_fields']  # cannot advertise full parity
 
 
@@ -94,7 +97,18 @@ def test_pinned_native_differential_if_available(tmp_path):
     if not upstream:
         pytest.skip('set BMS_TEST_BC2_UPSTREAM and BMS_TEST_BC2_PYTHON for native differential')
     python = os.environ['BMS_TEST_BC2_PYTHON']
-    assert inventory(Path(upstream)) == schema()
+    original = json.loads((Path(__file__).parents[1] / 'config/models/bindcraft2_native_inventory.json').read_text())
+    assert inventory(Path(upstream)) == original
+    assert schema()['fields']['aa_bias'] == original['fields']['aa_bias']
+    assert set(schema()['fields']) == set(original['fields'])
+    constants = subprocess.check_output([python, '-c',
+        "import json; from bindcraft.settings import CYCLIC_OFFSET_MODES, OLIGOMER_TIES; from bindcraft.protein import BINDER_ALONE; from bindcraft.epitope_targeting import EPITOPE_CUTOFF; print(json.dumps([list(CYCLIC_OFFSET_MODES), sorted(OLIGOMER_TIES), BINDER_ALONE, EPITOPE_CUTOFF]))"], text=True)
+    modes, ties, binder_alone, epitope_cutoff = json.loads(constants)
+    typed = schema()
+    assert typed['fields']['cyclic_offset_mode']['choices'] == modes
+    assert typed['fields']['oligomer_tie']['choices'] == ties
+    assert typed['registered_metrics']['filters']['Binder_RMSD']['params']['reference_state']['resolved_default'] == binder_alone
+    assert typed['registered_metrics']['filters']['Epitope_Residues_Contacted']['params']['epitope_cutoff']['resolved_default'] == epitope_cutoff
     request = {'max_trajectories': 2, 'modality': ['binder'], 'targets': [
         {'name': 'on', 'target_path': '/inputs/on.cif'}], 'weights_interface_contacts': 0.8,
         'filters': {'i_pTM': {'threshold': 0.75, 'higher': True}}}

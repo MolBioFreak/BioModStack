@@ -13,6 +13,7 @@ from pathlib import Path
 from services.bindcraft2_native import PIN, _canonical, compile_for_native
 
 INVENTORY = Path(__file__).parents[1] / "config/models/bindcraft2_native_inventory.json"
+TYPED_EVIDENCE = Path(__file__).parents[1] / "config/models/bindcraft2_typed_inventory.json"
 SYSTEM_KEYS = frozenset({"project_folder", "resume", "gpu_ids", "auto_multi_gpu", "design_workers",
                          "workers_per_gpu", "max_workers_per_gpu", "worker_launch_stagger",
                          "compile_next_length"})
@@ -21,8 +22,46 @@ SYSTEM_KEYS = frozenset({"project_folder", "resume", "gpu_ids", "auto_multi_gpu"
 def schema() -> dict:
     """Stable serializable discovery contract shared by operator and agent adapters."""
     data = json.loads(INVENTORY.read_text())
-    if data["upstream_commit"] != PIN:
+    evidence = json.loads(TYPED_EVIDENCE.read_text())
+    if data["upstream_commit"] != PIN or evidence["upstream_commit"] != PIN:
         raise ValueError("BC2 inventory pin mismatch")
+    for key, descriptor in evidence["top_level_resolved"].items():
+        field = data["fields"][key]
+        if field["status"] != "unresolved" or field["has_native_default"]:
+            raise ValueError(f"{key}: source-derived override is stale")
+        field["status"] = "typed"
+        field["observed_types"] = descriptor["observed_types"]
+        field["source_evidence"] = descriptor["source"]
+        field["runtime_fallback"] = descriptor["runtime_fallback"]
+        if "choices" in descriptor:
+            field["choices"] = descriptor["choices"]
+    data["unresolved_fields"] = sorted(k for k, v in data["fields"].items() if v["status"] != "typed")
+    for group, metrics in data["registered_metrics"].items():
+        for metric, entry in metrics.items():
+            for name, descriptor in entry["params"].items():
+                expression = descriptor["source_default"]
+                if descriptor["default_literal"] is not None:
+                    descriptor["request_types"] = [_kind(descriptor["default_literal"])]
+                    continue
+                path = f"{group}.{metric}.{name}"
+                if path in evidence["metric_exception"]:
+                    descriptor["unresolved_reason"] = evidence["metric_exception"][path]
+                elif expression in evidence["metric_expression_types"]:
+                    source = evidence["metric_expression_types"][expression]
+                    # A None default for interface_mask is not the nullable chain contract.
+                    if expression == "None" and name != "chain":
+                        descriptor["unresolved_reason"] = "No portable type for the native Array | None argument"
+                    else:
+                        descriptor["request_types"] = source["types"]
+                        descriptor["source_evidence"] = source["source"]
+                        if "default" in source:
+                            descriptor["resolved_default"] = source["default"]
+                        if "default_encoding" in source:
+                            descriptor["native_default_encoding"] = source["default_encoding"]
+                else:
+                    descriptor["unresolved_reason"] = "No source-backed JSON type"
+    data["typed_evidence"] = evidence
+    data["coverage_status"] = "INCOMPLETE: unresolved native settings and Array mask; not an enabled model"
     return data
 
 
@@ -85,6 +124,8 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
         if field["status"] != "typed":
             raise ValueError(f"{name}: unresolved native type")
         _check(value, field["observed_types"], name)
+        if "choices" in field and value not in field["choices"]:
+            raise ValueError(f"{name}: unknown native choice {value!r}")
         if isinstance(value, dict):
             if name == "aa_bias":
                 for residue, weight in value.items():
@@ -109,10 +150,10 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                                 source = registered["params"].get(parameter)
                                 if source is None:
                                     raise ValueError(f"{name}.{metric}.params.{parameter}: unknown parameter")
-                                default = source["default_literal"]
-                                if default is None:
+                                types = source.get("request_types")
+                                if not types:
                                     raise ValueError(f"{name}.{metric}.params.{parameter}: type unresolved")
-                                _check(param_value, [_kind(default)], f"{name}.{metric}.params.{parameter}")
+                                _check(param_value, types, f"{name}.{metric}.params.{parameter}")
                         elif key in ("higher", "mandatory"):
                             _check(entry_value, ["boolean"], f"{name}.{metric}.{key}")
                         elif key == "threshold":

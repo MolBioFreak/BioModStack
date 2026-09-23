@@ -5,6 +5,8 @@ export type BC2Field = {
   observed_types: string[]
   has_native_default: boolean
   native_default: unknown
+  choices?: string[]
+  runtime_fallback?: unknown
   status: 'typed' | 'unresolved'
 }
 export type BC2Inventory = {
@@ -12,7 +14,7 @@ export type BC2Inventory = {
   fields: Record<string, BC2Field>
   presets: Record<string, Record<string, unknown>>
   paratope_conformations: string[]
-  registered_metrics: Record<string, Record<string, { params: Record<string, { default_literal: unknown; source_default: string | null }> }>>
+  registered_metrics: Record<string, Record<string, { params: Record<string, { default_literal: unknown; source_default: string | null; request_types?: string[]; resolved_default?: unknown; native_default_encoding?: string; unresolved_reason?: string }> }>>
 }
 export type BC2Request = Record<string, unknown>
 const internal = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length'])
@@ -25,6 +27,9 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
   const control = (key: string, field: BC2Field) => {
     const type = field.observed_types[0]
     const current = value[key] ?? (field.has_native_default ? field.native_default : undefined)
+    if (field.choices) return <select aria-label={key} value={current as string ?? ''} onChange={event => set(key, event.currentTarget.value)}>
+      <option value="">Select native choice</option>{field.choices.map(choice => <option value={choice} key={choice}>{choice}</option>)}
+    </select>
     if (selectors.has(key)) return <select multiple aria-label={key} value={typeof current === 'string' ? [current] : Array.isArray(current) ? current as string[] : []}
       onChange={event => set(key, Array.from(event.currentTarget.selectedOptions, option => option.value))}>
       {Object.keys(inventory.presets[key] ?? {}).filter(name => !(key === 'core' && (name === 'default' || name === 'reference'))).map(name => <option key={name} value={name}>{name}</option>)}
@@ -81,29 +86,29 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
         return <fieldset key={metric}><legend>{metric}</legend>
           <label>Enable <input type="checkbox" aria-label={`${key}.${metric}.enabled`} checked={entry !== undefined} onChange={event => {
             if (event.currentTarget.checked) {
-              const nativeDefault = (field.has_native_default ? field.native_default : null) as Record<string, Record<string, unknown>> | null
-              // A new filter has no cutoff until the operator supplies one.
-              // Existing presets may provide a model-owned cutoff; never invent 0.
-              update(metric, key === 'filters'
-                ? (nativeDefault?.[metric] ? { ...nativeDefault[metric] } : { higher: true })
-                : { params: {} })
-            }
-            else { const copy = { ...entries }; delete copy[metric]; set(key, copy) }
+              const native = (inventory.fields[key]?.native_default as Record<string, Record<string, unknown>> | null)?.[metric]
+              // Only a pinned native entry is a default; a new metric needs an explicit threshold.
+              update(metric, native ? structuredClone(native) : key === 'filters' ? {} : { params: {} })
+            } else { const copy = { ...entries }; delete copy[metric]; set(key, copy) }
           }} /></label>
           {entry && <>
-            <label>Prediction state<input aria-label={`${key}.${metric}.prediction_state`} type="text" value={entry.prediction_state as string ?? ''}
-              onChange={event => update(metric, { ...entry, prediction_state: event.currentTarget.value })} /></label>
-            {key === 'filters' && <><label>Threshold <input type="number" step="any" required aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => update(metric, { ...entry, threshold: event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value) })} /></label>
-              {(['higher', 'mandatory'] as const).map(flag => <label key={flag}>{flag}<input type="checkbox" aria-label={`${key}.${metric}.${flag}`} checked={entry[flag] !== false} onChange={event => update(metric, { ...entry, [flag]: event.currentTarget.checked })} /></label>)}</>}
+            {key === 'filters' && <><label>Threshold <input type="number" step="any" aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => { const next = { ...entry }; if (event.currentTarget.value === '') delete next.threshold; else next.threshold = Number(event.currentTarget.value); update(metric, next) }} /></label>
+              {(['higher', 'mandatory'] as const).map(flag => <label key={flag}>{flag} (unset uses native behavior)<input type="checkbox" aria-label={`${key}.${metric}.${flag}`} checked={entry[flag] === true} onChange={event => update(metric, { ...entry, [flag]: event.currentTarget.checked })} /></label>)}</>}
             {Object.entries(info.params).map(([param, descriptor]) => {
-              const defaultValue = descriptor.default_literal
-              if (defaultValue === null) return <p key={param}>{param}: type unresolved</p>
+              if (!descriptor.request_types) return <p key={param}>{param}: {descriptor.unresolved_reason ?? 'type unresolved'}</p>
+              const defaultValue = descriptor.resolved_default ?? descriptor.default_literal
               const params = (entry.params ?? {}) as Record<string, unknown>
-              const actual = params[param] ?? defaultValue
+              const actual = Object.hasOwn(params, param) ? params[param] : defaultValue
               const write = (next: unknown) => update(metric, { ...entry, params: { ...params, [param]: next } })
-              return <label key={param}>{param}{typeof defaultValue === 'boolean'
-                ? <input type="checkbox" aria-label={`${key}.${metric}.params.${param}`} checked={Boolean(actual)} onChange={event => write(event.currentTarget.checked)} />
-                : <input type={typeof defaultValue === 'number' ? 'number' : 'text'} step="any" aria-label={`${key}.${metric}.params.${param}`} value={actual as string | number} onChange={event => write(typeof defaultValue === 'number' ? Number(event.currentTarget.value) : event.currentTarget.value)} />}</label>
+              const nullable = descriptor.request_types.includes('null')
+              const numeric = descriptor.request_types.includes('number') || descriptor.request_types.includes('integer')
+              return <label key={param}>{param}{descriptor.native_default_encoding && <small> Native default: {descriptor.native_default_encoding}; explicit finite override only.</small>}
+                {nullable && <select aria-label={`${key}.${metric}.params.${param}.mode`} value={actual === null ? 'null' : 'value'} onChange={event => write(event.currentTarget.value === 'null' ? null : '')}><option value="null">Native null</option><option value="value">Explicit value</option></select>}
+                {descriptor.request_types.includes('boolean')
+                  ? <input type="checkbox" aria-label={`${key}.${metric}.params.${param}`} checked={actual === true} onChange={event => write(event.currentTarget.checked)} />
+                  : <input type={numeric ? 'number' : 'text'} step={numeric ? 'any' : undefined} aria-label={`${key}.${metric}.params.${param}`}
+                    disabled={nullable && actual === null} value={actual === null || actual === undefined ? '' : actual as string | number}
+                    onChange={event => { if (event.currentTarget.value === '') { const copy = { ...params }; delete copy[param]; update(metric, { ...entry, params: copy }) } else write(numeric ? Number(event.currentTarget.value) : event.currentTarget.value) }} />}</label>
             })}
           </>}
         </fieldset>
@@ -115,7 +120,7 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
     {Object.entries(inventory.fields).filter(([key]) => !internal.has(key)).map(([key, field]) => {
       const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
         ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep'].includes(key))
-      return <div key={key}><label>{key}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}
+      return <div key={key}><label>{key}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}{!field.has_native_default && field.runtime_fallback !== undefined && <small> Native runtime fallback when omitted: {JSON.stringify(field.runtime_fallback)}</small>}
         {supported ? control(key, field) : <span> Unsupported typed control / unresolved source type</span>}</label></div>
     })}
   </section>
