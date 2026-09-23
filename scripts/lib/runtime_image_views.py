@@ -301,7 +301,15 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
             os.lseek(image_fd, 0, os.SEEK_SET)
             extract(image_fd, stage / "rootfs")
             original = _inventory(stage / "rootfs", freeze=True)
-            frozen = _inventory(stage / "rootfs")
+            # Freeze only changes modes, not member bytes. Verify the actual
+            # frozen tree below rather than hashing it here and then again in
+            # verify_derivation. The post-freeze pass also detects mutations
+            # made while freezing (including write-and-restore via ctime).
+            frozen = {rel: dict(row) for rel, row in original.items()}
+            for row in frozen.values():
+                if row["kind"] in {"file", "directory"}:
+                    row["mode"] = (row["mode"] & ~0o222) | (
+                        0o400 if row["kind"] == "file" else 0o500)
             if verify_image(lifecycle.object_path(root, digest), digest) != identity:
                 raise Error("source image changed during extraction")
             manifest = {"schema_version": 1, "source": identity, "original": original, "frozen": frozen}
@@ -312,17 +320,30 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
             with _directory(stage) as fd:
                 os.fchmod(fd, 0o500)
                 os.fsync(fd)
-            verify_derivation(stage, identity)
+            stage_verification = {}
+            verify_derivation(stage, identity, verification=stage_verification)
             _check_directory(path.parent, parent)
             if path.name in os.listdir(parent):
                 raise Error("derivation appeared during publication")
             os.rename(name, path.name, src_dir_fd=parent, dst_dir_fd=parent)
             os.fsync(parent)
+            # The rename moves the same inode and contents. Recheck its full
+            # no-follow identity tree after publication, without rereading all
+            # member bytes for a third time. Warm launches still hash once.
+            with _directory(path) as published:
+                envelope = _identity(os.fstat(published))
+            # Linux rename updates the moved directory's ctime. Only that
+            # field may differ; all contents retain their frozen identities.
+            if (envelope[:-1] != stage_verification['envelope'][:-1]
+                    or envelope[-1] < stage_verification['envelope'][-1]):
+                raise Error('derived rootfs envelope changed during publication')
+            stage_verification.update(path=str(path), envelope=envelope)
+            verify_derivation(path, identity, verification=stage_verification)
         finally:
             if name in os.listdir(parent):
                 _remove(parent, name)
         if verification is not None:
-            verify_derivation(path, identity, verification=verification)
+            verification.update(stage_verification)
         return path, manifest
 
 

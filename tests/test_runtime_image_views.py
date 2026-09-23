@@ -85,6 +85,53 @@ def test_warm_launch_hashes_each_generation_once(store, monkeypatch, clone_doubl
     assert not lifecycle.load_state(root)['leases']
 
 
+def test_cold_derivation_hashes_rootfs_twice_and_reuses_frozen_receipt(store, monkeypatch, clone_double):
+    root, digest, workspace, _ = store
+    counts = []
+    original = views._hash
+    def counted(fd):
+        counts.append(os.fstat(fd).st_size)
+        return original(fd)
+    monkeypatch.setattr(views, '_hash', counted)
+    with views.private_image_view(root, digest, workspace, extract) as view:
+        assert (view['rootfs'] / 'bin/program').read_bytes() == b'original bytes' * 8192
+        assert counts.count(len(b'original bytes') * 8192) == 2
+    assert counts.count(len(b'original bytes') * 8192) == 2
+    assert not list(workspace.iterdir())
+
+
+def test_freeze_mutation_rejected_before_publication(store, monkeypatch):
+    root, digest, _, _ = store
+    original = views._inventory
+    def mutate_after_freeze(path, **kwargs):
+        entries = original(path, **kwargs)
+        if kwargs.get('freeze'):
+            program = path / 'bin/program'
+            program.chmod(0o600)
+            program.write_bytes(b'changed' * 8192)
+            program.chmod(0o555)
+        return entries
+    monkeypatch.setattr(views, '_inventory', mutate_after_freeze)
+    with pytest.raises(shared.SharedRuntimeImageError, match='integrity'):
+        derive(store)
+    assert not views.derived_path(root, digest).exists()
+
+
+def test_published_derivation_rechecks_members_without_rehash(store, monkeypatch):
+    root, digest, _, _ = store
+    rename = views.os.rename
+    def tamper_after_publication(source, destination, **kwargs):
+        rename(source, destination, **kwargs)
+        if source.startswith('.derive-') and destination.startswith('.rootfs-'):
+            program = views.derived_path(root, digest) / 'rootfs/bin/program'
+            program.chmod(0o600)
+            program.write_bytes(b'changed')
+            program.chmod(0o555)
+    monkeypatch.setattr(views.os, 'rename', tamper_after_publication)
+    with pytest.raises(shared.SharedRuntimeImageError, match='integrity'):
+        derive(store)
+
+
 @pytest.mark.parametrize('phase', ['cloning', 'execution'])
 @pytest.mark.parametrize('mutation', ['source_restore', 'tree_restore', 'replace',
                                     'symlink', 'metadata', 'membership', 'hardlink'])
