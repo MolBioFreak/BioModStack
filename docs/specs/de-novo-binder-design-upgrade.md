@@ -1,8 +1,8 @@
 # De Novo Binder Design Upgrade: Implementation Specification
 
-**Status:** Revised after Astra's holistic source review and Christian's explicit scope clarification. Product scope is fixed below. This is a specification, not implementation, scientific-run, deployment or rental authorization. LigandMPNN's detailed scientific configuration remains open for discussion; its inclusion is not open.
+**Status:** Updated to Christian's three concurrent work tranches: agnostic workflow/core/bridge, full BC2, and experimental LigandMPNN sanity-check validation. This is a specification and implementation plan, not a claim of implementation or authorization to launch scientific campaigns, deploy or rent workers. Phase 3's recovery policy still needs explicit scientific definition; its role and inclusion are fixed.
 
-**Companion:** [Upgrade outline](de-novo-binder-upgrade-outline.md).
+**Companions:** [Upgrade outline](de-novo-binder-upgrade-outline.md) and [concurrent implementation SOW with subagent prompts and pass/fail gates](de-novo-binder-concurrent-implementation-plan.md). The concurrent SOW supersedes this document's earlier workstream allocation and ordinary-redesign interpretation of LigandMPNN, not the remaining upgrade scope.
 
 **Evidence baseline:** BMS `96923d9470d86219451d6caf88f63308a369c007`, verified against canonical Development, `origin/test` and API build during review. BC2: `PacesaLab/BindCraft2` at `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f`, package `1.0.1`. Start implementation from current `origin/test` and reconcile changed owners against this baseline; the older documentation worktree is not the implementation base.
 
@@ -33,10 +33,12 @@ The entire workflow is in scope, not just BC2's wrapper:
 - Correct existing workflow defects, including request handling, stage execution, selection, lineage, samples, results and continuation.
 - Deliver working local and remote-bridge execution across generation and refinement, with efficient startup and reliable result return/reopening.
 - Deliver solid per-model settings and results, human/agent parity, useful review and repeatable iteration.
-- Include LigandMPNN as an optional refinement method. Continue discussion of its precise scientific use without demoting it to an uncommitted future feature.
+- Include the experimental LigandMPNN interface-context sanity check as an optional assessment in the refinement/review experience. It complements the existing blind structure-recovery check; ordinary sequence redesign does not satisfy this deliverable.
 - Retain the agreed FA-MPNN, repack/anchor/PPIFlow, independent validation, FrustraMPNN, Caliby and complex-contact-frustration work.
 
 **Optional for the operator does not mean optional to deliver.** There is one completion scope. Engineering milestones are not a smaller accepted product. An in-scope operation left unavailable is unfinished work unless Christian explicitly changes that requirement.
+
+The implementation is divided into three concurrent tranches, not sequential release reductions: **Phase 1** generalizes and repairs the whole existing workflow/refinement/results/remote bridge; **Phase 2** integrates full native BC2 as a peer generator; **Phase 3** implements the experimental LigandMPNN sanity-check validator. Shared contracts create specific producer/consumer dependencies, not a requirement to finish Phase 1 before starting the others.
 
 Agnostic does not mean every checkpoint supports every molecule or format. Genuine native limitations must be explicit. They do not justify retaining antibody assumptions in otherwise generic infrastructure or abandoning qualification work that this upgrade requires.
 
@@ -192,7 +194,7 @@ The loop supports a selected subset of operations in scientifically valid orders
 
 Reuse generic constrained FA-MPNN for full complexes with explicit designed binder regions/chains, fixed target and protected binder residues. Keep target-sidechain and sequence-lock semantics distinct. Retain antibody-specialized masks only for antibody operations. Every sampled sequence is an identifiable child with native outputs, masks, scores and source association.
 
-Preserve and reconcile existing supported sequence-design alternatives instead of deleting them to simplify the launcher. Remove duplicate selectors/booleans from new writes; translate historical requests at one boundary. Caliby and LigandMPNN have the specific obligations below.
+Preserve and reconcile existing supported sequence-design alternatives instead of deleting them to simplify the launcher. Remove duplicate selectors/booleans from new writes; translate historical requests at one boundary. Caliby has the specific obligations below. The required LigandMPNN deliverable is the separate experimental sanity check in section 6.8, not an ordinary sequence-design selector.
 
 ### 6.3 Repack and anchor analysis
 
@@ -224,17 +226,17 @@ The agreed complex-contact-frustration work remains in scope. Qualify a genuinel
 
 Reuse and qualify the existing parent runner rather than reimplementing it. Establish checkpoint/context applicability, masks, complete scientific controls, native output cardinality and sequence/structure identity. Preserve interface versus non-interface design semantics and compare with exact unchanged parents and matched alternative designers. Bring its usable selection, execution and per-model results into the agnostic loop; do not label source implementation as either absent or already live-qualified.
 
-### 6.8 LigandMPNN — in scope, scientific choices pending discussion
+### 6.8 Phase 3: experimental LigandMPNN interface-context sanity check
 
-Deliver LigandMPNN as an optional refinement/sequence-design method through the single Foundry-owned execution path, integrated with the same candidate selection, local/remote placement, lineage and model-native result experience. It is not a new generator, compulsory step or unknown-partner finder. Inclusion is fixed; the choices below remain proposals until discussion.
+Deliver the custom diagnostic through the single Foundry-owned LigandMPNN execution path, using the same exact candidate selection, local/remote placement and model-native publication. Preserve a selected CDR or binder/target patch and evaluate opposing interface context under a declared masked-input recovery/compatibility policy. Do not substitute a routine binder-redesign option, a new generator or an unknown-partner finder.
 
-The agreed scientific starting point is an intact modeled binder–target structure/sequence complex. Preserve the target and protected binder regions; redesign declared binder positions with explicit structural context. Do not substitute excised free CDR peptides for the intended complex-conditioned question.
+A small assessment region need not mean an excised peptide: retain the declared surrounding structural context. LigandMPNN requires supplied backbone geometry; its sequence/context evidence is not independent pose recovery, affinity, specificity, partner identity or ΔΔG. The information being recovered must not leak into conditioning through visible residue identities or side-chain atoms. Keep diagnostic sequences as diagnostic artifacts rather than silently changing the assessed target or binder.
 
-Proposed selectable use cases are region-limited redesign and broader binder redesign with explicit protected positions. A controlled fixed-target-side-chain-context on/off comparison is a proposed experimental option, not an assumed improvement. Keep checkpoints, other settings, source structure and masks matched and preserve all results. Conditional sequence probabilities/confidences are model-native sequence compatibility evidence, not affinity, specificity, partner identity or ΔΔG.
+Bind every result to exact candidate/state/artifact, fixed and assessed regions, visible/held-out context, checkpoint/settings, comparator and policy identity. Preserve native outputs and distinguish execution status, scientific qualification and pass/fail/inconclusive outcomes. Default-off assessment adds no dependencies, preparation or work. Use typed UI/API controls and the existing result experience; no duplicate runner, validator framework or scoring database.
 
-Separate optional packing from sequence redesign and retain both identities. Changed sequences can enter the existing explicit independent-validation and comparison steps. No silent replacement of FA-MPNN, Caliby or an unsuccessful requested method.
+Pair the diagnostic with the existing blind structure/pose-recovery check for the same candidate/context. If both applicable, qualified checks complete validly and both fail their declared recovery criteria, mark the candidate computationally rejected under the selected sanity-check policy. If both pass, report support by both checks, not proven binding. If one passes and one fails, report mixed evidence. Skipped, unsupported, cancelled, errored, stale, unqualified or inconclusive checks do not count as scientific failures. Preserve rejected candidates and all evidence; do not delete native records or overwrite generator acceptance.
 
-Discussion must settle the initial selectable modes/defaults, target-context policy, masking/region UX, optional packing placement, comparator design and downstream assessment before implementing those scientific choices. The rest of the workflow can proceed once authorized without inventing answers or dropping this deliverable. Its final accepted settings, runtime, output and UI/API contract must be added to the same completion evidence.
+Verify what the blind predictor actually receives before claiming independent recovery. Settle the initial patch/direction, conditioning/masking, native metric/comparator, sample aggregation, recovery thresholds and benign calibration/held-out assessment explicitly. Do not invent scientific choices for implementation convenience. Plumbing and unrelated lanes proceed concurrently; unresolved qualification keeps its gate open rather than removing the deliverable. The exact dispatch prompt and decision rules are in sections 12–13 of the concurrent SOW.
 
 ## 7. Required correction ledger for the current workflow
 
@@ -291,33 +293,15 @@ Reuse result publication journals and exact generation/manifest identity. Cover 
 
 BC2's hosting restriction concerns third-party invocable functionality, not merely remote infrastructure. Qualify authorized internal local/private-remote execution and retain dependency/weight terms. Third-party API/workflow exposure requires an explicit audience/licensing decision. Rental/start, live scientific campaigns and Production promotion retain their separate authorization requirements.
 
-## 9. Subagent-first implementation plan
+## 9. Concurrent subagent-first implementation plan
 
-The holistic Astra review is complete as a source review, not live acceptance. This revised document incorporates its technical corrections without changing Christian's workflow direction. Implementation begins only when authorized. No extra ceremonial review is required to collect read-only inventory; actual unresolved science/contracts must be resolved before the dependent lane changes them.
+The [concurrent implementation SOW](de-novo-binder-concurrent-implementation-plan.md) is the dispatch authority. It supplies strict scope rules, sole-writer boundaries, full prompts, required work, per-lane pass/fail tests, localized scientific decisions, performance gates and integrated acceptance. Read its common instructions and the complete lane packet before implementation; this summary is not a substitute.
 
-### 9.1 Ownership and dependencies
+The parent owns shared API/registry/schema integration, baseline reconciliation and final closure. Eight implementation lanes run concurrently: A launcher/request experience; B refinement and blind structure validation; C candidate selection/shared results; D existing alternatives/analyses; E BC2 settings/native campaign; F BC2-native publication; G shared bridge/runtime/performance; H experimental LigandMPNN validator. One writer owns each shared file. Children return code/evidence and do not independently push, deploy or close requirements.
 
-The parent/integrator owns shared contract decisions, registry/router integration, source reconciliation and final acceptance. Assign disjoint files or clearly bounded symbols in isolated short-lived worktrees. Agents may own coherent vertical model slices; no blanket prohibition on that ownership. Children provide exact diffs/commits and evidence, but do not push/deploy or close the overall task independently.
+Agree small contracts for model requests, selected candidate/documents, native publication and existing bridge placement. Start all three phases against those boundaries; do not serialize the entire project by phase number. E/F agree the exact native producer metadata; B/H settle the scientific-check contract; other work continues while a local scientific choice is resolved. Integrate coherent slices early rather than maintaining divergent independent applications.
 
-- **BC2 model lane:** complete native inventory and model-owned schema, native resolution bridge, image/campaign invocation, runtime state and necessary producer metadata capture. Own BC2-specific files and native fixtures.
-- **Native results/selection lane:** BC2 publication parser with model lane's agreed format, existing result/selection extensions, state-aware identity, mmCIF consumers, repeated-round lineage and primary/optional publication isolation. One assigned editor owns overlapping ingester/selection symbols.
-- **Launcher/API lane:** modality/objective and generator choice, model-owned forms, discovery/preview/submission, saved/clone/retry fidelity and one historical compatibility adapter. Preserve all existing generator surfaces.
-- **Refinement lane:** general FA-MPNN handoff, repack versus read-only anchors versus supported PPIFlow, independent validation, native sample identity, round orchestration and existing branch repairs. Coordinate explicit input/output contracts before parallel consumers land.
-- **Analysis/alternative-method lane:** FrustraMPNN reuse and lineage, Caliby qualification/integration, agreed complex-contact analysis, and Foundry-owned LigandMPNN completion after its scientific choices are discussed. These are delivery workstreams, not optional engineering extras.
-- **Bridge/runtime lane:** selected BC2 and refinement dependency closure, portable inputs/native resume state, cache bindings, warm-path corrections and local/remote acceptance instrumentation using existing lifecycle owners.
-
-The parent assigns actual file/symbol ownership before dispatch to avoid simultaneous changes to `jobs.py`, `model_registry.py`, `nextflow.py`, `result_ingester.py`, `JobSubmission.tsx` and shared schemas. Split oversized lanes into disjoint tasks when useful; do not create paperwork-only agents or a new global framework workstream.
-
-### 9.2 Engineering sequence, not reduced releases
-
-1. Capture existing-generator/refinement behavior and defect fixtures; finish native field/output inventory and concrete shared input/result references.
-2. Implement model-owned request boundaries and targeted identity/publication repairs; remove proven unsafe fallbacks as replacements land.
-3. Build BC2 invocation, native publication and bridge closure in parallel with launcher generalization against the agreed interfaces.
-4. Integrate and qualify the agnostic repeated refinement loop, existing alternatives/analyses and LigandMPNN's agreed design. Parallelize independent model work; unresolved scientific decisions block their own implementation, not a fictitious change of scope.
-5. Run focused combined-tree checks, then authorized local/remote model and workflow acceptance, including startup measurements and result reopening.
-6. Reconcile current `test`, follow supported Development deployment after authorization and verify the actual served/runtime revision and results. Remove integrated temporary worktrees and obsolete implementation code.
-
-A partially integrated slice may be reviewed or merged under truthful availability, but the whole upgrade remains incomplete until every required deliverable closes. No autonomous reclassification into a smaller core release or deferred expansion.
+Use focused combined-tree checks, a bounded cross-lane review and authorized actual native/local/remote execution with measured startup, then supported Development deployment/readback when authorized. No second settings database, generic workflow engine, duplicate runner, per-job bootstrap or new validation bureaucracy. A partial slice may be integrated truthfully but the entire upgrade remains unfinished until all three tranches close their required gates. Only Christian can change the SOW.
 
 ## 10. Acceptance and completion checklist
 
@@ -331,7 +315,7 @@ Each item requires named evidence from the owning model/operation and the integr
 - **A06 — Selection and lineage:** source/root ownership, artifact/state identity, formats and role maps are preserved; repeated rounds and branches have correct parents/origins; foreign/mixed-incompatible/corrupt selections fail at the boundary; duplicate basenames do not collapse records.
 - **A07 — Optional loop delivery:** the upgraded loop can receive qualified candidates from every retained generator and BC2; generator-only exit works; repeated selected rounds work; off-stages neither execute, alter structures nor acquire assets. Genuine model limitations are explicit, not generic infrastructure limitations disguised as science.
 - **A08 — Refinement semantics:** repack-only, anchor-only, flow-only and explicitly composed redesign have distinct outputs; correct masks/roles/checkpoints and sample cardinality; coordinate/sequence changes invalidate inherited validation; exact predictor sample/metric pairing.
-- **A09 — Analyses and alternatives:** FrustraMPNN, Caliby, complex-contact-frustration work and LigandMPNN each close their agreed scientific request/execution/result/UI/API scope. Experimental labels do not waive execution or result correctness. Pending scientific decisions/unimplemented requirements keep the upgrade incomplete until resolved or explicitly changed by Christian.
+- **A09 — Analyses and experimental validation:** FrustraMPNN, Caliby and complex-contact-frustration work close their agreed scopes. LigandMPNN closes the Phase 3 interface-context diagnostic and dual-check decision contract, not ordinary redesign. Experimental labels do not waive execution, leakage controls, result correctness or scientific qualification. Pending choices/unimplemented requirements keep the upgrade incomplete until resolved or explicitly changed by Christian.
 - **A10 — Failure isolation:** a failed optional stage leaves verified primary/earlier candidates available; zero yield, failure, missing artifacts and unrequested stages remain distinct; retries do not duplicate scientific identities or destroy parents.
 - **A11 — Existing workflow correction:** C01–C14 have focused regressions and integrated evidence; existing generator/refinement/review/reopen routes remain usable with unsafe behavior corrected. Further in-scope issues discovered during work join the checklist.
 - **A12 — Local/remote parity:** authorized runs exercise the same compiled request and native result contract on both placements, including generation, candidate selection, refinement and return. Preserve model-appropriate stochastic behavior; parity does not require bitwise identical predictions across different hardware.
@@ -342,7 +326,7 @@ Complete relevant model settings and solid results remain mandatory. Avoid redun
 
 ## 11. Remaining decisions, without reopening scope
 
-- **LigandMPNN:** discuss region-limited versus broader binder redesign, structural target context, side-chain-context comparison, packing, matched baselines and downstream assessment. Inclusion in the optional loop is already required.
+- **LigandMPNN sanity check:** settle patch/direction, visible versus held-out context, native compatibility/recovery metric and comparator, aggregation/thresholds and benign qualification inputs. Verify the actual blind predictor's input and recovery contract. Dual valid scientific failure means computational rejection; unrun/error/inconclusive does not. The experimental validation role is fixed and ordinary redesign is not a substitute.
 - **Complex-contact frustration:** choose and qualify the actual complex-aware method/reference ensemble. Binder-local FrustraMPNN is not a substitute.
 - **Concrete native interfaces:** finish generated BC2 coverage and exact producer metadata/publication details before dependent code; this is implementation work, not permission to narrow native scope.
 - **Execution acceptance:** select authorized representative inputs/hardware and set measured startup expectations. No paid instance or scientific campaign is implicitly approved by this document.

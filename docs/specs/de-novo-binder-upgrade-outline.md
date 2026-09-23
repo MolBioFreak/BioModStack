@@ -1,8 +1,8 @@
 # De Novo Binder Design: Upgrade Outline
 
-**Status:** Revised after Astra's holistic review and Christian's scope clarification. This document fixes the product scope; it does not authorize implementation, scientific campaigns, deployment or worker rental.
+**Status:** Updated to Christian's three concurrent work tranches. This document fixes product scope; it does not claim implementation or authorize scientific campaigns, deployment or worker rental.
 
-**Specification:** [De Novo Binder Design Upgrade](de-novo-binder-design-upgrade.md).
+**Specification:** [De Novo Binder Design Upgrade](de-novo-binder-design-upgrade.md). **Dispatch plan:** [Concurrent implementation SOW](de-novo-binder-concurrent-implementation-plan.md), including complete subagent prompts, ownership and pass/fail gates.
 
 **Reviewed source:** BMS `96923d9470d86219451d6caf88f63308a369c007`; BindCraft2 `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f` (package version `1.0.1`). Implementation must start from current `origin/test` and reconcile relevant changes against this evidence baseline.
 
@@ -12,7 +12,9 @@ Upgrade the entire current de novo nanobody workflow into **agnostic De Novo Bin
 
 The user chooses binder format and objective, chooses a compatible generator, runs generation, reviews its native results, and either stops or selects candidates for refinement. Refined candidates can be assessed, compared, selected and refined again. This structure is Christian's direction, not an open architectural question.
 
-Local execution, remote-bridge execution, fast warm startup, solid per-model results and repair of existing workflow defects are all part of the same upgrade. LigandMPNN is an in-scope optional refinement method; its detailed scientific use remains the next discussion item. It is not an uncommitted later expansion.
+Local execution, remote-bridge execution, fast warm startup, solid per-model results and repair of existing workflow defects are all part of the same upgrade. LigandMPNN is an in-scope experimental interface-context sanity check alongside the existing blind structure-recovery assessment. An ordinary sequence-redesign option does not satisfy that role.
+
+The three concurrent tranches are: **Phase 1**, generalize and repair the entire existing workflow/refinement/core/remote bridge; **Phase 2**, integrate full native BC2 as a first-class peer option; **Phase 3**, implement the experimental LigandMPNN validator. Phase numbers are scope groupings, not an instruction to wait for each preceding phase to finish.
 
 There is no reduced “BC2 core” completion claim that excludes the launcher, existing generators, refinement loop, remote execution or agreed analyses. Engineering milestones may be sequenced and integrated separately, but they do not reduce the completion scope. Only Christian can remove or defer an agreed deliverable.
 
@@ -46,7 +48,9 @@ Register the complete selected runtime dependency closure for local and remote e
 
 Candidates from every generator enter the same selection/continuation experience, subject to actual artifact and model compatibility rather than generator-name whitelists.
 
-Deliver general constrained sequence redesign, independently selectable repack and anchor analysis, supported PPIFlow partial flow, independently selected prediction/validation, binder-local FrustraMPNN, Caliby qualification and integration, the agreed complex-contact-frustration work, and LigandMPNN as an optional refinement method. Keep each operation's settings and results model-owned. LigandMPNN's exact scientific options and the cross-chain-analysis method require explicit scientific decisions, not silent removal from scope.
+Deliver general constrained sequence redesign, independently selectable repack and anchor analysis, supported PPIFlow partial flow, independently selected prediction/validation, binder-local FrustraMPNN, Caliby qualification and integration, the agreed complex-contact-frustration work, and the optional experimental LigandMPNN sanity check. Keep each operation's settings and results model-owned. LigandMPNN's recovery/conditioning policy and the cross-chain-analysis method require explicit scientific decisions, not silent removal from scope.
+
+For an exact candidate/context, valid failure of both requested, qualified blind-recovery and LigandMPNN-context checks means computational rejection under the selected policy. Mixed evidence remains mixed; skipped, errored or inconclusive checks are not scientific failures. Preserve raw evidence and the unchanged candidate. LigandMPNN's supplied-geometry compatibility evidence is not independent pose recovery or proof of binding.
 
 Preserve parents and all round/sample/state identities. A changed sequence or structure creates a descendant with fresh validation state. The user can repeat the loop, compare parent and descendants, and stop without being forced through another model.
 
@@ -62,7 +66,7 @@ Use the same compiled scientific invocation and model result adapter for either 
 
 ## Implementation and completion
 
-Subagents implement bounded workstreams with explicit file ownership and one parent integrator. The existing holistic review supplies evidence; no ceremonial second review is required merely to inspect code. Concrete unresolved contracts must be resolved before dependent implementation, and consequential scientific choices remain Christian's decisions.
+Eight bounded implementation lanes cover launcher/requests, refinement/blind checks, selection/results, existing alternatives/analyses, BC2 native execution, BC2 publication, bridge/runtime/performance, and LigandMPNN validation. They work concurrently with sole-writer file ownership and one parent integrator. The linked SOW supplies copy-ready prompts and explicit pass/fail conditions. Reuse the existing review evidence; no ceremonial second review is required merely to inspect code. Resolve concrete shared interfaces early; consequential scientific choices remain Christian's decisions and block only their dependent work.
 
 Acceptance covers the **whole workflow**: all existing generators, full native BC2, modality-aware controls, repeated optional refinement, repaired defects, per-model results, local execution, remote execution and measured warm behavior. An unavailable in-scope operation is unfinished work, not a completed feature because a disabled selector explains it.
 
