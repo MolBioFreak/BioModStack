@@ -48,7 +48,11 @@ def campaign(root, *, zero=False):
     for state in ('stateB', 'stateA'):
         (root / '3_Ranked' / f't_seq0_{state}.cif').write_text(
             f'data_model\n_bindcraft.design t_seq0\n_bindcraft.bms_scored_candidate 2\n'
-            f'_bindcraft.bms_attempt_sha256 {digest}\n_atom_site.id 1\n')
+            f'_bindcraft.bms_attempt_sha256 {digest}\n'
+            f'_bindcraft.bms_target_state {state}\n'
+            '_bindcraft.bms_primary_target_state stateA\n'
+            '_bindcraft.bms_structure_variant native\n'
+            '_bindcraft.binder_chains B\n_bindcraft.target_chains A\n_atom_site.id 1\n')
 
 
 @pytest.mark.asyncio
@@ -81,11 +85,22 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
                                       'unresolved_retained_draw_joins': 0}
             assert receipt['arms'][0]['verified_attempts'] == 1
             assert 'selection' not in receipt
+            assert len(receipt['candidates']) == (0 if zero else 1)
             if not zero:
                 assert arm.retained[0].scored_design == 't_candidate2'
                 assert arm.draws[0].values['i_pTM'] == '0.1'
                 assert {doc.retained_design for doc in arm.documents} == {'t_seq0'}
                 assert receipt['arms'][0]['qualified_documents'] == 2
+                binding = receipt['candidates'][0]
+                assert (binding['retained_design'], binding['scored_design'], binding['trajectory_design'],
+                        binding['attempt_sha256'], binding['native_rank']) == ('t_seq0', 't_candidate2', 't', arm.attempts[0].sha256, 1)
+                assert {s['target_state'] for s in binding['structures']} == {'stateA', 'stateB'}
+                assert [s['target_state'] for s in binding['structures'] if s['primary']] == ['stateA']
+                for structure in binding['structures']:
+                    artifact = await session.get(JobArtifact, structure['artifact_id'])
+                    assert artifact.owner_job_id == job.id
+                    assert artifact.logical_path == structure['logical_path']
+                    assert artifact.sha256 == structure['sha256']
             count = len((await session.scalars(select(JobArtifact))).all())
             assert count == len(receipt['files'])
             assert await ingest_job_results(job.id, str(root), session) == 0
@@ -95,6 +110,13 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
         async with factory() as session:
             job = await session.get(Job, 'bc')
             assert (await read_published_native_results(job, session))[1] == receipt
+            if not zero:
+                mutated = dict(receipt)
+                mutated['candidates'] = [{**receipt['candidates'][0], 'native_rank': 99}]
+                job.provenance = {**job.provenance, 'bindcraft2_native_publication': mutated}
+                with pytest.raises(PublicationError, match='candidate artifact bindings changed'):
+                    await read_published_native_results(job, session)
+                await session.refresh(job)
             if not zero:
                 structure = root / '3_Ranked/t_seq0_stateA.cif'
                 structure.write_text(structure.read_text() + '# tampered\n')
