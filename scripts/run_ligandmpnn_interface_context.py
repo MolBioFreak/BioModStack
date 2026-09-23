@@ -106,7 +106,7 @@ def prepare(source, patch, binder_chain):
     return reference, render(True), render(False)
 
 
-def run_native(path, patch, seed, samples, temperature):
+def run_native(path, patch, seed, samples, temperature, *, expected_chains, expected_fixed_sidechain_chains):
     # The only inference engine is the installed Foundry MPNNInferenceEngine.
     from mpnn.inference_engines.mpnn import MPNNInferenceEngine
     from mpnn.utils.inference import MPNNInferenceInput
@@ -118,6 +118,19 @@ def run_native(path, patch, seed, samples, temperature):
     native_input = MPNNInferenceInput.from_atom_array_and_dict(atom_array=None, input_dict=options)
     # Verify native token mask and supplied sequence identity after parsing, not only PDB text.
     array = native_input.atom_array
+    if set(array.chain_id) != expected_chains:
+        raise ValueError('native parser changed supplied protein chain context')
+    # Fixed residues retain their identity and occupied coordinates after native
+    # parsing. Ground-truth patch side chains must be absent even after CCD padding.
+    fixed_sidechain_chains = {
+        chain for chain, name, occ, coord, designed in
+        zip(array.chain_id, array.atom_name, array.occupancy,
+            array.coord, array.mpnn_designed_residue_mask)
+        if not designed and name not in BACKBONE and float(occ) > 0 and
+        all(math.isfinite(float(v)) for v in coord)
+    }
+    if fixed_sidechain_chains != expected_fixed_sidechain_chains:
+        raise ValueError('native parser lost fixed protein side-chain context')
     for key in patch:
         matched = MPNNInferenceInput._mask_from_ids(array, [key])
         if not matched.any() or set(array.res_name[matched]) != {'UNK'} or not array.mpnn_designed_residue_mask[matched].all():
@@ -169,7 +182,14 @@ def execute(request, out):
     (out / 'masked_without_binder.pdb').write_text(ablated)
     conditions = {}
     for name, pdb in [('supplied_complex', 'masked_complex.pdb'), ('without_binder', 'masked_without_binder.pdb')]:
-        rows = run_native(out / pdb, patch, request['seed'], request['samples'], request['temperature'])
+        staged_atoms = [line for line in (out / pdb).read_text().splitlines()
+                        if line.startswith('ATOM  ')]
+        expected_chains = {line[21] for line in staged_atoms}
+        expected_fixed_sidechain_chains = {line[21] for line in staged_atoms
+                                            if line[12:16].strip() not in BACKBONE}
+        rows = run_native(out / pdb, patch, request['seed'], request['samples'],
+                          request['temperature'], expected_chains=expected_chains,
+                          expected_fixed_sidechain_chains=expected_fixed_sidechain_chains)
         for row in rows:
             row['patch_exact_matches'] = sum(row['sampled_patch'][k] == reference[k] for k in patch)
             row['patch_residue_count'] = len(patch)
