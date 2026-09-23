@@ -12,6 +12,7 @@ import { CandidateAccountingStatus } from './CandidateAccountingStatus';
 import { ExecutionSettingsPanel } from './ExecutionSettingsPanel';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
 import { RemoteDiagnosticsPrompt } from './RemoteDiagnosticsPrompt';
+import { BindCraft2JobResults } from './BindCraft2JobResults';
 
 interface DockingResult {
     name: string;
@@ -36,6 +37,7 @@ interface JobDetailsPanelProps {
 export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
     // Check if this is a docking job
     const isDockingJob = job.model_id === 'diffdock' || job.mode?.includes('dock');
+    const isBindCraft2 = job.model_id === 'bindcraft2';
     const isMolecularDynamicsJob = job.model_id === 'molecular_dynamics' ||
         job.mode === 'molecular_dynamics' || job.mode === 'md';
 
@@ -58,7 +60,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: !isDockingJob && !isMolecularDynamicsJob && job.status === 'completed',
+        enabled: !isDockingJob && !isMolecularDynamicsJob && !isBindCraft2 && job.status === 'completed',
     });
 
     const poses = dockingData?.sdfs || [];
@@ -76,12 +78,12 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                             </span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <Link
+                            {!isBindCraft2 && <Link
                                 to={`/designs/${job.id}`}
                                 className="px-3 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded text-xs font-medium transition-colors"
                             >
                                 {isMolecularDynamicsJob ? 'MD Operations →' : 'Open in Results Viewer →'}
-                            </Link>
+                            </Link>}
                             <button
                                 onClick={onClose}
                                 className="text-slate-400 hover:text-white transition-colors text-sm"
@@ -108,10 +110,11 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                         <span>Output: <code className="text-accent/80">{job.output_dir}</code></span>
                     </div>
 
-                    <CandidateAccountingStatus job={job} />
+                    {!isBindCraft2 && <CandidateAccountingStatus job={job} />}
                     {['esmfold2', 'esmfold2_experimental', 'antibody_denovo', 'antibody_child'].includes(job.model_id) && <ExecutionSettingsPanel jobId={job.id} />}
+                    {isBindCraft2 && ['completed', 'failed'].includes(job.status) && <BindCraft2JobResults jobId={job.id} />}
                     {/* Results Summary */}
-                    {job.status === 'completed' && (
+                    {!isBindCraft2 && job.status === 'completed' && (
                         <div className="flex flex-wrap gap-2">
                             {/* Docking results */}
                             {isDockingJob && (
@@ -180,7 +183,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     )}
 
                     {/* Job not completed */}
-                    {job.status !== 'completed' && (
+                    {!isBindCraft2 && job.status !== 'completed' && (
                         <div className="text-xs text-slate-500">
                             Job is {job.status}. Results will be available when completed.
                         </div>

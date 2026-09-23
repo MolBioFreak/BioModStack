@@ -8506,6 +8506,34 @@ async def delete_job_permanently(
 from services.core_protein_execution_settings import ExecutionSettings
 
 
+@router.get("/{job_id}/bindcraft2-results")
+async def get_bindcraft2_native_results(
+    job_id: str,
+    stage: Literal["trajectory", "draw", "retained", "attempt", "document"] = "trajectory",
+    arm: Optional[str] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """Paginate verified, model-owned BC2 records; never project them as Designs."""
+    from services.bindcraft2_result_readback import read_bindcraft2_result_page
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_result_page(
+            job, session, arm=arm, stage=stage, offset=offset, limit=limit,
+        )
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native results unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
+
+
 @router.get("/{job_id}/execution-settings", response_model=ExecutionSettings)
 async def job_execution_settings(job_id: str, session: AsyncSession = Depends(get_session)):
     from services.core_protein_execution_settings import verify_receipts
