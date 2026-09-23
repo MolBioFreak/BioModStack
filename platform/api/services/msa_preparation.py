@@ -111,6 +111,10 @@ def prepare_model_msa(*, sequences: list[str], params: dict) -> dict:
     arguments['credential_file'] = credential_file()
     return prepare_msa(**arguments)
 
+def replay_model_msa(*, sequences: list[str], params: dict) -> dict:
+    """Use the native provider cache without credentials or submission."""
+    return prepare_model_msa(sequences=sequences, params={**params, 'msa_cache_only': True})
+
 
 def _protenix_paired_headers(data: bytes) -> bytes:
     """Pinned Protenix bd54a05 native row-group header convention.

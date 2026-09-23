@@ -135,21 +135,20 @@ PY
         # still resolve next to it. A bundle without a config, or with several,
         # keeps the directory the application can only refuse, so fail early and
         # name the reason.
-        config_count=0
-        for candidate in "staged_input/input_bundle"/*.yaml "staged_input/input_bundle"/*.yml; do
-            [ -f "\$candidate" ] || continue
-            config_count=\$((config_count + 1))
-            staged_config="\$candidate"
-        done
-        if [ "\$config_count" -eq 0 ]; then
-            echo "Boltz-CP input bundle carries no native .yaml config" >&2
-            exit 1
+        DATA_ARG="\$TASK_ROOT/staged_input/input_bundle"
+        if [ "\$INPUT_FORMAT" = "config_files" ]; then
+            config_count=0
+            for candidate in "staged_input/input_bundle"/*.yaml "staged_input/input_bundle"/*.yml; do
+                [ -f "\$candidate" ] || continue
+                config_count=\$((config_count + 1))
+                staged_config="\$candidate"
+            done
+            if [ "\$config_count" -ne 1 ]; then
+                echo "Boltz-CP input bundle requires exactly one native .yaml config" >&2
+                exit 1
+            fi
+            DATA_ARG="\$TASK_ROOT/\$staged_config"
         fi
-        if [ "\$config_count" -gt 1 ]; then
-            echo "Boltz-CP input bundle carries \$config_count native configs; the application accepts one" >&2
-            exit 1
-        fi
-        DATA_ARG="\$TASK_ROOT/\$staged_config"
     else
         staged_file="\$(basename ${inputConfigPath})"
         cp ${inputConfigPath} "staged_input/\$staged_file"

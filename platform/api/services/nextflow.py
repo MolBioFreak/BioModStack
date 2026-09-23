@@ -6107,6 +6107,9 @@ def compile_nextflow_invocation(
         params['bcp_size_cp'] = derived_size_cp
 
         params.setdefault('bcp_input_format', 'config_files')
+        if params['bcp_input_format'] == 'config_files' and params.get('bcp_input_path'):
+            from services.model_msa_handoff import fold_cp_config_proteins
+            fold_cp_config_proteins(Path(params['bcp_input_path']))
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
         for retired_key in tuple(params):

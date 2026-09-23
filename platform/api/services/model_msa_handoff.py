@@ -215,6 +215,10 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
             raise ValueError('RF3 has no executable prediction workflow in this source revision (structure_prediction rejects pred_method=rf3). Native RF3 accepts per-component msa_path A3M with TaxID= pairing, not separate paired A3M or Boltz CSV; see docs/Native_MSA_Consumer_Contracts.md')
         return effective
     is_boltz = model_id in {'boltz2', 'boltz_cp_experimental'}
+    if (model_id == 'boltz_cp_experimental'
+            and effective.get('bcp_input_format', 'config_files') == 'config_files'
+            and (effective.get('bcp_input_path') or effective.get('input_path'))):
+        fold_cp_config_proteins(Path(effective.get('bcp_input_path') or effective['input_path']))
     if is_boltz and not enabled(params.get('boltz_use_msa')):
         return effective
     if not is_boltz:
@@ -499,6 +503,24 @@ def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
         raise ValueError('Boltz-CP config_files requires a native YAML config')
     return source, source.parent
 
+def fold_cp_config_proteins(source: Path) -> tuple[Path, dict, list[dict]]:
+    """Inspect the one executable native config before any provider operation."""
+    import yaml
+    path, _ = _fold_cp_native_config(source)
+    payload = yaml.safe_load(path.read_text())
+    if not isinstance(payload, dict) or not isinstance(payload.get('sequences'), list):
+        raise ValueError('Invalid native Boltz-CP config')
+    proteins = []
+    for entry in payload['sequences']:
+        if not isinstance(entry, dict):
+            raise ValueError('Invalid native Boltz-CP sequence entry')
+        if 'protein' in entry:
+            protein = entry['protein']
+            if not isinstance(protein, dict) or not isinstance(protein.get('sequence'), str):
+                raise ValueError('Invalid native Boltz-CP protein entry')
+            proteins.append(protein)
+    return path, payload, proteins
+
 
 def fold_cp_msa_intent(params, input_roles):
     """Input preparation, not an MSA request for future prediction outputs."""
@@ -591,10 +613,7 @@ def prepare_boltz_cp_bundle(params: dict, destination: Path) -> dict:
     for path in files:
         if not path.resolve().is_relative_to(base):
             raise ValueError('Boltz-CP config escapes input root')
-        payload = yaml.safe_load(path.read_text())
-        if not isinstance(payload, dict) or not isinstance(payload.get('sequences'), list):
-            raise ValueError('Invalid native Boltz-CP config')
-        proteins = [entry['protein'] for entry in payload['sequences'] if 'protein' in entry]
+        _, payload, proteins = fold_cp_config_proteins(path)
         configs.append((path, payload, proteins))
     records = []
     for index, (path, payload, proteins) in enumerate(configs):

@@ -8,7 +8,7 @@ import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
+import { api, completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
@@ -321,7 +321,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [msaCacheOnly, setMsaCacheOnly] = useState(initialValues?.msa_cache_only ?? false);  // Skip generation, require cache hit
     const [msaAllowEmptyFallback, setMsaAllowEmptyFallback] = useState(initialValues?.msa_allow_empty_fallback ?? false);
     const [msaCacheResult, setMsaCacheResult] = useState<{
-        key: string; infos: Record<string, MsaCacheInfo>; error: string | null;
+        key: string; state: string; error: string | null;
     } | null>(null);
     // NEW: Expansion, EnvDB, and Iterations controls
     const [msaUseExpand, setMsaUseExpand] = useState<boolean | undefined>(initialValues?.msa_use_expand);
@@ -943,54 +943,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         setParsedChains(activeModel?.chains ?? modalParsedStructure.chains ?? []);
     }, [modalParsedStructure, modalSelectedModel]);
 
-    // Fold-CP prepares an MSA for each protein sequence in the submitted complex.
-    // Batch variants replace the selected chain; the placeholder is not a real input.
-    const msaCacheChains = (() => {
-        const components = complexMode ? buildComplexComponents(batchEntriesPreview).components
-            : [{ id: primaryChainId || 'A', type: 'protein', sequence }];
-        const chains = components.filter(component => isProteinComponent(component)
-            && !(batchEntriesPreview.length && component.id === resolvedSequenceBatchComponentId))
-            .map(component => ({ id: String(component.id), sequence: String(component.sequence || '').replace(/\s+/g, '').toUpperCase() }));
-        if (batchEntriesPreview.length) {
-            chains.push(...batchEntriesPreview.map((entry, index) => ({
-                id: `${resolvedSequenceBatchComponentId} variant ${index + 1}`,
-                sequence: entry.sequence.replace(/\s+/g, '').toUpperCase(),
-            })));
-        }
-        return chains;
-    })();
-    const msaCacheKey = JSON.stringify(msaNeeded ? msaCacheChains : []);
-    const msaCacheLoading = msaNeeded && msaCacheChains.length > 0 && msaCacheResult?.key !== msaCacheKey;
-    const msaCacheError = msaCacheResult?.key === msaCacheKey ? msaCacheResult.error : null;
-    const msaCacheMissing = msaCacheResult?.key === msaCacheKey && !msaCacheError
-        ? msaCacheChains.filter(chain => !msaCacheResult.infos[chain.sequence]?.cache_entries)
-        : [];
-    const msaCacheReady = msaNeeded && msaCacheChains.length > 0 && !msaCacheLoading && !msaCacheError && !msaCacheMissing.length;
-
-    useEffect(() => {
-        if (!msaNeeded || !msaCacheChains.length) return;
-        let active = true;
-        const timer = setTimeout(() => {
-            const sequences = [...new Set(msaCacheChains.map(chain => chain.sequence).filter(Boolean))];
-            Promise.all(sequences.map(async (entry) => [entry, (await fetchMsaCacheInfo(entry)).data] as const))
-                .then(entries => {
-                    if (active) setMsaCacheResult({ key: msaCacheKey, infos: Object.fromEntries(entries), error: null });
-                })
-                .catch((err: UntypedApiValue) => {
-                    if (active) setMsaCacheResult({ key: msaCacheKey, infos: {}, error: err?.response?.data?.detail || err?.message || 'Failed to read MSA cache' });
-                });
-        }, 300);
-        return () => { active = false; clearTimeout(timer); };
-    }, [msaCacheKey, msaNeeded]);
-
-    const msaCacheSummary = msaCacheLoading ? 'Cache: checking...'
-        : msaCacheError ? 'Cache: unavailable'
-        : msaCacheReady ? `Cache: ready for ${msaCacheChains.length} protein chain(s)`
-        : `Cache: missing ${msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}`;
-
-    const buildSubmission = (resolvedSourcePath: string | null, requireSource = true) => {
-        if (placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
-        if (boltzCpPlacementError) throw new Error(boltzCpPlacementError);
+    const buildSubmission = (resolvedSourcePath: string | null, requireSource = true, launchOnly = false) => {
+        if (launchOnly && placementOwner.current !== executionTargetId) throw new Error('Execution target changed; GPU placement is being refreshed.');
+        if (launchOnly && boltzCpPlacementError) throw new Error(boltzCpPlacementError);
         if (sequenceHandoffLoading || sequenceHandoffError) {
             throw new Error(sequenceHandoffError || 'The selected saved sequence is still loading.');
         }
@@ -1074,13 +1029,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             throw new Error('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
         }
 
-        if (msaNeeded && msaCacheOnly && !msaCacheReady) {
-            throw new Error(msaCacheError
-                ? `Use Cache Only requires verified cache entries for every protein chain; cache lookup failed: ${msaCacheError}`
-                : msaCacheLoading
-                    ? 'Use Cache Only requires verified cache entries for every protein chain; cache lookup is still in progress.'
-                    : `Use Cache Only requires cached MSA for every protein chain; missing: ${msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}.`);
-        }
+
 
         // MSA Quality parameters (when MSA is enabled for unknown predictor)
         if (msaNeeded) {
@@ -1194,14 +1143,41 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         try { return buildSubmission(targetSourcePath || targetSource?.path || null).jobRequest; }
         catch { return null; }
     })();
+    const msaCacheKey = JSON.stringify(msaNeeded && workflowRequest ? {
+        model_id: workflowRequest.model_id, params: workflowRequest.params,
+    } : null);
+    const msaCacheLoading = msaNeeded && workflowRequest && msaCacheResult?.key !== msaCacheKey;
+    const msaCacheError = msaCacheResult?.key === msaCacheKey ? msaCacheResult.error : null;
+    const msaCacheReady = msaCacheResult?.key === msaCacheKey && msaCacheResult.state === 'ready';
+    const msaCacheSummary = msaCacheLoading ? 'Cache: checking native request...'
+        : msaCacheError ? 'Cache: unavailable'
+        : msaCacheReady ? 'Cache: native request ready'
+        : `Cache: ${msaCacheResult?.key === msaCacheKey ? msaCacheResult.state : 'unresolved'}`;
+    useEffect(() => {
+        if (!msaNeeded || !workflowRequest) return;
+        let active = true;
+        const timer = setTimeout(() => {
+            api.post('/api/msa/provider-cache/inspect', {
+                model_id: workflowRequest.model_id, params: workflowRequest.params,
+            }).then(({ data }) => {
+                if (active) setMsaCacheResult({ key: msaCacheKey, state: data.state, error: null });
+            }).catch((err: UntypedApiValue) => {
+                if (active) setMsaCacheResult({ key: msaCacheKey, state: 'unresolved', error: err?.response?.data?.detail || err?.message || 'Cache inspection failed' });
+            });
+        }, 300);
+        return () => { active = false; clearTimeout(timer); };
+    }, [msaCacheKey, msaNeeded]);
     const handleSubmit = async () => {
         let submission;
         try {
-            submission = buildSubmission(null, false);
+            if (msaNeeded && msaCacheOnly && !msaCacheReady) {
+                throw new Error(msaCacheError || 'Use Cache Only requires a verified native request cache replay.');
+            }
+            submission = buildSubmission(null, false, true);
             if (submission.targetConditioningRequested && complexMode) {
                 const source = await resolveTargetStructurePath();
                 if (!source) { alert('Failed to stage the fixed target structure for anchored prediction.'); return; }
-                submission = buildSubmission(source);
+                submission = buildSubmission(source, true, true);
             }
         } catch (error: UntypedApiValue) {
             alert(error?.message || 'Failed to stage the fixed target structure.');
@@ -2580,13 +2556,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                 </fieldset>
                                 <div className="p-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
                                     {msaCacheLoading ? (
-                                        <p className="text-xs text-[var(--text-muted)]">Checking local MSA cache...</p>
+                                        <p className="text-xs text-[var(--text-muted)]">Checking native provider cache...</p>
                                     ) : msaCacheError ? (
                                         <p className="text-xs text-[var(--error)]">{msaCacheError}</p>
                                     ) : msaCacheReady ? (
-                                        <p className="text-sm text-[var(--text-primary)] font-medium">Cached MSA verified for {msaCacheChains.length} protein chain(s).</p>
+                                        <p className="text-sm text-[var(--text-primary)] font-medium">Native request cache replay verified.</p>
                                     ) : (
-                                        <p className="text-xs text-[var(--text-muted)]">Missing cached MSA for: {msaCacheMissing.map(chain => chain.id).join(', ') || 'protein sequence'}.</p>
+                                        <p className="text-xs text-[var(--text-muted)]">{msaCacheSummary}. Launch preparation remains authoritative.</p>
                                     )}
                                 </div>
                                 <label className="flex items-center gap-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg cursor-pointer hover:bg-emerald-500/20 transition-colors">
@@ -2600,7 +2576,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                                 setMsaForceRefresh(false);
                                             }
                                         }}
-                                        disabled={!msaCacheReady && !msaCacheOnly}
+
                                         className="w-4 h-4 rounded bg-[var(--bg-primary)] border-emerald-500 text-emerald-400 focus:ring-emerald-500 disabled:opacity-50"
                                     />
                                     <div>

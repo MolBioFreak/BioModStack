@@ -165,31 +165,90 @@ def provider_readiness() -> dict:
 def preflight_msa_provider(model_id: str, params: dict) -> None:
     """Fail missing provider setup before queue insertion, never submit science."""
     from biomodstack_msa_policy import requires_msa_search
-    if not requires_msa_search(model_id, params):
+    if not requires_msa_search(model_id, params) and not _cache_only_search(model_id, params):
         return
     from biomodstack_msa_api import validate_settings
     provider = selected_provider(params)
     validate_settings(provider, provider_settings(params))
-    # A literal or typed-complex verified replay needs no submission setup.
-    # Unknown/generated rosters remain the native compiler's responsibility.
-    import json
-    components = params.get('complex_components')
-    if isinstance(components, str):
-        components = json.loads(components)
-    sequences = [c['sequence'] for c in (components or [])
-                 if c.get('type', 'protein') in {'protein', 'peptide'}]
-    sequence = params.get('sequence_input') or params.get('sequence')
-    if not sequences and sequence:
-        sequences = [sequence]
-    import re
-    if sequences and all(isinstance(s, str) and re.fullmatch(r'[A-Z]+', s) for s in sequences):
-        from services.msa_preparation import prepare_model_msa
-        from biomodstack_msa_api import MSACacheMiss
-        try:
-            prepare_model_msa(sequences=sequences, params={**params, 'msa_cache_only': True})
-            return
-        except MSACacheMiss:
-            pass
+    observation = inspect_msa_cache(model_id, params)
+    if observation['state'] == 'ready':
+        return
+    if params.get('msa_cache_only') in (True, 'true', '1', 1):
+        if observation['state'] == 'miss':
+            raise ValueError('MSA provider cache miss for native request roster')
+        # Uncompiled input cannot be certified here; launch preparation remains
+        # authoritative, but credentials cannot make a cache-only request ready.
+        return
     readiness = provider_readiness()["providers"][provider]
     if not readiness["configured"]:
         raise ValueError("; ".join(readiness["blockers"]))
+
+
+def inspect_msa_cache(model_id: str, params: dict) -> dict:
+    """Read-only native task replay; no credential or provider submission."""
+    from biomodstack_msa_policy import requires_msa_search
+    if not requires_msa_search(model_id, params) and not _cache_only_search(model_id, params):
+        return {'state': 'disabled'}
+    from biomodstack_msa_api import MSACacheMiss, validate_settings
+    from services.model_msa_handoff import (
+        _boltz_roster, _boltz_task_proteins, fold_cp_config_proteins,
+    )
+    from services.msa_preparation import replay_model_msa
+    import json
+    import re
+    provider = selected_provider(params)
+    validate_settings(provider, provider_settings(params))
+    # The native compiler expands authoring-time variants into distinct tasks.
+    # An uncompiled batch cannot be certified from its placeholder chain.
+    if params.get('sequence_batch_entries') and not params.get('sequence_batch_json_path'):
+        return {'state': 'unresolved'}
+    groups = []
+    native_roster = False
+    if model_id == 'boltz_cp_experimental' and params.get('bcp_input_format', 'config_files') == 'config_files' and (params.get('bcp_input_path') or params.get('input_path')):
+        native_roster = True
+        _, _, proteins = fold_cp_config_proteins(Path(params.get('bcp_input_path') or params['input_path']))
+        groups = [[p['sequence'] for p in proteins if p.get('msa') not in ('empty',) and not p.get('msa')]]
+    elif model_id == 'boltz2':
+        native_roster = True
+        groups = [[p['sequence'] for p in _boltz_task_proteins(task, params)
+                   if p.get('msa') != 'empty' and not p.get('msa')]
+                  for task in _boltz_roster(params)]
+    elif model_id == 'protenix':
+        from prepare_protenix_msa import load_native_protenix_input, iter_protein_chains
+        if (params.get('complex_batch_dir') or params.get('complex_json_path')
+                or params.get('sequence_batch_json_path') or params.get('sequence_input')
+                or params.get('sequence')) and not params.get('complex_components'):
+            payload = load_native_protenix_input({**params, 'sequence_input': params.get('sequence_input') or params.get('sequence')})
+            native_roster = True
+            tasks = {}
+            for task, _, chain in iter_protein_chains(payload):
+                if not (chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')):
+                    tasks.setdefault(task, []).append(chain['sequence'])
+            groups = list(tasks.values())
+    else:
+        components = params.get('esmf_complex_components') or params.get('complex_components')
+        if isinstance(components, str):
+            components = json.loads(components)
+        if components:
+            groups = [[c['sequence'] for c in components if c.get('type', 'protein') in {'protein', 'peptide'} and not c.get('msa_path')]]
+        elif params.get('sequence_input') or params.get('sequence') or params.get('esmf_sequence'):
+            groups = [[params.get('esmf_sequence') or params.get('sequence_input') or params['sequence']]]
+    groups = [group for group in groups if group]
+    if not groups:
+        return {'state': 'ready' if (params.get('msa_path') or params.get('esmf_msa_path')
+                or native_roster) else 'unresolved'}
+    if any(not isinstance(s, str) or not re.fullmatch('[A-Z]+', s) for group in groups for s in group):
+        return {'state': 'unresolved'}
+    for group in groups:
+        try:
+            replay_model_msa(sequences=group, params=params)
+        except MSACacheMiss:
+            return {'state': 'miss'}
+    return {'state': 'ready'}
+
+
+def _cache_only_search(model_id: str, params: dict) -> bool:
+    """Cache-only disables search egress, not native cache inspection."""
+    from biomodstack_msa_policy import requires_msa_search
+    return (params.get('msa_cache_only') in (True, 'true', '1', 1)
+            and requires_msa_search(model_id, {**params, 'msa_cache_only': False}))

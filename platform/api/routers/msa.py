@@ -45,6 +45,19 @@ async def get_msa_provider_readiness():
     from services.msa_provider_setup import provider_readiness
     return provider_readiness()
 
+class MSACacheInspection(BaseModel):
+    model_id: str
+    params: dict
+
+@router.post('/provider-cache/inspect')
+async def inspect_provider_cache(request: MSACacheInspection):
+    """Request-scoped native replay; no provider submission or cache writes."""
+    from services.msa_provider_setup import inspect_msa_cache
+    try:
+        return inspect_msa_cache(request.model_id, request.params)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
 _msa_server_status_cache: dict[str, dict] = {}
 _msa_server_status_cache_time: dict[str, float] = {}
