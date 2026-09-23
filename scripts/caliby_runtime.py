@@ -413,6 +413,10 @@ def normalize_sampling_results(
             raise ValueError(f"Caliby {field} cardinality does not match structures")
     if any(not path for path in output_paths):
         raise ValueError("Caliby returned an empty output structure path")
+    if any(not Path(str(path)).is_file() for path in output_paths):
+        raise ValueError("Caliby returned a missing output structure")
+    if len(set(map(str, output_paths))) != len(output_paths):
+        raise ValueError("Caliby reused an output structure for multiple native samples")
 
     manifest: list[dict[str, Any]] = []
     sc_metrics = self_consistency or {}

@@ -98,26 +98,39 @@ process RunCalibyBinder {
     path("caliby_binder.log"), emit: log
 
     script:
+    // Parent must resolve exact roles from the selected structure/document. Never
+    // infer binder A or target B from chain order or a generating model name.
+    def binderChains = params.get('binder_chains')
+    def targetChains = params.get('target_chains')
+    if (!binderChains || !targetChains) {
+        throw new IllegalArgumentException('Caliby binder requires explicit binder_chains and target_chains')
+    }
     """
+    set -euo pipefail
     mkdir -p results
     python3 ${params.code_root}/scripts/prep_caliby_binder_constraints.py \\
         --input-dir ./ \\
         --out-csv caliby_constraints.csv \\
-        --binder-chains "${params.binder_chains ?: 'A'}" \\
-        --target-chains "${params.target_chains ?: 'B'}"
+        --binder-chains "${binderChains}" \\
+        --target-chains "${targetChains}" \\
+        --design-positions "${params.get('caliby_design_positions') ?: ''}"
 
     python3 ${params.code_root}/scripts/run_caliby_sequence_design.py \\
         --input-dir ./ \\
         --output-dir results \\
         --model-name "${params.caliby_model_name ?: 'soluble_caliby_v1'}" \\
-        --num-seqs-per-pdb ${params.num_sequences ?: 4} \\
+        --num-seqs-per-pdb ${params.get('caliby_num_seqs_per_pdb') ?: 4} \\
         --batch-size ${params.caliby_batch_size ?: 4} \\
         --num-workers ${params.caliby_num_workers ?: 8} \\
         --clean-num-workers ${params.caliby_clean_num_workers ?: 2} \\
-        --temperature ${params.caliby_temperature ?: 0.1} \\
-        --omit-aas "${params.caliby_omit_aas ?: 'C'}" \\
+        --temperature ${params.caliby_temperature != null ? params.caliby_temperature : 0.1} \\
+        --omit-aas "${params.caliby_omit_aas != null ? params.caliby_omit_aas : 'C'}" \\
         --pos-constraint-csv caliby_constraints.csv \\
-        --run-self-consistency-eval false \\
+        --run-self-consistency-eval "${params.caliby_run_self_consistency_eval ?: false}" \\
+        --self-consistency-num-models ${params.caliby_self_consistency_num_models ?: 5} \\
+        --self-consistency-num-recycles ${params.caliby_self_consistency_num_recycles ?: 3} \\
+        --self-consistency-use-multimer "${params.caliby_self_consistency_use_multimer ?: false}" \\
+        --sampling-overrides-json '${params.caliby_sampling_overrides_json ?: ''}' \\
         2>&1 | tee caliby_binder.log
 
     cp results/caliby_metadata.jsonl caliby_metadata.jsonl

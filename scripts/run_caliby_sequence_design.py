@@ -45,8 +45,12 @@ def main() -> None:
     raw_pdb_dir.mkdir(parents=True, exist_ok=True)
     raw_meta_dir.mkdir(parents=True, exist_ok=True)
 
-    preflight_caliby_runtime(task="sequence_design", model_name=args.model_name)
     pdb_paths = collect_structure_paths(input_dir)
+    if not pdb_paths:
+        raise ValueError("Caliby sequence design requires at least one selected structure")
+    if args.num_seqs_per_pdb < 1 or args.batch_size < 1 or args.num_workers < 1 or args.clean_num_workers < 1:
+        raise ValueError("Caliby sample counts and worker counts must be positive")
+    preflight_caliby_runtime(task="sequence_design", model_name=args.model_name)
     cleaned = maybe_clean_inputs(
         pdb_paths=pdb_paths,
         cleaned_dir=output_dir / "cleaned_pdbs",
