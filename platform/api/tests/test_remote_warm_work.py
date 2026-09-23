@@ -1,5 +1,7 @@
 """Offline warm-path cost and integrity regressions."""
 import hashlib
+import fcntl
+import os
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -66,6 +68,21 @@ def test_source_archive_reuse_private_trees_and_rebuild_corruption(tmp_path, mon
     assert bundle._staged_source_archive(repo, data, revision, third) == digest
     assert len(archives) == 2
     assert third.joinpath('workflow.nf').read_text() == second.joinpath('workflow.nf').read_text()
+
+
+def test_source_archive_retention_skips_in_use_revision(tmp_path):
+    revisions = [f'{number:040x}' for number in range(4)]
+    archives = [tmp_path / (revision + '.tar.gz') for revision in revisions]
+    for number, archive in enumerate(archives):
+        archive.write_bytes(b'archive')
+        os.utime(archive, ns=(number + 1, number + 1))
+    with (tmp_path / (revisions[1] + '.lock')).open('a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        bundle._prune_source_archives(tmp_path)
+        assert not archives[0].exists()
+        assert all(path.exists() for path in archives[1:])
+    bundle._prune_source_archives(tmp_path)
+    assert [path.exists() for path in archives] == [False, False, True, True]
 
 
 def test_materialize_hashes_copy_once_and_refuses_corrupt_object(tmp_path, monkeypatch):

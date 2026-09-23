@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tarfile
 import uuid
@@ -901,6 +902,30 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
 _SOURCE_ARCHIVE_DIGESTS: dict[str, str] = {}
 
 
+def _prune_source_archives(cache_root: Path) -> None:
+    # Keep the current and one preceding revision. A different process may be
+    # copying an older archive; its per-revision lock makes that one ineligible.
+    archives = []
+    for path in cache_root.glob('*.tar.gz'):
+        if not _SOURCE_IDENTITY_RE.fullmatch(path.name.removesuffix('.tar.gz')):
+            continue
+        try:
+            identity = path.lstat()
+        except FileNotFoundError:  # Another controller just pruned it.
+            continue
+        if stat.S_ISREG(identity.st_mode):
+            archives.append((identity.st_mtime_ns, path))
+    for _, path in sorted(archives, reverse=True)[2:]:
+        lock_path = cache_root / (path.name.removesuffix('.tar.gz') + '.lock')
+        with lock_path.open('a+b') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            path.unlink(missing_ok=True)
+            _SOURCE_ARCHIVE_DIGESTS.pop(str(path), None)
+
+
 def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
                            source_root: Path) -> str:
     """Reuse a verified revision-keyed archive; extract into a private tree."""
@@ -936,6 +961,8 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         if _sha256_file(staged) != expected:
             raise RemoteBundleError('Cached source archive changed during staging')
         _safe_extract(staged, source_root)
+        os.utime(archive, None, follow_symlinks=False)
+        _prune_source_archives(cache_root)
     return expected
 
 
