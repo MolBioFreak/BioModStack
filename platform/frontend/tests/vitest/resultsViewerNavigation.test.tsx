@@ -8,6 +8,7 @@ import StructureViewerPane from '../../src/components/StructureViewerPane';
 // GPU canvas is outside this routing test; actual StructureViewerPane remains mounted.
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-test-gpu-canvas /> }));
 import { ResultsViewer } from '../../src/components/ResultsViewer';
+import BlindPoseSelectedControls from '../../src/components/BlindPoseSelectedControls';
 import { ProjectReturnBanner } from '../../src/components/project-manager/ProjectReturnBanner';
 import { api } from '../../src/lib/api';
 
@@ -22,6 +23,90 @@ const calls: Array<{ url: string; params: Record<string, any> }> = [];
 let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
+
+test('ResultsViewer mounts both optional selected actions without a selection', async () => {
+    await setup('/designs/parent');
+    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
+    expect(actions.props.sourceJobId).toBe('parent');
+    expect(actions.props.selectedDesignIds).toEqual([]);
+    expect(text(actions)).toContain('Blind pose (experimental)');
+    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
+    const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'))!;
+    await act(async () => tableTab.props.onClick()); await flush();
+    const row = renderer!.root.findAllByType('tr').find(candidate => text(candidate).includes('a-0'))!;
+    await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
+    expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['a-0']);
+});
+
+test('mounted selected actions submit exact independent subsets and read native result', async () => {
+    const requests: Array<{ url: string; body: any }> = [];
+    api.defaults.adapter = async config => {
+        const url = String(config.url);
+        requests.push({ url, body: typeof config.data === 'string' ? JSON.parse(config.data) : config.data });
+        const data = url.endsWith('/result') ? { records: [{ design_id: 'd-2', classification: 'unclassified', raw_metrics: { native: 0.4 } }] }
+            : url.includes('ligandmpnn') ? { job: { id: 'ligand-child' } } : { id: 'blind-child' };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    const opened: string[] = [];
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="bindcraft2"
+        sourceParams={{ bindcraft2_settings: { targets: [{ name: 'target-1' }, { name: 'target-2' }] } }}
+        selectedDesignIds={['d-2', 'd-1']} onOpenJob={id => opened.push(id)} />); });
+    const control = () => renderer!.root;
+    const change = async (label: string, value: string) => {
+        await act(async () => control().findByProps({ 'aria-label': label }).props.onChange({ target: { value } }));
+    };
+    await change('Declared target', 'target-2');
+    await change('Blind pose target chains', 'T');
+    await change('Binder chains for d-2', 'B,C');
+    await change('Binder chains for d-1', 'D');
+    await change('Blind pose model variant', 'full');
+    await change('Blind pose model ID or path', 'checkpoint');
+    await change('Inference loops', '4');
+    await change('Diffusion steps', '83');
+    await change('Diffusion samples', '2');
+    await change('Blind pose seed', '17');
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected blind pose')!.props.onClick());
+    expect(requests[0]).toEqual({ url: '/api/blind-pose/selected', body: {
+        source_job_id: 'source', target_name: 'target-2', design_ids: ['d-2', 'd-1'],
+        binder_chains: { 'd-2': ['B', 'C'], 'd-1': ['D'] }, target_chains: ['T'],
+        settings: { model_variant: 'full', model_id_or_path: 'checkpoint', num_loops: 4, num_sampling_steps: 83, num_diffusion_samples: 2, seed: 17 },
+    } });
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Open result Job')!.props.onClick());
+    expect(opened).toEqual(['blind-child']);
+    await change('Fixed binder chain', 'B');
+    await change('Target chain', 'T');
+    await change('Target patch residue IDs', 'T12,T13A');
+    await change('Seed', '21');
+    await change('Samples', '3');
+    await change('Temperature', '0.5');
+    await act(async () => control().findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
+    expect(requests[1]).toEqual({ url: '/api/ligandmpnn/interface-context/selected', body: {
+        action: 'ligandmpnn_interface_context', source_job_id: 'source', round_id: 'source',
+        candidate_ids: ['d-2', 'd-1'], settings: { binder_chain: 'B', target_chain: 'T', target_patch: ['T12', 'T13A'], seed: 21, samples: 3, temperature: 0.5 },
+    } });
+    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="blind-child" sourceModelId="esmfold2"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'blind-child', model_id: 'esmfold2', mode: 'blind_pose', status: 'completed' }} onOpenJob={() => undefined} />));
+    await flush();
+    expect(requests[2].url).toBe('/api/blind-pose/blind-child/result');
+    expect(text(control())).toContain('unclassified');
+    expect(text(control())).toContain('native');
+    await act(async () => renderer!.update(<BlindPoseSelectedControls sourceJobId="ligand-child" sourceModelId="ligandmpnn"
+        sourceParams={{}} selectedDesignIds={[]} resultJob={{ id: 'ligand-child', model_id: 'ligandmpnn', mode: 'interface_context', status: 'completed' }} onOpenJob={() => undefined} />));
+    await flush();
+    expect(requests[3].url).toBe('/api/ligandmpnn/interface-context/ligand-child/result');
+    expect(text(control())).toContain('unclassified');
+});
+
+test('mounted selected action shows server rejection without suppressing experimental operation', async () => {
+    api.defaults.adapter = async config => { throw new Error(`Selected route unavailable: ${config.url}`); };
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { renderer = create(<BlindPoseSelectedControls sourceJobId="source" sourceModelId="other" sourceParams={{}}
+        selectedDesignIds={['d-1']} onOpenJob={() => undefined} />); });
+    await act(async () => renderer!.root.findAllByType('button').find(b => text(b) === 'Run selected interface context')!.props.onClick());
+    expect(text(renderer!.root)).toContain('Selected route unavailable: /api/ligandmpnn/interface-context/selected');
+    expect(text(renderer!.root)).toContain('Blind pose (experimental)');
+});
 
 test('bound native document reads direct PAE without saved-analysis GET or queued-action exposure in ResultsViewer', async()=>{
     const native:any={...design('native','protenix'),core_protein_scientific_contract:1,
