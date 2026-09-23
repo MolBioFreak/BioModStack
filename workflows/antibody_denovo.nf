@@ -1981,26 +1981,18 @@ PY
     """
 }
 
-workflow ANTIBODY_DENOVO {
-take:
-target_pdb_ch // Channel: [meta, target_pdb]
-epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
-framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
+// Keep RFantibody generation and coarse screening in a separate DSL2 workflow.
+// This is an orchestration boundary; candidate channels and gates retain their original order.
+workflow ANTIBODY_BACKBONE_PREPARATION {
+    take:
+    target_pdb_ch
+    epitope_residues
+    framework_pdb_ch
+    selectedInputDir
+    shouldScreenRFantibody
+    orchestrator_batch_name
 
-main:
-def workflowContext = initializeAntibodyDenovoParams(params)
-def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
-def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
-def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
-def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
-def selectedInputDir = workflowContext.selectedInputDir
-def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
-
-if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
-    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
-}
-
-
+    main:
 log.info("Step 1: Generating CDR backbones with RFantibody...")
 
 def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
@@ -2029,14 +2021,10 @@ def designs_per_gpu = (total_designs / num_gpus).intValue()
 def remainder = total_designs % num_gpus
 def designs_per_job = params.designs_per_job ?: 5
 def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
-def orchestrator_batch_name = params.batch_name
-    ?: (params.job_id
-        ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
-        : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
-
+def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
 def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
 def skip_rfantibody_input_dir = selectedInputDir
-
 if (skip_rfantibody && skip_rfantibody_input_dir) {
     log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
 
@@ -2139,24 +2127,6 @@ if (use_orchestrator) {
     }
 } // End of else block (standard mode)
 } // End of skip_rfantibody else block
-
-def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
-def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
-def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
-def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
-def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
-    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
-    params.interactive_gate_continue != true
-def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
-    shouldPauseAfterRFantibody ||
-    rfantibodyScreenEnabled ||
-    params.rfantibody_min_epitope_contacts != null ||
-    params.rfantibody_max_epitope_distance != null ||
-    params.rfantibody_min_target_contacts != null ||
-    params.rfantibody_max_target_distance != null ||
-    params.rfantibody_max_epitope_centroid_distance != null
-)
-
 staged_rfantibody_pdbs = backbone_designs
     .map { meta, files -> files }
     .flatten()
@@ -2192,6 +2162,70 @@ reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
     def meta = [id: params.name ?: "antibody"]
     [meta, pdbs]
 }
+    emit:
+    backbones = backbone_designs
+    reviewed = reviewed_backbone_designs
+    candidate_count = rfantibody_candidate_count
+    ready_dir = rfantibody_ready_dir
+}
+
+workflow ANTIBODY_DENOVO {
+take:
+target_pdb_ch // Channel: [meta, target_pdb]
+epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
+framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
+
+main:
+def workflowContext = initializeAntibodyDenovoParams(params)
+def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
+def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
+def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
+def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
+def selectedInputDir = workflowContext.selectedInputDir
+def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
+
+if (params.run_affinity_maturation == true && params.run_frustrampnn == true) {
+    error('antibody_denovo:frustrampnn_stale_post_iggm_structure: IgGM changes sequence, but no producer-bound post-IgGM structure revalidation is wired')
+}
+
+
+def orchestrator_batch_name = params.batch_name
+    ?: (params.job_id
+        ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
+        : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
+def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
+def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
+def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
+def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
+    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
+    params.interactive_gate_continue != true
+def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
+    shouldPauseAfterRFantibody ||
+    rfantibodyScreenEnabled ||
+    params.rfantibody_min_epitope_contacts != null ||
+    params.rfantibody_max_epitope_distance != null ||
+    params.rfantibody_min_target_contacts != null ||
+    params.rfantibody_max_target_distance != null ||
+    params.rfantibody_max_epitope_centroid_distance != null
+)
+
+ANTIBODY_BACKBONE_PREPARATION(
+    target_pdb_ch,
+    epitope_residues,
+    framework_pdb_ch,
+    selectedInputDir ?: '',
+    shouldScreenRFantibody,
+    orchestrator_batch_name
+)
+backbone_designs = ANTIBODY_BACKBONE_PREPARATION.out.backbones
+reviewed_backbone_designs = ANTIBODY_BACKBONE_PREPARATION.out.reviewed
+rfantibody_candidate_count = ANTIBODY_BACKBONE_PREPARATION.out.candidate_count
+rfantibody_ready_dir = ANTIBODY_BACKBONE_PREPARATION.out.ready_dir
+
+rfantibodyCandidateDir = shouldScreenRFantibody
+    ? (rfantibodyFilteredDir ?: rfantibodyRawDir)
+    : rfantibodyRawDir
 
 if (shouldPauseAfterRFantibody) {
     log.info("Interactive SWA gate: pausing after RFantibody backbone generation at ${rfantibodyCandidateDir}")
