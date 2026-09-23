@@ -504,6 +504,10 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
+    # Selected post-round diagnostic only; not a sequence-design mode. The
+    # enabled LigandMPNN YAML must not advertise it before the parent submits
+    # its sealed, nonempty selection manifest through this exact route.
+    ('ligandmpnn', 'interface_context'): 'workflows/ligandmpnn_interface_context.nf',
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
