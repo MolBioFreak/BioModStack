@@ -292,6 +292,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [bc2Inventory, setBc2Inventory] = useState<BC2Inventory | null>(null);
     const [bc2LaunchAvailable, setBc2LaunchAvailable] = useState<boolean | undefined>(undefined);
     const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
+    const [bc2SubmitError, setBc2SubmitError] = useState<string | null>(null);
     useEffect(() => {
         if (deNovoGenerator !== 'bindcraft2') return;
         const controller = new AbortController();
@@ -1026,6 +1027,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             navigate(await completeCurrentLaunchContext(response.data) ?? '/');
         }
     });
+    const bc2CampaignRequest = {
+        name: jobName, model_id: 'bindcraft2', mode: 'campaign',
+        params: { bindcraft2_settings: bc2Settings },
+    };
 
     const boltzgenPreviewMutation = useMutation({
         mutationFn: async (payload: { params: Record<string, UntypedApiValue>; validate?: boolean }) => previewBoltzGenDesignSpec(payload),
@@ -2448,14 +2453,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         <section aria-label="BindCraft2 campaign draft" className="rounded-xl border p-6 space-y-4" style={themedPanelStyle}>
             <button type="button" onClick={onBack}>Back to workflows</button>
             <h2 className="text-xl font-semibold">De Novo Binder Design · BindCraft2</h2>
-            <p>Native campaign draft. No BindCraft2 job is submitted by this launcher. Candidate review and compatible downstream operations remain separate from the native campaign.</p>
+            <p>{bc2LaunchAvailable === true ? 'Native BindCraft2 campaign. Candidate review and compatible downstream operations remain separate from generation.' : 'Native campaign draft. No BindCraft2 job is submitted by this launcher. Candidate review and compatible downstream operations remain separate from the native campaign.'}</p>
             <button type="button" onClick={() => setDeNovoGenerator('rfantibody')}>Choose RFantibody</button>{' · '}
             <button type="button" onClick={() => setDeNovoGenerator('boltzgen')}>Choose BoltzGen VHH</button>{' · '}
             <button type="button" onClick={() => setDeNovoGenerator('ppiflow')}>Choose seeded PPIFlow</button>
             <label className="block">Draft name <input aria-label="Draft name" value={jobName} onChange={event => setJobName(event.target.value)} /></label>
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} />
                 : <p role="status">{bc2DiscoveryError ?? 'Loading model-owned settings inventory…'}</p>}
-            <details><summary>Saved native request preview (not executable)</summary>
+            {bc2LaunchAvailable === true && <>
+                <ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />
+                <button type="button" disabled={submitMutation.isPending} onClick={async () => {
+                    setBc2SubmitError(null);
+                    try { await submitMutation.mutateAsync(bc2CampaignRequest); }
+                    catch (error) {
+                        const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
+                        const detail = failed.response?.data?.detail;
+                        setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign submission failed');
+                    }
+                }}>Launch BindCraft2 campaign</button>
+                {bc2SubmitError && <p role="alert">{bc2SubmitError}</p>}
+            </>}
+            <details><summary>{bc2LaunchAvailable === true ? 'Native request preview' : 'Saved native request preview (not executable)'}</summary>
                 <pre>{JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: bc2Settings } }, null, 2)}</pre>
             </details>
             <button type="button" onClick={() => setShowTemplateManager(true)}>Save campaign draft</button>

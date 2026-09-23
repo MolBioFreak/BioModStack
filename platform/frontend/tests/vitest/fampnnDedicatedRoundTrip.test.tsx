@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {} })), iteration: vi.fn(async (_body: any) => ({ data: {} })), select: null as any }));
-vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
+vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, fetchExecutionTargets: vi.fn(async () => ({ data: [] })), launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: () => ({ gpuOptions: [], isLoading: false, isError: false }) }));
 vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null, useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }) }));
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: ({ currentParams, onSelect }: any) => { mocks.select = onSelect; return <output data-saved>{JSON.stringify(currentParams)}</output>; } }));
@@ -101,6 +101,7 @@ it('mounted BC2 saved campaign keeps native draft separate and never submits ant
     expect(document.querySelector('[aria-label="BindCraft2 campaign draft"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="max_trajectories"]')).not.toBeNull();
     expect(document.body.textContent).toContain('Model execution is not enabled.');
+    expect(document.body.textContent).not.toContain('Launch BindCraft2 campaign');
     expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!)).toMatchObject({
         denovo_generator: 'bindcraft2', bindcraft2_settings: settings,
     });
@@ -110,6 +111,31 @@ it('mounted BC2 saved campaign keeps native draft separate and never submits ant
     expect(discovery).toHaveBeenCalledWith('/api/models/bindcraft2/native-settings', expect.any(Object));
     await act(async () => mocks.select({ name: 'reopened', params: { denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 0, trajectory_only: false } } }));
     expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).bindcraft2_settings).toEqual({ max_trajectories: 0, trajectory_only: false });
+});
+it('mounted available BC2 campaign submits its own saved native settings and placement surface', async () => {
+    const settings = { max_trajectories: 2, targets: [{ name: 'target', target_path: 'inputs/target.pdb' }], trajectory_only: false };
+    const inventory = { upstream_commit: 'pin', fields: {
+        max_trajectories: { native_key: 'max_trajectories', observed_types: ['integer'], has_native_default: false, native_default: null, status: 'typed' },
+    }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
+    expect(document.querySelector('[aria-label="Execution target"]')).not.toBeNull();
+    await click('Launch BindCraft2 campaign');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit.mock.calls[0][0]).toEqual({ name: expect.any(String), model_id: 'bindcraft2', mode: 'campaign',
+        params: { bindcraft2_settings: settings } });
+    expect(mocks.iteration).not.toHaveBeenCalled();
+});
+it('BC2 campaign shows a submission refusal without translating it into antibody refinement', async () => {
+    mocks.submit.mockRejectedValueOnce({ response: { data: { detail: 'Native campaign unavailable' } } });
+    const inventory = { upstream_commit: 'pin', fields: {
+        max_trajectories: { native_key: 'max_trajectories', observed_types: ['integer'], has_native_default: false, native_default: null, status: 'typed' },
+    }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 2 } }} />);
+    await click('Launch BindCraft2 campaign');
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Native campaign unavailable');
+    expect(mocks.iteration).not.toHaveBeenCalled();
 });
 
 const mutation = { mutation: [{ chain_id: 'H', author_number: 0, insertion_code: 'A' }] };
