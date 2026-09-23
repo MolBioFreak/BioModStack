@@ -18,8 +18,10 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 from filter_caliby import main as filter_caliby_main
 from caliby_runtime import normalize_sampling_results, remap_constraint_dataframe_to_cleaned_paths
+import caliby_runtime
 from prep_caliby_binder_constraints import build_constraints
 from prep_caliby_antibody_constraints import main as prep_caliby_constraints_main
+import run_caliby_sequence_design as caliby_runner
 
 
 def _write_minimal_complex_pdb(path: Path) -> None:
@@ -81,6 +83,8 @@ def test_binder_module_requires_roles_and_does_not_force_off_native_controls() -
     assert "--run-self-consistency-eval false" not in binder
     assert "--self-consistency-use-multimer" in binder
     assert "--sampling-overrides-json" in binder
+    assert '--binder-chains "${binderChains}"' in binder
+    assert '--target-chains "${targetChains}"' in binder
     assert "set -euo pipefail" in binder
 
 
@@ -110,6 +114,31 @@ def test_caliby_cardinality_and_chain_rename_fail_closed(tmp_path: Path) -> None
     with pytest.raises(ValueError, match="changed chain IDs"):
         remap_constraint_dataframe_to_cleaned_paths(constraints, original_paths=[str(source)],
                                                      cleaned_paths=[str(changed)])
+
+
+def test_native_cleaner_chain_relabel_remaps_binder_mask_not_by_order(tmp_path: Path, monkeypatch) -> None:
+    original = tmp_path / "candidate.pdb"
+    cleaned = tmp_path / "cleaned" / "candidate.cif"
+    cleaned.parent.mkdir()
+    original.write_text("original", encoding="utf-8")
+    cleaned.write_text("cleaned", encoding="utf-8")
+    # Original binder H becomes cleaned B; exact structural fingerprints, not
+    # the ordinal first/second chain, establish this mapping.
+    monkeypatch.setattr(caliby_runtime, "parse_chain_order", lambda path:
+                        ["H", "A"] if path == original else ["A", "B"])
+    monkeypatch.setattr(caliby_runtime, "_chain_ca_fingerprints", lambda path:
+                        {"H": ((2, "SER", 40.0, 0.0, 0.0),),
+                         "A": ((1, "GLY", 0.0, 0.0, 0.0),)} if path == original else
+                        {"A": ((1, "GLY", 0.0, 0.0, 0.0),),
+                         "B": ((2, "SER", 40.001, 0.0, 0.0),)})
+    import pandas as pd
+    constraints = pd.DataFrame([{"pdb_key": "candidate", "fixed_pos_seq": "A1-1,H1-1",
+                                 "fixed_pos_scn": "A1-1,H1-1", "pos_restrict_aatype": "H2:WY"}])
+    mapped = remap_constraint_dataframe_to_cleaned_paths(
+        constraints, original_paths=[str(original)], cleaned_paths=[str(cleaned)])
+    assert mapped.iloc[0]["fixed_pos_seq"] == "A1-1,B1-1"
+    assert mapped.iloc[0]["fixed_pos_scn"] == "A1-1,B1-1"
+    assert mapped.iloc[0]["pos_restrict_aatype"] == "B2:WY"
 
 
 def test_prep_caliby_antibody_constraints_emits_native_columns(tmp_path: Path, monkeypatch) -> None:
@@ -258,3 +287,42 @@ def test_normalized_caliby_sidecar_owns_sequence_design_review_and_lineage(tmp_p
     assert metadata["selection_metric"] == "caliby_potts_energy"
     assert metadata["selection_direction"] == "lower_is_better"
     assert metadata["af3score_used"] is False
+
+
+def test_caliby_runner_records_selected_checkpoint_roles_and_effective_controls(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    _write_minimal_complex_pdb(input_dir / "candidate.pdb")
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "model_params/caliby/soluble_caliby_v1.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"selected checkpoint")
+    monkeypatch.setenv("MODEL_PARAMS_DIR", str(checkpoint.parents[1]))
+    monkeypatch.delenv("CALIBY_ALLOW_DOWNLOAD", raising=False)
+
+    def sample(paths, *, out_dir, **kwargs):
+        assert paths == [str(input_dir / "candidate.pdb")]
+        assert kwargs["sampling_overrides"] == {"potts_sampling_cfg": {"potts_sweeps": 7}}
+        assert kwargs["pos_constraint_df"] is None
+        native = tmp_path / "native.pdb"
+        native.write_text("END\n", encoding="utf-8")
+        return {"example_id": ["candidate"], "out_pdb": [str(native)],
+                "seq": ["AAAA"], "U": [-3.0], "input_seq": ["CCCC"]}
+
+    monkeypatch.setattr(caliby_runner, "maybe_clean_inputs", lambda **kw: kw["pdb_paths"])
+    monkeypatch.setattr(caliby_runner, "load_caliby_model", lambda name: type("Model", (), {"sample": staticmethod(sample)})())
+    monkeypatch.setattr(sys, "argv", ["run_caliby_sequence_design.py", "--input-dir", str(input_dir),
+                                      "--output-dir", str(output_dir), "--binder-chains", "H",
+                                      "--target-chains", "A", "--design-positions", "H2",
+                                      "--temperature", "0.25", "--omit-aas", "C,W",
+                                      "--sampling-overrides-json", '{"potts_sampling_cfg":{"potts_sweeps":7}}'])
+    caliby_runner.main()
+    sidecar = json.loads((output_dir / "generator_caliby_0001.json").read_text())
+    assert sidecar["caliby_checkpoint"] == str(checkpoint.resolve())
+    assert sidecar["binder_chains"] == ["H"]
+    assert sidecar["target_chains"] == ["A"]
+    assert sidecar["caliby_design_positions"] == "H2"
+    assert sidecar["caliby_sampling_settings"]["temperature"] == 0.25
+    assert sidecar["caliby_sampling_settings"]["omit_aas"] == ["C", "W"]
+    assert sidecar["caliby_sampling_settings"]["sampling_overrides"] == {"potts_sampling_cfg": {"potts_sweeps": 7}}
+    assert sidecar["source_backbone_id"] == "candidate"

@@ -287,6 +287,38 @@ def remap_position_like_spec(spec: str | None, chain_map: dict[str, str]) -> str
     return _POSITION_TOKEN_RE.sub(lambda match: f"{chain_map.get(match.group(1), match.group(1))}{match.group(2)}", text)
 
 
+def _chain_ca_fingerprints(path: Path) -> dict[str, tuple[tuple[Any, ...], ...]]:
+    """Match cleaner-renamed chains by residue identity and CA coordinates."""
+    import gemmi  # pragma: no cover - installed in the Caliby image
+
+    model = gemmi.read_structure(str(path))[0]
+    fingerprints = {}
+    # The native cleaner recenters the entire complex; preserve interchain
+    # geometry by measuring every CA from the first CA of the whole model.
+    origin = next(atom.pos for chain in model for residue in chain for atom in residue
+                  if atom.name == "CA" and atom.element.name == "C")
+    for chain in model:
+        residues = []
+        for residue in chain:
+            for atom in residue:
+                if atom.name == "CA" and atom.element.name == "C":
+                    pos = atom.pos
+                    residues.append((residue.seqid.num, residue.name,
+                                     pos.x - origin.x, pos.y - origin.y, pos.z - origin.z))
+                    break
+        if residues:
+            fingerprints[chain.name] = tuple(residues)
+    return fingerprints
+
+
+def _matching_ca_fingerprints(original: tuple[tuple[Any, ...], ...],
+                              cleaned: tuple[tuple[Any, ...], ...]) -> bool:
+    return (len(original) == len(cleaned) and all(
+        old[:2] == new[:2] and all(abs(a - b) < 0.02 for a, b in zip(old[2:], new[2:]))
+        for old, new in zip(original, cleaned)
+    ))
+
+
 def remap_constraint_dataframe_to_cleaned_paths(
     pos_constraint_df,
     *,
@@ -314,11 +346,33 @@ def remap_constraint_dataframe_to_cleaned_paths(
         cleaned_chain_order = parse_chain_order(cleaned_path)
         if not original_chain_order or not cleaned_chain_order or len(original_chain_order) != len(cleaned_chain_order):
             raise ValueError(f"Caliby constraint key {pdb_key!r} has unresolvable chain identity")
-        if set(original_chain_order) == set(cleaned_chain_order):
+        if original_chain_order == cleaned_chain_order:
             continue
-        # Positional zipping is not chain-role evidence. A cleaner that renames
-        # chains needs an explicit verified mapping, not guessed binder identity.
-        raise ValueError(f"Caliby cleaned structure changed chain IDs for {pdb_key!r}")
+        # Native cleaning renames chains. Match residue identity and geometry,
+        # never positional order, before translating the mask into clean IDs.
+        try:
+            originals = _chain_ca_fingerprints(original_path)
+            cleaned = _chain_ca_fingerprints(cleaned_path)
+            chain_map = {}
+            for old, fingerprint in originals.items():
+                matches = [new for new, candidate in cleaned.items()
+                           if _matching_ca_fingerprints(fingerprint, candidate)]
+                if len(matches) == 1:
+                    chain_map[old] = matches[0]
+        except (ImportError, IndexError, ValueError) as exc:
+            raise ValueError(f"Caliby cleaned structure changed chain IDs for {pdb_key!r}") from exc
+        if set(chain_map) != set(original_chain_order) or len(set(chain_map.values())) != len(chain_map):
+            raise ValueError(f"Caliby cleaned structure changed chain IDs for {pdb_key!r}")
+        for field in ("fixed_pos_seq", "fixed_pos_scn", "fixed_pos_override_seq",
+                      "pos_restrict_aatype", "symmetry_pos"):
+            if field not in remapped.columns:
+                continue
+            value = row.get(field)
+            if pd.isna(value):
+                continue
+            mapper = (remap_fixed_position_spec if field in ("fixed_pos_seq", "fixed_pos_scn")
+                      else remap_position_like_spec)
+            remapped.at[index, field] = mapper(str(value), chain_map)
 
     return remapped
 

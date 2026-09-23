@@ -126,6 +126,9 @@ process RunCalibyBinder {
         --temperature ${params.caliby_temperature != null ? params.caliby_temperature : 0.1} \\
         --omit-aas "${params.caliby_omit_aas != null ? params.caliby_omit_aas : 'C'}" \\
         --pos-constraint-csv caliby_constraints.csv \\
+        --binder-chains "${binderChains}" \\
+        --target-chains "${targetChains}" \\
+        --design-positions "${params.get('caliby_design_positions') ?: ''}" \\
         --run-self-consistency-eval "${params.caliby_run_self_consistency_eval ?: false}" \\
         --self-consistency-num-models ${params.caliby_self_consistency_num_models ?: 5} \\
         --self-consistency-num-recycles ${params.caliby_self_consistency_num_recycles ?: 3} \\

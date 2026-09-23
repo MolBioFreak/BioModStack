@@ -32,6 +32,9 @@ def main() -> None:
     parser.add_argument("--omit-aas", default="C")
     parser.add_argument("--pos-constraint-csv", default="")
     parser.add_argument("--sampling-overrides-json", default="")
+    parser.add_argument("--binder-chains", default="")
+    parser.add_argument("--target-chains", default="")
+    parser.add_argument("--design-positions", default="")
     parser.add_argument("--run-self-consistency-eval", type=parse_bool, default=False)
     parser.add_argument("--self-consistency-num-models", type=int, default=5)
     parser.add_argument("--self-consistency-num-recycles", type=int, default=3)
@@ -50,7 +53,7 @@ def main() -> None:
         raise ValueError("Caliby sequence design requires at least one selected structure")
     if args.num_seqs_per_pdb < 1 or args.batch_size < 1 or args.num_workers < 1 or args.clean_num_workers < 1:
         raise ValueError("Caliby sample counts and worker counts must be positive")
-    preflight_caliby_runtime(task="sequence_design", model_name=args.model_name)
+    runtime = preflight_caliby_runtime(task="sequence_design", model_name=args.model_name)
     cleaned = maybe_clean_inputs(
         pdb_paths=pdb_paths,
         cleaned_dir=output_dir / "cleaned_pdbs",
@@ -92,7 +95,26 @@ def main() -> None:
         prefix="caliby",
         source="caliby",
         stage_mode="sequence_design",
-        extra_metadata={"caliby_model": args.model_name},
+        extra_metadata={
+            "caliby_model": args.model_name,
+            "caliby_checkpoint": runtime["checkpoint_path"],
+            "caliby_sampling_settings": {
+                "num_seqs_per_pdb": args.num_seqs_per_pdb,
+                "batch_size": args.batch_size,
+                "num_workers": args.num_workers,
+                "clean_num_workers": args.clean_num_workers,
+                "temperature": args.temperature,
+                "omit_aas": parse_omit_aas(args.omit_aas),
+                "sampling_overrides": sampling_overrides,
+                "run_self_consistency_eval": args.run_self_consistency_eval,
+                "self_consistency_num_models": args.self_consistency_num_models,
+                "self_consistency_num_recycles": args.self_consistency_num_recycles,
+                "self_consistency_use_multimer": args.self_consistency_use_multimer,
+            },
+            "binder_chains": [chain.strip() for chain in args.binder_chains.split(",") if chain.strip()],
+            "target_chains": [chain.strip() for chain in args.target_chains.split(",") if chain.strip()],
+            "caliby_design_positions": args.design_positions,
+        },
         self_consistency=self_consistency,
     )
 
