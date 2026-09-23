@@ -88,7 +88,9 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
     params['lineage_root_job_id'] = source.lineage_root_job_id or source.id
     from routers.jobs import create_job
     job = JobCreate(name=f'blind-pose-{source.id[:8]}', model_id='esmfold2', mode='blind_pose', params=params)
-    return await create_job(job, background_tasks, session)
+    from services.binder_blind_pose_trust import selected_submission
+    with selected_submission():
+        return await create_job(job, background_tasks, session)
 
 
 @router.get('/{job_id}/result')

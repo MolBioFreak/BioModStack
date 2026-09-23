@@ -48,6 +48,17 @@ def test_preview_to_job_owned_native_handoff_and_readback(tmp_path, monkeypatch)
     assert json.loads(Path(materialized['bc2_compilation']).read_text())['native_request']['targets'][0]['target_path'] == str(tmp_path / 'job/bindcraft2/sources/target_0.fasta')
     assert (tmp_path / 'job/bindcraft2/sources/target_0.fasta').read_bytes() == source.read_bytes()
     assert materialized['bc2_campaign_dir'] == str(tmp_path / 'job/bindcraft2')
+    from services.nextflow import compile_nextflow_invocation
+    invocation = compile_nextflow_invocation('bindcraft2', 'campaign', {
+        **materialized, 'bc2_preview_digest': preview['preview_digest'],
+    }, str(tmp_path / 'job'), job_id='bc2-request')
+    assert invocation.entrypoint == 'workflows/bindcraft2.nf'
+    assert 'bindcraft2,workstation_ryzen7960x' in invocation.command
+    assert invocation.native_parameters['bc2_compilation'] == materialized['bc2_compilation']
+    assert invocation.native_parameters['bc2_campaign_dir'] == materialized['bc2_campaign_dir']
+    assert '--bindcraft2_settings' not in invocation.command
+    assert '--bc2_effective_settings' not in invocation.command
+    assert '--bc2_preview_digest' not in invocation.command
     source.write_text('>changed\nAAAAAAAA\n')
     with pytest.raises(ValueError, match='stale'):
         launch.materialize_campaign(settings, tmp_path / 'other', preview_digest=preview['preview_digest'], compiler=stub_compiler)

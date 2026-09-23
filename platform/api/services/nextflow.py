@@ -503,6 +503,7 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 }
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ('bindcraft2', 'campaign'): 'workflows/bindcraft2.nf',
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
     # Selected post-round diagnostic only; not a sequence-design mode. The
     # enabled LigandMPNN YAML must not advertise it before the parent submits
@@ -5264,6 +5265,9 @@ def compile_nextflow_invocation(
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
         ('molecular_dynamics', 'replica'): 'molecular_dynamics',
         ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
+        ('bindcraft2', 'campaign'): 'bindcraft2',
+        ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
+        ('esmfold2', 'blind_pose'): 'esmfold2',
         ('esmfold2', 'predict'): 'esmfold2',
         ('esmfold2', 'complex'): 'esmfold2',
         ('esmfold2_experimental', 'predict'): 'esmfold2',
@@ -5477,7 +5481,10 @@ def compile_nextflow_invocation(
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
-    if not is_fastq_only_ont_command and not is_generic_sequence_command:
+    if (not is_fastq_only_ont_command and not is_generic_sequence_command
+            and (model_id, mode) not in {('bindcraft2', 'campaign'),
+                                         ('ligandmpnn', 'interface_context'),
+                                         ('esmfold2', 'blind_pose')}):
         explicit_path_defaults.update({
             "msa_local_db": explicit_msa_db,
             "msa_cache_dir": explicit_msa_cache,
@@ -5486,6 +5493,50 @@ def compile_nextflow_invocation(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
+
+    if (model_id, mode) == ('bindcraft2', 'campaign'):
+        from services.bindcraft2_launch import read_campaign_receipt
+        from services.bindcraft2_typed import validate_request
+        settings = params.get('bindcraft2_settings')
+        if not isinstance(settings, dict):
+            raise ValueError('BC2 campaign requires typed scientific settings')
+        validate_request(settings)
+        preview_digest = params.get('bc2_preview_digest')
+        if (not isinstance(preview_digest, str) or
+                len(preview_digest) != 64 or
+                any(char not in '0123456789abcdef' for char in preview_digest)):
+            raise ValueError('BC2 campaign requires its native preview digest')
+        campaign = Path(output_dir).resolve() / 'bindcraft2'
+        expected = {'bc2_compilation': str(campaign / 'compilation.json'),
+                    'bc2_campaign_dir': str(campaign)}
+        if not _preview_only:
+            if any(params.get(key) != value for key, value in expected.items()):
+                raise ValueError('BC2 job-owned compilation paths changed')
+            receipt = read_campaign_receipt(Path(output_dir))
+            if (receipt['requested_settings'] != settings or
+                    receipt['effective_sha256'] != params.get('bc2_effective_sha256') or
+                    receipt['effective_settings'] != params.get('bc2_effective_settings')):
+                raise ValueError('BC2 compiled effective settings differ from saved Job')
+        for key, value in expected.items():
+            cmd.extend([f'--{key}', value])
+            native_parameters[key] = value
+        return finish_command(cmd)
+
+    if (model_id, mode) == ('ligandmpnn', 'interface_context'):
+        from services.ligandmpnn_interface_publication import KEY, verify_binding
+        binding = params.get(KEY)
+        if not isinstance(binding, dict):
+            raise ValueError('Selected LigandMPNN request binding is absent')
+        verify_binding(binding)
+        manifest = params.get('interface_context_manifest')
+        if not isinstance(manifest, str) or manifest != binding['manifest']:
+            raise ValueError('Selected LigandMPNN manifest changed')
+        cmd.extend(['--interface_context_manifest', manifest])
+        native_parameters['interface_context_manifest'] = manifest
+        if params.get('gpu_id') is not None:
+            cmd.extend(['--gpu_id', str(params['gpu_id'])])
+            native_parameters['gpu_id'] = params['gpu_id']
+        return finish_command(cmd)
 
     if is_generic_sequence_command:
         assert definition is not None  # Resolved and checked above.

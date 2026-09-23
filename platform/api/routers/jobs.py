@@ -6148,6 +6148,10 @@ async def _create_job(
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
     inherited_source_revision: str | None = None
+    if (normalized_model_id, normalized_mode) == ('esmfold2', 'blind_pose'):
+        from services.binder_blind_pose_trust import is_selected_submission
+        if not is_selected_submission():
+            raise HTTPException(status_code=422, detail='Blind pose requires the selected Design route')
     inherited_source_tree: str | None = None
     selected_execution_target: ExecutionTarget | None = None
     execution_parent: Job | None = None

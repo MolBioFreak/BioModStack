@@ -825,6 +825,22 @@
                 }
             }
         },
+        "bindcraft2_campaign_parameters": {
+            "title": "BindCraft2 Native Campaign Handoff",
+            "type": "object",
+            "properties": {
+                "bc2_compilation": {"type": "string", "description": "Job-owned pinned native compilation receipt", "hidden": true},
+                "bc2_campaign_dir": {"type": "string", "description": "Job-owned campaign directory", "hidden": true},
+                "bc2_gpu_ids": {"type": "string", "description": "Scheduler-assigned devices", "hidden": true}
+            }
+        },
+        "ligandmpnn_interface_context_parameters": {
+            "title": "Selected LigandMPNN Interface Context Inputs",
+            "type": "object",
+            "properties": {
+                "interface_context_manifest": {"type": "string", "description": "Selected, materialized invocation manifest", "hidden": true}
+            }
+        },
         "blind_pose_parameters": {
             "title": "Selected Blind Pose Inputs",
             "type": "object",
@@ -882,6 +898,12 @@
         },
         {
             "$ref": "#/definitions/protenix_parameters"
+        },
+        {
+            "$ref": "#/definitions/bindcraft2_campaign_parameters"
+        },
+        {
+            "$ref": "#/definitions/ligandmpnn_interface_context_parameters"
         },
         {
             "$ref": "#/definitions/blind_pose_parameters"

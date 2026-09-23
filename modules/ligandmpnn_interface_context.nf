@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 // Selected, read-only candidate diagnostic. No verdict or candidate mutation.
 process RunLigandMPNNInterfaceContext {
     tag "ligandmpnn-context:${invocation_id}"
-    label 'CPU'
+    label 'gpu'
     stageInMode 'copy'
     errorStrategy 'terminate'
     maxRetries 0
@@ -23,7 +23,7 @@ process RunLigandMPNNInterfaceContext {
     """
     set -euo pipefail
     python3 '${stageScript}' '${request_snapshot}' '${source_snapshot}' effective_request.json
-    apptainer exec --no-home \\
+    apptainer exec --nv --no-home --env CUDA_VISIBLE_DEVICES=${params.gpu_id} \\
       --bind "\$PWD:\$PWD" \\
       --bind '${nativeScript}:/probe/ligandmpnn_context.py' \\
       '${image}' python /probe/ligandmpnn_context.py \\

@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from database import Design, Job, JobArtifact, get_session
@@ -213,6 +213,7 @@ def test_compiler_selected_mode_preserves_manifest_and_all_sampling(source, tmp_
     assert normalized.params['esmf_seed'] == 17
     invocation = compile_nextflow_invocation('esmfold2', 'blind_pose', normalized.params, str(tmp_path / 'out'), job_id='fixture')
     assert invocation.entrypoint == 'workflows/binder_blind_pose.nf'
+    assert 'esmfold2,workstation_ryzen7960x' in invocation.command
     native = invocation.native_parameters
     assert native['blind_pose_candidate_pdbs'] == params['blind_pose_candidate_pdbs']
     assert native['esmfold2_validation_num_sampling_steps'] == 83
@@ -247,6 +248,17 @@ def test_api_contract_rejects_unrouted_mode_before_queue(monkeypatch):
                                            'num_loops': 1, 'num_sampling_steps': 25, 'num_diffusion_samples': 1}})
     assert response.status_code == 503
     assert 'not registered' in response.json()['detail']
+
+
+@pytest.mark.asyncio
+async def test_generic_job_submission_cannot_bypass_selected_design_owner():
+    from routers.jobs import _create_job
+    from schemas import JobCreate
+    request = JobCreate(name='unowned-blind-pose', model_id='esmfold2',
+                        mode='blind_pose', params={})
+    with pytest.raises(HTTPException, match='selected Design route') as exc:
+        await _create_job(request, BackgroundTasks(), None)
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
