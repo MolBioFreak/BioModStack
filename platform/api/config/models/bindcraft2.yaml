@@ -17,8 +17,16 @@ outputs:
   - cif
   - csv
   - json
-modes: []
-params: []
+modes:
+  - id: campaign
+    name: Native campaign
+    description: Pinned typed scientific request; requires model-owned native compilation.
+    params: [bindcraft2_settings]
+params:
+  - name: bindcraft2_settings
+    type: object
+    required: true
+    description: Complete typed BindCraft2 native scientific settings, including finite max_trajectories.
 enabled: false
 experimental: true
 public_launch: false

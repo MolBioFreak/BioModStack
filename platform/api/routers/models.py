@@ -2,8 +2,10 @@
 Models API router - List available models and their configurations.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List
+from sqlalchemy.ext.asyncio import AsyncSession
+from database import get_session, Job
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from model_registry import get_registry, ModelDefinition
@@ -359,6 +361,41 @@ async def get_bindcraft2_native_settings():
         "launch_available": get_registry().get_model("bindcraft2") is not None,
         "settings": schema(),
     }
+
+
+class BindCraft2CampaignPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: str
+    mode: str
+    params: dict
+
+
+@router.post('/bindcraft2/campaign/preview')
+async def preview_bindcraft2_campaign(request: BindCraft2CampaignPreviewRequest):
+    """Non-executing pinned native preview of the saved-draft request shape."""
+    if request.model_id != 'bindcraft2' or request.mode != 'campaign' or set(request.params) != {'bindcraft2_settings'}:
+        raise HTTPException(status_code=422, detail='Expected bindcraft2/campaign with only params.bindcraft2_settings')
+    from services.bindcraft2_launch import preview_campaign
+    try:
+        return await __import__('asyncio').to_thread(preview_campaign, request.params['bindcraft2_settings'])
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get('/bindcraft2/campaign/jobs/{job_id}/settings')
+async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Reopen the exact native effective settings bound to an owned campaign Job."""
+    job = await session.get(Job, job_id)
+    if job is None or job.model_id != 'bindcraft2' or job.mode != 'campaign':
+        raise HTTPException(status_code=404, detail='BindCraft2 campaign Job not found')
+    from services.bindcraft2_launch import read_campaign_receipt
+    try:
+        result = read_campaign_receipt(job.output_dir)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail=f'Campaign receipt unavailable: {exc}') from exc
+    if result['requested_settings'] != job.params.get('bindcraft2_settings'):
+        raise HTTPException(status_code=409, detail='Campaign receipt differs from saved Job request')
+    return result
 
 
 @router.get("/{model_id}")
