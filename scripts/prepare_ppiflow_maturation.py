@@ -23,6 +23,8 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 import pyrosetta
 from pyrosetta import rosetta
 
+from ppiflow_coordinate_changes import changed_residues
+
 from identify_anchors import (
     build_ppiflow_region_spec,
     build_loop_residue_map,
@@ -45,6 +47,21 @@ def _residue_key(pose, resi: int) -> ResidueKey:
         int(pdb_info.number(resi)),
         (pdb_info.icode(resi) or "").strip(),
     )
+
+
+def _pose_atom_coordinates(pose):
+    atoms = {}
+    info = pose.pdb_info()
+    for resi in range(1, pose.total_residue() + 1):
+        residue = pose.residue(resi)
+        identity = (info.chain(resi), int(info.number(resi)),
+                    (info.icode(resi) or "").strip(), residue.name3())
+        for atom_index in range(1, residue.natoms() + 1):
+            xyz = residue.xyz(atom_index)
+            atoms[(*identity, residue.atom_name(atom_index).strip())] = (
+                float(xyz.x), float(xyz.y), float(xyz.z)
+            )
+    return atoms
 
 
 def _interface_pairs_within_distance(
@@ -341,6 +358,7 @@ def main() -> None:
     enriched_pose = rosetta.core.pose.Pose()
     enriched_pose.assign(input_pose)
     repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance)
+    original_coordinates = _pose_atom_coordinates(enriched_pose)
     if args.rotamer_enrichment and repack_shell_residues:
         _run_interface_rotamer_enrichment(
             enriched_pose,
@@ -349,6 +367,7 @@ def main() -> None:
             relax_antibody_backbone_shell=bool(args.relax_antibody_backbone_shell),
         )
 
+    actual_changes = changed_residues(original_coordinates, _pose_atom_coordinates(enriched_pose))
     enriched_interface_score, enriched_interface_residues, enriched_binder_scores, enriched_pair_scores = _compute_interface_pair_energy_breakdown(
         enriched_pose,
         antibody_chains,
@@ -390,8 +409,10 @@ def main() -> None:
         "backbone_movement_allowed": bool(args.relax_antibody_backbone_shell),
         "anchor_selection_method": anchor_payload["anchor_selection_method"],
         "repack_shell_distance": float(args.rotamer_shell_distance),
-        "repacked_residue_count": len(repack_shell_residues),
-        "repacked_residues": [residue_id(enriched_pose, resi) for resi in repack_shell_residues],
+        "repack_shell_residue_count": len(repack_shell_residues),
+        "repack_shell_residues": [residue_id(enriched_pose, resi) for resi in repack_shell_residues],
+        "repacked_residue_count": len(actual_changes),
+        "repacked_residues": actual_changes,
         "interface_residue_count_original": len(original_interface_residues),
         "interface_residue_count_enriched": len(enriched_interface_residues),
         "interface_residues_original": _interface_residue_payload(input_pose, original_interface_residues, original_binder_scores),
