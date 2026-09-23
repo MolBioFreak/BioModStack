@@ -442,6 +442,7 @@ async def finalize_successful_job(
          ).exists()])]
         if job.execution_target_id else []
     )
+    default_ingester = ingest_fn is None
     if ingest_fn is None:
         from services.result_ingester import ingest_job_results
 
@@ -475,6 +476,13 @@ async def finalize_successful_job(
     from services.core_protein_scientific_contract import revision_for_job
 
     strict_revision = None
+    optional_attachment = (
+        default_ingester
+        and str(job.model_id or '').strip().lower() not in {'frustrampnn', 'conformational_mapping'}
+        and isinstance(job.stage_outputs, dict)
+        and any(str(stage).strip().lower() in {'frustrampnn', 'canonical_frustrampnn'}
+                for stage in job.stage_outputs)
+    )
     try:
         strict_revision = revision_for_job(job)
         # Interactive gates returned above. A terminal full antibody root must
@@ -493,13 +501,31 @@ async def finalize_successful_job(
             from services.result_ingester import ingest_component_projection
             await ingest_component_projection(job, output_dir, session)
         session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
-        ingested_count = await ingest_fn(
-            job_id,
-            output_dir,
-            session,
-            epitope_residues=epitope_residues,
-            commit=False,
-        )
+        if optional_attachment:
+            # The public ingester's commit=False contract includes the optional
+            # attachment in the caller's transaction. Run its same primary owner
+            # first, so no optional failure can decide primary publication.
+            from services.result_ingester import (
+                _ingest_job_results, _ingest_protenix_primary_publications,
+            )
+            from paths import resolve_runtime_data_path, get_data_root
+
+            ingested_count = await _ingest_job_results(
+                job_id, output_dir, session, epitope_residues,
+            )
+            if str(job.model_id or '').strip().lower() == 'protenix':
+                root = Path(output_dir)
+                root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+                await _ingest_protenix_primary_publications(job, root, session)
+            await session.flush()
+            if antibody_closeout is not None:
+                job.provenance = {**(job.provenance or {}),
+                                  'antibody_pipeline_result': antibody_closeout}
+        else:
+            ingested_count = await ingest_fn(
+                job_id, output_dir, session,
+                epitope_residues=epitope_residues, commit=False,
+            )
         from services.core_protein_execution_settings import persist_openmm_receipts
         await persist_openmm_receipts(job, output_dir, session)
         if antibody_closeout is not None:
@@ -663,6 +689,57 @@ async def finalize_successful_job(
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")
+
+    if optional_attachment:
+        from services.result_ingester import _ingest_explicit_frustrampnn_results
+        from paths import resolve_runtime_data_path, get_data_root
+
+        root = Path(output_dir)
+        root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+        try:
+            # A savepoint contains partial component writes. Primary rows remain
+            # pending until the terminal failure CAS succeeds in the same commit.
+            async with session.begin_nested():
+                await _ingest_explicit_frustrampnn_results(job, root, session, commit=False)
+        except Exception as exc:
+            session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
+            session.info.setdefault('protein_design_primary_prevalidated', set()).discard(job_id)
+            if manual_remote_pull:
+                await session.rollback()
+                raise
+            await session.refresh(job)
+            message = str(exc) or exc.__class__.__name__
+            count = await _authoritative_result_count(session, job)
+            provenance = _integrity_provenance(job, {
+                'state': 'ingestion_failed', 'partial': True,
+                'design_count': count, 'result_count': count,
+                'result_kind': result_kind, 'error': message,
+                'primary_validated': True, 'failed_stage': 'frustrampnn',
+                'idempotent_prior_results': idempotent_prior_results,
+            })
+            failure = await session.execute(update(Job).where(
+                Job.id == job_id, *remote_authority,
+                Job.status == 'running', Job.queue_status == 'running',
+                Job.awaiting_input.is_(False),
+            ).values(
+                status='failed', queue_status='failed', paused=False,
+                assigned_gpu=None, current_stage='FrustraMPNN Result Ingestion Failed',
+                stage_progress=None, completed_at=datetime.utcnow(),
+                error_message=f'FrustraMPNN result ingestion failed: {message}',
+                provenance=provenance,
+                **({'remote_state': 'returned_ingestion_failed'} if remote_authority else {}),
+            ))
+            if failure.rowcount != 1:
+                await session.rollback()
+                job = await session.get(Job, job_id)
+                state = 'cancelled' if job is not None and job.status == 'cancelled' else 'awaiting_input'
+                return FinalizationResult(False, await _authoritative_result_count(session, job), state)
+            if job.execution_target_id:
+                from services.remote_execution.executor import _release_remote_target_lease
+                await _release_remote_target_lease(session, job)
+            await session.commit()
+            await session.refresh(job)
+            return FinalizationResult(False, count, 'ingestion_failed')
 
     # Ingesters may commit internally.  Publish completion with a conditional DB
     # update: a cancellation or review gate committed after ingestion wins.
