@@ -1,9 +1,8 @@
 """Selected BC2 CIF is real structure input, not PDB bytes with a new suffix."""
-import json
 from pathlib import Path
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, Job
@@ -46,21 +45,14 @@ def real_campaign(root):
 
 
 @pytest.mark.asyncio
-async def test_selected_route_consumes_verified_native_cif(tmp_path, monkeypatch):
+async def test_projected_cif_design_is_verified_without_forcing_antibody_route(tmp_path):
     root = tmp_path / 'native'
     real_campaign(root)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
-    captured = {}
-    class RouteReached(Exception):
-        pass
-    async def submit(request, background_tasks, session):
-        captured['launch_request'] = request
-        raise RouteReached
-    monkeypatch.setattr(jobs, 'create_job', submit)
+
     try:
         async with factory() as session:
             job = Job(id='bc', name='BC2', model_id='bindcraft2', mode='campaign',
@@ -75,16 +67,15 @@ async def test_selected_route_consumes_verified_native_cif(tmp_path, monkeypatch
             assert design.provenance['primary_target_state'] == 'stateA'
             request = jobs.AntibodyIterationLaunchRequest(source_job_id=job.id,
                         design_ids=[design.id], action='validate_boltz2')
-            with pytest.raises(RouteReached):
+            # A generic BC2 binder is not automatically antibody-compatible.
+            with pytest.raises(HTTPException, match='not part of an antibody or nanobody'):
                 await jobs.launch_antibody_iteration_from_designs(request, BackgroundTasks(), session)
-            selection = Path(captured['launch_request'].params['iteration_selection_dir'])
-            derivative = selection / f'001_{design.id}.pdb'
+            derivative = jobs._cif_selection_pdb(Path(design.pdb_path), tmp_path / 'seed.pdb')
             assert derivative.read_text().startswith('ATOM')
-            manifest = json.loads((selection / 'selection_manifest.json').read_text())
-            assert str(root / '3_Ranked/t_seq0_stateA.cif') in json.dumps(manifest)
             assert jobs._extract_chain_records_from_structure(Path(design.pdb_path))['B'][0] == {
                 'resseq': 12, 'icode': '', 'aa': 'A'}
             assert jobs._extract_chain_records_from_structure(derivative)['B'][0]['resseq'] == 12
+            await jobs._validate_selected_design_owners(session, job, None, [design])
             unrepresentable = tmp_path / 'long_chain.cif'
             unrepresentable.write_text(Path(design.pdb_path).read_text().replace(
                 'ALA B 1 1 ?', 'ALA LONG 1 1 ?').replace('12 ALA B CA', '12 ALA LONG CA'))
@@ -93,6 +84,6 @@ async def test_selected_route_consumes_verified_native_cif(tmp_path, monkeypatch
             # Selection readback detects source mutation, not a guessed derivative.
             (root / '3_Ranked/t_seq0_stateA.cif').write_text('data_corrupt\n')
             with pytest.raises(Exception, match='bytes'):
-                await jobs.launch_antibody_iteration_from_designs(request, BackgroundTasks(), session)
+                await jobs._validate_selected_design_owners(session, job, None, [design])
     finally:
         await engine.dispose()

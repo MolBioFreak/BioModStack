@@ -2646,7 +2646,7 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
     )
     is_caliby_antibody = model_id == "caliby_experimental" and has_antibody_params
     return (
-        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child", "bindcraft2"}
+        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
         or "antibody" in model_id
         or "antibody" in mode
         or is_antibody_pipeline_mode(rfd_mode)
