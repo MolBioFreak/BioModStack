@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from routers.models import router
@@ -12,6 +12,8 @@ from database import get_session
 from types import SimpleNamespace
 from services import bindcraft2_launch as launch
 from services.bindcraft2_native import compile_for_native, _canonical
+from schemas import JobCreate
+from routers.jobs import normalize_job_request
 import hashlib
 
 
@@ -112,3 +114,21 @@ def test_actual_image_cpu_compilation_and_native_handoff(tmp_path, monkeypatch):
                    check=True, capture_output=True, text=True, timeout=120)
     assert (tmp_path / 'job/bindcraft2/native_settings.json').is_file()
     assert launch.read_campaign_receipt(tmp_path / 'job')['effective_sha256'] == handoff['bc2_effective_sha256']
+
+
+def test_shared_prequeue_request_preserves_typed_bc2_campaign_shape():
+    class Registry:
+        def validate_job_params(self, model_id, mode, params, **kwargs):
+            assert (model_id, mode) == ('bindcraft2', 'campaign')
+            assert set(params) == {'bindcraft2_settings', 'bc2_preview_digest'}
+            return []
+
+    params = {'bindcraft2_settings': {'max_trajectories': 2}, 'bc2_preview_digest': 'a' * 64}
+    request = JobCreate(name='BC2 typed request', model_id='bindcraft2', mode='campaign', params=params)
+    normalized = normalize_job_request(request, registry=Registry())
+    assert normalized.params == params
+    assert request.params == params
+    invalid = request.model_copy(update={'params': {**params, 'bindcraft2_settings': {'max_trajectories': 0}}})
+    with pytest.raises(HTTPException) as exc:
+        normalize_job_request(invalid, registry=Registry())
+    assert exc.value.status_code == 422

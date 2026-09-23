@@ -5834,6 +5834,12 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if (normalized_model_id, normalized_mode) == ('bindcraft2', 'campaign'):
+        from services.bindcraft2_typed import validate_request
+        try:
+            validate_request(job_data.params.get('bindcraft2_settings'))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and job_data.params.get('cm_request_path'):
         from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
         native_entrypoint = native_entrypoint or MODEL_MODE_WORKFLOW_ENTRYPOINTS[(normalized_model_id, normalized_mode)]
@@ -6749,6 +6755,21 @@ async def _create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = dict(job_data.params)
+
+        if normalized_model_id == 'bindcraft2' and normalized_mode == 'campaign':
+            from services.bindcraft2_launch import materialize_campaign
+            try:
+                job_params = {
+                    **job_params,
+                    **await asyncio.to_thread(
+                        materialize_campaign,
+                        job_params['bindcraft2_settings'],
+                        Path(output_dir),
+                        preview_digest=job_params['bc2_preview_digest'],
+                    ),
+                }
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if is_md_launch:
             try:

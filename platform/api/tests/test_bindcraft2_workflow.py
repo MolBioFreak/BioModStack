@@ -12,8 +12,9 @@ def test_disabled_registry_declares_new_runtime_without_advertising_partial_sett
     assert model["container"] == "bindcraft2.sif"
     assert model["enabled"] is False and model["public_launch"] is False
     assert [mode['id'] for mode in model['modes']] == ['campaign']
-    assert model['modes'][0]['params'] == ['bindcraft2_settings']
-    assert [param['name'] for param in model['params']] == ['bindcraft2_settings']
+    assert model['modes'][0]['params'] == ['bindcraft2_settings', 'bc2_preview_digest']
+    assert [param['name'] for param in model['params']] == ['bindcraft2_settings', 'bc2_preview_digest']
+    assert next(p for p in model['params'] if p['name'] == 'bc2_preview_digest')['pattern'] == '^[0-9a-f]{64}$'
 
 
 def test_native_leaf_has_one_runtime_and_pinned_image():

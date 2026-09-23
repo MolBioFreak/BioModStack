@@ -21,12 +21,17 @@ modes:
   - id: campaign
     name: Native campaign
     description: Pinned typed scientific request; requires model-owned native compilation.
-    params: [bindcraft2_settings]
+    params: [bindcraft2_settings, bc2_preview_digest]
 params:
   - name: bindcraft2_settings
     type: object
     required: true
     description: Complete typed BindCraft2 native scientific settings, including finite max_trajectories.
+  - name: bc2_preview_digest
+    type: string
+    required: true
+    pattern: '^[0-9a-f]{64}$'
+    description: Digest of the pinned native preview for this exact request and governed source bytes.
 enabled: false
 experimental: true
 public_launch: false
