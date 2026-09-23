@@ -93,15 +93,14 @@ def test_boltz_complex_batch_supplied_and_short_peptide(monkeypatch, tmp_path):
     assert bound['components'][1:] == payload['components'][1:]
 
 
-def test_cp_all_configs_are_packaged_and_empty_preserved(monkeypatch, tmp_path):
+def test_cp_single_top_level_directory_config_is_packaged_and_empty_preserved(monkeypatch, tmp_path):
     from biomodstack_boltz_msa import resolve_boltz_config
     calls = provider_fixture(monkeypatch, tmp_path)
     source = tmp_path / 'configs'
-    (source / 'nested').mkdir(parents=True)
+    source.mkdir()
     payloads = {
-        'input.yaml': {'version': 1, 'sequences': [{'protein': {'id': ['B', 'C'], 'sequence': 'ACDE'}}]},
-        'nested/other.yml': {'version': 1, 'sequences': [
-            {'protein': {'id': 'A', 'sequence': 'FGHI'}},
+        'input.yml': {'version': 1, 'sequences': [
+            {'protein': {'id': ['B', 'C'], 'sequence': 'ACDE'}},
             {'protein': {'id': 'P', 'sequence': 'KLMN', 'msa': 'empty'}}]},
     }
     for name, payload in payloads.items():
@@ -109,7 +108,7 @@ def test_cp_all_configs_are_packaged_and_empty_preserved(monkeypatch, tmp_path):
     originals = {name: (source / name).read_bytes() for name in payloads}
     prepared = prepare_launch_msa('boltz_cp_experimental', {'boltz_use_msa': True,
         'msa_provider': 'colabfold_api', 'bcp_input_path': str(source)}, tmp_path / 'host')
-    assert [call[0] for call in calls] == [['ACDE'], ['FGHI']]
+    assert [call[0] for call in calls] == [['ACDE']]
     assert {name: (source / name).read_bytes() for name in payloads} == originals
     worker = tmp_path / 'worker'
     shutil.move(str(tmp_path / 'host'), worker)
@@ -122,10 +121,31 @@ def test_cp_all_configs_are_packaged_and_empty_preserved(monkeypatch, tmp_path):
         for item in bound['sequences']:
             protein = item['protein']
             assert protein['msa'] == 'empty' or Path(protein['msa']).is_relative_to(worker)
-    (worker / 'input.yaml').write_text('sequences: []\n')
+    (worker / 'input.yml').write_text('sequences: []\n')
     with pytest.raises(ValueError, match='config identity'):
-        resolve_boltz_config(worker / 'input.yaml', root=worker,
+        resolve_boltz_config(worker / 'input.yml', root=worker,
             manifest_sha256=prepared['boltz_prepared_msa_sha256'])
+
+
+@pytest.mark.parametrize('layout', ['multiple', 'nested', 'top_and_nested', 'empty'])
+def test_cp_unsupported_directory_roster_rejected_before_provider(monkeypatch, tmp_path, layout):
+    calls = provider_fixture(monkeypatch, tmp_path)
+    source = tmp_path / 'configs'
+    source.mkdir()
+    (source / 'nested').mkdir()
+    payload = {'sequences': [{'protein': {'id': 'A', 'sequence': 'ACDE'}}]}
+    if layout in {'multiple', 'top_and_nested'}:
+        (source / 'first.yaml').write_text(yaml.safe_dump(payload))
+    if layout == 'multiple':
+        (source / 'second.yml').write_text(yaml.safe_dump(payload))
+    if layout in {'nested', 'top_and_nested'}:
+        (source / 'nested' / 'other.yaml').write_text(yaml.safe_dump(payload))
+    destination = tmp_path / 'prepared'
+    with pytest.raises(ValueError, match='exactly one top-level YAML'):
+        prepare_launch_msa('boltz_cp_experimental', {
+            'boltz_use_msa': True, 'msa_provider': 'colabfold_api',
+            'bcp_input_path': str(source)}, destination)
+    assert not calls and not destination.exists()
 
 
 @pytest.mark.parametrize('provider', ['colabfold_api', 'neurosnap_api'])

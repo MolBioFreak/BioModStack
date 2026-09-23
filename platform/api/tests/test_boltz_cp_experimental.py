@@ -32,7 +32,9 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert model.name == "NVIDIA Fold-CP"
     assert model.experimental is False
     assert any(mode.id == "design" for mode in model.modes)
-    assert any(param.name == "input_path" for param in model.params)
+    input_path = next(param for param in model.params if param.name == "input_path")
+    assert "exactly one top-level YAML" in input_path.description
+    assert "Multiple or nested configs are unsupported" in input_path.description
     assert any(param.name == "gpu_ids" for param in model.params)
     assert any(param.name == "size_cp" for param in model.params)
 

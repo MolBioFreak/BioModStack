@@ -116,6 +116,32 @@ def test_fold_cp_binding_rejects_changed_inputs(tmp_path, monkeypatch, failure):
         _bind_protenix_msa_transport(inv, prepared)
 
 
+def test_fold_cp_directory_input_binds_only_its_single_top_level_config(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from component_runtime import canonical_bytes
+    calls = provider_double(monkeypatch, tmp_path)
+    inv = compiled(tmp_path)
+    source = Path(inv.native_parameters['bcp_input_path'])
+    config_dir = source.parent / 'native-configs'
+    config_dir.mkdir()
+    config = config_dir / 'native.yml'
+    config.write_bytes(source.read_bytes())
+    inv = replace(inv, native_parameters_json=canonical_bytes({**inv.native_parameters, 'bcp_input_path': str(config_dir)}))
+    prepared = prepare_launch_msa(inv.model_id, inv.native_parameters, tmp_path / 'out/prepared-msa')
+    assert [r['path'] for r in json.loads((Path(prepared['bcp_input_path']) / 'msa-inputs.json').read_text())['configs']] == ['native.yml']
+    assert _bind_protenix_msa_transport(inv, prepared).execution_plan.metadata.external_services[0].state == 'prepared'
+    assert len(calls) == 1
+
+    # A fabricated multi-config manifest must not gain publication authority.
+    manifest_path = Path(prepared['bcp_input_path']) / 'msa-inputs.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['configs'].append({**manifest['configs'][0], 'path': 'second.yaml'})
+    (manifest_path.parent / 'second.yaml').write_bytes((manifest_path.parent / 'native.yml').read_bytes())
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match='roster mismatch'):
+        _bind_protenix_msa_transport(inv, {**prepared, 'boltz_prepared_msa_sha256': digest(manifest_path.read_bytes())})
+
+
 @pytest.mark.parametrize('frustra', [False, True])
 def test_fold_cp_preview_is_input_preparation_not_generated_design(tmp_path, monkeypatch, frustra):
     calls = provider_double(monkeypatch, tmp_path)
