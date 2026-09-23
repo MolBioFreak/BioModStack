@@ -30,6 +30,7 @@ def test_fail_closed_unknown_nested_and_types():
                        {'weights_interface_contacts': '0.8'}, {'weights_interface_contacts': float('nan')},
                        {'binder_lengths': [100, 50]}, {'paratope_conformations': ['invented']}, {'mystery': 1},
                        {'filters': {'i_pTM': {'threshold': '0.8'}}},
+                       {'filters': {'i_pTM': {'higher': True}}},
                        {'filters': {'unlisted': {'threshold': 0.7}}},
                        {'losses': {'interface_contacts': {'params': {'wrong': 2}}}},
                        {'targets': [{'name': 'x', 'target_path': 'a.cif', 'bogus': 3}]},

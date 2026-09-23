@@ -10,6 +10,7 @@ export default defineConfig({
             './tests/vitest/installFeaturesMounted.test.tsx',
             './tests/vitest/msaProviderReadinessMounted.test.tsx',
             './tests/vitest/esmfold2SettingsMounted.test.tsx',
+            './tests/vitest/BindCraft2Settings.test.tsx',
             './tests/vitest/msaServerMenu.test.tsx',
             './tests/vitest/frontendPollingMounted.test.tsx',
             './tests/vitest/quickViewerSettings.test.tsx',

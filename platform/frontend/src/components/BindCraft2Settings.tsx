@@ -65,11 +65,18 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
         const entry = entries[metric]
         return <fieldset key={metric}><legend>{metric}</legend>
           <label>Enable <input type="checkbox" aria-label={`${key}.${metric}.enabled`} checked={entry !== undefined} onChange={event => {
-            if (event.currentTarget.checked) update(metric, key === 'filters' ? { threshold: 0, higher: true } : { params: {} })
+            if (event.currentTarget.checked) {
+              const nativeDefault = (field.has_native_default ? field.native_default : null) as Record<string, Record<string, unknown>> | null
+              // A new filter has no cutoff until the operator supplies one.
+              // Existing presets may provide a model-owned cutoff; never invent 0.
+              update(metric, key === 'filters'
+                ? (nativeDefault?.[metric] ? { ...nativeDefault[metric] } : { higher: true })
+                : { params: {} })
+            }
             else { const copy = { ...entries }; delete copy[metric]; set(key, copy) }
           }} /></label>
           {entry && <>
-            {key === 'filters' && <><label>Threshold <input type="number" step="any" aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => update(metric, { ...entry, threshold: Number(event.currentTarget.value) })} /></label>
+            {key === 'filters' && <><label>Threshold <input type="number" step="any" required aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => update(metric, { ...entry, threshold: event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value) })} /></label>
               {(['higher', 'mandatory'] as const).map(flag => <label key={flag}>{flag}<input type="checkbox" aria-label={`${key}.${metric}.${flag}`} checked={entry[flag] !== false} onChange={event => update(metric, { ...entry, [flag]: event.currentTarget.checked })} /></label>)}</>}
             {Object.entries(info.params).map(([param, descriptor]) => {
               const defaultValue = descriptor.default_literal

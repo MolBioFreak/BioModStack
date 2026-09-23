@@ -74,6 +74,8 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                     registered = data["registered_metrics"][name].get(metric)
                     if registered is None or not isinstance(entry, dict):
                         raise ValueError(f"{name}.{metric}: unknown metric or invalid entry")
+                    if name == "filters" and "threshold" not in entry:
+                        raise ValueError(f"{name}.{metric}.threshold: explicit cutoff required")
                     allowed = set(data["nested_surfaces"][name][metric]["entry_keys"])
                     for key, entry_value in entry.items():
                         if key not in allowed:
