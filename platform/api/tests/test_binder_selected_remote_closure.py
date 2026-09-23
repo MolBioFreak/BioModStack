@@ -64,3 +64,7 @@ def test_maturation_manifest_and_each_native_pdb_are_portable(tmp_path, monkeypa
     assert bundle._rewrite_maturation_pdb_paths(params['pdb_paths'], mapping) == (
         '/worker/inputs/source_000000.pdb,/worker/inputs/source_000001.pdb')
     assert bundle._rewrite(params['source_identity_json'], mapping) == '/worker/inputs/source_identity.json'
+    unrelated = bundle._input_assets({'pdb_paths': str(first)}, native_invocation=SimpleNamespace(  # type: ignore[arg-type]
+        model_id='antibody_denovo', mode='design', generated_inputs=()),
+        repo_root=tmp_path / 'source', runtime_paths=set(), output_dir=root / 'other')
+    assert {path for path, _ in unrelated} == {first}

@@ -538,8 +538,10 @@ def _input_assets(
             raise RemoteBundleError(f"Native runtime field has no selected dependency binding: {key}")
     candidates = list(_flatten_strings({key: value for key, value in params.items()
                                    if key not in destinations and key not in runtime_fields
-                                   and key != 'pdb_paths'}))
-    if native_invocation.mode == 'maturation_child' and params.get('pdb_paths'):
+                                   and not (key == 'pdb_paths' and native_invocation.model_id == 'template_antibody_denovo'
+                                            and native_invocation.mode == 'maturation_child')}))
+    if (native_invocation.model_id == 'template_antibody_denovo'
+            and native_invocation.mode == 'maturation_child' and params.get('pdb_paths')):
         # Native child syntax is a comma-separated list, not one filesystem path.
         candidates.extend(part.strip() for part in str(params['pdb_paths']).split(',') if part.strip())
     for raw in candidates:
