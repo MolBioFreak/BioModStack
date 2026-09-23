@@ -1325,6 +1325,11 @@ def _should_normalize_antibody_job_params(
 ) -> bool:
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
+    # A model-owned native request is never an antibody-pipeline parameter bag.
+    # In particular these distinct model routes must not acquire implicit
+    # validator, chain, gate, or PPIFlow defaults during shared job admission.
+    if normalized_model_id in {"bindcraft2", "ligandmpnn"}:
+        return False
     if (
         normalized_model_id == "protein_local_redesign"
         and normalized_mode == "local_redesign"
