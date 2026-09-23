@@ -36,6 +36,20 @@ def test_readonly_routes_and_real_catalog_validation(monkeypatch):
     assert 'physical_console_verified' not in body
 
 
+def test_preflight_preserves_catalog_refusal_receipt_compatibility(monkeypatch):
+    from test_bioxp_operator_controls import refusal_stop_receipt
+    client, runtime = setup(monkeypatch)
+    catalog = runtime.connection.client.responses['operator_control_catalog_v2']
+    catalog['dashboard']['latest_receipts'] = [refusal_stop_receipt()]
+    result = client.get(PATH, params={'expected_connection_generation': 77})
+    assert result.status_code == 200, result.text
+    assert result.json()['preflight']['reference_snapshot'] == reference()
+    # Compatibility backfill never changes the original refusal into stop evidence.
+    evidence = catalog['dashboard']['latest_receipts'][0]['interrupt_evidence']
+    assert evidence['physical_effect_verified'] is False
+    assert 'source_call_completed' not in evidence
+
+
 def test_real_http_client_registration_fresh_reads_and_no_cache(tmp_path):
     import asyncio
     import httpx

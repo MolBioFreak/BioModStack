@@ -14,7 +14,7 @@ from services.bioxp.protocol_models import (
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
-from .operator_controls import _translate_robot_error
+from .operator_controls import _normalize_interrupt_evidence, _translate_robot_error
 
 router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
@@ -79,7 +79,7 @@ async def get_transfer_preflight(
             params={"schema_version": "bioxp.operator_control_catalog.v2"})
         if runtime.connection.snapshot().generation != generation:
             raise HTTPException(status_code=409, detail="Connection changed during transfer preflight")
-        return transfer_preflight(reference, catalog, generation)
+        return transfer_preflight(reference, _normalize_interrupt_evidence(catalog), generation)
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
     except ValidationError as exc:
