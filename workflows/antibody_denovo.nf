@@ -88,41 +88,17 @@ def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
 
 
 def extractSequenceFromPDB(pdb_file) {
-    def aa_codes = [
-        'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-        'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-        'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-        'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
-    ]
-    
-    def chain_sequences = [:] as LinkedHashMap  // Preserve chain order
-    def seen_residues = [:] as Map  // Per-chain residue tracking
-    
-    try {
-        pdb_file.eachLine { line ->
-            if (line.startsWith('ATOM') && line.length() >= 26 && line.substring(12, 16).trim() == 'CA') {
-                def resName = line.substring(17, 20).trim()
-                def resNum = line.substring(22, 26).trim()
-                def chain = line.substring(21, 22)
-                def key = "${chain}_${resNum}"
-                
-                if (!seen_residues.containsKey(chain)) {
-                    seen_residues[chain] = [] as Set
-                    chain_sequences[chain] = []
-                }
-                
-                if (!seen_residues[chain].contains(key) && aa_codes.containsKey(resName)) {
-                    seen_residues[chain].add(key)
-                    chain_sequences[chain] << aa_codes[resName]
-                }
-            }
-        }
-    } catch (Exception e) {
-        return "AAAA"
+    def command = ['python3', "${params.code_root}/scripts/extract_antibody_pdb_sequence.py", pdb_file.toString()]
+    def process = new ProcessBuilder(command).redirectErrorStream(true).start()
+    def output = process.inputStream.getText('UTF-8')
+    if (process.waitFor() != 0) {
+        throw new IllegalArgumentException("Invalid validation structure ${pdb_file}: ${output.trim()}")
     }
-    
-    def result = chain_sequences.values().collect { it.join('') }.join(':')
-    return result ?: "AAAA"
+    def chains = new JsonSlurper().parseText(output).chains
+    if (!chains || chains.any { !it.chain || !it.sequence }) {
+        throw new IllegalArgumentException("Invalid validation structure ${pdb_file}: no chain sequence")
+    }
+    return chains.collect { it.sequence }.join(':')
 }
 
 def parseFastaRecords(fasta_file) {
