@@ -7,6 +7,8 @@ export type BC2Field = {
   native_default: unknown
   choices?: string[]
   runtime_fallback?: unknown
+  applicable_when?: Record<string, unknown>
+  fallback_authority?: string
   status: 'typed' | 'unresolved'
 }
 export type BC2Inventory = {
@@ -144,7 +146,7 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
     {Object.entries(inventory.fields).filter(([key]) => !internal.has(key)).map(([key, field]) => {
       const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
         ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep', 'binder_shapes', 'validation_models', 'crop_fasta_sequence', 'multitarget_rounds_per_target'].includes(key))
-      return <div key={key}><label>{key}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}{!field.has_native_default && field.runtime_fallback !== undefined && <small> Native runtime fallback when omitted: {JSON.stringify(field.runtime_fallback)}</small>}
+      return <div key={key}><label>{key}{field.applicable_when && <small> Applies when relax_accepted_designs is enabled; omitted values use native relaxation defaults.</small>}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}{!field.has_native_default && field.runtime_fallback !== undefined && <small> {field.fallback_authority ? 'Native relaxation fallback when omitted' : 'Native runtime fallback when omitted'}: {JSON.stringify(field.runtime_fallback)}</small>}
         {supported ? control(key, field) : <span> Unsupported typed control / unresolved source type</span>}</label></div>
     })}
   </section>

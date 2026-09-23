@@ -21,6 +21,7 @@ const inventory: BC2Inventory = {
     validation_models: { native_key: 'validation_models', observed_types: ['integer', 'array'], has_native_default: false, native_default: null, status: 'typed' },
     humanize: { native_key: 'humanize', observed_types: ['boolean'], has_native_default: false, native_default: null, status: 'typed' },
     gpu_ids: { native_key: 'gpu_ids', observed_types: [], has_native_default: false, native_default: null, status: 'unresolved' },
+    ...Object.fromEntries(Object.entries({ relax_steps: 200, relax_learning_rate: 0.02, relax_restraint_backbone: 10, relax_restraint_sidechain: 0.5, relax_weight_bond: 100, relax_weight_clash: 5, relax_overlap_tol: 0.4, relax_min_sep: 2.5 }).map(([key, fallback]) => [key, { native_key: key, observed_types: [key === 'relax_steps' ? 'integer' : 'number'], has_native_default: false, native_default: null, runtime_fallback: fallback, applicable_when: { relax_accepted_designs: true }, fallback_authority: 'bindcraft.protein.default_relax_parameters', status: 'typed' as const }])),
   },
   presets: {}, paratope_conformations: ['extended', 'folded_back'], registered_metrics: { filters: {
     i_pTM: { params: { prediction_state: { default_literal: 'complex', source_default: "'complex'", request_types: ['string'] } } },
@@ -106,6 +107,37 @@ describe('BC2 model-owned operator adapter', () => {
     domAct(() => root.unmount())
     host.remove()
   })
+})
+
+it('mounts every optional native relaxation numeric control without filling omitted values', () => {
+  let latest: Record<string, unknown> = {}
+  function Form() {
+    const [value, setValue] = useState<Record<string, unknown>>({ max_trajectories: 3 })
+    latest = value
+    return <BindCraft2Settings inventory={inventory} value={value} onChange={setValue} />
+  }
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host)
+  domAct(() => root.render(<Form />))
+  try {
+    const keys = Object.keys(inventory.fields).filter(key => key.startsWith('relax_'))
+    expect(keys).toHaveLength(8)
+    for (const key of keys) {
+      const input = host.querySelector<HTMLInputElement>(`[aria-label="${key}"]`)!
+      expect(input).not.toBeNull()
+      expect(input.type).toBe('number')
+      expect(input.value).toBe('')
+      const label = input.closest('label')!.textContent!
+      expect(label).toContain('Applies when relax_accepted_designs is enabled')
+      expect(label).toContain('Native relaxation fallback when omitted')
+    }
+    expect(keys.every(key => !(key in latest))).toBe(true)
+    const steps = host.querySelector<HTMLInputElement>('[aria-label="relax_steps"]')!
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    domAct(() => { setter.call(steps, '12'); steps.dispatchEvent(new Event('input', { bubbles: true })) })
+    expect(latest.relax_steps).toBe(12)
+    expect(keys.filter(key => key in latest)).toEqual(['relax_steps'])
+  } finally { domAct(() => root.unmount()); host.remove() }
 })
 
 it('mounted scientific controls emit typed operator edits', () => {
