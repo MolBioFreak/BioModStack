@@ -41,6 +41,7 @@ workflow MATURATION_CHILD {
     emit:
     matured_pdbs = MATURATION_CHILD_IMPL.out.matured_pdbs
     scores = MATURATION_CHILD_IMPL.out.scores
+    sample_identity = MATURATION_CHILD_IMPL.out.sample_identity
 }
 
 // Entry point for direct invocation

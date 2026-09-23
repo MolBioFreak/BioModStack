@@ -1303,18 +1303,21 @@ process CollectMaturationOutputs {
 process StageValidatedMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/source_identity.json", saveAs: { fn -> fn.replace('input_pdbs/', '') }
 
     input:
-    path pdbs
+    tuple val(identity_json), path(pdbs)
 
     output:
     path "input_pdbs", emit: pdb_dir
 
     script:
+    def encodedIdentity = identity_json.bytes.encodeBase64().toString()
     """
-    mkdir -p input_pdbs
-    cp ${pdbs} input_pdbs/ 2>/dev/null || true
+    set -euo pipefail
+    printf '%s' '${encodedIdentity}' | base64 --decode > selected_source_identity.json
+    python3 ${params.code_root}/scripts/maturation_identity.py stage selected_source_identity.json input_pdbs
     """
 }
 
@@ -3229,9 +3232,14 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
             }
 
             validated_maturation_inputs = validated_structures
-                .map { meta, pdb -> pdb }
+                .map { meta, pdb -> [meta: meta, path: pdb.toString(), pdb: pdb] }
                 .collect()
-                .filter { pdbs -> pdbs && pdbs.size() > 0 }
+                .filter { items -> items && items.size() > 0 }
+                .map { items ->
+                    tuple(groovy.json.JsonOutput.toJson(items.collect { item ->
+                        [meta: item.meta, path: item.path]
+                    }), items.collect { item -> item.pdb })
+                }
 
             StageValidatedMaturationInputs(validated_maturation_inputs)
 
@@ -3272,14 +3280,26 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 }
             }
 
-            // These are new, unvalidated descendants. A pre-maturation predictor
-            // result belongs to its input document, not to changed coordinates.
-            validated_structures = CollectValidatedMaturationOutputs.out.pdbs
-                .flatten()
-                .map { pdb ->
-                    def meta = [id: pdb.baseName, validation_status: 'unvalidated',
-                                terminal_producer: 'ppiflow_maturation_post_validation']
-                    [meta, pdb]
+            // Native sidecars carry exact child sample/source identity. A missing
+            // historical association stays unknown; never infer validation or
+            // ancestry from a copied filename.
+            validated_structures = CollectValidatedMaturationOutputs.out.manifest
+                .flatMap { manifest_file ->
+                    def report = new groovy.json.JsonSlurper().parse(manifest_file)
+                    (report.samples ?: []).collect { sample ->
+                        def evidence = sample.identity instanceof Map ? sample.identity : [:]
+                        def sampleMeta = evidence.sample_meta instanceof Map ? evidence.sample_meta : [:]
+                        def source = evidence.source instanceof Map ? evidence.source : [:]
+                        def sourceMeta = source.source_meta instanceof Map ? source.source_meta : [:]
+                        def meta = new LinkedHashMap(sampleMeta)
+                        meta.id = sampleMeta.id ?: sample.pdb.toString().replace('.pdb', '')
+                        meta.source_document_id = sourceMeta.id ?: null
+                        meta.source_structure_state = sourceMeta.structure_state ?: sourceMeta.target_state ?: null
+                        meta.source_meta = sourceMeta
+                        meta.validation_status = 'unvalidated'
+                        meta.terminal_producer = 'ppiflow_maturation_post_validation'
+                        tuple(meta, file("${manifest_file.parent}/${sample.pdb}"))
+                    }
                 }
         }
     }

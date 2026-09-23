@@ -115,6 +115,25 @@ def resolveMaturationRankingScore(parsed, boolean strict) {
          (parsed.delta_interface_score ?: 0.0))
 }
 
+process PublishMaturationSampleIdentity {
+    label 'process_low'
+    publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_sample_identity.json'
+
+    input:
+    tuple val(meta), path(sample_pdb)
+
+    output:
+    path '*_sample_identity.json', emit: sidecar
+
+    script:
+    def encodedMeta = groovy.json.JsonOutput.toJson(meta)
+    def sourceManifest = params.get('source_identity_json') ?: ''
+    """
+    python3 ${params.code_root}/scripts/maturation_identity.py sample \\
+        "${sourceManifest}" '${encodedMeta}' "${sample_pdb}" "${sample_pdb.baseName}_sample_identity.json"
+    """
+}
+
 workflow MATURATION_CHILD_CORE {
     take:
     pdb_list
@@ -139,10 +158,19 @@ workflow MATURATION_CHILD_CORE {
     // A missing redesign request is not consent to mutate the flow backbone.
     def runRedesign = (params.maturation_redesign_enabled == true) && ppiflowMode != 'backbone_refine'
 
+    def sourceIdentityFile = params.get('source_identity_json')
+    def sourceRows = sourceIdentityFile ? new groovy.json.JsonSlurper().parse(new File(sourceIdentityFile.toString())) : []
+    def sourceByName = sourceRows.collectEntries { row -> [(row.staged_name.toString()): row] }
     def anchor_inputs = Channel
         .from(pdb_list)
         .map { pdb ->
-            def meta = [id: pdb.baseName]
+            def source = sourceByName[pdb.name]
+            def sourceMeta = source?.source_meta instanceof Map ? source.source_meta : [:]
+            def meta = new LinkedHashMap(sourceMeta)
+            meta.id = pdb.baseName
+            meta.source_staged_name = source?.staged_name ?: pdb.name
+            meta.source_document_id = sourceMeta.id ?: null
+            meta.source_structure_state = sourceMeta.structure_state ?: sourceMeta.target_state ?: null
             tuple(meta, pdb)
         }
 
@@ -172,6 +200,8 @@ workflow MATURATION_CHILD_CORE {
             def sampleMeta = new LinkedHashMap(meta)
             sampleMeta.parent_id = meta.id
             sampleMeta.id = backbone_pdb.baseName
+            sampleMeta.validation_status = 'unvalidated'
+            sampleMeta.terminal_producer = 'ppiflow_maturation_post_validation'
             sampleMeta.sample_index = manifestEntry.sample_index
             if (strictScientificContract) {
                 if (!manifestEntry.comparison_path) throw new IllegalArgumentException('Missing native comparison publication')
@@ -313,9 +343,11 @@ workflow MATURATION_CHILD_CORE {
             tuple(representativeMeta, maturedPdbList, scoreJsonList)
         }
 
+    PublishMaturationSampleIdentity(final_matured)
     FilterByMaturation(filter_inputs)
 
     emit:
     matured_pdbs = FilterByMaturation.out.pdbs
     scores = FilterByMaturation.out.filter_reports
+    sample_identity = PublishMaturationSampleIdentity.out.sidecar
 }

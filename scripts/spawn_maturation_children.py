@@ -74,6 +74,8 @@ def check_existing_children(parent_job_id, stage, api_url, batch_name=None):
 def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_prefix, stage, params_json, api_url):
     pdb_dir = Path(pdb_dir)
     pdb_files = sorted(pdb_dir.glob("*.pdb"))
+    source_manifest_path = pdb_dir / 'source_identity.json'
+    source_rows = json.loads(source_manifest_path.read_text()) if source_manifest_path.exists() else []
     if not pdb_files:
         print("[SPAWN-MAT] No PDB files found to spawn.", file=sys.stderr)
         return {"status": "no_inputs", "spawned_jobs": 0, "child_jobs": []}
@@ -163,6 +165,7 @@ def spawn_jobs(parent_job_id, pdb_dir, designs_per_job, batch_name, display_pref
             "mode": "maturation_child",
             "params": {
                 "pdb_paths": pdb_paths,
+                **({'source_identity_json': str(source_manifest_path.resolve())} if source_rows else {}),
                 "job_index": i,
                 "total_jobs": num_jobs,
                 "maturation_stage_name": stage,

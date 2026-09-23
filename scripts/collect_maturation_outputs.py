@@ -57,7 +57,7 @@ def candidate_output_dirs(raw_output_dir):
 
 def collect_files(output_dirs, patterns, subdirs, predicate=None, accepted=None):
     collected = []
-    seen_names = set()
+    seen_paths = set()
     for job_idx, output_dir in enumerate(output_dirs):
         dir_candidates = candidate_output_dirs(output_dir)
         dir_path = next((candidate for candidate in dir_candidates if candidate.exists()), None)
@@ -75,7 +75,7 @@ def collect_files(output_dirs, patterns, subdirs, predicate=None, accepted=None)
                 for path in search_path.glob(pattern):
                     if predicate is not None and not predicate(path):
                         continue
-                    if path.name in seen_names:
+                    if path.resolve() in seen_paths:
                         continue
                     dest = resolve_dest_name(path, job_idx)
                     if not dest.exists():
@@ -83,7 +83,7 @@ def collect_files(output_dirs, patterns, subdirs, predicate=None, accepted=None)
                         collected.append(str(dest))
                         if accepted is not None:
                             accepted[str(output_dir)].append(path)
-                        seen_names.add(path.name)
+                        seen_paths.add(path.resolve())
                         print(f"Collected: {path} -> {dest}")
     return collected
 
@@ -115,6 +115,18 @@ def main():
         accepted=accepted,
         predicate=is_final_ppiflow_pdb,
     )
+    pdb_sources = [(output_dir, path) for output_dir in output_dirs for path in accepted[str(output_dir)]]
+    sample_rows = []
+    for collected_name, (output_dir, original) in zip(pdbs, pdb_sources):
+        root = next((candidate for candidate in candidate_output_dirs(output_dir) if candidate.exists()), None)
+        sidecar = root / 'run/ppiflow/sample_identity' / f'{original.stem}_sample_identity.json' if root else None
+        identity = json.loads(sidecar.read_text()) if sidecar and sidecar.is_file() else None
+        # The emitted sidecar names the exact native document; never infer a
+        # source from the filename when the native sidecar is absent.
+        if identity and identity.get('pdb_name') != original.name:
+            identity = None
+        sample_rows.append({'pdb': collected_name, 'child_output_dir': str(output_dir),
+                            'native_pdb': str(original), 'identity': identity})
 
     jsons = collect_files(
         output_dirs,
@@ -149,6 +161,7 @@ def main():
         "stage": args.stage_name,
         "source_dirs": output_dirs,
         "collected_pdbs": pdbs,
+        "samples": sample_rows,
         "collected_jsons": jsons,
         "collected_txts": txts,
         "collected_csvs": csvs,
