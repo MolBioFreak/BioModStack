@@ -226,7 +226,12 @@ def inspect_msa_cache(model_id: str, params: dict) -> dict:
                     tasks.setdefault(task, []).append(chain['sequence'])
             groups = list(tasks.values())
     else:
-        components = params.get('esmf_complex_components') or params.get('complex_components')
+        components = params.get('esmf_complex_components', params.get('complex_components'))
+        raw = params.get('esmf_complex_components_json') or params.get('complex_components_json')
+        if components is not None and raw:
+            raise ValueError('conflicting component sources')
+        if raw:
+            components = json.loads(raw)
         if isinstance(components, str):
             components = json.loads(components)
         if components:

@@ -112,7 +112,7 @@ it('allows cache-only after all protein chains have verified hits', async () => 
     expect(posts[0].params.msa_cache_only).toBe(true);
 });
 
-it('keeps uncompiled batch cache unresolved rather than certifying the displaced chain', async () => {
+it('submits an unresolved authoring-time batch for authoritative native cache preparation', async () => {
     await mount({ ...fixture, bcp_size_cp: 1, boltz_use_msa: true, msa_cache_only: true,
         sequence_batch_input: 'variant1: VVVVVV\nvariant2: LLLLLL', sequence_batch_component_id: 'B',
         complex_components: [
@@ -125,7 +125,9 @@ it('keeps uncompiled batch cache unresolved rather than certifying the displaced
         expect.objectContaining({ sequence: 'VVVVVV' }), expect.objectContaining({ sequence: 'LLLLLL' }),
     ]));
     await click('Launch Prediction');
-    expect(posts).toHaveLength(0);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params).toMatchObject({ msa_cache_only: true,
+        sequence_batch_entries: [{ name: 'variant1', sequence: 'VVVVVV' }, { name: 'variant2', sequence: 'LLLLLL' }] });
 });
 
 it('names stale remote telemetry, refuses launch, and refreshes without stale-capacity bypass', async () => {

@@ -1170,7 +1170,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const handleSubmit = async () => {
         let submission;
         try {
-            if (msaNeeded && msaCacheOnly && !msaCacheReady) {
+            // Authoring-time batches are compiled into native tasks at launch;
+            // inspection cannot certify their placeholder roster.
+            if (msaNeeded && msaCacheOnly && !hasBatchEntries && !msaCacheReady) {
                 throw new Error(msaCacheError || 'Use Cache Only requires a verified native request cache replay.');
             }
             submission = buildSubmission(null, false, true);

@@ -1,4 +1,5 @@
 """Native cache and Fold-CP admission boundaries without provider I/O."""
+import json
 from pathlib import Path
 
 import pytest
@@ -55,3 +56,36 @@ def test_uncompiled_batch_cannot_claim_native_cache_ready(monkeypatch):
         'boltz_use_msa': True, 'msa_provider': 'colabfold_api', 'msa_cache_only': True, 'sequence': 'ACDE',
         'sequence_batch_entries': [{'name': 'variant', 'sequence': 'FGHI'}],
     }) == {'state': 'unresolved'}
+
+
+@pytest.mark.parametrize('component_key', ['esmf_complex_components_json', 'complex_components_json'])
+def test_esmfold_cache_inspects_native_complex_not_unrelated_primary(component_key, monkeypatch):
+    from biomodstack_msa_api import MSACacheMiss
+
+    calls = []
+    cached = ['ACDE', 'FGHI']
+    def replay(*, sequences, params):
+        calls.append(sequences)
+        if sequences != cached:
+            raise MSACacheMiss()
+        return {'cache_hit': True}
+
+    monkeypatch.setattr('services.msa_preparation.replay_model_msa', replay)
+    params = {
+        'esmf_use_msa': True, 'msa_cache_only': True, 'msa_provider': 'colabfold_api',
+        'core_protein_scientific_contract': 1, 'esmf_sequence': 'WRONG',
+        component_key: json.dumps([
+            {'id': 'A', 'type': 'protein', 'sequence': 'ACDE'},
+            {'id': 'B', 'type': 'peptide', 'sequence': 'FGHI'},
+            {'id': 'C', 'type': 'ligand', 'sequence': 'IGNORED'},
+        ]),
+    }
+    assert setup.inspect_msa_cache('esmfold2', params) == {'state': 'ready'}
+    assert calls == [['ACDE', 'FGHI']]
+
+    calls.clear()
+    cached = ['WRONG']  # A cached primary must not certify a different complex.
+    assert setup.inspect_msa_cache('esmfold2', params) == {'state': 'miss'}
+    assert calls == [['ACDE', 'FGHI']]
+    with pytest.raises(ValueError, match='cache miss for native request roster'):
+        setup.preflight_msa_provider('esmfold2', params)
