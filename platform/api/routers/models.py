@@ -345,6 +345,22 @@ async def list_categories():
     return {"categories": registry.get_categories()}
 
 
+@router.get("/bindcraft2/native-settings")
+async def get_bindcraft2_native_settings():
+    """Discover pinned BC2 controls without granting launch authority.
+
+    The operator and agent adapters can read the same typed inventory while the
+    executable model is unavailable. Public launch remains registry-owned.
+    """
+    from services.bindcraft2_typed import schema
+
+    return {
+        "model_id": "bindcraft2",
+        "launch_available": get_registry().get_model("bindcraft2") is not None,
+        "settings": schema(),
+    }
+
+
 @router.get("/{model_id}")
 async def get_model(model_id: str):
     """
