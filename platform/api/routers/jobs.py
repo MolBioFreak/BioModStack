@@ -2708,6 +2708,41 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
     return source_job, root_job
 
 
+async def _validate_selected_design_owners(
+    session: AsyncSession,
+    source_job: Job,
+    root_job: Optional[Job],
+    designs: List[Design],
+) -> None:
+    """Refuse a foreign Design before copying or linking any selected input."""
+    owner_roots: Dict[str, str] = {}
+    for design in designs:
+        owner_id = str(getattr(design, "job_id", "") or "").strip()
+        if not owner_id:
+            raise HTTPException(status_code=422, detail="Selected design has no source job owner.")
+        if root_job is not None:
+            claimed_root = str(getattr(design, "lineage_root_job_id", "") or "").strip()
+            if claimed_root and claimed_root != root_job.id:
+                raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
+        if owner_id in owner_roots:
+            continue
+        owner = await session.get(Job, owner_id)
+        if owner is None:
+            raise HTTPException(status_code=422, detail="Selected design source job is missing.")
+        if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
+            owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
+            continue
+        if root_job is None:
+            raise HTTPException(status_code=422, detail="Selected design belongs to another job.")
+        try:
+            _, owner_root = await _resolve_antibody_root_job(session, owner_id)
+        except HTTPException as exc:
+            raise HTTPException(status_code=422, detail="Selected design has no compatible source lineage.") from exc
+        if owner_root.id != root_job.id:
+            raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
+        owner_roots[owner_id] = owner_root.id
+
+
 def _normalize_design_ids(values: List[str]) -> List[str]:
     normalized: List[str] = []
     seen: set[str] = set()
@@ -7656,6 +7691,7 @@ async def launch_antibody_iteration_from_designs(
 
     action = request.action.strip().lower()
     ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    await _validate_selected_design_owners(session, source_job, root_job, ordered_designs)
     if action == "frustrampnn":
         if (
             request.param_overrides
@@ -7839,6 +7875,7 @@ async def launch_manual_mutagenesis_from_designs(
         )
 
     ordered_designs = [design_by_id[design_id] for design_id in design_ids]
+    await _validate_selected_design_owners(session, source_job, root_job, ordered_designs)
     launch_request, variant_count, variant_note = _build_manual_mutagenesis_iteration_job(
         source_job=source_job,
         designs=ordered_designs,
