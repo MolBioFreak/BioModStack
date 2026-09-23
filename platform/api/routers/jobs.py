@@ -2646,7 +2646,7 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
     )
     is_caliby_antibody = model_id == "caliby_experimental" and has_antibody_params
     return (
-        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child"}
+        model_id in {"template_antibody_denovo", "antibody_denovo", "antibody_child", "bindcraft2"}
         or "antibody" in model_id
         or "antibody" in mode
         or is_antibody_pipeline_mode(rfd_mode)
@@ -2729,6 +2729,9 @@ async def _validate_selected_design_owners(
         owner = await session.get(Job, owner_id)
         if owner is None:
             raise HTTPException(status_code=422, detail="Selected design source job is missing.")
+        if owner.model_id == 'bindcraft2':
+            from services.bindcraft2_publication import read_published_native_results
+            await read_published_native_results(owner, session)
         if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
             owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
             continue
@@ -3017,6 +3020,83 @@ def _extract_chain_records_from_pdb(pdb_path: Path) -> Dict[str, List[Dict[str, 
     return chain_records
 
 
+def _extract_chain_records_from_structure(path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    if path.suffix.lower() not in {'.cif', '.mmcif'}:
+        return _extract_chain_records_from_pdb(path)
+    from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+
+    data = MMCIF2Dict(str(path))
+    def column(*names: str) -> list[str]:
+        for name in names:
+            if name in data:
+                return data[name]
+        return []
+    atoms = column('_atom_site.auth_atom_id', '_atom_site.label_atom_id')
+    residues = column('_atom_site.auth_comp_id', '_atom_site.label_comp_id')
+    chains = column('_atom_site.auth_asym_id', '_atom_site.label_asym_id')
+    numbers = column('_atom_site.auth_seq_id', '_atom_site.label_seq_id')
+    insertions = column('_atom_site.pdbx_PDB_ins_code')
+    groups = column('_atom_site.group_PDB')
+    if not (len(atoms) == len(residues) == len(chains) == len(numbers) == len(groups)):
+        return {}
+    if not insertions:
+        insertions = ['?'] * len(atoms)
+    if len(insertions) != len(atoms):
+        return {}
+    records: Dict[str, List[Dict[str, Any]]] = {}
+    seen: Dict[str, set[tuple[int, str]]] = {}
+    for group, atom, residue, chain, number, insertion in zip(
+            groups, atoms, residues, chains, numbers, insertions):
+        if group != 'ATOM' or atom != 'CA' or residue not in AA_CODES:
+            continue
+        try:
+            resseq = int(number)
+        except ValueError:
+            continue
+        chain_id = chain.upper()
+        icode = '' if insertion in {'.', '?'} else insertion
+        key = (resseq, icode)
+        if key in seen.setdefault(chain_id, set()):
+            continue
+        seen[chain_id].add(key)
+        records.setdefault(chain_id, []).append({'resseq': resseq, 'icode': icode,
+                                                  'aa': AA_CODES[residue]})
+    return records
+
+
+def _cif_selection_pdb(source: Path, destination: Path) -> Path:
+    """Materialize only representable CIF coordinates for a PDB-only consumer."""
+    from Bio.PDB import MMCIFParser, PDBIO
+    from Bio.PDB.PDBParser import PDBParser
+    structure = MMCIFParser(QUIET=True).get_structure('selected', str(source))
+    def identity(model):
+        return [(chain.id, residue.id, residue.resname,
+                 tuple((atom.id, atom.coord.tolist()) for atom in residue))
+                for chain in model for residue in chain]
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError('Selected CIF has no single PDB-representable model')
+    original = identity(models[0])
+    if not original or any(len(chain) != 1 or not (1 <= residue_id[1] <= 9999)
+                           or residue_id[2] not in {' ', '', '?'}
+                           for chain, residue_id, _, _ in original):
+        raise ValueError('Selected CIF chain/residue identifiers cannot be represented in PDB')
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(str(destination))
+    converted = PDBParser(QUIET=True).get_structure('selected', str(destination))
+    after = identity(next(iter(converted)))
+    if len(after) != len(original) or any(
+            (a[0], a[1], a[2], [atom[0] for atom in a[3]]) !=
+            (b[0], b[1], b[2], [atom[0] for atom in b[3]]) or
+            any(any(abs(x - y) > 0.0011 for x, y in zip(atom_a[1], atom_b[1]))
+                for atom_a, atom_b in zip(a[3], b[3]))
+            for a, b in zip(original, after)):
+        destination.unlink(missing_ok=True)
+        raise ValueError('Selected CIF to PDB conversion lost chain, residue or atom mapping')
+    return destination
+
+
 def _resolve_loop_region_map(root_job: Job) -> Dict[str, tuple[int, int]]:
     params = root_job.params if isinstance(root_job.params, dict) else {}
     region_map: Dict[str, tuple[int, int]] = {}
@@ -3237,7 +3317,7 @@ def _generate_manual_mutagenesis_variants(
 
     for design in designs:
         design_path = _resolve_design_structure_path(design.pdb_path)
-        chain_records = _extract_chain_records_from_pdb(design_path)
+        chain_records = _extract_chain_records_from_structure(design_path)
         if not chain_records:
             raise HTTPException(status_code=422, detail=f"Could not extract protein chains from '{design.name}'.")
 
@@ -3730,7 +3810,19 @@ def _materialize_seed_selection_from_completed_designs(
     for idx, design in enumerate(designs, start=1):
         source_path = _resolve_design_structure_path(design.pdb_path)
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        if root_job.execution_target_id:
+        if source_path.suffix.lower() in {'.cif', '.mmcif'}:
+            if dest_path.exists() or dest_path.is_symlink():
+                if dest_path.is_symlink() or not dest_path.is_file():
+                    raise ValueError('Unsafe retained CIF-derived seed')
+                import tempfile
+                with tempfile.TemporaryDirectory(dir=selection_dir.parent) as temporary:
+                    comparison = _cif_selection_pdb(source_path, Path(temporary) / dest_path.name)
+                    if dest_path.read_bytes() != comparison.read_bytes():
+                        raise ValueError('Retained seed differs from native CIF conversion')
+            else:
+                _cif_selection_pdb(source_path, dest_path)
+            link_mode = 'converted_verified_copy'
+        elif root_job.execution_target_id:
             # Remote input authority requires a regular immutable snapshot,
             # not a mutable reference into an imported result generation.
             if dest_path.exists() or dest_path.is_symlink():
@@ -4042,7 +4134,7 @@ def _build_cdr_indel_iteration_job(
 
     for design in designs:
         design_path = _resolve_design_structure_path(design.pdb_path)
-        chain_records = _extract_chain_records_from_pdb(design_path)
+        chain_records = _extract_chain_records_from_structure(design_path)
         if not chain_records:
             raise HTTPException(status_code=422, detail=f"Could not extract chain sequences from '{design.name}'.")
 
@@ -4237,17 +4329,13 @@ def _materialize_antibody_selection(
             )
 
         source_path = _resolve_design_structure_path(design.pdb_path)
-        if source_path.suffix.lower() != ".pdb":
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Design '{design.name}' is backed by '{source_path.name}', not a PDB file. "
-                    "Antibody iteration actions currently require PDB-backed selections."
-                ),
-            )
-
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
-        if root_job.execution_target_id:
+        if source_path.suffix.lower() in {'.cif', '.mmcif'}:
+            _cif_selection_pdb(source_path, dest_path)
+            link_mode = 'converted_verified_copy'
+        elif source_path.suffix.lower() != '.pdb':
+            raise HTTPException(status_code=422, detail=f"Unsupported selected structure format: {source_path.suffix}")
+        elif root_job.execution_target_id:
             # Remote preview binds one retained snapshot. Reference-only local
             # links are not immutable portable inputs and cannot be approved.
             shutil.copyfile(source_path, dest_path)
@@ -4257,9 +4345,11 @@ def _materialize_antibody_selection(
 
         manifest_items.append(_build_selection_manifest_item(
             design,
-            source_path=source_path,
+            source_path=dest_path if source_path.suffix.lower() in {'.cif', '.mmcif'} else source_path,
             selection_path=dest_path,
             selection_entry_mode=link_mode,
+            extra={"native_source_structure_path": str(source_path), "native_source_format": "mmcif"}
+                  if source_path.suffix.lower() in {'.cif', '.mmcif'} else None,
         ))
 
     _write_selection_manifest(

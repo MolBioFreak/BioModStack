@@ -75,19 +75,21 @@ async def test_primary_cif_binding_survives_finalizer_replay(tmp_path):
             session.add(job)
             await session.commit()
             first = await finalize_successful_job(job, str(root), session)
-            assert first.completed and first.design_count == 0
+            assert first.completed and first.design_count == 1, job.error_message
             _, receipt = await read_published_native_results(job, session)
             candidate = receipt['candidates'][0]
             primary = next(item for item in candidate['structures'] if item['primary'])
             artifact = await session.get(JobArtifact, primary['artifact_id'])
             assert artifact.storage_path == str(root / '3_Ranked/t_seq0_stateA.cif')
             assert artifact.sha256 == primary['sha256']
-            assert not (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
+            assert len((await session.scalars(select(Design).where(Design.job_id == job.id))).all()) == 1
+            projected_id = candidate['design_id']
             job.status = job.queue_status = 'running'
             job.completed_at = None
             await session.commit()
             replay = await finalize_successful_job(job, str(root), session)
-            assert replay.completed and replay.design_count == 0
+            assert replay.completed and replay.design_count == 1
+            assert [d.id for d in (await session.scalars(select(Design).where(Design.job_id == job.id))).all()] == [projected_id]
             assert job.provenance['result_integrity']['idempotent_prior_results'] is True
             assert (await read_published_native_results(job, session))[1]['candidates'] == receipt['candidates']
     finally:

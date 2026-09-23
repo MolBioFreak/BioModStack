@@ -540,13 +540,12 @@ async def finalize_successful_job(
         idempotent_prior_results = False
         result_kind = "design"
         if bc2_native:
-            # Zero retained rows and structureless native rows are valid outcomes.
-            # The model-owned reader rechecks registered bytes, attempt and
-            # accounting before completion; no CIF is projected as a Design.
+            # Zero yield and unjoined native rows remain valid. Verify every
+            # projected Design against its registered CIF before completion.
             from services.bindcraft2_publication import read_published_native_results
-            await read_published_native_results(job, session)
-            if count != 0 or int(ingested_count or 0) != 0:
-                raise RuntimeError('BC2 native publication unexpectedly created Designs')
+            _, native_receipt = await read_published_native_results(job, session)
+            if count != len(native_receipt['candidates']) or int(ingested_count or 0) != count:
+                raise RuntimeError('BC2 projected Design count differs from native publication')
             result_kind = 'bindcraft2_native_publication'
             idempotent_prior_results = bc2_prior_publication
         elif job_expects_rfd3_local_redesign_candidates(job):

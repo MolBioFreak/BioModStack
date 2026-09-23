@@ -81,7 +81,7 @@ def _receipt(job: Job, root: Path, inventory: dict, publication: NativePublicati
             "remote_attempt_id": job.remote_attempt_id,
             "files": inventory, "arms": _summary(publication)}
 
-def _candidate_bindings(publication: NativePublication, artifacts: dict[str, JobArtifact]) -> list[dict]:
+def _candidate_bindings(publication: NativePublication, artifacts: dict[str, JobArtifact], job_id: str) -> list[dict]:
     """Bind producer-joined candidates to registered native documents, never names inferred from paths."""
     bindings = []
     for candidate in project_native_candidates(publication):
@@ -95,7 +95,11 @@ def _candidate_bindings(publication: NativePublication, artifacts: dict[str, Job
                                "primary": structure.primary, "variant": structure.variant,
                                "binder_chains": structure.binder_chains,
                                "target_chains": structure.target_chains})
-        bindings.append({"arm": candidate.arm, "retained_design": candidate.retained_design,
+        bindings.append({"design_id": str(uuid.uuid5(uuid.NAMESPACE_URL, "bindcraft2:" +
+                        repr((job_id, candidate.arm, candidate.retained_design,
+                              candidate.scored_design, candidate.trajectory_design,
+                              candidate.attempt_sha256, candidate.primary_structure.sha256)))),
+                         "arm": candidate.arm, "retained_design": candidate.retained_design,
                          "scored_design": candidate.scored_design,
                          "trajectory_design": candidate.trajectory_design,
                          "attempt_sha256": candidate.attempt_sha256,
@@ -104,11 +108,41 @@ def _candidate_bindings(publication: NativePublication, artifacts: dict[str, Job
     return bindings
 
 
-async def publish_native_results(job: Job, root: Path, session, *, commit: bool = False) -> int:
-    """Publish a sealed local or returned native campaign within the caller transaction.
+def _design_fields(job: Job, binding: dict, root: Path) -> dict:
+    primary = next(s for s in binding["structures"] if s["primary"])
+    return {"id": binding["design_id"], "job_id": job.id,
+            "name": binding["retained_design"], "producer_model_id": "bindcraft2",
+            # The legacy column name is historical: this remains the native CIF.
+            "pdb_path": str(root / primary["logical_path"].removeprefix("bindcraft2/native/")),
+            "lineage_root_job_id": job.id, "origin_job_id": job.id,
+            "stage_family": "bindcraft2", "stage_mode": job.mode,
+            "artifact_class": "binder_complex", "artifact_schema_version": 1,
+            "provenance": {"schema": "bindcraft2.candidate-lineage.v1",
+                           "arm": binding["arm"], "retained_design": binding["retained_design"],
+                           "scored_design": binding["scored_design"],
+                           "trajectory_design": binding["trajectory_design"],
+                           "attempt_sha256": binding["attempt_sha256"],
+                           "primary_target_state": primary["target_state"],
+                           "primary_artifact_id": primary["artifact_id"]}}
 
-    Returns zero Designs; native row counts live in the model-owned read result.
-    A replay with changed bytes or changed attempt identity is refused.
+
+async def _verify_designs(job: Job, session, bindings: list[dict], root: Path) -> None:
+    with session.no_autoflush:
+        rows = (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
+    expected = {b["design_id"]: _design_fields(job, b, root) for b in bindings}
+    if len(expected) != len(bindings) or set(expected) != {row.id for row in rows}:
+        raise PublicationError("BC2 persisted candidate Design identity changed")
+    for row in rows:
+        for key, value in expected[row.id].items():
+            if getattr(row, key) != value:
+                raise PublicationError(f"BC2 persisted candidate Design lineage changed: {key}")
+
+
+async def publish_native_results(job: Job, root: Path, session, *, commit: bool = False) -> int:
+    """Publish native artifacts and exact producer-joined CIF Designs atomically.
+
+    Unjoined rows and valid zero-yield campaigns remain native observations.
+    Replay requires identical bytes, bindings and persisted Design identity.
     """
     if job.model_id != "bindcraft2":
         raise PublicationError("BC2 publication requires a persisted BC2 job")
@@ -128,9 +162,9 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         raise PublicationError("BC2 native publication replay changed")
     with session.no_autoflush:
         existing = (await session.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
-        designs = (await session.scalars(select(Design.id).where(Design.job_id == job.id))).all()
-    if designs:
-        raise PublicationError("BC2 job already contains Designs; refusing mixed result authority")
+        designs = (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
+    if previous is None and designs:
+        raise PublicationError("BC2 Designs exist without native publication receipt")
     attempt = receipt["attempt"]
     owned = {a.logical_path: a for a in existing if a.attempt == attempt}
     if any(a.logical_path.startswith("bindcraft2/native/") and a.attempt != attempt for a in existing):
@@ -157,15 +191,23 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
     if previous is not None and {name for name in owned if name.startswith("bindcraft2/native/")} != {
         "bindcraft2/native/" + name for name in inventory}:
         raise PublicationError("BC2 registered artifact inventory changed")
-    receipt["candidates"] = _candidate_bindings(publication, owned)
+    receipt["candidates"] = _candidate_bindings(publication, owned, job.id)
     if previous is not None and previous != receipt:
         raise PublicationError("BC2 native publication replay changed")
+    if previous is not None:
+        await _verify_designs(job, session, receipt["candidates"], root)
+    else:
+        ids = [binding["design_id"] for binding in receipt["candidates"]]
+        if len(ids) != len(set(ids)):
+            raise PublicationError("BC2 candidate producer identities collide")
+        for binding in receipt["candidates"]:
+            session.add(Design(**_design_fields(job, binding, root)))
     job.provenance = {**(job.provenance or {}), "bindcraft2_native_publication": receipt}
     if commit:
         await session.commit()
     else:
         await session.flush()
-    return 0
+    return len(receipt["candidates"])
 
 
 async def read_published_native_results(job: Job, session) -> tuple[NativePublication, dict]:
@@ -198,6 +240,7 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
     if _inventory(root, publication) != receipt["files"] or _summary(publication) != receipt["arms"]:
         raise PublicationError("BC2 native inventory or accounting changed")
     if receipt.get("candidates") != _candidate_bindings(publication, {
-            "bindcraft2/native/" + name: row for name, row in registered.items()}):
+            "bindcraft2/native/" + name: row for name, row in registered.items()}, job.id):
         raise PublicationError("BC2 candidate artifact bindings changed")
+    await _verify_designs(job, session, receipt["candidates"], root)
     return publication, receipt
