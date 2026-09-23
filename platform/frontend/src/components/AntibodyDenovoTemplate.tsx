@@ -290,6 +290,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         initialValues?.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)
             ? initialValues.bindcraft2_settings as BC2Request : {});
     const [bc2Inventory, setBc2Inventory] = useState<BC2Inventory | null>(null);
+    const [bc2LaunchAvailable, setBc2LaunchAvailable] = useState<boolean | undefined>(undefined);
     const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
     useEffect(() => {
         if (deNovoGenerator !== 'bindcraft2') return;
@@ -302,6 +303,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             .then(data => {
                 if (!data.settings?.fields || data.model_id !== 'bindcraft2') throw new Error('Invalid BindCraft2 settings discovery');
                 setBc2Inventory(data.settings as BC2Inventory);
+                setBc2LaunchAvailable(data.launch_available === true);
                 setBc2DiscoveryError(null);
             })
             .catch(error => { if (!controller.signal.aborted) setBc2DiscoveryError(String(error)); });
@@ -2451,7 +2453,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             <button type="button" onClick={() => setDeNovoGenerator('boltzgen')}>Choose BoltzGen VHH</button>{' · '}
             <button type="button" onClick={() => setDeNovoGenerator('ppiflow')}>Choose seeded PPIFlow</button>
             <label className="block">Draft name <input aria-label="Draft name" value={jobName} onChange={event => setJobName(event.target.value)} /></label>
-            {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} />
+            {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} />
                 : <p role="status">{bc2DiscoveryError ?? 'Loading model-owned settings inventory…'}</p>}
             <details><summary>Saved native request preview (not executable)</summary>
                 <pre>{JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: bc2Settings } }, null, 2)}</pre>

@@ -100,6 +100,7 @@ it('mounted BC2 saved campaign keeps native draft separate and never submits ant
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
     expect(document.querySelector('[aria-label="BindCraft2 campaign draft"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="max_trajectories"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('Model execution is not enabled.');
     expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!)).toMatchObject({
         denovo_generator: 'bindcraft2', bindcraft2_settings: settings,
     });
