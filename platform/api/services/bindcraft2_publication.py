@@ -1,4 +1,4 @@
-"""BC2 publication adapter: immutable native bytes in JobArtifact, no Design projection.
+"""BC2 publication adapter: immutable native bytes and exact candidate bindings.
 
 The native reader is the sole interpretation of scientific CSV values. This adapter
 registers the sealed input documents, binds them to a Job and offers verified
@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from database import Design, Job, JobArtifact
+from services.bindcraft2_candidate_projection import project_native_candidates
 from services.bindcraft2_native_results import NativePublication, read_native_publication
 
 
@@ -80,6 +81,28 @@ def _receipt(job: Job, root: Path, inventory: dict, publication: NativePublicati
             "remote_attempt_id": job.remote_attempt_id,
             "files": inventory, "arms": _summary(publication)}
 
+def _candidate_bindings(publication: NativePublication, artifacts: dict[str, JobArtifact]) -> list[dict]:
+    """Bind producer-joined candidates to registered native documents, never names inferred from paths."""
+    bindings = []
+    for candidate in project_native_candidates(publication):
+        structures = []
+        for structure in candidate.structures:
+            artifact = artifacts.get("bindcraft2/native/" + structure.path)
+            if artifact is None or artifact.sha256 != structure.sha256:
+                raise PublicationError("projected CIF lacks matching registered JobArtifact")
+            structures.append({"artifact_id": artifact.id, "logical_path": artifact.logical_path,
+                               "sha256": structure.sha256, "target_state": structure.target_state,
+                               "primary": structure.primary, "variant": structure.variant,
+                               "binder_chains": structure.binder_chains,
+                               "target_chains": structure.target_chains})
+        bindings.append({"arm": candidate.arm, "retained_design": candidate.retained_design,
+                         "scored_design": candidate.scored_design,
+                         "trajectory_design": candidate.trajectory_design,
+                         "attempt_sha256": candidate.attempt_sha256,
+                         "sequence": candidate.sequence, "native_rank": candidate.native_rank,
+                         "structures": structures})
+    return bindings
+
 
 async def publish_native_results(job: Job, root: Path, session, *, commit: bool = False) -> int:
     """Publish a sealed local or returned native campaign within the caller transaction.
@@ -101,7 +124,7 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         raise PublicationError("BC2 campaign has no native execution evidence")
     receipt = _receipt(job, root, inventory, publication)
     previous = (job.provenance or {}).get("bindcraft2_native_publication")
-    if previous is not None and previous != receipt:
+    if previous is not None and {key: value for key, value in previous.items() if key != "candidates"} != receipt:
         raise PublicationError("BC2 native publication replay changed")
     with session.no_autoflush:
         existing = (await session.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
@@ -124,14 +147,19 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         else:
             if previous is not None:
                 raise PublicationError("BC2 publication missing registered artifact")
-            session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job.id, attempt=attempt,
+            artifact = JobArtifact(id=str(uuid.uuid4()), owner_job_id=job.id, attempt=attempt,
                                     logical_path=key, storage_path=str(root / name),
                                     sha256=entry["sha256"], bytes=entry["bytes"],
                                     media_type=entry["media_type"],
-                                    provenance={"schema": _SCHEMA, "remote_attempt_id": job.remote_attempt_id}))
+                                    provenance={"schema": _SCHEMA, "remote_attempt_id": job.remote_attempt_id})
+            session.add(artifact)
+            owned[key] = artifact
     if previous is not None and {name for name in owned if name.startswith("bindcraft2/native/")} != {
         "bindcraft2/native/" + name for name in inventory}:
         raise PublicationError("BC2 registered artifact inventory changed")
+    receipt["candidates"] = _candidate_bindings(publication, owned)
+    if previous is not None and previous != receipt:
+        raise PublicationError("BC2 native publication replay changed")
     job.provenance = {**(job.provenance or {}), "bindcraft2_native_publication": receipt}
     if commit:
         await session.commit()
@@ -169,4 +197,7 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
     publication = read_native_publication(root)
     if _inventory(root, publication) != receipt["files"] or _summary(publication) != receipt["arms"]:
         raise PublicationError("BC2 native inventory or accounting changed")
+    if receipt.get("candidates") != _candidate_bindings(publication, {
+            "bindcraft2/native/" + name: row for name, row in registered.items()}):
+        raise PublicationError("BC2 candidate artifact bindings changed")
     return publication, receipt
