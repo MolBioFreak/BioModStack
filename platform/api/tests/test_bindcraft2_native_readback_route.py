@@ -40,7 +40,7 @@ def test_readback_route_pages_and_rejects_unpublished_or_wrong_model(monkeypatch
             raise PublicationError("no receipt")
         return {"schema": "bindcraft2.native-readback.v1", "arm": kwargs["arm"],
                 "stage": kwargs["stage"], "offset": kwargs["offset"], "limit": kwargs["limit"],
-                "total": 0, "rows": [], "selection": {"eligible": False, "reason": "unmapped"}}
+                "total": 0, "rows": []}
 
     monkeypatch.setattr(readback, "read_bindcraft2_result_page", page)
     app = FastAPI()

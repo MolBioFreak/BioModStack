@@ -78,8 +78,7 @@ def _summary(publication: NativePublication) -> list[dict]:
 def _receipt(job: Job, root: Path, inventory: dict, publication: NativePublication) -> dict:
     return {"schema": _SCHEMA, "root": str(root), "attempt": job.retry_count or 0,
             "remote_attempt_id": job.remote_attempt_id,
-            "files": inventory, "arms": _summary(publication),
-            "selection": {"eligible": False, "reason": "native CIF has no verified lossless Design/PDB conversion, chain role map, or explicit target-state identity"}}
+            "files": inventory, "arms": _summary(publication)}
 
 
 async def publish_native_results(job: Job, root: Path, session, *, commit: bool = False) -> int:

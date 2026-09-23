@@ -17,11 +17,9 @@ async def read_bindcraft2_result_page(
     offset: int = 0, limit: int = 50,
 ) -> dict:
     """Caller must authorize the Job before invoking this adapter."""
-    publication, receipt = await read_published_native_results(job, session)
+    publication, _receipt = await read_published_native_results(job, session)
     # A first-page request has no arm selection yet. Use the first native arm
     # only for display; the returned page states its actual arm identity.
     if arm is None and publication.arms and all(item.name is not None for item in publication.arms):
         arm = publication.arms[0].name
-    page = native_result_page(publication, arm=arm, stage=stage, offset=offset, limit=limit)
-    page["selection"] = receipt["selection"]
-    return page
+    return native_result_page(publication, arm=arm, stage=stage, offset=offset, limit=limit)

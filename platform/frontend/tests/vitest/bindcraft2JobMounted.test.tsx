@@ -21,7 +21,7 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
       offset: Number(query.get('offset')), limit: 25, total: 26,
       accounting: { claimed_attempts: 30, generated_rows: 26 },
       arms: [{ name: 'native_arm', accounting: {} }],
-      metadata: null, selection: { eligible: false, reason: 'no verified target-state map' },
+      metadata: null,
       rows: [{ design: 'native-1', native_score: 0.91 }],
     }) };
   }));
@@ -33,7 +33,7 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
   expect(paths).toHaveLength(1);
   expect(paths[0]).not.toContain('arm=');
   await vi.waitFor(() => expect(text(mounted!.root)).toContain('native-1'));
-  expect(text(mounted!.root)).toContain('Selection unavailable: no verified target-state map');
+  expect(text(mounted!.root)).not.toContain('Selection unavailable');
   expect(text(mounted!.root)).not.toContain('Open in Results Viewer');
   await act(async () => mounted!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'attempt' } }));
   await vi.waitFor(() => expect(paths.at(-1)).toContain('stage=attempt'));

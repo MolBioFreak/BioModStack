@@ -47,7 +47,7 @@ async def test_native_zero_yield_finalizes_and_reopens_without_designs(tmp_path)
             job = await session.get(Job, 'bc2')
             publication, receipt = await read_published_native_results(job, session)
             assert publication.arms[0].accounting['retained_sequences'] == 0
-            assert receipt['selection']['eligible'] is False
+            assert 'selection' not in receipt
             job.status = job.queue_status = 'running'
             job.completed_at = None
             await session.commit()

@@ -68,7 +68,7 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
             page = await read_bindcraft2_result_page(job, session, stage='retained', limit=1)
             assert page['schema'] == 'bindcraft2.native-readback.v1'
             assert page['total'] == (0 if zero else 1)
-            assert page['selection']['eligible'] is False
+            assert 'selection' not in page
             if not zero:
                 assert page['rows'][0]['scored_design'] == 't_candidate2'
             arm = publication.arms[0]
@@ -77,7 +77,7 @@ async def test_ingester_idempotent_readback_and_accounting(tmp_path, zero):
                                       'rejected_draws': 0 if zero else 1, 'retained_sequences': 0 if zero else 1,
                                       'unresolved_retained_draw_joins': 0}
             assert receipt['arms'][0]['verified_attempts'] == 1
-            assert receipt['selection']['eligible'] is False
+            assert 'selection' not in receipt
             if not zero:
                 assert arm.retained[0].scored_design == 't_candidate2'
                 assert arm.draws[0].values['i_pTM'] == '0.1'

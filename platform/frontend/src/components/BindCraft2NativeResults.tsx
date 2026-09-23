@@ -11,7 +11,6 @@ export interface BindCraft2NativePage {
   accounting: Record<string, number | null>;
   arms: { name: string | null; accounting: Record<string, number | null> }[];
   metadata: Record<string, unknown> | null;
-  selection: { eligible: boolean; reason: string };
   rows: Record<string, unknown>[];
 }
 
@@ -29,7 +28,6 @@ export function BindCraft2NativeResults({ page, onPage }: {
   return <section aria-label="BindCraft2 native results">
     <h2>BindCraft2 native campaign</h2>
     <p>Native rows and metrics are shown without a cross-model score or inferred structure state.</p>
-    <p>{page.selection.eligible ? 'Selection available' : `Selection unavailable: ${page.selection.reason}`}</p>
     <label>Campaign arm <select aria-label="Campaign arm" value={page.arm ?? ''}
       onChange={e => change(e.target.value || null, page.stage)}>
       {page.arms.map(a => <option key={a.name ?? ''} value={a.name ?? ''}>{a.name ?? 'Main campaign'}</option>)}

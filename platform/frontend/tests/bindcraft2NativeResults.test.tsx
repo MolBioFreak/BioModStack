@@ -10,7 +10,6 @@ test('BC2 result view keeps unknown state, missing counts and explicit draw join
     limit: 50, total: 1, metadata: null,
     accounting: { claimed_attempts: null, scored_draws: 2, retained_sequences: 1 },
     arms: [{ name: null, accounting: { claimed_attempts: null } }],
-    selection: { eligible: false, reason: 'target-state identity unknown' },
     rows: [{ design: 't_seq0', scored_design: 't_candidate2', target_state: null,
       values: { i_pTM: '0.9', Interface_Residues: '' } }],
   };
@@ -18,6 +17,5 @@ test('BC2 result view keeps unknown state, missing counts and explicit draw join
   assert.match(html, /t_candidate2/);
   assert.match(html, /i_pTM/);
   assert.match(html, /Unknown \/ not emitted/);
-  assert.match(html, /Selection unavailable: target-state identity unknown/);
-  assert.doesNotMatch(html, /Selection available/);
+  assert.doesNotMatch(html, /Selection unavailable/);
 });
