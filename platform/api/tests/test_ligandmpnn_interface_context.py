@@ -1,6 +1,9 @@
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -136,3 +139,53 @@ def test_reader_rejects_rehashed_leakage_and_comparator_change(tmp_path):
     data['conditions']['without_binder']['masked_input_sha256'] = runner.digest(ablated_file)
     with pytest.raises(ValueError, match='comparator'):
         read()
+
+
+def test_installed_foundry_whole_patch_identity_blinding(tmp_path):
+    """Opt-in image/checkpoint differential; fixtures alone cannot prove native masks."""
+    image = os.environ.get('BMS_TEST_FOUNDRY_IMAGE')
+    if not image or not shutil.which('apptainer'):
+        pytest.skip('set BMS_TEST_FOUNDRY_IMAGE and provide apptainer for native CPU smoke')
+    assert image is not None
+    source = Path(__file__).resolve().parents[3] / 'platform/api/assets/md/admitted_structures/1AKI.pdb'
+    atoms = [line for line in source.read_text().splitlines(keepends=True)
+             if line.startswith('ATOM  ') and line[16] == ' ' and line[21] == 'A']
+    ids = list(dict.fromkeys(line[22:27] for line in atoms))[:60]
+    assert len(ids) == 60
+    base = ''.join(line[:21] + ('B' if line[22:27] in ids[30:] else 'A') + line[22:]
+                   for line in atoms if line[22:27] in ids) + 'END\n'
+    patch = ['A' + ids[i].strip() for i in (3, 4)]
+    original = [line for line in base.splitlines(keepends=True)
+                if line.startswith('ATOM  ') and line[21] == 'A' and line[22:27] == ids[3]]
+    old = original[0][17:20]
+    replacement = 'VAL' if old != 'VAL' else 'ALA'
+    perturbed = ''.join(line[:17] + replacement + line[20:] if line in original else line
+                        for line in base.splitlines(keepends=True))
+    results = []
+    for suffix, text in (('original', base), ('perturbed', perturbed)):
+        pdb = tmp_path / f'{suffix}.pdb'
+        pdb.write_text(text)
+        request = {'candidate_id': 'native-smoke', 'round_id': 'native-smoke',
+                   'source_sha256': runner.digest(pdb), 'structure_path': str(pdb),
+                   'binder_chain': 'B', 'target_chain': 'A', 'target_patch': patch,
+                   'seed': 7, 'samples': 1, 'temperature': 0.1}
+        request_path = tmp_path / f'{suffix}.json'
+        request_path.write_text(json.dumps(request))
+        binds = ['--bind', f'{tmp_path}:{tmp_path}',
+                 '--bind', f'{SCRIPT}:/probe/ligandmpnn_context.py']
+        # The API test namespace maps the host user to root; --no-home avoids
+        # shadowing the image's /foundry -> /root/.foundry checkpoint tree.
+        subprocess.run(['apptainer', 'exec', '--no-home', *binds, image,
+                        'python', '/probe/ligandmpnn_context.py', str(request_path),
+                        str(tmp_path / f'result-{suffix}')],
+                       check=True, timeout=180)
+        results.append(read_context_result(tmp_path / f'result-{suffix}/result.json',
+                                           candidate_id=request['candidate_id'],
+                                           round_id=request['round_id'],
+                                           source_sha256=request['source_sha256']))
+    first, second = results
+    assert first['reference_patch'][patch[0]] != second['reference_patch'][patch[0]]
+    for label in ('supplied_complex', 'without_binder'):
+        a, b = first['conditions'][label], second['conditions'][label]
+        assert a['masked_input_sha256'] == b['masked_input_sha256']
+        assert [row['sampled_patch'] for row in a['samples']] == [row['sampled_patch'] for row in b['samples']]
