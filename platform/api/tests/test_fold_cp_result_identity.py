@@ -93,3 +93,106 @@ async def test_returned_fold_cp_json_cif_persist_metrics_and_shard_identity(tmp_
             assert sorted(row.ptm for row in rows) == pytest.approx([0.72, 0.81, 0.9572844505310059])
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('commit', [False, True])
+async def test_raw_then_confidence_enriches_same_row_and_respects_transaction(tmp_path, nested, commit):
+    output = tmp_path / 'output'
+    cif_root = output / 'cif_files' / 'predictions'
+    json_root = output / 'json_files' / 'predictions'
+    relative = Path('predictions_dp0_cp0/sample') if nested else Path('.')
+    cif_dir = cif_root / relative
+    cif_dir.mkdir(parents=True)
+    structure = cif_dir / 'boltz_cp_input_model_0.cif'
+    shutil.copy2(FIXTURE / structure.name, structure)
+    # Intermediate structures must never enter the published result roster.
+    intermediate = output / 'run' / 'intermediate' / structure.name
+    intermediate.parent.mkdir(parents=True)
+    shutil.copy2(structure, intermediate)
+    engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "foldcp.db"}')
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            job = Job(id='fold-cp-return', name='Fold-CP return', model_id='boltz_cp_experimental',
+                      mode='design', params={}, output_dir=str(output))
+            session.add(job)
+            await session.commit()
+            assert await ingest_loose_files(job.id, output, session, current_job=job) == 1
+            row = (await session.execute(select(Design).where(Design.job_id == job.id))).scalar_one()
+            assert row.producer_model_id == 'boltz_cp_experimental'
+            assert row.ptm is None
+            assert Path(row.pdb_path) == structure
+            row_id, created = row.id, row.created_at
+            row.is_favorite = True
+            row.notes = 'operator annotation'
+            row.provenance = {'operator': 'preserve'}
+            if nested:
+                # A retained legacy name differs from today's shard-local name.
+                row.name = 'legacy_basename'
+            await session.commit()
+            assert await ingest_loose_files(job.id, output, session, current_job=job) == 0
+
+            sidecar_dir = json_root / ('predictions_dp0_cp0' if nested else '')
+            sidecar_dir.mkdir(parents=True)
+            sidecar = sidecar_dir / 'confidence_boltz_cp_input_model_0.json'
+            shutil.copy2(FIXTURE / sidecar.name, sidecar)
+            assert await ingest_loose_files(job.id, output, session, current_job=job, commit=commit) == 0
+            if not commit:
+                async with factory() as separate:
+                    uncommitted = (await separate.execute(select(Design).where(Design.job_id == job.id))).scalar_one()
+                    assert uncommitted.json_path is None
+                await session.commit()
+        async with factory() as session:
+            rows = (await session.execute(select(Design).where(Design.job_id == 'fold-cp-return'))).scalars().all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert (row.id, row.created_at) == (row_id, created)
+            assert (row.is_favorite, row.notes) == (True, 'operator annotation')
+            if nested:
+                assert row.name == 'legacy_basename'
+            assert row.provenance['operator'] == 'preserve'
+            assert row.json_path == str(sidecar)
+            assert row.ptm == pytest.approx(0.9572844505310059)
+            assert row.iptm == pytest.approx(0.9093641042709351)
+            assert row.producer_model_id == 'boltz_cp_experimental'
+            assert await ingest_loose_files(job.id, output, session, current_job=job) == 0
+            assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all() == [row]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_partial_confidence_does_not_hide_other_published_structures(tmp_path):
+    output = tmp_path / 'output'
+    cif_root = output / 'cif_files' / 'predictions'
+    json_root = output / 'json_files' / 'predictions'
+    for shard in ('predictions_dp0_cp0', 'predictions_dp1_cp0'):
+        directory = cif_root / shard / 'sample'
+        directory.mkdir(parents=True)
+        shutil.copy2(FIXTURE / 'boltz_cp_input_model_0.cif', directory / 'boltz_cp_input_model_0.cif')
+    json_dir = json_root / 'predictions_dp0_cp0'
+    json_dir.mkdir(parents=True)
+    shutil.copy2(FIXTURE / 'confidence_boltz_cp_input_model_0.json',
+                 json_dir / 'confidence_boltz_cp_input_model_0.json')
+    engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "foldcp.db"}')
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            job = Job(id='partial', name='partial', model_id='boltz_cp_experimental',
+                      mode='design', params={}, output_dir=str(output))
+            session.add(job)
+            await session.commit()
+            assert await ingest_loose_files(job.id, output, session, current_job=job) == 2
+            rows = (await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all()
+            assert len({row.name for row in rows}) == 2
+            assert {row.ptm is None for row in rows} == {True, False}
+            assert {row.producer_model_id for row in rows} == {'boltz_cp_experimental'}
+            assert await ingest_loose_files(job.id, output, session, current_job=job) == 0
+    finally:
+        await engine.dispose()

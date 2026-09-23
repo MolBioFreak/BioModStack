@@ -6886,7 +6886,9 @@ async def ingest_loose_files(
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
-    if plr_final_path is not None:
+    if is_fold_cp:
+        search_paths = [output_path / "json_files" / "predictions"]
+    elif plr_final_path is not None:
         search_paths = [plr_final_path]
     elif boltzgen_filtered_path is not None:
         search_paths = [boltzgen_filtered_path]
@@ -6928,10 +6930,23 @@ async def ingest_loose_files(
     
     designs_created = 0
     
-    # Replay uses the same job/name identity as discovery within one import.
-    ingested_names = set((await session.execute(
-        select(Design.name).where(Design.job_id == job_id, Design.source_stage.is_(None))
-    )).scalars())
+    existing_designs = (await session.execute(
+        select(Design).where(Design.job_id == job_id, Design.source_stage.is_(None))
+    )).scalars().all()
+    ingested_names = {row.name for row in existing_designs}
+    fold_cp_by_path = {row.pdb_path: row for row in existing_designs if row.pdb_path} if is_fold_cp else {}
+    fold_cp_by_name = {row.name: row for row in existing_designs} if is_fold_cp else {}
+    designs_enriched = 0
+
+    def fold_cp_name(structure: Path, root: Path) -> str:
+        relative = structure.relative_to(root)
+        if relative.parent == Path('.'):
+            return structure.stem
+        import hashlib
+        import re
+        sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", relative.with_suffix('').as_posix())[:100]
+        digest = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:12]
+        return f"foldcp_{sanitized}_{digest}"
     metric_results_found = False
     
     print(f"[Ingester DEBUG] Search paths: {[str(p) for p in search_paths]}")
@@ -6986,20 +7001,23 @@ async def ingest_loose_files(
                             raise ValueError(f"Ambiguous Fold-CP structures for {json_file}: {matches}")
                         if matches:
                             fold_cp_structure = matches[0]
-                            relative_structure = fold_cp_structure.relative_to(structure_root)
-                            if relative_structure.parent != Path('.'):
-                                import hashlib
-                                sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", relative_structure.with_suffix('').as_posix())[:100]
-                                digest = hashlib.sha256(relative_structure.as_posix().encode()).hexdigest()[:12]
-                                design_name = f"foldcp_{sanitized}_{digest}"
+                            design_name = fold_cp_name(fold_cp_structure, structure_root)
                             break
                     if fold_cp_structure is None:
                         continue
 
-                if design_name in ingested_names:
+                existing_fold_cp = fold_cp_by_path.get(str(fold_cp_structure)) if fold_cp_structure else None
+                if fold_cp_structure and not existing_fold_cp:
+                    named_row = fold_cp_by_name.get(design_name)
+                    if named_row and named_row.pdb_path == str(fold_cp_structure):
+                        existing_fold_cp = named_row
+                if design_name in ingested_names and not existing_fold_cp:
                     metric_results_found = True
                     continue
-                
+                if existing_fold_cp and existing_fold_cp.json_path == str(json_file):
+                    metric_results_found = True
+                    continue
+
                 # Look for corresponding Structure (CIF preferred for complexes, PDB fallback)
                 structure_candidates = [
                     search_dir / f"{design_name}.cif",
@@ -7028,11 +7046,11 @@ async def ingest_loose_files(
                     metrics = json.load(f)
 
                 aligned_pdb_name = str(metrics.get('aligned_pdb') or '').strip()
-                if aligned_pdb_name:
+                if aligned_pdb_name and not is_fold_cp:
                     aligned_candidate = json_file.parent / aligned_pdb_name
                     if aligned_candidate.exists():
                         structure_path = aligned_candidate
-                
+
                 # Boltz2 format: complex_plddt, ptm, iptm, confidence_score, complex_pde
                 plddt = metrics.get('complex_plddt') or metrics.get('plddt')
                 if plddt is not None and plddt <= 1.0:
@@ -7147,7 +7165,7 @@ async def ingest_loose_files(
                     name=design_name,
                     pdb_path=str(structure_path),
                     json_path=str(json_file) if json_file else (str(fam_json_path) if fam_json_path.exists() else None),
-                    producer_model_id="boltz2",
+                    producer_model_id="boltz_cp_experimental" if is_fold_cp else "boltz2",
                     
                     # Backbone grouping
                     backbone_id=parse_backbone_id(design_name),
@@ -7205,10 +7223,36 @@ async def ingest_loose_files(
                     created_at=datetime.utcnow()
                 )
                 
-                session.add(design)
-                designs_created += 1
+                if existing_fold_cp:
+                    # Project native metrics onto the retained structure without replacing
+                    # its identity, annotations, or unrelated lineage.
+                    for field in (
+                        "json_path", "producer_model_id",
+                        "plddt_overall", "pae_overall", "ptm", "conf_score", "ligand_iptm",
+                        "rmsd_overall", "rmsd_binder", "rmsd_target", "affinity_score",
+                        "binder_probability", "residue_plddt", "iptm", "protein_iptm",
+                        "complex_iplddt", "complex_ipde", "chains_ptm", "pair_chains_iptm",
+                        "disorder", "num_recycles", "has_clash", "binder_length",
+                        "cdr_h1_length", "cdr_h2_length", "cdr_h3_length",
+                        "cdr_l1_length", "cdr_l2_length", "cdr_l3_length",
+                        *aligned_error_fields.keys(), *_geometry_design_fields(geometry_fields).keys(),
+                    ):
+                        value = getattr(design, field)
+                        if value is not None:
+                            setattr(existing_fold_cp, field, value)
+                    existing_fold_cp.confidence_metrics = {
+                        **(existing_fold_cp.confidence_metrics or {}), **(design.confidence_metrics or {})
+                    }
+                    existing_fold_cp.provenance = {**fam_provenance, **(existing_fold_cp.provenance or {})}
+                    designs_enriched += 1
+                else:
+                    session.add(design)
+                    designs_created += 1
+                    if is_fold_cp:
+                        fold_cp_by_path[str(structure_path)] = design
+                        fold_cp_by_name[design_name] = design
                 ingested_names.add(design_name)
-                
+
             except Exception as e:
                 print(f"[Ingester] Error parsing Boltz2 file {json_file}: {e}")
         
@@ -7553,7 +7597,7 @@ async def ingest_loose_files(
                 print(f"[Ingester] Error parsing Protenix file {json_file}: {e}")
                 
     # If still no designs, try just finding raw structures (e.g. valid job but missing metadata)
-    if designs_created == 0 and not metric_results_found:
+    if is_fold_cp or (designs_created == 0 and not metric_results_found):
         print("[Ingester] No JSON metrics found. Scanning for raw structure files...")
 
         # Determine job type for model-specific ingestion logic
@@ -7700,8 +7744,14 @@ async def ingest_loose_files(
                 structure_paths.extend(sorted(plr_final_path.glob("*.cif")))
                 structure_paths.extend(sorted(plr_final_path.glob("*.mmcif")))
 
+            if is_fold_cp:
+                for root in (output_path / "cif_files" / "predictions", output_path / "pdb_files" / "predictions"):
+                    if root.is_dir():
+                        structure_paths.extend(sorted(root.rglob("*.cif")))
+                        structure_paths.extend(sorted(root.rglob("*.pdb")))
+
             # For non-oligo jobs: prefer run/rebuilt/ over raw structures
-            if not is_maturation_child and plr_final_path is None:
+            if not is_fold_cp and not is_maturation_child and plr_final_path is None:
                 rebuilt_dir = output_path / "run" / "rebuilt"
                 if rebuilt_dir.exists():
                     structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
@@ -7738,8 +7788,9 @@ async def ingest_loose_files(
                 print(f"[Ingester] No raw structures found under {output_path}")
 
             for structure_path in structure_paths:
-                design_name = structure_path.stem
-                if design_name in ingested_names:
+                structure_root = output_path / structure_path.relative_to(output_path).parts[0] / "predictions" if is_fold_cp else None
+                design_name = fold_cp_name(structure_path, structure_root) if is_fold_cp else structure_path.stem
+                if (is_fold_cp and (str(structure_path) in fold_cp_by_path or design_name in fold_cp_by_name)) or (not is_fold_cp and design_name in ingested_names):
                     continue
 
                 lineage = await _resolve_parent_design_lineage(
@@ -7811,7 +7862,7 @@ async def ingest_loose_files(
                     stage_mode=((fam_payload or {}).get("stage_mode") or job_context.get("stage_mode")),
                     selected_loop_scope=job_context.get("selected_loop_scope"),
                     provenance=design_provenance or None,
-                    producer_model_id=_fampnn_producer_identity(fam_payload, structure_path),
+                    producer_model_id="boltz_cp_experimental" if is_fold_cp else _fampnn_producer_identity(fam_payload, structure_path),
                     epitope_contact_count=epitope_contact_count,
                     epitope_min_distance=epitope_min_distance,
                     
@@ -7854,8 +7905,11 @@ async def ingest_loose_files(
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
+                if is_fold_cp:
+                    fold_cp_by_path[str(structure_path)] = design
+                    fold_cp_by_name[design_name] = design
 
-    if designs_created > 0 and commit:
+    if (designs_created > 0 or designs_enriched > 0) and commit:
         try:
             await session.commit()
             print(f"[Ingester] Ingested {designs_created} designs from loose files for job {job_id}")
