@@ -50,17 +50,10 @@ def fixture(tmp_path):
     return pdb, snapshot, request
 
 
-def test_model_owned_controls_and_legacy_modes_unchanged():
+def test_legacy_model_modes_unchanged_until_selected_parent_route_is_wired():
     model = yaml.safe_load((ROOT / 'platform/api/config/models/ligandmpnn.yaml').read_text())
     assert {mode['id'] for mode in model['modes']} == {
-        'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware', 'interface_context'}
-    mode = next(m for m in model['modes'] if m['id'] == 'interface_context')
-    assert set(mode['params']) == {'binder_chain', 'target_chain', 'target_patch',
-                                   'seed', 'samples', 'temperature'}
-    controls = {p['name']: p for p in model['params']}
-    assert controls['target_patch']['type'] == 'array'
-    assert controls['seed']['maximum'] == 2147483647
-    assert controls['samples']['maximum'] == 16
+        'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
     assert model['experimental'] is False  # historical modes are not reclassified
 
 
