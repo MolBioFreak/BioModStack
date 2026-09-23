@@ -476,6 +476,8 @@ async def finalize_successful_job(
     from services.core_protein_scientific_contract import revision_for_job
 
     strict_revision = None
+    bc2_native = default_ingester and str(job.model_id or '').strip().lower() == 'bindcraft2'
+    bc2_prior_publication = bool((job.provenance or {}).get('bindcraft2_native_publication')) if bc2_native else False
     optional_attachment = (
         default_ingester
         and str(job.model_id or '').strip().lower() not in {'frustrampnn', 'conformational_mapping'}
@@ -537,7 +539,17 @@ async def finalize_successful_job(
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"
-        if job_expects_rfd3_local_redesign_candidates(job):
+        if bc2_native:
+            # Zero retained rows and structureless native rows are valid outcomes.
+            # The model-owned reader rechecks registered bytes, attempt and
+            # accounting before completion; no CIF is projected as a Design.
+            from services.bindcraft2_publication import read_published_native_results
+            await read_published_native_results(job, session)
+            if count != 0 or int(ingested_count or 0) != 0:
+                raise RuntimeError('BC2 native publication unexpectedly created Designs')
+            result_kind = 'bindcraft2_native_publication'
+            idempotent_prior_results = bc2_prior_publication
+        elif job_expects_rfd3_local_redesign_candidates(job):
             result_kind = "rfd3_local_redesign_candidate"
             if count == 0:
                 raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
