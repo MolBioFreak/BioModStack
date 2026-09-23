@@ -5015,6 +5015,11 @@ async def _ingest_job_results(
     if current_job is not None and current_job.model_id == "bindcraft2":
         from services.bindcraft2_publication import publish_native_results
         return await publish_native_results(current_job, output_path, session, commit=False)
+    if current_job is not None and current_job.model_id == "esmfold2" and current_job.mode == "blind_pose":
+        from services.binder_blind_pose_selected import publish_selected, read_selected
+        await publish_selected(current_job, output_path, session)
+        await read_selected(current_job, session)
+        return 0
     if current_job is not None and current_job.model_id == 'ligandmpnn' and current_job.mode == 'interface_context':
         from services.ligandmpnn_interface_publication import publish_selected
         await publish_selected(current_job, output_path, session)

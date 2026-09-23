@@ -275,3 +275,64 @@ async def test_selected_api_builds_exact_scheduler_job(source, monkeypatch):
             model_variant='fast', model_id_or_path='', num_loops=1,
             num_sampling_steps=25, num_diffusion_samples=1))
     assert await route.launch_selected(body, BackgroundTasks(), SelectionSession()) == {'job_id': 'child'}
+
+
+@pytest.mark.asyncio
+async def test_successful_job_finalizes_blind_evidence_without_a_new_design(source, tmp_path, monkeypatch):
+    from datetime import datetime
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+    from database import Base
+    from services.result_state_integrity import finalize_successful_job
+    from run_binder_blind_pose import run
+
+    parent, designs, inputs, target = source
+    directory = inputs / 'finalizer-selected'
+    binding = selected.prepare_selected(parent, designs[:1], target_pdb=str(target),
+        binder_chains={designs[0].id: ['B']}, target_chains=['T'], directory=directory)
+    params = selected.launch_params(directory, variant='fast', model_id_or_path='',
+        num_loops=1, num_sampling_steps=25, num_diffusion_samples=1, seed=7)
+    params[selected.KEY] = binding
+
+    def native(command, check):
+        assert check
+        output = Path(command[command.index('--output-dir') + 1])
+        key = command[command.index('--sequence-name') + 1]
+        sample = key + '_000'
+        (output / (sample + '.cif')).write_text('data_sample\n')
+        (output / (sample + '.metrics.json')).write_text(json.dumps({
+            'sample_id': sample, 'cif': sample + '.cif', 'iptm': .2}))
+        (output / 'manifest.json').write_text(json.dumps({
+            'workflow': 'esmfold2', 'sequence_name': key, 'sample_count': 1,
+            'samples': [{'sample_id': sample, 'cif': sample + '.cif',
+                         'metrics': sample + '.metrics.json'}]}))
+
+    monkeypatch.setattr('run_binder_blind_pose.subprocess.run', native)
+    output = tmp_path / 'finished'
+    run(directory / 'selection.json', directory, directory / 'target.pdb',
+        output / 'blind_pose_results', model_variant='fast', model_id_or_path='',
+        num_loops=1, num_sampling_steps=25, num_diffusion_samples=1,
+        seed=7, device='cpu', runner=tmp_path / 'native.py')
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'blind-pose.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            job = Job(id='blind-child', name='blind-child', model_id='esmfold2',
+                mode='blind_pose', params=params, output_dir=str(output), status='running',
+                queue_status='running', created_at=datetime.utcnow(), awaiting_input=False,
+                awaiting_payload={}, retry_count=0, max_retries=2)
+            session.add(job)
+            await session.commit()
+            completed = await finalize_successful_job(job, str(output), session)
+            assert completed.completed, completed
+        async with factory() as session:
+            job = await session.get(Job, 'blind-child')
+            assert job.status == 'completed'
+            assert job.provenance['result_integrity']['result_kind'] == 'blind_pose_native_evidence'
+            assert await session.scalar(select(func.count(Design.id)).where(Design.job_id == job.id)) == 0
+            assert (await selected.read_selected(job, session))['records'][0]['classification'] == 'unclassified'
+    finally:
+        await engine.dispose()
