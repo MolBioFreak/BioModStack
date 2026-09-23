@@ -467,10 +467,11 @@ function MobileTopbarTools({
 
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
+    const queryClient = useQueryClient();
     const isMobileTopbar = useIsMobileTopbar();
     const bmsFeatureState = useBmsFeatureState();
     const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
-    const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
+    const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures, bmsFeatureState.known);
 
     const isActive = (path: string) => location.pathname === path;
     const isProjectManagerActive = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
@@ -483,6 +484,7 @@ export function Layout({ children }: LayoutProps) {
 
     const handleSetShowDevFeatures = (enabled: boolean) => {
         setShowDevFeatures(enabled);
+        if (enabled) void queryClient.invalidateQueries({ queryKey: ['bms-install-features'] });
         try {
             localStorage.setItem(SHOW_DEV_FEATURES_KEY, String(enabled));
         } catch {
