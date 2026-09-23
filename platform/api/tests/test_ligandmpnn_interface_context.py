@@ -67,18 +67,22 @@ def test_invalid_request_refused(tmp_path, change):
 
 
 def test_reader_exact_identity_and_cardinality(tmp_path):
-    _, request = example(tmp_path)
+    source, request = example(tmp_path)
+    _, complete, ablated = runner.prepare(source, request['target_patch'], 'B')
     row = {'batch_idx': 0, 'design_idx': 0, 'sampled_patch': {'A1': 'A', 'A2': 'V'},
            'patch_residue_count': 2, 'patch_exact_matches': 1}
     data = {'schema': 'bms.ligandmpnn.interface-context.experimental.v1',
             'status': 'completed_unclassified', 'qualification': 'unqualified',
             'model_type': 'ligand_mpnn', 'method': 'masked_whole_patch_sampling_with_binder_ablation',
+            'checkpoint_sha256': runner.CHECKPOINT_SHA256, 'foundry_version': runner.VERSION,
             'candidate_id': 'candidate', 'round_id': 'round', 'source_sha256': request['source_sha256'],
             'target_patch': ['A1', 'A2'], 'reference_patch': {'A1': 'A', 'A2': 'G'},
+            'fixed_binder_chain': 'B', 'target_chain': 'A', 'seed': 1, 'temperature': 0.1,
             'samples': 1, 'conditions': {}}
-    for label, filename in [('supplied_complex', 'masked_complex.pdb'), ('without_binder', 'masked_without_binder.pdb')]:
+    for label, filename, content in [('supplied_complex', 'masked_complex.pdb', complete),
+                                     ('without_binder', 'masked_without_binder.pdb', ablated)]:
         staged = tmp_path / filename
-        staged.write_text(label)
+        staged.write_text(content)
         data['conditions'][label] = {'samples': [row], 'masked_input_sha256': hashlib.sha256(staged.read_bytes()).hexdigest()}
     path = tmp_path / 'result.json'
     path.write_text(json.dumps(data))
@@ -89,3 +93,46 @@ def test_reader_exact_identity_and_cardinality(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match='cardinality'):
         read_context_result(path, candidate_id='candidate', round_id='round', source_sha256=request['source_sha256'])
+
+
+def test_reader_rejects_rehashed_leakage_and_comparator_change(tmp_path):
+    source, request = example(tmp_path)
+    ref, complete, ablated = runner.prepare(source, request['target_patch'], 'B')
+    row = {'batch_idx': 0, 'design_idx': 0, 'sampled_patch': ref,
+           'patch_residue_count': 2, 'patch_exact_matches': 2}
+    data = {'schema': 'bms.ligandmpnn.interface-context.experimental.v1',
+            'status': 'completed_unclassified', 'qualification': 'unqualified',
+            'candidate_id': 'candidate', 'round_id': 'round', 'source_sha256': request['source_sha256'],
+            'model_type': 'ligand_mpnn', 'method': 'masked_whole_patch_sampling_with_binder_ablation',
+            'checkpoint_sha256': runner.CHECKPOINT_SHA256, 'foundry_version': runner.VERSION,
+            'target_patch': request['target_patch'], 'reference_patch': ref,
+            'fixed_binder_chain': 'B', 'target_chain': 'A', 'seed': 1,
+            'temperature': 0.1, 'samples': 1, 'conditions': {}}
+    for name, filename, content in [('supplied_complex', 'masked_complex.pdb', complete),
+                                    ('without_binder', 'masked_without_binder.pdb', ablated)]:
+        file = tmp_path / filename
+        file.write_text(content)
+        data['conditions'][name] = {'masked_input_sha256': runner.digest(file), 'samples': [row]}
+    result = tmp_path / 'result.json'
+    def read():
+        result.write_text(json.dumps(data))
+        return read_context_result(result, candidate_id='candidate', round_id='round',
+                                   source_sha256=request['source_sha256'])
+    assert read() == data
+    leaked = complete.replace('UNK A   1', 'ALA A   1')
+    file = tmp_path / 'masked_complex.pdb'
+    file.write_text(leaked)
+    data['conditions']['supplied_complex']['masked_input_sha256'] = runner.digest(file)
+    with pytest.raises(ValueError, match='held-out'):
+        read()
+    file.write_text(complete)
+    data['conditions']['supplied_complex']['masked_input_sha256'] = runner.digest(file)
+    ablated_file = tmp_path / 'masked_without_binder.pdb'
+    ablated_file.write_text(ablated.replace('UNK A   2', 'ALA A   2'))
+    data['conditions']['without_binder']['masked_input_sha256'] = runner.digest(ablated_file)
+    with pytest.raises(ValueError, match='held-out'):
+        read()
+    ablated_file.write_text(ablated + pdb_line(100, 'N', 'ALA', 'A', 3, 3.0))
+    data['conditions']['without_binder']['masked_input_sha256'] = runner.digest(ablated_file)
+    with pytest.raises(ValueError, match='comparator'):
+        read()
