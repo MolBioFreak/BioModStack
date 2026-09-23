@@ -1438,6 +1438,8 @@ async def _resolve_parent_design_lineage(
             )
             parent_design = result.scalar_one_or_none()
             cache[parent_design_id] = parent_design
+        if parent_design is None or (source_stage_job_id and parent_design.job_id != source_stage_job_id):
+            raise ValueError("selected parent Design is missing or belongs to a different source job")
     if parent_design is None and candidate_source_ids:
         for candidate_id in _ordered_unique(candidate_source_ids):
             parent_design = cache.get(candidate_id)
@@ -1449,31 +1451,26 @@ async def _resolve_parent_design_lineage(
                 )
                 parent_design = result.scalar_one_or_none()
                 cache[candidate_id] = parent_design
+            if parent_design is not None and source_stage_job_id and parent_design.job_id != source_stage_job_id:
+                raise ValueError("inferred parent Design belongs to a different source job")
             if parent_design is not None:
                 parent_design_id = parent_design.id
                 break
-    if parent_design is None and source_pdb_path:
-        cache_key = f"pdb::{source_pdb_path}"
+    if parent_design is None and source_pdb_path and source_stage_job_id:
+        cache_key = f"pdb::{source_stage_job_id}::{source_pdb_path}"
         parent_design = cache.get(cache_key)
         if parent_design is None and cache_key not in cache:
             result = await session.execute(
                 select(Design).options(
                     load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
-                ).where(Design.pdb_path == source_pdb_path)
+                ).where(Design.pdb_path == source_pdb_path,
+                        Design.job_id == source_stage_job_id)
             )
-            parent_design = result.scalars().first()
+            matches = result.scalars().all()
+            if len(matches) > 1:
+                raise ValueError("selected source structure matches multiple Designs")
+            parent_design = matches[0] if matches else None
             cache[cache_key] = parent_design
-        if parent_design is None and source_design_name:
-            cache_key = f"name::{source_design_name}"
-            parent_design = cache.get(cache_key)
-            if parent_design is None and cache_key not in cache:
-                result = await session.execute(
-                    select(Design).options(
-                        load_only(*_SOURCE_LINEAGE_LOAD_ONLY_COLUMNS)
-                    ).where(Design.name == source_design_name)
-                )
-                parent_design = result.scalars().first()
-                cache[cache_key] = parent_design
         if parent_design is not None:
             parent_design_id = parent_design.id
 
@@ -4321,31 +4318,27 @@ async def _ingest_explicit_frustrampnn_results(
             _assert_protein_design_metadata_replay(design, metadata_row)
 
     created = 0
-    try:
-        for candidate_id, row in protein_metadata.items():
-            _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
-        for root, terminal, bundle in validated_candidates:
-            invocation_id = bundle.manifest["invocation_id"]
-            await ingest_frustrampnn_result_bundle(
-                session,
-                root,
-                parent_job_id=str(current_job.id),
-                terminal_envelope=terminal,
-                commit=False,
-                validated_bundle=bundle,
-                parent_metadata_snapshot=(
-                    protein_metadata[str(bundle.manifest["candidate_id"])]
-                    if bundle.request["parent_workflow_id"] == "protein_design"
-                    else None
-                ),
-            )
-            if existing_results[invocation_id] is None:
-                created += 1
-        if commit:
-            await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
+    for candidate_id, row in protein_metadata.items():
+        _enrich_protein_design_from_metadata(primary_designs[candidate_id], row)
+    for root, terminal, bundle in validated_candidates:
+        invocation_id = bundle.manifest["invocation_id"]
+        await ingest_frustrampnn_result_bundle(
+            session,
+            root,
+            parent_job_id=str(current_job.id),
+            terminal_envelope=terminal,
+            commit=False,
+            validated_bundle=bundle,
+            parent_metadata_snapshot=(
+                protein_metadata[str(bundle.manifest["candidate_id"])]
+                if bundle.request["parent_workflow_id"] == "protein_design"
+                else None
+            ),
+        )
+        if existing_results[invocation_id] is None:
+            created += 1
+    if commit:
+        await session.commit()
     return created
 
 
@@ -4925,10 +4918,12 @@ async def ingest_job_results(
     *,
     commit: bool = True,
 ) -> int:
-    """Import native results atomically, or join a caller-owned transaction.
+    """Import native results, or join a caller-owned transaction.
 
     With commit=False the caller owns both commit and rollback, including after
-    partial writes. Native prevalidation failures must not discard its pending work.
+    partial writes. With commit=True, verified primary publication is durable
+    before an optional FrustraMPNN attachment is attempted; attachment failure
+    still raises and never certifies an invalid component.
     """
     session.info.setdefault("protein_design_primary_prevalidated", set()).discard(job_id)
     current_job = None
@@ -4950,22 +4945,32 @@ async def ingest_job_results(
         count = 0 if model_id == "frustrampnn" else await _ingest_job_results(
             job_id, output_dir, session, epitope_residues,
         )
+        output_path = Path(output_dir)
+        output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
+                       else get_data_root() / output_dir)
+        if model_id == "protenix" and current_job is not None:
+            await _ingest_protenix_primary_publications(current_job, output_path, session)
         await session.flush()
+        if closeout is not None and current_job is not None:
+            current_job.provenance = {**(current_job.provenance or {}),
+                                      "antibody_pipeline_result": closeout}
+        # The primary owner has finished verification and publication. Commit
+        # before the optional component only when it was selected: its native
+        # validation may fail without revoking an already verified generator.
+        optional_outputs = current_job.stage_outputs if current_job is not None else None
+        has_optional_stage = isinstance(optional_outputs, dict) and any(
+            str(stage).strip().lower() in _FRUSTRAMPNN_TERMINAL_STAGES
+            for stage in optional_outputs
+        )
+        if commit and has_optional_stage and model_id != "frustrampnn":
+            await session.commit()
         # CM owns its exact reference-set join inside its native bundle transaction.
         if model_id != "conformational_mapping":
-            output_path = Path(output_dir)
-            output_path = (resolve_runtime_data_path(output_path) if output_path.is_absolute()
-                           else get_data_root() / output_dir)
-            if model_id == "protenix":
-                await _ingest_protenix_primary_publications(current_job, output_path, session)
             component_count = await _ingest_explicit_frustrampnn_results(
                 current_job, output_path, session, commit=False,
             )
             if model_id == "frustrampnn":
                 count = component_count or 0
-        if closeout is not None and current_job is not None:
-            current_job.provenance = {**(current_job.provenance or {}),
-                                      "antibody_pipeline_result": closeout}
         if commit:
             await session.commit()
         else:

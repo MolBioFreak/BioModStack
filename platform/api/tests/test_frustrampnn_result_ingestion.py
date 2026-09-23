@@ -507,6 +507,101 @@ async def db(tmp_path: Path):
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_failed_optional_component_cannot_rollback_fresh_primary_and_retry_identity(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified primary row is durable before optional terminal validation."""
+    root = tmp_path / "primary"
+    root.mkdir()
+    structure = root / "candidate.pdb"
+    structure.write_bytes(MANIFEST_FIXTURE._pdb())
+    async with db() as session:
+        session.add(Job(
+            id="job-primary", name="primary", model_id="boltz2", mode="predict", params={},
+            status="running", queue_status="running", output_dir=str(root),
+            stage_outputs={"frustrampnn": [str(root / "missing-terminal.json")]},
+            provenance={"stage_terminal_states": {"frustrampnn": {"status": "failed", "outputs": []}}},
+        ))
+        await session.commit()
+
+    async def verified_primary(job_id, output_dir, session, epitope_residues):
+        assert job_id == "job-primary"
+        if await session.get(Design, "primary-candidate") is None:
+            session.add(Design(id="primary-candidate", job_id=job_id,
+                               name="candidate", pdb_path=str(structure),
+                               provenance={"producer_candidate_id": "primary-candidate"}))
+            return 1
+        return 0
+
+    monkeypatch.setattr(result_ingester, "_ingest_job_results", verified_primary)
+    for _attempt in range(2):
+        async with db() as session:
+            with pytest.raises(FrustraMPNNPersistenceError, match="missing, unsafe"):
+                await ingest_job_results("job-primary", str(root), session)
+        async with db() as session:
+            candidates = (await session.execute(select(Design).where(
+                Design.job_id == "job-primary"))).scalars().all()
+            assert [row.id for row in candidates] == ["primary-candidate"]
+            owner = await session.get(Job, "job-primary")
+            assert owner.provenance["stage_terminal_states"]["frustrampnn"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_caller_owned_optional_failure_never_rolls_back_pending_primary(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "caller"
+    root.mkdir()
+    async with db() as session:
+        session.add(Job(id="caller", name="caller", model_id="boltz2", mode="predict", params={},
+                        status="running", queue_status="running", output_dir=str(root),
+                        stage_outputs={"frustrampnn": []}))
+        await session.commit()
+
+    async def primary(job_id, output_dir, session, epitope_residues):
+        session.add(Design(id="caller-candidate", job_id=job_id,
+                           name="candidate", pdb_path=str(root / "candidate.pdb")))
+        return 1
+
+    monkeypatch.setattr(result_ingester, "_ingest_job_results", primary)
+    async with db() as session:
+        with pytest.raises(FrustraMPNNPersistenceError, match="no explicit terminal result"):
+            await ingest_job_results("caller", str(root), session, commit=False)
+        assert await session.get(Design, "caller-candidate") is not None
+        await session.rollback()
+    async with db() as session:
+        assert await session.get(Design, "caller-candidate") is None
+
+
+@pytest.mark.asyncio
+async def test_lineage_requires_exact_owned_parent_not_foreign_name_or_path(
+    tmp_path: Path, db
+) -> None:
+    shared = str(tmp_path / "same.pdb")
+    async with db() as session:
+        for job_id in ("source-a", "source-b"):
+            session.add(Job(id=job_id, name=job_id, model_id="boltz2",
+                            mode="predict", params={}, status="completed"))
+            session.add(Design(id=f"design-{job_id}", job_id=job_id,
+                               name="same", pdb_path=shared))
+        await session.commit()
+
+    resolve = result_ingester._resolve_parent_design_lineage
+    context = {"source_stage_job_id": "source-a", "selection_index": {
+        "selected": {"source_design_id": "design-source-b", "design_job_id": "source-a"}}}
+    async with db() as session:
+        with pytest.raises(ValueError, match="different source job"):
+            await resolve(session, context, "selected")
+        context["selection_index"]["selected"] = {
+            "source_pdb_path": shared, "source_design_name": "same", "design_job_id": "source-a"}
+        lineage = await resolve(session, context, "selected")
+        assert lineage["parent_design_id"] == "design-source-a"
+        context["selection_index"]["selected"] = {
+            "source_design_name": "same", "design_job_id": "source-a"}
+        assert (await resolve(session, context, "selected"))["parent_design_id"] is None
+
+
 async def _seed_job(
     sessions: async_sessionmaker,
     *,
