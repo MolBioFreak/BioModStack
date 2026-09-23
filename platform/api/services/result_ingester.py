@@ -5015,6 +5015,10 @@ async def _ingest_job_results(
     if current_job is not None and current_job.model_id == "bindcraft2":
         from services.bindcraft2_publication import publish_native_results
         return await publish_native_results(current_job, output_path, session, commit=False)
+    if current_job is not None and current_job.model_id == 'ligandmpnn' and current_job.mode == 'interface_context':
+        from services.ligandmpnn_interface_publication import publish_selected
+        await publish_selected(current_job, output_path, session)
+        return 0
     if current_job is not None:
         from services.rf_filter_stage_accounting import prepare_filter_stages, retain_filter_stages
         retain_filter_stages(current_job, prepare_filter_stages(current_job, output_path))

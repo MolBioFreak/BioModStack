@@ -83,6 +83,8 @@ def _integrity_provenance(job: Job, payload: dict[str, Any]) -> dict[str, Any]:
 def job_expects_design_results(job: Job) -> bool:
     """Return whether a successful workflow is expected to publish Design rows."""
     params = job.params if isinstance(job.params, dict) else {}
+    if job.model_id == 'ligandmpnn' and job.mode == 'interface_context':
+        return False
     if (job.model_id in {'antibody_denovo', 'template_antibody_denovo'}
             and job.mode in {'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}):
         return True
@@ -548,6 +550,11 @@ async def finalize_successful_job(
                 raise RuntimeError('BC2 projected Design count differs from native publication')
             result_kind = 'bindcraft2_native_publication'
             idempotent_prior_results = bc2_prior_publication
+        elif default_ingester and job.model_id == 'ligandmpnn' and job.mode == 'interface_context':
+            from services.ligandmpnn_interface_publication import read_selected
+            await read_selected(job, session)
+            result_kind = 'ligandmpnn_interface_context_native'
+            idempotent_prior_results = True
         elif job_expects_rfd3_local_redesign_candidates(job):
             result_kind = "rfd3_local_redesign_candidate"
             if count == 0:
