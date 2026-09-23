@@ -21,6 +21,8 @@ export interface FrustraMpnnOverviewCell {
     status: string;
     reason: string | null;
     isNative: boolean;
+    nativeScore: number | null;
+    predictedDeltaFromNative: number | null;
 }
 
 export interface FrustraMpnnOverviewModel {
@@ -39,6 +41,9 @@ export function buildFrustraMpnnOverviewModel(residues: CmLandscapeResidue[]): F
         } else {
             lastChain.end = residueIndex + 1;
         }
+        const nativeSlot = residue.slots.find((candidate) => candidate.mutation_aa === residue.wt);
+        const nativeScore = nativeSlot?.status === 'ok' && nativeSlot.score != null && Number.isFinite(nativeSlot.score)
+            ? nativeSlot.score : null;
         CANONICAL_AMINO_ACIDS.forEach((mutationAa, mutationIndex) => {
             const slot = residue.slots.find((candidate) => candidate.mutation_aa === mutationAa);
             if (!slot) throw new Error(`missing_exact_20_slot:${residue.key}:${mutationAa}`);
@@ -52,6 +57,9 @@ export function buildFrustraMpnnOverviewModel(residues: CmLandscapeResidue[]): F
                 status: slot.status,
                 reason: slot.reason,
                 isNative: mutationAa === residue.wt,
+                nativeScore,
+                predictedDeltaFromNative: nativeScore != null && slot.status === 'ok' && slot.score != null && Number.isFinite(slot.score)
+                    ? slot.score - nativeScore : null,
             });
         });
     });
@@ -214,7 +222,7 @@ export default function FrustraMpnnLandscapeOverview({
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 className="text-sm font-semibold text-slate-200">Mutation × residue map</h3>
-                    <p className="mt-1 max-w-4xl text-xs text-slate-500">Select a residue to show its 20-slot profile. Structure selection is linked when mapping is available.</p>
+                    <p className="mt-1 max-w-4xl text-xs text-slate-500">Select a residue to show its 20-slot profile. Hover to compare each predicted substitution with the native amino acid at the same source residue. These chain-local score differences are not binding energies or target-contact effects.</p>
                 </div>
                 <div aria-label="Canonical frustration class legend" className="flex flex-wrap gap-3 text-[11px] text-slate-300">
                     {([
@@ -256,7 +264,7 @@ export default function FrustraMpnnLandscapeOverview({
                 />
             </div>
             <div aria-live="polite" className="mt-2 min-h-12 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
-                {hovered ? <div className="flex flex-wrap items-center gap-x-4 gap-y-1"><span className="font-mono font-semibold text-cyan-200">{identityLabel(hovered.residue)}</span><span>WT <b>{hovered.residue.wt}</b> → <b>{hovered.mutationAa}</b>{hovered.isNative ? ' · native slot' : ''}</span><span>Score <b>{hovered.score == null ? 'unavailable' : hovered.score.toFixed(3)}</b></span><span className="capitalize">Class <b>{hovered.className ?? hovered.status}</b></span>{hovered.reason && <span className="text-amber-200">{hovered.reason}</span>}</div> : selectedIndex >= 0 ? <div><span className="font-semibold text-cyan-200">Selected {identityLabel(model.residues[selectedIndex])}</span><span className="ml-3 text-slate-400">Use ←/→ while the map is focused to inspect adjacent residues.</span></div> : <div><span className="font-medium text-slate-200">Hover</span> for exact mutation evidence · <span className="font-medium text-slate-200">click</span> to select · <span className="font-medium text-slate-200">focus + arrow keys</span> to move residue-by-residue.</div>}
+                {hovered ? <div className="flex flex-wrap items-center gap-x-4 gap-y-1"><span className="font-mono font-semibold text-cyan-200">{identityLabel(hovered.residue)}</span><span className="text-slate-400">Source entity {hovered.residue.source_entity_id ?? 'unavailable'} · chain instance {hovered.residue.entity_instance_id}</span><span>WT <b>{hovered.residue.wt}</b> → <b>{hovered.mutationAa}</b>{hovered.isNative ? ' · native slot' : ''}</span><span>Score <b>{hovered.score == null ? 'unavailable' : hovered.score.toFixed(3)}</b></span><span>Native score <b>{hovered.nativeScore == null ? 'unavailable' : hovered.nativeScore.toFixed(3)}</b></span><span>Predicted Δ from native <b>{hovered.predictedDeltaFromNative == null ? 'unavailable' : hovered.predictedDeltaFromNative.toFixed(3)}</b></span><span className="capitalize">Class <b>{hovered.className ?? hovered.status}</b></span>{hovered.reason && <span className="text-amber-200">{hovered.reason}</span>}</div> : selectedIndex >= 0 ? <div><span className="font-semibold text-cyan-200">Selected {identityLabel(model.residues[selectedIndex])}</span><span className="ml-3 text-slate-400">Use ←/→ while the map is focused to inspect adjacent residues.</span></div> : <div><span className="font-medium text-slate-200">Hover</span> for exact mutation evidence · <span className="font-medium text-slate-200">click</span> to select · <span className="font-medium text-slate-200">focus + arrow keys</span> to move residue-by-residue.</div>}
             </div>
         </section>
     );
