@@ -34,6 +34,27 @@ async def test_helper_reuses_verified_bytes_and_repairs_corruption(tmp_path, mon
     assert first.read_bytes() == original
 
 
+@pytest.mark.asyncio
+async def test_warm_helper_refuses_symlink_ancestor_before_skip(tmp_path, monkeypatch):
+    uploads = []
+
+    async def local_run(connection, argv, input_bytes=None, **kwargs):
+        if input_bytes is not None:
+            uploads.append(1)
+        return subprocess.run(argv, input=input_bytes, capture_output=True, check=True)
+
+    monkeypatch.setattr(cache, 'run_remote', local_run)
+    real = tmp_path / 'worker'
+    await cache._install_helper(SimpleNamespace(remote_root=str(real)), cache._noop)
+    cold = len(uploads)
+    (tmp_path / 'alias').symlink_to(real, target_is_directory=True)
+    with pytest.raises(subprocess.CalledProcessError):
+        await cache._install_helper(SimpleNamespace(remote_root=str(tmp_path / 'alias')), cache._noop)
+    assert len(uploads) == cold
+    await cache._install_helper(SimpleNamespace(remote_root=str(real)), cache._noop)
+    assert len(uploads) == cold
+
+
 def test_source_archive_reuse_private_trees_and_rebuild_corruption(tmp_path, monkeypatch):
     repo = tmp_path / 'repo'
     repo.mkdir()
@@ -56,18 +77,22 @@ def test_source_archive_reuse_private_trees_and_rebuild_corruption(tmp_path, mon
     first = tmp_path / 'attempt1'
     second = tmp_path / 'attempt2'
     digest = bundle._staged_source_archive(repo, data, revision, first)
-    assert bundle._staged_source_archive(repo, data, revision, second) == digest
+    def no_extract(*args):
+        raise AssertionError('prewarm must not extract source')
+    with monkeypatch.context() as patcher:
+        patcher.setattr(bundle, '_safe_extract', no_extract)
+        assert bundle._staged_source_archive(repo, data, revision, second, extract=False) == digest
     assert len(archives) == 1
     assert first.joinpath('.bms-source.tar.gz').read_bytes() == second.joinpath('.bms-source.tar.gz').read_bytes()
-    assert first.joinpath('workflow.nf').stat().st_ino != second.joinpath('workflow.nf').stat().st_ino
+    assert [p.name for p in second.iterdir()] == ['.bms-source.tar.gz']
     first.joinpath('workflow.nf').write_text('changed')
-    assert second.joinpath('workflow.nf').read_text() != 'changed'
+    assert not second.joinpath('workflow.nf').exists()
     cached = data / 'remote-execution/source-archives' / (revision + '.tar.gz')
     cached.write_bytes(b'corrupt')
     third = tmp_path / 'attempt3'
     assert bundle._staged_source_archive(repo, data, revision, third) == digest
     assert len(archives) == 2
-    assert third.joinpath('workflow.nf').read_text() == second.joinpath('workflow.nf').read_text()
+    assert third.joinpath('workflow.nf').read_text() != first.joinpath('workflow.nf').read_text()
 
 
 def test_source_archive_retention_skips_in_use_revision(tmp_path):

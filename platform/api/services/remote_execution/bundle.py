@@ -927,8 +927,8 @@ def _prune_source_archives(cache_root: Path) -> None:
 
 
 def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
-                           source_root: Path) -> str:
-    """Reuse a verified revision-keyed archive; extract into a private tree."""
+                           source_root: Path, *, extract: bool = True) -> str:
+    """Reuse a verified revision-keyed archive; stage privately, optionally extract."""
     cache_root = data_root / 'remote-execution' / 'source-archives'
     cache_root.mkdir(parents=True, exist_ok=True)
     archive = cache_root / (revision + '.tar.gz')
@@ -960,7 +960,8 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         shutil.copyfile(archive, staged)
         if _sha256_file(staged) != expected:
             raise RemoteBundleError('Cached source archive changed during staging')
-        _safe_extract(staged, source_root)
+        if extract:
+            _safe_extract(staged, source_root)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     return expected

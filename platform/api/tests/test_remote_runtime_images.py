@@ -380,6 +380,30 @@ def test_warm_image_ingest_hashes_only_lease_and_rejects_corruption(tmp_path, mo
         store.ingest_runtime(item, source)
 
 
+@pytest.mark.parametrize('caller', ['warm_ingest', 'runtime_alias'])
+@pytest.mark.parametrize('existing', [False, True])
+def test_wrong_runtime_size_never_creates_or_releases_owner(tmp_path, caller, existing):
+    store, source, item = publish(tmp_path)
+    lifecycle = tool.runtime_lifecycle()
+    runtime = tmp_path / 'worker/attempts' / str(uuid.uuid4()) / 'materialized/runtime'
+    alias = runtime / 'containers/image.sif'
+    if existing:
+        if caller == 'warm_ingest':
+            store.ingest_runtime(item, source)
+        else:
+            store.runtime_alias(item, alias, runtime)
+    before = lifecycle.load_state(store.image_store)['leases']
+    wrong = dict(item, size_bytes=int(item['size_bytes']) + 1)
+    with pytest.raises(ValueError, match='runtime_image_size_mismatch'):
+        if caller == 'warm_ingest':
+            store.ingest_runtime(wrong, source)
+        else:
+            store.runtime_alias(wrong, alias, runtime)
+    assert lifecycle.load_state(store.image_store)['leases'] == before
+    if not existing and caller == 'runtime_alias':
+        assert not alias.exists()
+
+
 def test_image_publication_isolated_and_downstream_publish_reuses_inode(tmp_path):
     store, source, item = publish(tmp_path)
     obj = store.image_path(item)
@@ -476,8 +500,10 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(repo / relative, destination)
     archive_run = subprocess.run
+    archive_calls = []
     def archive(argv, **kwargs):
         if argv[:2] == ['git', 'archive']:
+            archive_calls.append(1)
             import tarfile
             from types import SimpleNamespace
             with tarfile.open(fileobj=kwargs['stdout'], mode='w') as tar:
@@ -485,6 +511,12 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
             return SimpleNamespace(returncode=0)
         return archive_run(argv, **kwargs)
     monkeypatch.setattr(bundle.subprocess, 'run', archive)
+    extract_calls = []
+    original_extract = bundle._safe_extract
+    def count_extract(*args):
+        extract_calls.append(1)
+        return original_extract(*args)
+    monkeypatch.setattr(bundle, '_safe_extract', count_extract)
     # A real executable argv recorder stands in for Nextflow, not Apptainer/science.
     executable = Path(target.remote_root) / 'runner/nextflow'
     executable.parent.mkdir(parents=True)
@@ -495,6 +527,7 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
     executable.chmod(0o700)
     calls, uploads = local_transport
     monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
+    monkeypatch.setattr(cache, 'get_data_root', lambda: roots['data'])
     monkeypatch.setattr(cache, 'current_source_identity', lambda *_: ('a' * 40, 'b' * 40))
     from types import SimpleNamespace
     entries = cache.independent_plan(SimpleNamespace(kind='image', model_id='protenix'))
@@ -505,6 +538,8 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
                              native_invocation=job.native_invocation, source_revision='a' * 40,
                              source_tree='b' * 40, operation_id=str(uuid.uuid4()),
                              progress=cache._noop, check_fence=cache._noop)
+    assert len(archive_calls) == 1
+    assert not extract_calls
     assert not (Path(target.remote_root) / 'attempts').exists()
     invocation_inodes = []
     attempts = []
@@ -512,6 +547,8 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
         prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command,
                                                 native_invocation=job.native_invocation)
         attempts.append(prepared)
+        assert len(archive_calls) == 1  # launch reused the verified warm archive
+        assert len(extract_calls) == len(attempts)  # private extraction at launch only
         assert len(prepared.runtime_images) == 1
         image = prepared.runtime_images[0]
         assert len(image.aliases) == 1
@@ -751,6 +788,7 @@ async def test_frustrampnn_shared_canonical_reader(
         native_parameters_json=canonical_bytes(native))
     job.native_invocation = attach_selected_plan(job.native_invocation, roots, fixture_metadata=fixture_metadata)
     monkeypatch.setattr(cache, 'get_code_root', lambda: roots['repo'])
+    monkeypatch.setattr(cache, 'get_data_root', lambda: roots['data'])
     monkeypatch.setattr(cache, 'current_source_identity', lambda *_: ('a' * 40, 'b' * 40))
     await cache.prewarm_cache(connection=target, job=job, command=command,
                              native_invocation=job.native_invocation, source_revision='a' * 40,

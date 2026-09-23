@@ -290,10 +290,9 @@ class Cache:
             else:
                 present = True
         if present:
-            _, identities = runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-                owner='cache-artifact:' + item['sha256'])
-            if identities[item['sha256']]['size'] != item['size_bytes']:
-                raise ValueError('runtime_image_size_mismatch')
+            runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+                owner='cache-artifact:' + item['sha256'],
+                expected_sizes={item['sha256']: item['size_bytes']})
             return {**item, 'state': 'ready', 'cache_hit': True}
         # One private upload -> one independently copied immutable object. Never
         # retain another artifact-CAS SIF or adopt/hardlink a mutable incoming file.
@@ -319,10 +318,9 @@ class Cache:
                 or '..' in destination.parts or destination == root
                 or not destination.is_relative_to(root)):
             raise ValueError('unsafe_runtime_alias')
-        _, identities = runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
-            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'])
-        if identities[item['sha256']]['size'] != item['size_bytes']:
-            raise ValueError('runtime_image_size_mismatch')
+        runtime_lifecycle().ensure_lease(self.image_store, [item['sha256']],
+            owner='attempt:' + relative.parts[0] + ':image:' + item['sha256'],
+            expected_sizes={item['sha256']: item['size_bytes']})
         target = self.image_path(item)
         with directory(destination.parent, create=not check) as parent:
             # Exact, controller-derived target only, not arbitrary external links.
@@ -1020,6 +1018,7 @@ class Cache:
         with self.locked(item), self.objects(item) as objects:
             fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=objects)
             try:
+                regular(fd)
                 # _publish_copy hashes the exact bytes it copies before atomic
                 # publication. A separate pre-read only hashes the same object
                 # twice and does not strengthen the use-boundary check.

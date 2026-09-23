@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -76,6 +77,19 @@ def test_cold_warm_corrupt_and_materialization_isolation(tmp_path):
     source.write_bytes(data)
     assert cache.ingest(item, source)['cache_hit'] is False
     assert cache.probe(item)['state'] == 'cache_hit'
+
+
+def test_nonregular_object_refused_before_destination_creation(tmp_path):
+    cache, source = upload(tmp_path / 'cache', b'model')
+    item = identity(b'model')
+    cache.ingest(item, source)
+    obj = tmp_path / 'cache/objects/sha256' / item['sha256'][:2] / item['sha256']
+    obj.unlink()
+    os.mkfifo(obj)
+    destination = tmp_path / 'attempt/deep/model'
+    with pytest.raises(ValueError, match='not_regular_file'):
+        cache.materialize(item, destination, tmp_path / 'attempt')
+    assert not destination.parent.exists()
 
 
 def test_bad_partial_never_published(tmp_path):

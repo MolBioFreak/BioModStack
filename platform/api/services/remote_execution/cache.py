@@ -8,15 +8,14 @@ import os
 import shutil
 import stat
 from pathlib import Path
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import uuid
 
-from paths import get_code_root
+from paths import get_code_root, get_data_root
 from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source,
-                     _safe_extract, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
+                     _staged_source_archive, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
 from .images import resolve_image
 from . import hf_assets
@@ -99,6 +98,10 @@ async def _install_helper(connection, check_fence, helper_name='bms_artifact_cac
     digests = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
     probe = """import hashlib,os,pathlib,stat,sys
 root=pathlib.Path(sys.argv[1]);names=sys.argv[2:];valid=[]
+q=pathlib.Path('/')
+for part in root.parts[1:]:
+ q=q/part
+ if q.is_symlink(): raise RuntimeError('unsafe helper path')
 for pair in names:
  name,expected=pair.split(':',1)
  try:
@@ -524,13 +527,8 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
         raise ValueError('Prewarm source identity does not match current committed source')
     _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
                                                 native_invocation=native_invocation)
-    archive = directory / 'source.tar.gz'
-    with archive.open('wb') as stream:
-        subprocess.run(['git', 'archive', '--format=tar.gz', '-6', source_revision], cwd=repo,
-                       stdout=stream, stderr=subprocess.PIPE, check=True, timeout=300)
     source = directory / 'source'
-    _safe_extract(archive, source)
-    archive.replace(source / '.bms-source.tar.gz')
+    _staged_source_archive(repo, get_data_root().resolve(), source_revision, source, extract=False)
 
     entries = []
     assets = [(source / '.bms-source.tar.gz', 'source/.bms-source.tar.gz')]
