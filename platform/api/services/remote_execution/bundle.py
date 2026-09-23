@@ -650,6 +650,19 @@ def _input_assets(
         for path in selected:
             if _under(path, root):
                 selected[path] = "trusted-results/" + path.relative_to(trusted).as_posix()
+    # Selection is one immutable directory contract: manifest basenames must
+    # resolve beside candidate and independent-target snapshots on the worker.
+    if (native_invocation.model_id, native_invocation.mode) == ('esmfold2', 'blind_pose'):
+        from services.binder_blind_pose_selected import KEY, _verify_request_snapshots
+        from types import SimpleNamespace
+        binding = json.loads(native_invocation.requested_json).get(KEY)
+        if not isinstance(binding, dict):
+            raise RemoteBundleError('Selected blind pose has no request binding')
+        _verify_request_snapshots(SimpleNamespace(params=params), binding)
+        root = Path(params['blind_pose_selection_manifest']).parent.resolve()
+        if not any(_under(root, allowed) and root != allowed for allowed in input_roots):
+            raise RemoteBundleError('Selected blind pose directory is outside managed inputs')
+        selected[root] = f"blind-pose/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
@@ -1295,6 +1308,9 @@ def prepare_remote_bundle(
         position = command.index('--pdb_paths') + 1
         translated_command[position] = _rewrite_maturation_pdb_paths(
             str(command[position]), path_map)
+    if job.mode == 'blind_pose' and job.model_id == 'esmfold2' and '--blind_pose_candidate_pdbs' in command:
+        position = command.index('--blind_pose_candidate_pdbs') + 1
+        translated_command[position] = _rewrite_maturation_pdb_paths(str(command[position]), path_map)
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:

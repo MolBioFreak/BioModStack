@@ -25,6 +25,16 @@ outputs:
   - json
 
 modes:
+  - id: blind_pose
+    name: Selected blind-pose complex cofold
+    description: Sequence-only independent target and selected candidate binder cofold; native samples remain unclassified.
+    params:
+      - model_variant
+      - model_id_or_path
+      - num_loops
+      - num_sampling_steps
+      - num_diffusion_samples
+      - seed
   - id: predict
     name: Standalone ESMFold2 Fold
     description: Run the Biohub ESMFold2 local model path with protein, complex, nucleic-acid, ligand, PDB-sequence, and MSA inputs.

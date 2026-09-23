@@ -521,6 +521,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("protenix", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
+    ("esmfold2", "blind_pose"): "workflows/binder_blind_pose.nf",
     ("esmfold2_experimental", "predict"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("esmfold2_experimental", "complex"): STRUCTURE_PREDICTION_ENTRYPOINT,
     ("boltz2", "complex"): COMPLEX_PREDICTION_ENTRYPOINT,
@@ -6166,7 +6167,27 @@ def compile_nextflow_invocation(
 
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'boltz_cp_experimental'
-    elif model_id in {'esmfold2', 'esmfold2_experimental'}:
+    elif model_id == 'esmfold2' and mode == 'blind_pose':
+        from types import SimpleNamespace
+        from services.binder_blind_pose_selected import KEY, _verify_request_snapshots, BlindPoseError
+        binding = params.get(KEY)
+        if not isinstance(binding, dict):
+            raise ValueError('Selected blind pose requires its persisted request binding')
+        try:
+            _verify_request_snapshots(SimpleNamespace(params=params), binding)
+        except (BlindPoseError, KeyError, OSError) as exc:
+            raise ValueError('Selected blind pose request changed') from exc
+        # The leaf consumes only sealed staged inputs and explicitly typed sampling
+        # controls. Never compile these as a generic structure-prediction launch.
+        allowed = ('blind_pose_selection_manifest', 'blind_pose_candidate_pdbs', 'target_pdb',
+                   'esmfold2_validation_variant', 'esmf_model_id_or_path',
+                   'esmfold2_validation_num_loops', 'esmfold2_validation_num_sampling_steps',
+                   'esmfold2_validation_num_diffusion_samples', 'esmf_seed')
+        missing = [key for key in allowed[:-1] if key not in params]
+        if missing:
+            raise ValueError('Selected blind pose missing ' + ', '.join(missing))
+        params = {key: params[key] for key in allowed if key in params}
+    elif model_id in {'esmfold2', 'esmfold2_experimental'} and mode != 'blind_pose':
         if 'core_protein_scientific_contract' in params:
             # Validate typed values before stringifying them into Nextflow flags.
             # This import is route-free and never imports the scientific runtime.

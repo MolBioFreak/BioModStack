@@ -3,6 +3,8 @@
 process BinderBlindPoseESMFold2 {
     label 'ESMFold2'
     label 'gpu'
+    stageInMode 'copy'
+    publishDir "${params.out_dir}", mode: 'copy', pattern: 'blind_pose_results'
     container "${params.container_dir}/esmfold2.sif"
 
     input:

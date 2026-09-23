@@ -31,6 +31,7 @@ class BlindPoseSettings(BaseModel):
 class SelectedBlindPoseRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_job_id: str
+    target_name: str | None = None
     design_ids: list[str] = Field(min_length=1)
     binder_chains: dict[str, list[str]]
     target_chains: list[str] = Field(min_length=1)
@@ -50,8 +51,19 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
     if source is None:
         raise HTTPException(404, 'Source job not found')
     target = (source.params or {}).get('target_pdb')
+    if getattr(source, 'model_id', None) == 'bindcraft2':
+        targets = ((source.params or {}).get('bindcraft2_settings') or {}).get('targets')
+        if not isinstance(targets, list):
+            raise HTTPException(422, 'BC2 source has no independently declared targets')
+        matches = [t for t in targets if isinstance(t, dict) and
+                   (request.target_name is None or t.get('name') == request.target_name)]
+        if len(matches) != 1:
+            raise HTTPException(422, 'Select one independently declared BC2 target_name')
+        target = matches[0].get('target_path')
+    elif request.target_name is not None:
+        raise HTTPException(422, 'target_name applies only to BC2 sources')
     if not isinstance(target, str) or not target:
-        raise HTTPException(422, 'Source job has no independently declared target PDB')
+        raise HTTPException(422, 'Source job has no independently declared target structure')
     designs = (await session.scalars(select(Design).where(Design.id.in_(request.design_ids)))).all()
     by_id = {d.id: d for d in designs}
     if len(by_id) != len(request.design_ids):

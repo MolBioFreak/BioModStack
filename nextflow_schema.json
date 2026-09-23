@@ -825,6 +825,18 @@
                 }
             }
         },
+        "blind_pose_parameters": {
+            "title": "Selected Blind Pose Inputs",
+            "type": "object",
+            "properties": {
+                "blind_pose_selection_manifest": {"type": "string"},
+                "blind_pose_candidate_pdbs": {"type": "string"},
+                "esmfold2_validation_variant": {"type": "string"},
+                "esmfold2_validation_num_loops": {"type": "integer"},
+                "esmfold2_validation_num_sampling_steps": {"type": "integer"},
+                "esmfold2_validation_num_diffusion_samples": {"type": "integer"}
+            }
+        },
         "scheduler_assignment_parameters": {
             "title": "Scheduler Assignment Parameters",
             "type": "object",
@@ -870,6 +882,9 @@
         },
         {
             "$ref": "#/definitions/protenix_parameters"
+        },
+        {
+            "$ref": "#/definitions/blind_pose_parameters"
         },
         {
             "$ref": "#/definitions/scheduler_assignment_parameters"

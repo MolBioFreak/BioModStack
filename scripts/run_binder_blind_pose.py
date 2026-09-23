@@ -15,7 +15,9 @@ import re
 import subprocess
 import sys
 
-from run_esmfold2_inference import parse_pdb_polymer_components
+from run_esmfold2_inference import PROTEIN_3TO1, parse_pdb_polymer_components
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+from io import StringIO
 
 
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -24,7 +26,46 @@ _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 def _source(path: Path, chain_ids: list[str], *, role: str) -> list[dict]:
     if not chain_ids or len(set(chain_ids)) != len(chain_ids) or any(not isinstance(x, str) or not x for x in chain_ids):
         raise ValueError(f"{role} chains must be distinct explicit chain IDs")
-    components = parse_pdb_polymer_components(path, chain_ids=chain_ids, include_dna_rna=False)
+    if path.suffix.lower() in {'.cif', '.mmcif'}:
+        cif = MMCIF2Dict(StringIO(path.read_text()))
+        def column(name):
+            return cif.get('_atom_site.' + name, [])
+        count = len(column('id'))
+        fields = ('group_PDB', 'auth_asym_id', 'label_asym_id', 'auth_seq_id',
+                  'label_seq_id', 'label_comp_id', 'pdbx_PDB_model_num')
+        if not count or any(len(column(field)) != count for field in fields):
+            raise ValueError('CIF lacks an unambiguous atom_site sequence identity')
+        residues = {chain: {} for chain in chain_ids}
+        instances = {chain: set() for chain in chain_ids}
+        for i in range(count):
+            if column('group_PDB')[i] != 'ATOM':
+                continue
+            chain = column('auth_asym_id')[i]
+            if chain not in residues:
+                continue
+            if column('pdbx_PDB_model_num')[i] != '1':
+                raise ValueError('Selected CIF has multiple structural models')
+            position = (column('label_asym_id')[i], column('label_seq_id')[i])
+            instances[chain].add(position[0])
+            if position[1] in {'.', '?'}:
+                raise ValueError('Selected CIF has no polymer residue identity')
+            name = column('label_comp_id')[i].upper()
+            previous = residues[chain].setdefault(position, name)
+            if previous != name:
+                raise ValueError('Selected CIF residue identity conflicts')
+        components = []
+        for chain in chain_ids:
+            names = list(residues[chain].values())
+            if len(instances[chain]) != 1 or instances[chain] & {'.', '?'}:
+                raise ValueError(f'{role} auth chain {chain} is not one CIF chain instance')
+            if not names or any(name not in PROTEIN_3TO1 for name in names):
+                raise ValueError(f'{role} chain {chain} is not an identified protein')
+            components.append({'id': chain, 'type': 'protein',
+                               'sequence': ''.join(PROTEIN_3TO1[name] for name in names)})
+    elif path.suffix.lower() == '.pdb':
+        components = parse_pdb_polymer_components(path, chain_ids=chain_ids, include_dna_rna=False)
+    else:
+        raise ValueError(f'{role} source must be PDB or native CIF')
     by_id = {component['id']: component for component in components if component['type'] == 'protein'}
     if set(by_id) != set(chain_ids):
         raise ValueError(f"{role} protein chains disagree: requested {chain_ids}, observed {sorted(by_id)}")
@@ -50,8 +91,8 @@ def compile_selected_inputs(manifest: dict, staged_dir: Path, target_pdb: Path) 
         key, name, chains = row['candidate_key'], row['source_pdb'], row['binder_chains']
         if not isinstance(key, str) or not _KEY.fullmatch(key) or key in seen:
             raise ValueError('Invalid or duplicate candidate key')
-        if not isinstance(name, str) or not name.endswith('.pdb') or Path(name).name != name:
-            raise ValueError('source_pdb must be a staged PDB basename')
+        if not isinstance(name, str) or Path(name).suffix.lower() not in {'.pdb', '.cif', '.mmcif'} or Path(name).name != name:
+            raise ValueError('source_pdb must be a staged structure basename')
         path = staged_dir / name
         if not path.is_file() or path.is_symlink():
             raise ValueError(f'Missing staged candidate: {name}')

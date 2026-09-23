@@ -39,8 +39,8 @@ def _source(path: str) -> tuple[Path, bytes]:
     resolved = resolve_runtime_data_path(path)
     if not any(resolved.is_relative_to(root.resolve()) for root in get_allowed_roots().values()):
         raise BlindPoseError('structure path outside managed roots')
-    if resolved.suffix.lower() != '.pdb':
-        raise BlindPoseError('blind pose sequence sources must be PDB-backed')
+    if resolved.suffix.lower() not in {'.pdb', '.cif', '.mmcif'}:
+        raise BlindPoseError('blind pose sequence sources must be PDB or CIF-backed')
     return resolved, _regular(resolved)
 
 
@@ -62,6 +62,7 @@ def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: 
     ):
         raise BlindPoseError('explicit distinct target chain IDs required')
     target_path, target_bytes = _source(target_pdb)
+    target_name = 'target' + target_path.suffix.lower()
     selected = []
     snapshots = []
     for index, design in enumerate(designs):
@@ -74,7 +75,7 @@ def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: 
             raise BlindPoseError('explicit distinct binder chains may not overlap target chains')
         path, content = _source(design.pdb_path)
         key = f'candidate-{index:04d}'
-        filename = key + '.pdb'
+        filename = key + path.suffix.lower()
         selected.append({'candidate_key': key, 'source_pdb': filename, 'binder_chains': chains})
         snapshots.append((filename, content, design.id, hashlib.sha256(content).hexdigest()))
     # Validate sequences and roles *before* creating any inputs. Import the same
@@ -89,21 +90,21 @@ def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: 
         scratch = Path(tmp)
         for filename, content, _, _ in snapshots:
             (scratch / filename).write_bytes(content)
-        (scratch / 'target.pdb').write_bytes(target_bytes)
+        (scratch / target_name).write_bytes(target_bytes)
         compiled = compile_selected_inputs({'schema_version': 1, 'target_chains': target_chains,
-                                            'candidates': selected}, scratch, scratch / 'target.pdb')
+                                            'candidates': selected}, scratch, scratch / target_name)
     directory.mkdir(parents=True, exist_ok=False)
     try:
         for filename, content, _, _ in snapshots:
             (directory / filename).write_bytes(content)
-        (directory / 'target.pdb').write_bytes(target_bytes)
+        (directory / target_name).write_bytes(target_bytes)
         manifest = {'schema_version': 1, 'target_chains': target_chains, 'candidates': selected}
         (directory / 'selection.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
         binding = {'schema': SCHEMA, 'source_job_id': source_job.id,
                    'target_source_sha256': hashlib.sha256(target_bytes).hexdigest(),
-                   'target_source_name': target_path.name,
+                   'target_source_name': target_path.name, 'target_snapshot_name': target_name,
                    'candidates': [{'candidate_key': row['candidate_key'], 'design_id': design_id,
-                                   'source_sha256': digest, 'binder_chains': row['binder_chains']}
+                                   'source_sha256': digest, 'source_pdb': row['source_pdb'], 'binder_chains': row['binder_chains']}
                                   for row, (_, _, design_id, digest) in zip(selected, snapshots)],
                    'target_chains': target_chains,
                    'component_sha256': {row['candidate_key']: hashlib.sha256(
@@ -127,9 +128,10 @@ def launch_params(directory: Path, *, variant: str, model_id_or_path: str,
     if seed is not None and (type(seed) is not int or seed < 0):
         raise BlindPoseError('seed must be a nonnegative integer or null')
     manifest = json.loads((directory / 'selection.json').read_text())
+    binding = json.loads((directory / 'binding.json').read_text())
     return {'blind_pose_selection_manifest': str(directory / 'selection.json'),
             'blind_pose_candidate_pdbs': [str(directory / row['source_pdb']) for row in manifest['candidates']],
-            'target_pdb': str(directory / 'target.pdb'),
+            'target_pdb': str(directory / binding['target_snapshot_name']),
             'esmfold2_validation_variant': variant, 'esmf_model_id_or_path': model_id_or_path,
             'esmfold2_validation_num_loops': num_loops,
             'esmfold2_validation_num_sampling_steps': num_sampling_steps,
@@ -137,7 +139,17 @@ def launch_params(directory: Path, *, variant: str, model_id_or_path: str,
             'esmf_seed': seed}
 
 
-def _result_inventory(root: Path, binding: dict, requested_samples: int) -> tuple[dict, dict]:
+def _requested_settings(params: dict) -> dict:
+    return {'model_variant': params['esmfold2_validation_variant'],
+            'model_id_or_path': params['esmf_model_id_or_path'],
+            'num_loops': params['esmfold2_validation_num_loops'],
+            'num_sampling_steps': params['esmfold2_validation_num_sampling_steps'],
+            'num_diffusion_samples': params['esmfold2_validation_num_diffusion_samples'],
+            'seed': params.get('esmf_seed')}
+
+
+def _result_inventory(root: Path, binding: dict, requested_settings: dict) -> tuple[dict, dict]:
+    requested_samples = requested_settings['num_diffusion_samples']
     receipt_path = root / 'blind_pose_results' / 'blind_pose_receipt.json'
     receipt = json.loads(_regular(receipt_path))
     expected = {row['candidate_key']: row for row in binding['candidates']}
@@ -146,6 +158,9 @@ def _result_inventory(root: Path, binding: dict, requested_samples: int) -> tupl
         receipt.get('predictor') != 'esmfold2' or not isinstance(rows, list) or not rows):
         raise BlindPoseError('blind pose native receipt is missing or wrong')
     seen = set()
+    settings = receipt.get('requested_settings')
+    if settings != requested_settings:
+        raise BlindPoseError('native settings differ from selected request')
     names = {'blind_pose_results/blind_pose_receipt.json'}
     for row in rows:
         key, sample = row.get('candidate_key'), row.get('sample_id')
@@ -200,13 +215,13 @@ def _verify_request_snapshots(job: Job, binding: dict) -> None:
         raise BlindPoseError('candidate path roster changed')
     for row, saved, path in zip(candidates, binding['candidates'], paths):
         if (row != {'candidate_key': saved['candidate_key'],
-                    'source_pdb': saved['candidate_key'] + '.pdb',
+                    'source_pdb': saved['source_pdb'],
                     'binder_chains': saved['binder_chains']}
                 or Path(path) != manifest.parent / row['source_pdb']
                 or hashlib.sha256(_regular(Path(path))).hexdigest() != saved['source_sha256']):
             raise BlindPoseError('selected candidate snapshot changed')
     target = Path(params['target_pdb'])
-    if target != manifest.parent / 'target.pdb' or hashlib.sha256(_regular(target)).hexdigest() != binding['target_source_sha256']:
+    if target != manifest.parent / binding['target_snapshot_name'] or hashlib.sha256(_regular(target)).hexdigest() != binding['target_source_sha256']:
         raise BlindPoseError('independent target snapshot changed')
 
 
@@ -219,7 +234,7 @@ async def publish_selected(job: Job, root: Path, session) -> dict:
     root = root.absolute()
     if not job.output_dir or Path(job.output_dir).absolute() != root or root.is_symlink():
         raise BlindPoseError('job output root differs from published result root')
-    native, files = _result_inventory(root, binding, job.params['esmfold2_validation_num_diffusion_samples'])
+    native, files = _result_inventory(root, binding, _requested_settings(job.params))
     previous = (job.provenance or {}).get(KEY)
     identity = {'schema': SCHEMA, 'attempt': job.retry_count or 0,
                 'remote_attempt_id': job.remote_attempt_id, 'binding': binding,
@@ -259,7 +274,7 @@ async def read_selected(job: Job, session) -> dict:
         raise BlindPoseError('published result root changed')
     _verify_request_snapshots(job, receipt['binding'])
     native, files = _result_inventory(Path(job.output_dir).absolute(), receipt['binding'],
-                                       job.params['esmfold2_validation_num_diffusion_samples'])
+                                       _requested_settings(job.params))
     if files != receipt['files']:
         raise BlindPoseError('blind pose result bytes changed')
     artifacts = (await session.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
