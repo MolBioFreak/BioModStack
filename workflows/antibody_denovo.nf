@@ -3272,10 +3272,13 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 }
             }
 
+            // These are new, unvalidated descendants. A pre-maturation predictor
+            // result belongs to its input document, not to changed coordinates.
             validated_structures = CollectValidatedMaturationOutputs.out.pdbs
                 .flatten()
                 .map { pdb ->
-                    def meta = [id: pdb.baseName]
+                    def meta = [id: pdb.baseName, validation_status: 'unvalidated',
+                                terminal_producer: 'ppiflow_maturation_post_validation']
                     [meta, pdb]
                 }
         }

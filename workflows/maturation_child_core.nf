@@ -136,7 +136,8 @@ workflow MATURATION_CHILD_CORE {
         ? selectedLoopsSpec.split(',')*.trim().findAll { it }.collect { it.toUpperCase() } as Set
         : [] as Set
     def ppiflowMode = (params.ppiflow_mode ?: params.maturation_stage_name ?: 'maturation').toString().toLowerCase()
-    def runRedesign = (params.maturation_redesign_enabled != false) && ppiflowMode != 'backbone_refine'
+    // A missing redesign request is not consent to mutate the flow backbone.
+    def runRedesign = (params.maturation_redesign_enabled == true) && ppiflowMode != 'backbone_refine'
 
     def anchor_inputs = Channel
         .from(pdb_list)
@@ -231,7 +232,7 @@ workflow MATURATION_CHILD_CORE {
         }
         .filter { _meta, _backbone, _scoreJson, score -> !strictScientificContract || score != null }
 
-    def redesign_enabled = params.maturation_redesign_enabled != false
+    def redesign_enabled = params.maturation_redesign_enabled == true
     def redesign_top_n = params.maturation_redesign_top_n ?: 0
     def partial_selected = partial_scored
     if (redesign_enabled && runRedesign && redesign_top_n > 0) {

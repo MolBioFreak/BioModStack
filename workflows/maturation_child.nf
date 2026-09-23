@@ -16,7 +16,7 @@ nextflow.enable.dsl = 2
 // Workflow-specific param defaults
 params.pdb_paths = null
 params.framework_type = 'standard-fv'
-params.maturation_redesign_enabled = true
+params.maturation_redesign_enabled = false
 params.maturation_redesign_top_n = 0
 params.ppiflow_require_anchors = true
 params.ppiflow_selected_loops = null
