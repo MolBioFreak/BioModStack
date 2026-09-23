@@ -51,7 +51,11 @@ class NativeDocument:
     format: str
     retained_design: str | None = None  # only verified native CIF metadata can bind a document
     attempt_sha256: str | None = None
-    target_state: str | None = None  # current producer does not stamp state identity
+    target_state: str | None = None  # producer-stamped prediction key, never filename inference
+    primary_target_state: str | None = None
+    structure_variant: str | None = None  # native or relaxed
+    binder_chains: str | None = None
+    target_chains: str | None = None
 
 
 @dataclass(frozen=True)
@@ -218,8 +222,8 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
             if path.is_symlink():
                 raise NativeResultError(f"unsafe native artifact: {path}")
             if path.is_file() and path.suffix.lower() in (".cif", ".mmcif", ".pdb", ".ent"):
-                retained_design = attempt_sha = None
-                if stage in ("3_Ranked", "accepted") and path.suffix.lower() in (".cif", ".mmcif"):
+                retained_design = attempt_sha = state = primary = variant = binder = target = None
+                if stage in ("3_Ranked", "accepted", "2_Refolded") and path.suffix.lower() in (".cif", ".mmcif"):
                     stamp = _cif_metadata(path)
                     design = stamp.get("design")
                     if design in retained_by_name:
@@ -228,14 +232,30 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
                         stamped_digest = stamp.get("bms_attempt_sha256")
                         if stamped_candidate or stamped_digest:
                             if (stamped_candidate != row.values.get("bms_scored_candidate")
-                                    or stamped_digest != row.values.get("bms_attempt_sha256")):
+                                    or stamped_digest != row.values.get("bms_attempt_sha256")
+                                    or (row.values.get("bms_scored_design") and stamp.get("bms_scored_design")
+                                        and stamp["bms_scored_design"] != row.values["bms_scored_design"])
+                                    or (row.values.get("bms_trajectory_design") and stamp.get("bms_trajectory_design")
+                                        and stamp["bms_trajectory_design"] != row.values["bms_trajectory_design"])):
                                 raise NativeResultError(f"contradictory retained CIF metadata: {path}")
                             if row.scored_design is not None and row.attempt_sha256 is not None:
                                 retained_design, attempt_sha = design, row.attempt_sha256
+                                state = stamp.get("bms_target_state") or None
+                                primary = stamp.get("bms_primary_target_state") or None
+                                variant = stamp.get("bms_structure_variant") or None
+                                binder = stamp.get("binder_chains") or None
+                                target = stamp.get("target_chains") or None
+                                if (state or primary or variant) and not (state and primary and variant in ("native", "relaxed")):
+                                    raise NativeResultError(f"incomplete retained CIF state identity: {path}")
+                                if variant == "relaxed" and stage != "2_Refolded":
+                                    raise NativeResultError(f"contradictory relaxed CIF location: {path}")
+                                if variant == "native" and stage == "2_Refolded":
+                                    raise NativeResultError(f"contradictory native CIF location: {path}")
                     elif stamp.get("bms_scored_candidate") or stamp.get("bms_attempt_sha256"):
                         raise NativeResultError(f"orphan producer-stamped CIF: {path}")
                 documents.append(NativeDocument(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest(),
-                                                path.suffix.lower().lstrip("."), retained_design, attempt_sha))
+                                                path.suffix.lower().lstrip("."), retained_design, attempt_sha,
+                                                state, primary, variant, binder, target))
     return tuple(documents)
 
 def _is_number(value: str) -> bool:
@@ -281,11 +301,14 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
     draws = attach(draws)
     qualified_draws = []
     for row in draws:
-        match = re.fullmatch(r"(.+)_candidate[1-9][0-9]*", row.design)
-        source = trajectory_by_name.get(match.group(1)) if match else None
-        if source and source.recipe_hash == row.recipe_hash and source.attempt_sha256:
+        source = trajectory_by_name.get(row.values.get("bms_trajectory_design") or "")
+        digest = row.values.get("bms_attempt_sha256")
+        if digest and (not _DIGEST.fullmatch(digest) or
+                       (source is not None and source.attempt_sha256 is not None and digest != source.attempt_sha256)):
+            raise NativeResultError(f"contradictory scored attempt: {row.design}")
+        if source and source.recipe_hash == row.recipe_hash and source.attempt_sha256 == digest:
             qualified_draws.append(replace(row, trajectory_design=source.design,
-                                           attempt_sha256=source.attempt_sha256))
+                                           attempt_sha256=digest))
         else:
             qualified_draws.append(row)
     draws = tuple(qualified_draws)
@@ -300,15 +323,23 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
                 raise NativeResultError(f"incomplete retained producer identity: {row.design}")
             # Only explicit native design identities may establish a join, never rank,
             # sequence, recipe hash, or _seqN position.
-            match = re.fullmatch(r"(.+)_seq[0-9]+", row.design)
-            if not match:
-                raise NativeResultError(f"invalid retained design: {row.design}")
-            trajectory = match.group(1)
-            scored = f"{trajectory}_candidate{candidate}"
+            trajectory = row.values.get("bms_trajectory_design")
+            scored = row.values.get("bms_scored_design")
+            if not trajectory or not scored:
+                qualified_retained.append(row)
+                continue
+            if scored != f"{trajectory}_candidate{candidate}":
+                raise NativeResultError(f"contradictory scored/retained producer identity: {row.design}")
             draw = draw_by_name.get(scored)
             source = trajectory_by_name.get(trajectory)
+            if draw is not None and (not draw.trajectory_design or not draw.attempt_sha256):
+                qualified_retained.append(row)
+                continue
+            if draw is not None and draw.attempt_sha256 != digest:
+                raise NativeResultError(f"contradictory retained attempt: {row.design}")
             if (draw is None or draw.outcome != "passed" or scored in used_draws
-                    or source is None or draw.recipe_hash != row.recipe_hash
+                    or source is None or draw.trajectory_design != trajectory
+                    or draw.attempt_sha256 != digest or draw.recipe_hash != row.recipe_hash
                     or source.recipe_hash != row.recipe_hash):
                 raise NativeResultError(f"contradictory scored/retained join: {row.design}")
             used_draws.add(scored)
@@ -386,7 +417,9 @@ def native_result_page(publication: NativePublication, *, arm: str | None = None
                     "drawn": item.drawn, "sha256": item.sha256}
         return {"path": item.path, "sha256": item.sha256, "format": item.format,
                 "retained_design": item.retained_design, "attempt_sha256": item.attempt_sha256,
-                "target_state": item.target_state}
+                "target_state": item.target_state, "primary_target_state": item.primary_target_state,
+                "structure_variant": item.structure_variant, "binder_chains": item.binder_chains,
+                "target_chains": item.target_chains}
 
     return {"schema": "bindcraft2.native-readback.v1", "arm": arm, "stage": stage,
             "offset": offset, "limit": limit, "total": len(rows),

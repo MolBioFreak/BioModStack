@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from services.bindcraft2_candidate_projection import project_native_candidates
 from services.bindcraft2_native_results import NativeResultError, native_result_page, read_native_publication
 
 
@@ -136,22 +137,31 @@ def producer_attempt(root, design="t"):
     return hashlib.sha256(canonical).hexdigest()
 
 
-def stamped_campaign(root, *, sidecar=True, stamp=True):
+def stamped_campaign(root, *, sidecar=True, stamp=True, states=False):
     digest = producer_attempt(root) if sidecar else "a" * 64
     table(root / "1_Trajectories/!_Trajectories.csv", [
         {"design": "t", "hash": "recipe", "trajectory": "7", "bms_attempt_sha256": digest}])
     table(root / "2_Refolded/!_Refolded.csv", [
-        {"design": f"t_candidate{i}", "hash": "recipe", "outcome": "rejected" if i == 3 else "passed"}
+        {"design": f"t_candidate{i}", "hash": "recipe", "bms_trajectory_design": "t",
+         "bms_attempt_sha256": digest, "outcome": "rejected" if i == 3 else "passed"}
         for i in (1, 2, 3)])
     rows = [{"design": f"t_seq{i}", "hash": "recipe", "rank": str(2 - i)} for i in (0, 1)]
     if stamp:
         for row, candidate in zip(rows, (2, 1)):
-            row.update(bms_scored_candidate=str(candidate), bms_attempt_sha256=digest)
+            row.update(bms_scored_candidate=str(candidate), bms_scored_design=f"t_candidate{candidate}",
+                       bms_trajectory_design="t", bms_attempt_sha256=digest)
     table(root / "3_Ranked/!_Ranked.csv", rows)
     for design, candidate in (("t_seq0", 2), ("t_seq1", 1)):
         for state in ("targetA", "targetB"):
             metadata = (f"_bindcraft.design {design}\n_bindcraft.bms_scored_candidate {candidate}\n"
+                        f"_bindcraft.bms_scored_design t_candidate{candidate}\n"
+                        f"_bindcraft.bms_trajectory_design t\n"
                         f"_bindcraft.bms_attempt_sha256 {digest}\n") if stamp else ""
+            if states and stamp:
+                metadata += (f"_bindcraft.bms_target_state {state}\n"
+                             "_bindcraft.bms_primary_target_state targetB\n"
+                             "_bindcraft.bms_structure_variant native\n"
+                             "_bindcraft.binder_chains B\n_bindcraft.target_chains A\n")
             (root / "3_Ranked" / f"{design}_{state}.cif").write_text("data_model\n" + metadata + "_atom_site.id 1\n")
     return digest
 
@@ -271,6 +281,74 @@ def test_bounded_readback_retains_native_metrics_settings_and_unknown_state(tmp_
         with pytest.raises(NativeResultError):
             native_result_page(publication, **kwargs)
 
+
+def test_stamped_state_identity_projects_exact_primary_without_ordinal_join(tmp_path):
+    digest = stamped_campaign(tmp_path, states=True)
+    publication = read_native_publication(tmp_path)
+    candidates = project_native_candidates(publication)
+    assert [(candidate.retained_design, candidate.scored_design, candidate.native_rank) for candidate in candidates] == [
+        ("t_seq0", "t_candidate2", 2), ("t_seq1", "t_candidate1", 1)]
+    assert all(candidate.attempt_sha256 == digest for candidate in candidates)
+    assert all(candidate.primary_structure.target_state == "targetB" for candidate in candidates)
+    assert all(candidate.primary_structure.path.endswith("_targetB.cif") for candidate in candidates)
+    assert all({structure.target_state for structure in candidate.structures} == {"targetA", "targetB"}
+               for candidate in candidates)
+    assert all(candidate.primary_structure.binder_chains == "B" for candidate in candidates)
+    assert publication.arms[0].draws[2].outcome == "rejected"
+    page = native_result_page(publication, stage="document")
+    assert {document["target_state"] for document in page["rows"]} == {"targetA", "targetB"}
+    assert {document["primary_target_state"] for document in page["rows"]} == {"targetB"}
+
+
+def test_unknown_state_and_ambiguous_primary_remain_native(tmp_path):
+    stamped_campaign(tmp_path)
+    assert project_native_candidates(read_native_publication(tmp_path)) == ()
+    stamped_campaign(tmp_path, states=True)
+    path = tmp_path / "3_Ranked/t_seq0_targetA.cif"
+    path.write_text(path.read_text().replace("bms_target_state targetA", "bms_target_state targetB"))
+    candidates = project_native_candidates(read_native_publication(tmp_path))
+    assert [candidate.retained_design for candidate in candidates] == ["t_seq1"]
+    assert read_native_publication(tmp_path).arms[0].accounting["retained_sequences"] == 2
+
+
+def test_missing_explicit_join_is_observational_not_stem_inference(tmp_path):
+    stamped_campaign(tmp_path, states=True)
+    path = tmp_path / "3_Ranked/!_Ranked.csv"
+    rows = list(csv.DictReader(path.open()))
+    rows[0]["bms_scored_design"] = ""
+    rows[0]["bms_trajectory_design"] = ""
+    table(path, rows)
+    arm = read_native_publication(tmp_path).arms[0]
+    assert arm.retained[0].scored_design is None
+    assert arm.retained[0].rank == 2
+    assert arm.draws[2].outcome == "rejected"
+    assert [candidate.retained_design for candidate in project_native_candidates(read_native_publication(tmp_path))] == ["t_seq1"]
+
+def test_unstamped_draw_keeps_failed_and_retained_rows_without_projection(tmp_path):
+    stamped_campaign(tmp_path, states=True)
+    path = tmp_path / "2_Refolded/!_Refolded.csv"
+    rows = list(csv.DictReader(path.open()))
+    rows[1]["bms_trajectory_design"] = ""
+    rows[1]["bms_attempt_sha256"] = ""
+    table(path, rows)
+    arm = read_native_publication(tmp_path).arms[0]
+    assert arm.draws[1].outcome == "passed" and arm.draws[1].attempt_sha256 is None
+    assert arm.draws[2].outcome == "rejected"
+    assert arm.retained[0].scored_design is None and arm.retained[0].rank == 2
+    assert [candidate.retained_design for candidate in project_native_candidates(read_native_publication(tmp_path))] == ["t_seq1"]
+
+
+def test_relaxed_structure_is_derivative_not_primary(tmp_path):
+    stamped_campaign(tmp_path, states=True)
+    source = tmp_path / "3_Ranked/t_seq0_targetB.cif"
+    relaxed = tmp_path / "2_Refolded/Relaxed/t_seq0_targetB.cif"
+    relaxed.parent.mkdir(parents=True, exist_ok=True)
+    relaxed.write_text(source.read_text().replace("bms_structure_variant native", "bms_structure_variant relaxed"))
+    arm = read_native_publication(tmp_path).arms[0]
+    assert any(doc.structure_variant == "relaxed" and doc.retained_design == "t_seq0" for doc in arm.documents)
+    projected = project_native_candidates(read_native_publication(tmp_path))
+    assert len(projected) == 2
+    assert all(structure.variant == "native" for candidate in projected for structure in candidate.structures)
 
 def test_malformed_producer_join_is_not_accepted_as_ordinal(tmp_path):
     stamped_campaign(tmp_path)

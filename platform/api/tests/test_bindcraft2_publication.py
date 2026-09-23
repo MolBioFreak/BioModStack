@@ -37,10 +37,13 @@ def campaign(root, *, zero=False):
     if zero:
         return
     table(root / '2_Refolded/!_Refolded.csv', [
-        {'design': 't_candidate1', 'hash': 'h', 'outcome': 'rejected', 'Binder_Sequence': 'AAA', 'i_pTM': '0.1'},
-        {'design': 't_candidate2', 'hash': 'h', 'outcome': 'passed', 'Binder_Sequence': 'CCC', 'i_pTM': '0.9'}])
+        {'design': 't_candidate1', 'hash': 'h', 'bms_trajectory_design': 't', 'bms_attempt_sha256': digest,
+         'outcome': 'rejected', 'Binder_Sequence': 'AAA', 'i_pTM': '0.1'},
+        {'design': 't_candidate2', 'hash': 'h', 'bms_trajectory_design': 't', 'bms_attempt_sha256': digest,
+         'outcome': 'passed', 'Binder_Sequence': 'CCC', 'i_pTM': '0.9'}])
     table(root / '3_Ranked/!_Ranked.csv', [
         {'design': 't_seq0', 'hash': 'h', 'rank': '1', 'bms_scored_candidate': '2',
+         'bms_scored_design': 't_candidate2', 'bms_trajectory_design': 't',
          'bms_attempt_sha256': digest, 'Binder_Sequence': 'CCC'}])
     for state in ('stateB', 'stateA'):
         (root / '3_Ranked' / f't_seq0_{state}.cif').write_text(
