@@ -18,16 +18,14 @@ export const launcherWorkflowTemplates = [
 
         {
             id: 'antibody_denovo',
-            name: 'De Novo Nanobody Toolkit',
-            description: 'Generate, refine, validate, and review nanobody candidates.',
+            name: 'De Novo Binder Design',
+            description: 'Choose a supported binder generator, then review candidates and compatible refinement options. RFantibody and this launcher’s BoltzGen route are antibody-specific.',
             icon: 'flask',
             color: '#14B8A6',
             stages: [
-                { tool: 'RFantibody / BoltzGen / PPIFlow' },
-                { tool: 'FAMPNN' },
-                { tool: 'PPIFlow (Opt.)' },
-                { tool: 'Protenix / Boltz2 / ESMFold2' },
-                { tool: 'Review + QC' }
+                { tool: 'RFantibody / BoltzGen VHH / seeded PPIFlow' },
+                { tool: 'Candidate review' },
+                { tool: 'Compatible refinement (optional)' }
             ],
         },
 
