@@ -79,6 +79,46 @@ def _terminal_outputs(root: Path) -> dict[str, list[str]]:
     }
 
 
+def _publish_primary_pdb(job_root: Path, design_name: str) -> Path:
+    """Publish a real primary structure at the protein_design output path."""
+    published = job_root / "results" / "best_designs" / f"{design_name}.pdb"
+    published.parent.mkdir(parents=True, exist_ok=True)
+    published.write_bytes(MANIFEST_FIXTURE._pdb())
+    return published
+
+
+def _bind_primary_csv_to_bundles(csv_path: Path, bundles: list[Path]) -> None:
+    """Carry the workflow's declared deterministic identity into primary rows."""
+    identities = {}
+    for bundle in bundles:
+        request = json.loads((bundle / "workflow_component_request_v1.json").read_text())
+        source = request["source_artifact"]
+        identities[source["artifact_id"]] = {
+            "parent_job_id": request["parent_job_id"],
+            "parent_workflow_id": request["parent_workflow_id"],
+            "producer_stage": source["producer_stage"],
+            "producer_candidate_key": source["relative_path"],
+            "producer_method": "boltz" if "boltz" in source["producer_stage"] else "af2",
+            "producer_output_key": source["relative_path"],
+            "producer_identity_sha256": hashlib.sha256(
+                canonical_json_bytes(request)
+            ).hexdigest(),
+            "producer_artifact_sha256": source["sha256"],
+            "source_format": "pdb",
+        }
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        columns = list(reader.fieldnames or [])
+        rows = list(reader)
+    for row in rows:
+        row.update(identities[row["candidate_id"]])
+    columns.extend(identities[next(iter(identities))])
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def _replace_identity(value, replacements: dict[str, str]):
     if isinstance(value, dict):
         return {key: _replace_identity(item, replacements) for key, item in value.items()}
@@ -213,7 +253,7 @@ async def _seed_numeric_metadata_case(
         for index, bundle in enumerate(bundles)
     ]
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     with (results / "all_designs.csv").open(
         "w", encoding="utf-8", newline=""
     ) as handle:
@@ -388,10 +428,10 @@ async def test_protein_design_typed_metadata_accepts_zero_and_allowed_negative_w
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-0/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/  exact design string  .pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "candidate_id",
         "description",
@@ -447,6 +487,8 @@ async def test_protein_design_typed_metadata_accepts_zero_and_allowed_negative_w
                 "ptm": "0",
             }
         )
+    _publish_primary_pdb(job_root, "  exact design string  ")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1194,7 +1236,7 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/rank_0.pdb",
+        producer_candidate_key="results/best_designs/candidate-a.pdb",
     )
     candidate_b, invocation_b, _ = _parent_bundle(
         bundle_b,
@@ -1202,16 +1244,19 @@ async def test_parent_candidate_set_rolls_back_designs_and_results_on_late_bundl
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/rank_1.pdb",
+        producer_candidate_key="results/best_designs/candidate-b.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description\n"
         f"{candidate_a},candidate-a\n"
         f"{candidate_b},candidate-b\n",
         encoding="utf-8",
     )
+    for name in ("candidate-a", "candidate-b"):
+        _publish_primary_pdb(job_root, name)
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle_a, bundle_b])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1288,7 +1333,7 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
 ) -> None:
     job_id = "job-protein-design"
     job_root = tmp_path / "job-root"
-    candidate_key = "frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb"
+    candidate_key = "results/best_designs/duplicate-basename.pdb"
     bundle = job_root / "frustrampnn" / "results" / "candidate"
     candidate_id, invocation_id, source = _parent_bundle(
         bundle,
@@ -1299,12 +1344,14 @@ async def test_protein_design_canonical_ingestion_precreates_identity_and_enrich
         producer_candidate_key=candidate_key,
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt,seq_mpnn_score\n"
         f"{candidate_id},duplicate-basename,91.25,-1.75\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "duplicate-basename")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1367,12 +1414,15 @@ async def test_protein_design_metadata_set_is_prevalidated_before_any_write(
     )
     if metadata_rows is not None:
         results = job_root / "results"
-        results.mkdir(parents=True)
+        results.mkdir(parents=True, exist_ok=True)
         rendered = [row.format(candidate_id=candidate_id) for row in metadata_rows]
         (results / "all_designs.csv").write_text(
             "candidate_id,description\n" + "\n".join(rendered) + ("\n" if rendered else ""),
             encoding="utf-8",
         )
+        if len(metadata_rows) > 1:
+            for name in ("first", "second", "candidate", "other"):
+                _publish_primary_pdb(job_root, name)
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1402,15 +1452,17 @@ async def test_protein_design_replay_is_idempotent_and_keeps_exact_identity(
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:boltz_terminal",
-        producer_candidate_key="frustrampnn/sources/boltz/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/stable-design.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt\n"
         f"{candidate_id},stable-design,88.5\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "stable-design")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1464,10 +1516,10 @@ async def test_protein_design_replay_distinguishes_signed_zero_in_immutable_snap
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:boltz_terminal",
-        producer_candidate_key="frustrampnn/sources/boltz/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/signed-zero-design.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
 
     def publish(value: str) -> None:
@@ -1476,8 +1528,10 @@ async def test_protein_design_replay_distinguishes_signed_zero_in_immutable_snap
             f"{candidate_id},signed-zero-design,{value}\n",
             encoding="utf-8",
         )
+        _bind_primary_csv_to_bundles(csv_path, [bundle])
 
     publish(initial)
+    _publish_primary_pdb(job_root, "signed-zero-design")
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1532,15 +1586,17 @@ async def test_protein_design_replay_fails_closed_without_legacy_metadata_snapsh
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/legacy-snapshot.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,pr_plddt\n"
         f"{candidate_id},legacy-snapshot,88.5\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "legacy-snapshot")
+    _bind_primary_csv_to_bundles(results / "all_designs.csv", [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1572,16 +1628,18 @@ async def test_protein_design_replay_rejects_mutated_metadata_without_any_row_ch
         job_id=job_id,
         parent_workflow_id="protein_design",
         producer_stage="protein_design:af2_terminal",
-        producer_candidate_key="frustrampnn/sources/af2/fold-a/sample-0/canonical.pdb",
+        producer_candidate_key="results/best_designs/original-name.pdb",
     )
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
     csv_path.write_text(
         "candidate_id,description,pr_plddt,fold_id,seq_id\n"
         f"{candidate_id},original-name,88.5,7,3\n",
         encoding="utf-8",
     )
+    _publish_primary_pdb(job_root, "original-name")
+    _bind_primary_csv_to_bundles(csv_path, [bundle])
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1643,14 +1701,12 @@ async def test_protein_design_multi_candidate_replay_metadata_conflict_rolls_bac
             job_id=job_id,
             parent_workflow_id="protein_design",
             producer_stage="protein_design:boltz_terminal",
-            producer_candidate_key=(
-                f"frustrampnn/sources/boltz/fold-{index}/sample-0/canonical.pdb"
-            ),
+            producer_candidate_key=f"results/best_designs/stable-{index}.pdb",
         )
         for index, bundle in enumerate(bundles)
     ]
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     csv_path = results / "all_designs.csv"
     csv_path.write_text(
         "candidate_id,description,pr_plddt\n"
@@ -1660,6 +1716,9 @@ async def test_protein_design_multi_candidate_replay_metadata_conflict_rolls_bac
         ),
         encoding="utf-8",
     )
+    for index in range(len(candidates)):
+        _publish_primary_pdb(job_root, f"stable-{index}")
+    _bind_primary_csv_to_bundles(csv_path, bundles)
     await _seed_parent_job(
         db,
         job_id=job_id,
@@ -1721,7 +1780,7 @@ async def test_disabled_frustrampnn_ordinary_protein_design_uses_published_candi
     )
     job_root = tmp_path / "job-root"
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     payload = MANIFEST_FIXTURE._pdb()
     artifact_sha256 = hashlib.sha256(payload).hexdigest()
     producer_identity_sha256 = hashlib.sha256(b"ordinary-producer-identity").hexdigest()
@@ -2087,7 +2146,7 @@ async def test_disabled_protein_design_rejects_unsafe_or_ambiguous_published_str
         artifact_sha256 = "0" * 64
     job_root = tmp_path / "job-root"
     results = job_root / "results"
-    results.mkdir(parents=True)
+    results.mkdir(parents=True, exist_ok=True)
     (results / "all_designs.csv").write_text(
         "candidate_id,description,parent_job_id,parent_workflow_id,producer_stage,"
         "producer_candidate_key,producer_method,producer_output_key,producer_identity_sha256,"
