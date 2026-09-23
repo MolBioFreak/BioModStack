@@ -125,6 +125,10 @@ export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boo
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
+        // A cold failure after an Electron/Vite reload has no validated value to retain.
+        // Keep checking while mounted so the controls return when the API recovers.
+        refetchInterval: 15_000,
+        refetchIntervalInBackground: true,
     });
     return {
         features: resolveBmsFeatureQueryState(query.data, query.isError).features,
@@ -151,6 +155,8 @@ export function useBmsFeatureState(): BmsFeatureState {
         queryKey: ['bms-install-features'],
         queryFn: fetchBmsFeatureState,
         staleTime: 60_000,
+        refetchInterval: 15_000,
+        refetchIntervalInBackground: true,
     });
     return resolveBmsFeatureQueryState(query.data, query.isError);
 }

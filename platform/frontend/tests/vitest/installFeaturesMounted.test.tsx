@@ -84,8 +84,19 @@ it.each(faults)('cold %s failure remains disabled until a validated success', as
     expect(client.getQueryState(key)?.status).toBe('error');
     check('hidden', 'disabled');
     fetchMock.mockResolvedValue(reply(enabled));
-    await refresh();
+    // The shell stays mounted through API restarts; no manual refresh is available.
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_100); });
     check('BioXP', 'BioXP route');
+});
+it('a transient outage retains the last validated BioXP flag during automatic refresh', async () => {
+    await mount();
+    check('BioXP', 'BioXP route');
+    fetchMock.mockRejectedValue(new TypeError('offline'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_100); });
+    check('BioXP', 'BioXP route');
+    fetchMock.mockResolvedValue(reply({ features: { bioxp: false }, dev_features: { bioxp: true } }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_100); });
+    check('hidden', 'disabled');
 });
 it('cold pending is not enabled and valid developer visibility changes are applied', async () => {
     fetchMock.mockImplementation(() => new Promise(() => {}));
