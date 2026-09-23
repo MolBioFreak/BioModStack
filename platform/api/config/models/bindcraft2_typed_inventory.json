@@ -1,0 +1,965 @@
+{
+  "metric_exception": {
+    "losses.induced_fit_interface.interface_mask": "Array | None is an in-memory JAX mask, not a portable JSON request; no source-backed serialization contract"
+  },
+  "top_level_resolved": {
+    "cyclic_offset_mode": {"observed_types": ["string"], "choices": ["distance", "direction", "neighbours"], "runtime_fallback": "direction", "source": "bindcraft/settings.py:CYCLIC_OFFSET_MODES,resolve_cyclic_offset_mode"},
+    "oligomer_tie": {"observed_types": ["string"], "choices": ["none", "symmetric"], "runtime_fallback": "symmetric", "source": "bindcraft/settings.py:OLIGOMER_TIES,resolve_oligomer_tie"},
+    "number_of_final_designs": {"observed_types": ["integer"], "runtime_fallback": 1, "source": "bindcraft/campaign.py:settings.get('number_of_final_designs', 1)"}
+  },
+  "metric_expression_types": {
+    "BINDER_ALONE": {
+      "default": "binder_alone",
+      "source": "bindcraft/protein.py:BINDER_ALONE",
+      "types": [
+        "string"
+      ]
+    },
+    "EPITOPE_CUTOFF": {
+      "default": 10.0,
+      "source": "bindcraft/epitope_targeting.py:EPITOPE_CUTOFF",
+      "types": [
+        "number"
+      ]
+    },
+    "None": {
+      "default": null,
+      "source": "bindcraft/filters.py:plddt_metric / bindcraft/loss.py:binder_pae_loss,radius_of_gyration_loss (chain: str | None)",
+      "types": [
+        "string",
+        "null"
+      ]
+    },
+    "float('inf')": {
+      "default_encoding": "+Infinity",
+      "source": "bindcraft/loss.py:interface_contacts_loss,binder_contacts_loss (contact_residue_count: int | float)",
+      "types": [
+        "integer",
+        "number"
+      ]
+    }
+  },
+  "purpose": "Source-derived annotations only. A null reference entry is not a default or a type. This overlay does not enable execution.",
+  "top_level_unresolved": {
+    "auto_multi_gpu": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/design_workers.py:239"
+        }
+      ]
+    },
+    "autotune_loss_weights": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/parameter_sweep.py:192"
+        }
+      ]
+    },
+    "betasheet_reopt_recycles": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "design_model.num_recycle",
+          "source": "bindcraft/trajectory.py:192"
+        }
+      ]
+    },
+    "bigbang": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "binder_chain": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:110"
+        }
+      ]
+    },
+    "binder_name": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:125"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:128"
+        }
+      ]
+    },
+    "binder_shapes": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:304"
+        },
+        {
+          "fallback_expression": "[]",
+          "source": "bindcraft/settings.py:655"
+        }
+      ]
+    },
+    "campaign_name": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:125"
+        }
+      ]
+    },
+    "compile_next_length": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/campaign.py:180"
+        }
+      ]
+    },
+    "crop_fasta_sequence": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:147"
+        },
+        {
+          "fallback_expression": "DEFAULT_IDR_CROP_LENGTHS",
+          "source": "bindcraft/protein_preparation.py:83"
+        },
+        {
+          "fallback_expression": "DEFAULT_IDR_CROP_LENGTHS",
+          "source": "bindcraft/settings.py:61"
+        }
+      ]
+    },
+    "cyclic_offset_mode": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "'direction'",
+          "source": "bindcraft/settings.py:89"
+        }
+      ]
+    },
+    "design_workers": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/design_workers.py:126"
+        }
+      ]
+    },
+    "desperation_trajectories": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "DESPERATION_TRAJECTORIES",
+          "source": "bindcraft/desperation.py:24"
+        }
+      ]
+    },
+    "detarget_check_interval": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "DEFAULT_DETARGET_CHECK_INTERVAL",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "disulfide_sigma": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "disulfide_staple": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "disulfide_temperature": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "domain_linker_fix_cut": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.5",
+          "source": "bindcraft/loss.py:838"
+        }
+      ]
+    },
+    "domain_linker_gap": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.1",
+          "source": "bindcraft/loss.py:837"
+        }
+      ]
+    },
+    "domain_linker_sharpness": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.03",
+          "source": "bindcraft/loss.py:837"
+        }
+      ]
+    },
+    "forced_targeting_shell": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "EPITOPE_CUTOFF",
+          "source": "bindcraft/epitope_targeting.py:81"
+        },
+        {
+          "fallback_expression": "'the default'",
+          "source": "bindcraft/settings.py:260"
+        }
+      ]
+    },
+    "gpu_ids": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/design_workers.py:124"
+        }
+      ]
+    },
+    "humanization_hydro_weight": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "humanize": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "idr_crop_count": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:146"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:270"
+        },
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/settings.py:117"
+        },
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/target_schedule.py:17"
+        }
+      ]
+    },
+    "induced_fit_interface_cutoff": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "induced_fit_monomer_adaptive": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/trajectory.py:96"
+        }
+      ]
+    },
+    "induced_fit_monomer_chunk": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "5",
+          "source": "bindcraft/trajectory.py:66"
+        },
+        {
+          "fallback_expression": "5",
+          "source": "bindcraft/trajectory.py:85"
+        }
+      ]
+    },
+    "induced_fit_monomer_plddt": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.7",
+          "source": "bindcraft/trajectory.py:96"
+        }
+      ]
+    },
+    "induced_fit_monomer_steps": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "30",
+          "source": "bindcraft/preflight.py:111"
+        },
+        {
+          "fallback_expression": "30",
+          "source": "bindcraft/trajectory.py:76"
+        }
+      ]
+    },
+    "induced_fit_mpnn_designed_share": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "INDUCED_FIT_DESIGNED_SHARE",
+          "source": "bindcraft/MPNN_stage.py:166"
+        }
+      ]
+    },
+    "induced_fit_mpnn_shell": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/MPNN_stage.py:166"
+        }
+      ]
+    },
+    "induced_fit_mpnn_threshold": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "2.0",
+          "source": "bindcraft/MPNN_stage.py:166"
+        }
+      ]
+    },
+    "induced_fit_steps": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/target_schedule.py:35"
+        }
+      ]
+    },
+    "interface_contact_distance": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "length_bucket_size": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/af2.py:50"
+        }
+      ]
+    },
+    "max_binder_chain_breaks_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_binder_free_cysteines_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_coldspot_contact_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_cyclic_closure_distance_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_interface_residues_final": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/preflight.py:167"
+        },
+        {
+          "fallback_expression": "DEFAULT_DETARGET_INTERFACE_RESIDUES",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "max_detarget_iptm": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.4",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "max_detarget_iptm_anneal": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_iptm_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_iptm_harden": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_iptm_mutate": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_iptm_refine": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_iptm_screen": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_detarget_rounds": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "10",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "max_off_epitope_contact_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_off_paratope_contact_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_oligomer_symmetry_rmsd_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_surface_hydrophobicity_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "max_workers_per_gpu": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "MAXIMUM_WORKERS_PER_GPU",
+          "source": "bindcraft/design_workers.py:63"
+        }
+      ]
+    },
+    "min_epitope_residues_contacted_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_framework_packing_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_interface_buried_area_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_iptm_refine": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_iptm_screen": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_receptor_chains_contacted_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_target_crop_length_final": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "min_target_plddt_final": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "DEFAULT_DISORDERED_TARGET_PLDDT",
+          "source": "bindcraft/settings.py:226"
+        }
+      ]
+    },
+    "mixed_topology": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "mpnn_fix_linker": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/MPNN_stage.py:148"
+        }
+      ]
+    },
+    "multitarget_best_round": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/trajectory.py:115"
+        }
+      ]
+    },
+    "multitarget_cumulative_filter": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "len(design_settings.prepared_states) > 1",
+          "source": "bindcraft/trajectory.py:254"
+        }
+      ]
+    },
+    "multitarget_filter_models": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/trajectory.py:182"
+        }
+      ]
+    },
+    "multitarget_merged_gradient_budget": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "'sequence_updates'",
+          "source": "bindcraft/settings.py:672"
+        }
+      ]
+    },
+    "multitarget_merged_gradients": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/settings.py:665"
+        }
+      ]
+    },
+    "multitarget_rounds_per_target": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:669"
+        }
+      ]
+    },
+    "multitarget_steps": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/target_schedule.py:35"
+        }
+      ]
+    },
+    "multitarget_swap_patience": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "20",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "multitarget_swap_threshold": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "0.5",
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "multitarget_tied_redesign": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "True",
+          "source": "bindcraft/MPNN_stage.py:179"
+        }
+      ]
+    },
+    "multitarget_warmup_patience": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/target_schedule.py:18"
+        }
+      ]
+    },
+    "non_contact_distance": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "number_of_final_designs": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/campaign.py:135"
+        },
+        {
+          "fallback_expression": "1",
+          "source": "bindcraft/design_workers.py:256"
+        }
+      ]
+    },
+    "oligomer_tie": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "'symmetric'",
+          "source": "bindcraft/campaign_log.py:145"
+        },
+        {
+          "fallback_expression": "'symmetric'",
+          "source": "bindcraft/settings.py:104"
+        }
+      ]
+    },
+    "project_folder": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "DEFAULT_PROJECT_FOLDER",
+          "source": "bindcraft/campaign.py:286"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/campaign_log.py:164"
+        },
+        {
+          "fallback_expression": "'bindcraft_campaign'",
+          "source": "bindcraft/cli.py:167"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/design_workers.py:256"
+        }
+      ]
+    },
+    "protease_stable": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_learning_rate": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_min_sep": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_overlap_tol": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_restraint_backbone": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_restraint_sidechain": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_steps": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_weight_bond": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "relax_weight_clash": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "sparse_output": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:475"
+        }
+      ]
+    },
+    "target_chain": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/epitope_targeting.py:80"
+        },
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/epitope_targeting.py:84"
+        },
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/loss.py:900"
+        },
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/protein_preparation.py:183"
+        },
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/settings.py:113"
+        },
+        {
+          "fallback_expression": "self.target_chain_prefix",
+          "source": "bindcraft/settings.py:639"
+        },
+        {
+          "fallback_expression": "'target'",
+          "source": "bindcraft/trajectory.py:79"
+        }
+      ]
+    },
+    "termini_accessible": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "termini_together": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "validation_models": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "''",
+          "source": "bindcraft/campaign_output.py:553"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/preflight.py:25"
+        },
+        {
+          "fallback_expression": "DEFAULT_VALIDATION_MODEL_COUNT",
+          "source": "bindcraft/preflight.py:128"
+        },
+        {
+          "fallback_expression": "DEFAULT_VALIDATION_MODEL_COUNT",
+          "source": "bindcraft/settings.py:562"
+        },
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:572"
+        }
+      ]
+    },
+    "weights_binder_intra_hotspot": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_coldspot_repel": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_collective_softness": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_com_distance": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_distogram_cce": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_experimentally_resolved": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_fold_switching": {
+      "classification": "unresolved_type_with_runtime_use",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": null,
+          "source": "bindcraft/settings.py:303"
+        }
+      ]
+    },
+    "weights_non_contact": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_ptm_loss": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_sequence_entropy": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_target_helicity": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_target_plddt": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_target_rigidity": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "weights_target_rmsd": {
+      "classification": "unresolved_type_without_direct_get_evidence",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": []
+    },
+    "worker_launch_stagger": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "PACKED_LAUNCH_STAGGER_SECONDS",
+          "source": "bindcraft/design_workers.py:100"
+        }
+      ]
+    },
+    "workers_per_gpu": {
+      "classification": "system_or_runtime_owned",
+      "reason": "No non-null pinned default/preset value or explicit closed request type; runtime fallback is not a declared request type or campaign default.",
+      "source_observations": [
+        {
+          "fallback_expression": "'auto'",
+          "source": "bindcraft/design_workers.py:62"
+        }
+      ]
+    }
+  },
+  "upstream_commit": "d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
+}
