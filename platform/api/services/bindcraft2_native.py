@@ -8,14 +8,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Callable
 
 PIN = "d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
 
 
+def receipt_json(value: object) -> object:
+    """Lossless JSON receipt encoding for native's infinity sentinel thresholds."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return {"$bc2_nonfinite_float": "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")}
+    if isinstance(value, dict):
+        return {key: receipt_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [receipt_json(item) for item in value]
+    return value
+
+
 def _canonical(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return json.dumps(receipt_json(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
 def compile_for_native(request: dict, project_folder: Path,
@@ -43,8 +55,9 @@ def compile_for_native(request: dict, project_folder: Path,
     effective = resolve(native)
     if not isinstance(effective, dict):
         raise ValueError("native resolver did not return settings")
-    if effective.get("max_trajectories") != limit or effective.get("project_folder") != str(project_folder):
-        raise ValueError("native resolution changed system-bound budget or campaign directory")
+    if (effective.get("max_trajectories") != limit or effective.get("project_folder") != str(project_folder)
+            or effective.get("resume") is not False):
+        raise ValueError("native resolution changed system-bound budget, resume or campaign directory")
     return {"schema_version": 1, "upstream_commit": PIN, "native_request": native,
             "effective_settings": effective,
             "effective_sha256": hashlib.sha256(_canonical(effective)).hexdigest()}

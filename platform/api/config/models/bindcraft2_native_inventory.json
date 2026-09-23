@@ -1,5 +1,5 @@
 {
-  "coverage_status": "INCOMPLETE: registries, generated keys, nested parameters, types, UI/API and native differential tests pending",
+  "coverage_status": "INCOMPLETE: source observations are not validated types/defaults; UI/API/runtime acceptance pending",
   "default_sha256": "4b929f04e58f16d83d058155513bacbcdd8a818da16ac91ea53d9c015212ad22",
   "default_values": {
     "archive_trajectories": false,
@@ -119,6 +119,3387 @@
     "weights_iptm_loss": 0.05,
     "weights_plddt_loss": 0.1
   },
+  "fields": {
+    "aa_bias": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "aa_bias",
+      "observed_types": [
+        "object"
+      ],
+      "preset_examples": 9,
+      "status": "typed"
+    },
+    "anneal_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "anneal_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 2,
+      "status": "typed"
+    },
+    "archive_trajectories": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "archive_trajectories",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "attention_backend": {
+      "has_native_default": true,
+      "native_default": "auto",
+      "native_key": "attention_backend",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "auto_multi_gpu": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "auto_multi_gpu",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "autotune": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "autotune",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "autotune_loss_weights": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "autotune_loss_weights",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "betasheet_reopt_extra_anneal_steps": {
+      "has_native_default": true,
+      "native_default": 0,
+      "native_key": "betasheet_reopt_extra_anneal_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "betasheet_reopt_extra_refine_steps": {
+      "has_native_default": true,
+      "native_default": 0,
+      "native_key": "betasheet_reopt_extra_refine_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "betasheet_reopt_recycles": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "betasheet_reopt_recycles",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "betasheet_reopt_trigger": {
+      "has_native_default": true,
+      "native_default": 0.15,
+      "native_key": "betasheet_reopt_trigger",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "bigbang": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "bigbang",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "bigbang_initialization": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "bigbang_initialization",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "binder_chain": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "binder_chain",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "binder_lengths": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "binder_lengths",
+      "observed_types": [
+        "array"
+      ],
+      "preset_examples": 6,
+      "status": "typed"
+    },
+    "binder_name": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "binder_name",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "binder_scaffold": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "binder_scaffold",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "binder_shapes": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "binder_shapes",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "campaign_name": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "campaign_name",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "campaign_seed": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "campaign_seed",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "compile_next_length": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "compile_next_length",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "copies": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "copies",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "core": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "core",
+      "observed_types": [
+        "array",
+        "string"
+      ],
+      "preset_examples": 0,
+      "status": "typed"
+    },
+    "crop_fasta_sequence": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "crop_fasta_sequence",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "cyclic_offset_mode": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "cyclic_offset_mode",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "cyclize_peptide": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "cyclize_peptide",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "design_dropout": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "design_dropout",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "design_models": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "design_models",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 5,
+      "status": "typed"
+    },
+    "design_recycles": {
+      "has_native_default": true,
+      "native_default": 1,
+      "native_key": "design_recycles",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "design_workers": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "design_workers",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "desperation": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "desperation",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "desperation_trajectories": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "desperation_trajectories",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "detarget_check_interval": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "detarget_check_interval",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "disulfide_distance": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "disulfide_distance",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "disulfide_sequence_separation": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "disulfide_sequence_separation",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "disulfide_sigma": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "disulfide_sigma",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "disulfide_staple": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "disulfide_staple",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "disulfide_temperature": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "disulfide_temperature",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "domain_contact_cutoff": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_contact_cutoff",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "domain_linker_fix_cut": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_linker_fix_cut",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "domain_linker_gap": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_linker_gap",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "domain_linker_helix_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_linker_helix_weight",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "domain_linker_sharpness": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_linker_sharpness",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "domain_pae_margin": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_pae_margin",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "domain_rg_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_rg_weight",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "domain_sep_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "domain_sep_weight",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "enough_passing_sequences": {
+      "has_native_default": true,
+      "native_default": 3,
+      "native_key": "enough_passing_sequences",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "exposed_loops_distinguish_sheets": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "exposed_loops_distinguish_sheets",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "exposed_loops_measure": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "exposed_loops_measure",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "filters": {
+      "has_native_default": true,
+      "native_default": {
+        "Backbone_Clashes": {
+          "higher": false,
+          "threshold": 0
+        },
+        "Interface_Residues": {
+          "higher": true,
+          "threshold": 7
+        },
+        "Unbound_Binder_pLDDT": {
+          "higher": true,
+          "threshold": 0.8
+        },
+        "i_pAE": {
+          "higher": false,
+          "threshold": 0.35
+        },
+        "i_pTM": {
+          "higher": true,
+          "threshold": 0.7
+        },
+        "pTM": {
+          "higher": true,
+          "threshold": 0.55
+        }
+      },
+      "native_key": "filters",
+      "observed_types": [
+        "object"
+      ],
+      "preset_examples": 11,
+      "status": "typed"
+    },
+    "forced_targeting": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "forced_targeting",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "forced_targeting_shell": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "forced_targeting_shell",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "gpu_ids": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "gpu_ids",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "harden_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "harden_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 2,
+      "status": "typed"
+    },
+    "hash_design_names": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "hash_design_names",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "humanization_coupling_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "humanization_coupling_weight",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "humanization_hydro_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "humanization_hydro_weight",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "humanization_mhc2_weight": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "humanization_mhc2_weight",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "humanization_species": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "humanization_species",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "humanize": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "humanize",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "idr_crop_count": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "idr_crop_count",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_delta": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_delta",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "induced_fit_interface_cutoff": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_interface_cutoff",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_monomer_adaptive": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_monomer_adaptive",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_monomer_chunk": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_monomer_chunk",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_monomer_plddt": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_monomer_plddt",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_monomer_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_monomer_steps",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_mpnn_designed_share": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_mpnn_designed_share",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_mpnn_shell": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_mpnn_shell",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_mpnn_threshold": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_mpnn_threshold",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_steps",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "induced_fit_tm_target": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "induced_fit_tm_target",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "initial_guess": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "initial_guess",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "interface_contact_distance": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "interface_contact_distance",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "kept_sequences": {
+      "has_native_default": true,
+      "native_default": 1,
+      "native_key": "kept_sequences",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "length_bucket_size": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "length_bucket_size",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "losses": {
+      "has_native_default": true,
+      "native_default": {
+        "binder_contacts": {
+          "params": {
+            "chain": "binder",
+            "prediction_state": "complex"
+          }
+        },
+        "binder_helicity": {
+          "params": {
+            "chain": "binder",
+            "prediction_state": "complex"
+          }
+        },
+        "binder_pae": {
+          "params": {
+            "chain": "binder",
+            "prediction_state": "complex"
+          }
+        },
+        "compactness": {
+          "params": {
+            "chain": "binder",
+            "prediction_state": "complex"
+          }
+        },
+        "interface_contacts": {
+          "params": {
+            "contacts_per_residue": 2,
+            "cutoff": 20.0
+          }
+        },
+        "plddt_loss": {
+          "params": {
+            "chain": "binder",
+            "prediction_state": "complex"
+          }
+        }
+      },
+      "native_key": "losses",
+      "observed_types": [
+        "object"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "max_binder_chain_breaks_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_binder_chain_breaks_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_binder_free_cysteines_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_binder_free_cysteines_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_coldspot_contact_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_coldspot_contact_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_cyclic_closure_distance_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_cyclic_closure_distance_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_interface_residues_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_interface_residues_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_anneal": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_anneal",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_harden": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_harden",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_mutate": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_mutate",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_refine": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_refine",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_iptm_screen": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_iptm_screen",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_detarget_rounds": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_detarget_rounds",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_domain_size": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_domain_size",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_domains": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_domains",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_exposed_loop_fraction_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_exposed_loop_fraction_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_helix_fraction_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_helix_fraction_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_induced_fit_tm_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_induced_fit_tm_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_interdomain_contact_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_interdomain_contact_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_ipae_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_ipae_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "max_mhc_anchor_score_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_mhc_anchor_score_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_off_epitope_contact_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_off_epitope_contact_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_off_paratope_contact_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_off_paratope_contact_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_oligomer_symmetry_rmsd_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_oligomer_symmetry_rmsd_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_protease_site_score_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_protease_site_score_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_scaffold_framework_rmsd_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_scaffold_framework_rmsd_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "max_surface_hydrophobicity_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_surface_hydrophobicity_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "max_termini_distance_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_termini_distance_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_terminus_exposure_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_terminus_exposure_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "max_trajectories": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_trajectories",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 0,
+      "status": "typed"
+    },
+    "max_workers_per_gpu": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "max_workers_per_gpu",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_binder_disulfides_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_binder_disulfides_final",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_c_terminus_away_cosine_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_c_terminus_away_cosine_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_domain_separation_ratio_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_domain_separation_ratio_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_domain_size": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_domain_size",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_epitope_residues_contacted_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_epitope_residues_contacted_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_framework_packing_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_framework_packing_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_hotspot_contact_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_hotspot_contact_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_induced_fit_interface_rmsd_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_induced_fit_interface_rmsd_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_interface_buried_area_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_interface_buried_area_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_iptm_anneal": {
+      "has_native_default": true,
+      "native_default": 0.5,
+      "native_key": "min_iptm_anneal",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_iptm_final": {
+      "has_native_default": true,
+      "native_default": 0.7,
+      "native_key": "min_iptm_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_iptm_harden": {
+      "has_native_default": true,
+      "native_default": 0.5,
+      "native_key": "min_iptm_harden",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_iptm_mutate": {
+      "has_native_default": true,
+      "native_default": 0.5,
+      "native_key": "min_iptm_mutate",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_iptm_refine": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_iptm_refine",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_iptm_screen": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_iptm_screen",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_monomer_plddt_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_monomer_plddt_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 8,
+      "status": "typed"
+    },
+    "min_n_terminus_away_cosine_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_n_terminus_away_cosine_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_plddt_anneal": {
+      "has_native_default": true,
+      "native_default": 0.65,
+      "native_key": "min_plddt_anneal",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_plddt_final": {
+      "has_native_default": true,
+      "native_default": 0.7,
+      "native_key": "min_plddt_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "min_plddt_harden": {
+      "has_native_default": true,
+      "native_default": 0.65,
+      "native_key": "min_plddt_harden",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "min_plddt_mutate": {
+      "has_native_default": true,
+      "native_default": 0.6,
+      "native_key": "min_plddt_mutate",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "min_plddt_refine": {
+      "has_native_default": true,
+      "native_default": 0.6,
+      "native_key": "min_plddt_refine",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "min_plddt_screen": {
+      "has_native_default": true,
+      "native_default": 0.6,
+      "native_key": "min_plddt_screen",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "min_ptm_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_ptm_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "min_receptor_chains_contacted_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_receptor_chains_contacted_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_scaffold_sequence_retained_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_scaffold_sequence_retained_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "min_target_crop_length_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_target_crop_length_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_target_plddt_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_target_plddt_final",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "min_termini_away_cosine_final": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "min_termini_away_cosine_final",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "mixed_topology": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "mixed_topology",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "modality": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "modality",
+      "observed_types": [
+        "array",
+        "string"
+      ],
+      "preset_examples": 0,
+      "status": "typed"
+    },
+    "mpnn_fix_linker": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "mpnn_fix_linker",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "mpnn_model": {
+      "has_native_default": true,
+      "native_default": "v_48_020",
+      "native_key": "mpnn_model",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "mpnn_variant": {
+      "has_native_default": true,
+      "native_default": "negative",
+      "native_key": "mpnn_variant",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "multitarget_best_round": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_best_round",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_cumulative_filter": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_cumulative_filter",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_filter_models": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_filter_models",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_merged_gradient_budget": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_merged_gradient_budget",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_merged_gradients": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_merged_gradients",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_rounds_per_target": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_rounds_per_target",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_steps",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_swap_patience": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_swap_patience",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_swap_threshold": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_swap_threshold",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_tied_redesign": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_tied_redesign",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "multitarget_warmup_patience": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "multitarget_warmup_patience",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "mutate_positions": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "mutate_positions",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "mutate_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "mutate_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 2,
+      "status": "typed"
+    },
+    "n_domains": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "n_domains",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "non_contact_distance": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "non_contact_distance",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "number_of_final_designs": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "number_of_final_designs",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "oligomer_tie": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "oligomer_tie",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "parameter_sweep": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "parameter_sweep",
+      "observed_types": [
+        "object"
+      ],
+      "preset_examples": 0,
+      "status": "typed"
+    },
+    "paratope_conformations": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "paratope_conformations",
+      "observed_types": [
+        "array"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "project_folder": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "project_folder",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "protease_stable": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "protease_stable",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "redesign_interface": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "redesign_interface",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "refine_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "refine_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "relax_accepted_designs": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "relax_accepted_designs",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "relax_learning_rate": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_learning_rate",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_min_sep": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_min_sep",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_overlap_tol": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_overlap_tol",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_restraint_backbone": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_restraint_backbone",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_restraint_sidechain": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_restraint_sidechain",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_steps",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_weight_bond": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_weight_bond",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "relax_weight_clash": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "relax_weight_clash",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "resume": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "resume",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_binder_monomers": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "save_binder_monomers",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_design_animations": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "save_design_animations",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_design_frames": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "save_design_frames",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_design_sequences": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "save_design_sequences",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_design_trajectory": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "save_design_trajectory",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "save_failed_refolds": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "save_failed_refolds",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_failed_trajectories": {
+      "has_native_default": true,
+      "native_default": true,
+      "native_key": "save_failed_trajectories",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "save_loss_plots": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "save_loss_plots",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "screen_steps": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "screen_steps",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 2,
+      "status": "typed"
+    },
+    "sequence_candidates": {
+      "has_native_default": true,
+      "native_default": 10,
+      "native_key": "sequence_candidates",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "sparse_output": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "sparse_output",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "subbatch_size": {
+      "has_native_default": true,
+      "native_default": "auto",
+      "native_key": "subbatch_size",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "target": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "target",
+      "observed_types": [
+        "array",
+        "string"
+      ],
+      "preset_examples": 0,
+      "status": "typed"
+    },
+    "target_chain": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "target_chain",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "target_flexibility": {
+      "has_native_default": true,
+      "native_default": 0.0,
+      "native_key": "target_flexibility",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "targets": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "targets",
+      "observed_types": [
+        "array"
+      ],
+      "preset_examples": 6,
+      "status": "typed"
+    },
+    "termini_accessible": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "termini_accessible",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "termini_distance_threshold": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "termini_distance_threshold",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "termini_together": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "termini_together",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "trajectory_only": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "trajectory_only",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "use_cueq": {
+      "has_native_default": true,
+      "native_default": false,
+      "native_key": "use_cueq",
+      "observed_types": [
+        "boolean"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "validation_crop_flank": {
+      "has_native_default": true,
+      "native_default": 5,
+      "native_key": "validation_crop_flank",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "validation_model": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "validation_model",
+      "observed_types": [
+        "string"
+      ],
+      "preset_examples": 7,
+      "status": "typed"
+    },
+    "validation_models": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "validation_models",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "validation_recycles": {
+      "has_native_default": true,
+      "native_default": 3,
+      "native_key": "validation_recycles",
+      "observed_types": [
+        "integer"
+      ],
+      "preset_examples": 3,
+      "status": "typed"
+    },
+    "weights_binder_coldspot": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_binder_coldspot",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_binder_contacts": {
+      "has_native_default": true,
+      "native_default": 1.0,
+      "native_key": "weights_binder_contacts",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 5,
+      "status": "typed"
+    },
+    "weights_binder_helicity": {
+      "has_native_default": true,
+      "native_default": -0.3,
+      "native_key": "weights_binder_helicity",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 5,
+      "status": "typed"
+    },
+    "weights_binder_intra_coldspot": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_binder_intra_coldspot",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_binder_intra_hotspot": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_binder_intra_hotspot",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_binder_pae": {
+      "has_native_default": true,
+      "native_default": 0.4,
+      "native_key": "weights_binder_pae",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 5,
+      "status": "typed"
+    },
+    "weights_c_terminus_away": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_c_terminus_away",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_coldspot_repel": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_coldspot_repel",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_collective_softness": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_collective_softness",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_com_distance": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_com_distance",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_compactness": {
+      "has_native_default": true,
+      "native_default": 0.5,
+      "native_key": "weights_compactness",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 7,
+      "status": "typed"
+    },
+    "weights_distogram_cce": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_distogram_cce",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_disulfide": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_disulfide",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_experimentally_resolved": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_experimentally_resolved",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_exposed_loops": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_exposed_loops",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_exposed_termini": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_exposed_termini",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_fold_switching": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_fold_switching",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_humanization": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_humanization",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_induced_fit_global": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_induced_fit_global",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_induced_fit_interface": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_induced_fit_interface",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_interface_contacts": {
+      "has_native_default": true,
+      "native_default": 1.0,
+      "native_key": "weights_interface_contacts",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "weights_interface_pae": {
+      "has_native_default": true,
+      "native_default": 0.1,
+      "native_key": "weights_interface_pae",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "weights_iptm_loss": {
+      "has_native_default": true,
+      "native_default": 0.05,
+      "native_key": "weights_iptm_loss",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 6,
+      "status": "typed"
+    },
+    "weights_multidomain": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_multidomain",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_n_terminus_away": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_n_terminus_away",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_non_contact": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_non_contact",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_non_helical": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_non_helical",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_plddt_loss": {
+      "has_native_default": true,
+      "native_default": 0.1,
+      "native_key": "weights_plddt_loss",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 4,
+      "status": "typed"
+    },
+    "weights_protease_sites": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_protease_sites",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_ptm_loss": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_ptm_loss",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_sequence_entropy": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_sequence_entropy",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_target_helicity": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_target_helicity",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_target_plddt": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_target_plddt",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_target_rigidity": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_target_rigidity",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_target_rmsd": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_target_rmsd",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "weights_termini_angle": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_termini_angle",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "weights_termini_distance": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "weights_termini_distance",
+      "observed_types": [
+        "number"
+      ],
+      "preset_examples": 1,
+      "status": "typed"
+    },
+    "worker_launch_stagger": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "worker_launch_stagger",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    },
+    "workers_per_gpu": {
+      "has_native_default": false,
+      "native_default": null,
+      "native_key": "workers_per_gpu",
+      "observed_types": [],
+      "preset_examples": 0,
+      "status": "unresolved"
+    }
+  },
+  "nested_surfaces": {
+    "filters": {
+      "All_Atom_Clashes": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "cutoff",
+          "prediction_state"
+        ]
+      },
+      "Backbone_Clashes": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "cutoff",
+          "prediction_state"
+        ]
+      },
+      "Binder_BetaSheet_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Binder_Chain_Breaks": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "maximum_bond",
+          "minimum_bond",
+          "prediction_state"
+        ]
+      },
+      "Binder_Disulfides": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "distance",
+          "prediction_state",
+          "sequence_separation",
+          "tolerance"
+        ]
+      },
+      "Binder_Extinction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Binder_Free_Cysteines": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Binder_Helix_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Binder_Loop_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Binder_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "reference_state"
+        ]
+      },
+      "Coldspot_Contact_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Cyclic_Closure_Distance": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Domain_Separation_Ratio": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "domain_contact_cutoff",
+          "min_domain_size",
+          "n_domains",
+          "prediction_state"
+        ]
+      },
+      "Epitope_Residues_Contacted": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "epitope_cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Exposed_Loop_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Framework_Packing_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "sequence_separation"
+        ]
+      },
+      "Hotspot_Contact_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Induced_Fit_Interface_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "interface_residues",
+          "prediction_state",
+          "reference_state",
+          "target"
+        ]
+      },
+      "Induced_Fit_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "reference_state"
+        ]
+      },
+      "Induced_Fit_TM": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "reference_state"
+        ]
+      },
+      "Interdomain_Contact_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "domain_contact_cutoff",
+          "min_domain_size",
+          "n_domains",
+          "prediction_state"
+        ]
+      },
+      "Interface_BuriedArea": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Interface_BuriedArea_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Interface_Hydrophobicity": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Interface_Residues": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Interface_Residues_detarget": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "MHC_Anchor_Score": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "coupling_weight",
+          "hydrophobicity_weight",
+          "mhc_class_ii_weight",
+          "prediction_state",
+          "species",
+          "temperature"
+        ]
+      },
+      "Off_Epitope_Contact_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "epitope_cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Off_Paratope_Contact_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Oligomer_Symmetry_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Protease_Site_Score": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Receptor_Chains_Contacted": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "SS_pLDDT": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Scaffold_Framework_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "scaffold",
+          "scaffold_chain",
+          "scaffold_edits"
+        ]
+      },
+      "Scaffold_Sequence_Retained_Fraction": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "scaffold",
+          "scaffold_chain",
+          "scaffold_edits"
+        ]
+      },
+      "Surface_Hydrophobicity": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Target_Crop_Length": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Target_RMSD": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "prediction_state",
+          "target"
+        ]
+      },
+      "Termini_Distance": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state"
+        ]
+      },
+      "Terminus_Exposure": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "terminus_length"
+        ]
+      },
+      "Unbound_Binder_pLDDT": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "i_pAE": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "i_pAE_detarget": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "i_pDAE": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "binder",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "i_pTM": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "prediction_state"
+        ]
+      },
+      "i_pTM_detarget": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "prediction_state"
+        ]
+      },
+      "pTM": {
+        "entry_keys": [
+          "params",
+          "prediction_state",
+          "threshold",
+          "higher",
+          "mandatory"
+        ],
+        "params": [
+          "prediction_state"
+        ]
+      }
+    },
+    "losses": {
+      "binder_coldspot": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contacts_per_residue",
+          "cutoff",
+          "designed_only",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "binder_contacts": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "contact_residue_count",
+          "contacts_per_residue",
+          "cutoff",
+          "per_protomer",
+          "prediction_state",
+          "sequence_separation"
+        ]
+      },
+      "binder_helicity": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "cutoff",
+          "prediction_state"
+        ]
+      },
+      "binder_intra_coldspot": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contacts_per_residue",
+          "cutoff",
+          "prediction_state",
+          "sequence_separation"
+        ]
+      },
+      "binder_intra_hotspot": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contacts_per_residue",
+          "cutoff",
+          "prediction_state",
+          "sequence_separation"
+        ]
+      },
+      "binder_pae": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "domain_ids",
+          "per_protomer",
+          "prediction_state"
+        ]
+      },
+      "c_terminus_away": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "coldspot_repel": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contacts_per_residue",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "collective_softness": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "contact_decay",
+          "damping",
+          "eps",
+          "power_iterations",
+          "prediction_state"
+        ]
+      },
+      "com_distance": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "eps",
+          "prediction_state",
+          "radius_ratio",
+          "target"
+        ]
+      },
+      "compactness": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "eps",
+          "per_protomer",
+          "prediction_state"
+        ]
+      },
+      "distogram_cce": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "disulfide": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "distance",
+          "prediction_state",
+          "sequence_separation",
+          "sigma",
+          "temperature"
+        ]
+      },
+      "experimentally_resolved": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "exposed_loops": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "distinguish_sheets",
+          "measure",
+          "plddt_temperature",
+          "plddt_threshold",
+          "prediction_state",
+          "window"
+        ]
+      },
+      "exposed_termini": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state",
+          "terminus_length"
+        ]
+      },
+      "fold_switching": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder_shapes",
+          "chain",
+          "tm_target"
+        ]
+      },
+      "humanization": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "coupling_weight",
+          "hydrophobicity_weight",
+          "mhc_class_ii_weight",
+          "prediction_state",
+          "species",
+          "temperature"
+        ]
+      },
+      "induced_fit_global": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state",
+          "reference_state",
+          "tm_target"
+        ]
+      },
+      "induced_fit_interface": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "cutoff",
+          "interface_mask",
+          "interface_rmsd_target",
+          "prediction_state",
+          "reference_state",
+          "target"
+        ]
+      },
+      "interface_contacts": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contact_residue_count",
+          "contacts_per_residue",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "interface_pae": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "iptm_loss": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "prediction_state"
+        ]
+      },
+      "multidomain": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "domain_contact_cutoff",
+          "domain_ids",
+          "domain_linker_gap",
+          "domain_linker_helix_weight",
+          "domain_linker_sharpness",
+          "domain_pae_margin",
+          "domain_rg_weight",
+          "domain_sep_weight",
+          "max_domain_size",
+          "max_domains",
+          "min_domain_size",
+          "n_domains",
+          "prediction_state",
+          "seed"
+        ]
+      },
+      "n_terminus_away": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "non_contact": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "contacts_per_residue",
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "non_helical": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "cutoff",
+          "prediction_state"
+        ]
+      },
+      "plddt_loss": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "protease_sites": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "ptm_loss": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "prediction_state"
+        ]
+      },
+      "sequence_entropy": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state"
+        ]
+      },
+      "target_helicity": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "cutoff",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "target_plddt": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "prediction_state",
+          "target"
+        ]
+      },
+      "target_rigidity": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "prediction_state",
+          "target"
+        ]
+      },
+      "target_rmsd": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "prediction_state",
+          "target"
+        ]
+      },
+      "termini_angle": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "binder",
+          "prediction_state",
+          "target"
+        ]
+      },
+      "termini_distance": {
+        "entry_keys": [
+          "params",
+          "prediction_state"
+        ],
+        "params": [
+          "chain",
+          "prediction_state",
+          "threshold_distance"
+        ]
+      }
+    },
+    "parameter_sweep": {
+      "fields": [
+        "axes",
+        "levels",
+        "max_arms",
+        "block_trajectories",
+        "multiplier"
+      ]
+    },
+    "targets": {
+      "fields": [
+        "chains",
+        "coldspots",
+        "hotspots",
+        "name",
+        "objective",
+        "target_path",
+        "weight"
+      ]
+    }
+  },
+  "paratope_conformations": [
+    "extended",
+    "folded_back"
+  ],
   "preset_only_not_in_reference": [
     "paratope_conformations",
     "settings"
@@ -1095,53 +4476,1934 @@
     "worker_launch_stagger",
     "workers_per_gpu"
   ],
-  "reference_only_not_statically_known": [
-    "anneal_steps",
-    "harden_steps",
-    "max_detarget_iptm_anneal",
-    "max_detarget_iptm_final",
-    "max_detarget_iptm_harden",
-    "max_detarget_iptm_mutate",
-    "max_detarget_iptm_refine",
-    "max_detarget_iptm_screen",
-    "min_c_terminus_away_cosine_final",
-    "min_iptm_refine",
-    "min_iptm_screen",
-    "min_n_terminus_away_cosine_final",
-    "mutate_steps",
-    "refine_steps",
-    "screen_steps",
-    "weights_binder_coldspot",
-    "weights_binder_intra_coldspot",
-    "weights_binder_intra_hotspot",
-    "weights_c_terminus_away",
-    "weights_coldspot_repel",
-    "weights_collective_softness",
-    "weights_com_distance",
-    "weights_distogram_cce",
-    "weights_disulfide",
-    "weights_experimentally_resolved",
-    "weights_exposed_loops",
-    "weights_exposed_termini",
-    "weights_fold_switching",
-    "weights_humanization",
-    "weights_induced_fit_global",
-    "weights_induced_fit_interface",
-    "weights_multidomain",
-    "weights_n_terminus_away",
-    "weights_non_contact",
-    "weights_non_helical",
-    "weights_protease_sites",
-    "weights_ptm_loss",
-    "weights_sequence_entropy",
-    "weights_target_helicity",
-    "weights_target_plddt",
-    "weights_target_rigidity",
-    "weights_target_rmsd",
-    "weights_termini_angle",
-    "weights_termini_distance"
-  ],
+  "reference_only_not_statically_known": [],
   "reference_sha256": "9a664de69968f2dffe6c2beff167cd256d0c11d3b5f2e2c9a1358a557d372263",
+  "registered_metrics": {
+    "filters": {
+      "All_Atom_Clashes": {
+        "function": "all_atom_clashes_metric",
+        "params": {
+          "cutoff": {
+            "default_literal": 2.5,
+            "required": false,
+            "source_default": "2.5"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Backbone_Clashes": {
+        "function": "backbone_clashes_metric",
+        "params": {
+          "cutoff": {
+            "default_literal": 2.5,
+            "required": false,
+            "source_default": "2.5"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_BetaSheet_Fraction": {
+        "function": "binder_beta_sheet_fraction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_Chain_Breaks": {
+        "function": "binder_chain_breaks_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "maximum_bond": {
+            "default_literal": 4.3,
+            "required": false,
+            "source_default": "4.3"
+          },
+          "minimum_bond": {
+            "default_literal": 3.3,
+            "required": false,
+            "source_default": "3.3"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_Disulfides": {
+        "function": "binder_disulfide_count_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "distance": {
+            "default_literal": 3.8,
+            "required": false,
+            "source_default": "3.8"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "sequence_separation": {
+            "default_literal": 3,
+            "required": false,
+            "source_default": "3"
+          },
+          "tolerance": {
+            "default_literal": 1.0,
+            "required": false,
+            "source_default": "1.0"
+          }
+        }
+      },
+      "Binder_Extinction": {
+        "function": "binder_extinction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_Free_Cysteines": {
+        "function": "binder_free_cysteine_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_Helix_Fraction": {
+        "function": "binder_helix_fraction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_Loop_Fraction": {
+        "function": "binder_loop_fraction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Binder_RMSD": {
+        "function": "binder_rmsd_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          }
+        }
+      },
+      "Coldspot_Contact_Fraction": {
+        "function": "coldspot_contact_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Cyclic_Closure_Distance": {
+        "function": "cyclic_closure_distance_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Domain_Separation_Ratio": {
+        "function": "domain_separation_ratio_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "domain_contact_cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "min_domain_size": {
+            "default_literal": 50,
+            "required": false,
+            "source_default": "50"
+          },
+          "n_domains": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Epitope_Residues_Contacted": {
+        "function": "epitope_residues_contacted_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "epitope_cutoff": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "EPITOPE_CUTOFF"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Exposed_Loop_Fraction": {
+        "function": "exposed_loop_fraction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Framework_Packing_Fraction": {
+        "function": "framework_packing_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.5,
+            "required": false,
+            "source_default": "4.5"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "sequence_separation": {
+            "default_literal": 20,
+            "required": false,
+            "source_default": "20"
+          }
+        }
+      },
+      "Hotspot_Contact_Fraction": {
+        "function": "hotspot_contact_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Induced_Fit_Interface_RMSD": {
+        "function": "induced_fit_interface_rmsd_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "interface_residues": {
+            "default_literal": [],
+            "required": false,
+            "source_default": "()"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Induced_Fit_RMSD": {
+        "function": "binder_rmsd_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          }
+        }
+      },
+      "Induced_Fit_TM": {
+        "function": "induced_fit_tm_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          }
+        }
+      },
+      "Interdomain_Contact_Fraction": {
+        "function": "interdomain_contact_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "domain_contact_cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "min_domain_size": {
+            "default_literal": 50,
+            "required": false,
+            "source_default": "50"
+          },
+          "n_domains": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Interface_BuriedArea": {
+        "function": "interface_buried_area_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Interface_BuriedArea_Fraction": {
+        "function": "interface_buried_area_fraction_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Interface_Hydrophobicity": {
+        "function": "interface_hydrophobicity_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Interface_Residues": {
+        "function": "interface_residues_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Interface_Residues_detarget": {
+        "function": "interface_residues_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "MHC_Anchor_Score": {
+        "function": "mhc_anchor_score_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "coupling_weight": {
+            "default_literal": 0.5,
+            "required": false,
+            "source_default": "0.5"
+          },
+          "hydrophobicity_weight": {
+            "default_literal": 0.0,
+            "required": false,
+            "source_default": "0.0"
+          },
+          "mhc_class_ii_weight": {
+            "default_literal": 1.0,
+            "required": false,
+            "source_default": "1.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "species": {
+            "default_literal": "human",
+            "required": false,
+            "source_default": "'human'"
+          },
+          "temperature": {
+            "default_literal": 0.1,
+            "required": false,
+            "source_default": "0.1"
+          }
+        }
+      },
+      "Off_Epitope_Contact_Fraction": {
+        "function": "off_epitope_contact_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "epitope_cutoff": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "EPITOPE_CUTOFF"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Off_Paratope_Contact_Fraction": {
+        "function": "off_paratope_contact_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Oligomer_Symmetry_RMSD": {
+        "function": "oligomer_symmetry_rmsd_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Protease_Site_Score": {
+        "function": "protease_site_score_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Receptor_Chains_Contacted": {
+        "function": "receptor_chains_contacted_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 4.0,
+            "required": false,
+            "source_default": "4.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "SS_pLDDT": {
+        "function": "structured_residue_plddt_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Scaffold_Framework_RMSD": {
+        "function": "scaffold_framework_rmsd_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "scaffold": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          },
+          "scaffold_chain": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          },
+          "scaffold_edits": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          }
+        }
+      },
+      "Scaffold_Sequence_Retained_Fraction": {
+        "function": "scaffold_sequence_retained_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "scaffold": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          },
+          "scaffold_chain": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          },
+          "scaffold_edits": {
+            "default_literal": "",
+            "required": false,
+            "source_default": "''"
+          }
+        }
+      },
+      "Surface_Hydrophobicity": {
+        "function": "surface_hydrophobicity_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Target_Crop_Length": {
+        "function": "target_crop_length_metric",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Target_RMSD": {
+        "function": "target_rmsd_metric",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "Termini_Distance": {
+        "function": "termini_distance_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "Terminus_Exposure": {
+        "function": "terminus_exposure_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "terminus_length": {
+            "default_literal": 3,
+            "required": false,
+            "source_default": "3"
+          }
+        }
+      },
+      "Unbound_Binder_pLDDT": {
+        "function": "plddt_metric",
+        "params": {
+          "chain": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "None"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "i_pAE": {
+        "function": "ipae_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "i_pAE_detarget": {
+        "function": "ipae_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "i_pDAE": {
+        "function": "interface_pdae_metric",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "i_pTM": {
+        "function": "iptm_metric",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "i_pTM_detarget": {
+        "function": "iptm_metric",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "pTM": {
+        "function": "ptm_metric",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      }
+    },
+    "losses": {
+      "binder_coldspot": {
+        "function": "binder_coldspot_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contacts_per_residue": {
+            "default_literal": 1,
+            "required": false,
+            "source_default": "1"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "designed_only": {
+            "default_literal": true,
+            "required": false,
+            "source_default": "True"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "binder_contacts": {
+        "function": "binder_contacts_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contact_residue_count": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "float('inf')"
+          },
+          "contacts_per_residue": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "cutoff": {
+            "default_literal": 14.0,
+            "required": false,
+            "source_default": "14.0"
+          },
+          "per_protomer": {
+            "default_literal": false,
+            "required": false,
+            "source_default": "False"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          },
+          "sequence_separation": {
+            "default_literal": 9,
+            "required": false,
+            "source_default": "9"
+          }
+        }
+      },
+      "binder_helicity": {
+        "function": "binder_helicity_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 6.0,
+            "required": false,
+            "source_default": "6.0"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "binder_intra_coldspot": {
+        "function": "binder_intra_coldspot_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contacts_per_residue": {
+            "default_literal": 1,
+            "required": false,
+            "source_default": "1"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "sequence_separation": {
+            "default_literal": 20,
+            "required": false,
+            "source_default": "20"
+          }
+        }
+      },
+      "binder_intra_hotspot": {
+        "function": "binder_intra_hotspot_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contacts_per_residue": {
+            "default_literal": 1,
+            "required": false,
+            "source_default": "1"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "sequence_separation": {
+            "default_literal": 20,
+            "required": false,
+            "source_default": "20"
+          }
+        }
+      },
+      "binder_pae": {
+        "function": "binder_pae_loss",
+        "params": {
+          "chain": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "None"
+          },
+          "domain_ids": {
+            "default_literal": [],
+            "required": false,
+            "source_default": "()"
+          },
+          "per_protomer": {
+            "default_literal": false,
+            "required": false,
+            "source_default": "False"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "c_terminus_away": {
+        "function": "c_terminus_away_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "coldspot_repel": {
+        "function": "coldspot_repel_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contacts_per_residue": {
+            "default_literal": 1,
+            "required": false,
+            "source_default": "1"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "collective_softness": {
+        "function": "collective_softness_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contact_decay": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "damping": {
+            "default_literal": 0.01,
+            "required": false,
+            "source_default": "0.01"
+          },
+          "eps": {
+            "default_literal": 1e-08,
+            "required": false,
+            "source_default": "1e-08"
+          },
+          "power_iterations": {
+            "default_literal": 12,
+            "required": false,
+            "source_default": "12"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "com_distance": {
+        "function": "com_distance_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "eps": {
+            "default_literal": 1e-08,
+            "required": false,
+            "source_default": "1e-08"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "radius_ratio": {
+            "default_literal": 0.9,
+            "required": false,
+            "source_default": "0.9"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "compactness": {
+        "function": "radius_of_gyration_loss",
+        "params": {
+          "chain": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "None"
+          },
+          "eps": {
+            "default_literal": 1e-08,
+            "required": false,
+            "source_default": "1e-08"
+          },
+          "per_protomer": {
+            "default_literal": false,
+            "required": false,
+            "source_default": "False"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "distogram_cce": {
+        "function": "distogram_cce_loss",
+        "params": {
+          "chain": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "disulfide": {
+        "function": "disulfide_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "distance": {
+            "default_literal": 3.8,
+            "required": false,
+            "source_default": "3.8"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "sequence_separation": {
+            "default_literal": 3,
+            "required": false,
+            "source_default": "3"
+          },
+          "sigma": {
+            "default_literal": 1.5,
+            "required": false,
+            "source_default": "1.5"
+          },
+          "temperature": {
+            "default_literal": 0.1,
+            "required": false,
+            "source_default": "0.1"
+          }
+        }
+      },
+      "experimentally_resolved": {
+        "function": "experimentally_resolved_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "exposed_loops": {
+        "function": "exposed_loop_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "distinguish_sheets": {
+            "default_literal": true,
+            "required": false,
+            "source_default": "True"
+          },
+          "measure": {
+            "default_literal": "plddt",
+            "required": false,
+            "source_default": "'plddt'"
+          },
+          "plddt_temperature": {
+            "default_literal": 0.05,
+            "required": false,
+            "source_default": "0.05"
+          },
+          "plddt_threshold": {
+            "default_literal": 0.85,
+            "required": false,
+            "source_default": "0.85"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "window": {
+            "default_literal": 3,
+            "required": false,
+            "source_default": "3"
+          }
+        }
+      },
+      "exposed_termini": {
+        "function": "exposed_termini_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "terminus_length": {
+            "default_literal": 3,
+            "required": false,
+            "source_default": "3"
+          }
+        }
+      },
+      "fold_switching": {
+        "function": "fold_switching_loss",
+        "params": {
+          "binder_shapes": {
+            "default_literal": [],
+            "required": false,
+            "source_default": "()"
+          },
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "tm_target": {
+            "default_literal": 0.6,
+            "required": false,
+            "source_default": "0.6"
+          }
+        }
+      },
+      "humanization": {
+        "function": "humanization_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "coupling_weight": {
+            "default_literal": 0.5,
+            "required": false,
+            "source_default": "0.5"
+          },
+          "hydrophobicity_weight": {
+            "default_literal": 0.0,
+            "required": false,
+            "source_default": "0.0"
+          },
+          "mhc_class_ii_weight": {
+            "default_literal": 1.0,
+            "required": false,
+            "source_default": "1.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "species": {
+            "default_literal": "human",
+            "required": false,
+            "source_default": "'human'"
+          },
+          "temperature": {
+            "default_literal": 0.1,
+            "required": false,
+            "source_default": "0.1"
+          }
+        }
+      },
+      "induced_fit_global": {
+        "function": "induced_fit_global_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          },
+          "tm_target": {
+            "default_literal": 0.6,
+            "required": false,
+            "source_default": "0.6"
+          }
+        }
+      },
+      "induced_fit_interface": {
+        "function": "induced_fit_interface_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "interface_mask": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "None"
+          },
+          "interface_rmsd_target": {
+            "default_literal": 3.0,
+            "required": false,
+            "source_default": "3.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "reference_state": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "BINDER_ALONE"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "interface_contacts": {
+        "function": "interface_contacts_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contact_residue_count": {
+            "default_literal": null,
+            "required": false,
+            "source_default": "float('inf')"
+          },
+          "contacts_per_residue": {
+            "default_literal": 1,
+            "required": false,
+            "source_default": "1"
+          },
+          "cutoff": {
+            "default_literal": 21.6875,
+            "required": false,
+            "source_default": "21.6875"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "interface_pae": {
+        "function": "interface_pae_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "iptm_loss": {
+        "function": "iptm_loss",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "multidomain": {
+        "function": "multidomain_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "domain_contact_cutoff": {
+            "default_literal": 8.0,
+            "required": false,
+            "source_default": "8.0"
+          },
+          "domain_ids": {
+            "default_literal": [],
+            "required": false,
+            "source_default": "()"
+          },
+          "domain_linker_gap": {
+            "default_literal": 0.1,
+            "required": false,
+            "source_default": "0.1"
+          },
+          "domain_linker_helix_weight": {
+            "default_literal": 0.0,
+            "required": false,
+            "source_default": "0.0"
+          },
+          "domain_linker_sharpness": {
+            "default_literal": 0.03,
+            "required": false,
+            "source_default": "0.03"
+          },
+          "domain_pae_margin": {
+            "default_literal": 0.15,
+            "required": false,
+            "source_default": "0.15"
+          },
+          "domain_rg_weight": {
+            "default_literal": 0.3,
+            "required": false,
+            "source_default": "0.3"
+          },
+          "domain_sep_weight": {
+            "default_literal": 0.0,
+            "required": false,
+            "source_default": "0.0"
+          },
+          "max_domain_size": {
+            "default_literal": 180,
+            "required": false,
+            "source_default": "180"
+          },
+          "max_domains": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "min_domain_size": {
+            "default_literal": 50,
+            "required": false,
+            "source_default": "50"
+          },
+          "n_domains": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "seed": {
+            "default_literal": 0,
+            "required": false,
+            "source_default": "0"
+          }
+        }
+      },
+      "n_terminus_away": {
+        "function": "n_terminus_away_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "non_contact": {
+        "function": "non_contact_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "contacts_per_residue": {
+            "default_literal": 2,
+            "required": false,
+            "source_default": "2"
+          },
+          "cutoff": {
+            "default_literal": 14.0,
+            "required": false,
+            "source_default": "14.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "non_helical": {
+        "function": "non_helical_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "cutoff": {
+            "default_literal": 6.0,
+            "required": false,
+            "source_default": "6.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "plddt_loss": {
+        "function": "plddt_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "binder_alone",
+            "required": false,
+            "source_default": "'binder_alone'"
+          }
+        }
+      },
+      "protease_sites": {
+        "function": "protease_site_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "ptm_loss": {
+        "function": "ptm_loss",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "sequence_entropy": {
+        "function": "sequence_entropy_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          }
+        }
+      },
+      "target_helicity": {
+        "function": "target_helicity_loss",
+        "params": {
+          "cutoff": {
+            "default_literal": 6.0,
+            "required": false,
+            "source_default": "6.0"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "target_plddt": {
+        "function": "target_plddt_loss",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "target_rigidity": {
+        "function": "target_rigidity_loss",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "target_rmsd": {
+        "function": "target_rmsd_loss",
+        "params": {
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "termini_angle": {
+        "function": "termini_angle_loss",
+        "params": {
+          "binder": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "target": {
+            "default_literal": "target",
+            "required": false,
+            "source_default": "'target'"
+          }
+        }
+      },
+      "termini_distance": {
+        "function": "termini_distance_loss",
+        "params": {
+          "chain": {
+            "default_literal": "binder",
+            "required": false,
+            "source_default": "'binder'"
+          },
+          "prediction_state": {
+            "default_literal": "complex",
+            "required": false,
+            "source_default": "'complex'"
+          },
+          "threshold_distance": {
+            "default_literal": 7.0,
+            "required": false,
+            "source_default": "7.0"
+          }
+        }
+      }
+    }
+  },
+  "registry_sha256": {
+    "filters.py": "737225ef652fd6a8b5501c7699e0e7a1a43f3712e07ffca98a6f10c2cc7adb0b",
+    "loss.py": "625f9c4a1eb028aab59d06550994350c05a226d282eac2329d92038bceb3a323",
+    "parameter_sweep.py": "8bc29d0c7a3a9c6906c267bfebade1a71455a219a5de4633b5983515c558cc6f"
+  },
   "source_sha256": "d88f87212929bfc7a8ae186189eab70a527d04aa2d89f5d6adee1f6af4993cfa",
   "statically_known_not_in_reference": [
     "core",
@@ -1157,6 +6419,117 @@
     "objective",
     "target_path",
     "weight"
+  ],
+  "unresolved_fields": [
+    "auto_multi_gpu",
+    "autotune_loss_weights",
+    "betasheet_reopt_recycles",
+    "bigbang",
+    "binder_chain",
+    "binder_name",
+    "binder_shapes",
+    "campaign_name",
+    "compile_next_length",
+    "crop_fasta_sequence",
+    "cyclic_offset_mode",
+    "design_workers",
+    "desperation_trajectories",
+    "detarget_check_interval",
+    "disulfide_sigma",
+    "disulfide_staple",
+    "disulfide_temperature",
+    "domain_linker_fix_cut",
+    "domain_linker_gap",
+    "domain_linker_sharpness",
+    "forced_targeting_shell",
+    "gpu_ids",
+    "humanization_hydro_weight",
+    "humanize",
+    "idr_crop_count",
+    "induced_fit_interface_cutoff",
+    "induced_fit_monomer_adaptive",
+    "induced_fit_monomer_chunk",
+    "induced_fit_monomer_plddt",
+    "induced_fit_monomer_steps",
+    "induced_fit_mpnn_designed_share",
+    "induced_fit_mpnn_shell",
+    "induced_fit_mpnn_threshold",
+    "induced_fit_steps",
+    "interface_contact_distance",
+    "length_bucket_size",
+    "max_binder_chain_breaks_final",
+    "max_binder_free_cysteines_final",
+    "max_coldspot_contact_final",
+    "max_cyclic_closure_distance_final",
+    "max_detarget_interface_residues_final",
+    "max_detarget_iptm",
+    "max_detarget_iptm_anneal",
+    "max_detarget_iptm_final",
+    "max_detarget_iptm_harden",
+    "max_detarget_iptm_mutate",
+    "max_detarget_iptm_refine",
+    "max_detarget_iptm_screen",
+    "max_detarget_rounds",
+    "max_off_epitope_contact_final",
+    "max_off_paratope_contact_final",
+    "max_oligomer_symmetry_rmsd_final",
+    "max_surface_hydrophobicity_final",
+    "max_workers_per_gpu",
+    "min_epitope_residues_contacted_final",
+    "min_framework_packing_final",
+    "min_interface_buried_area_final",
+    "min_iptm_refine",
+    "min_iptm_screen",
+    "min_receptor_chains_contacted_final",
+    "min_target_crop_length_final",
+    "min_target_plddt_final",
+    "mixed_topology",
+    "mpnn_fix_linker",
+    "multitarget_best_round",
+    "multitarget_cumulative_filter",
+    "multitarget_filter_models",
+    "multitarget_merged_gradient_budget",
+    "multitarget_merged_gradients",
+    "multitarget_rounds_per_target",
+    "multitarget_steps",
+    "multitarget_swap_patience",
+    "multitarget_swap_threshold",
+    "multitarget_tied_redesign",
+    "multitarget_warmup_patience",
+    "non_contact_distance",
+    "number_of_final_designs",
+    "oligomer_tie",
+    "project_folder",
+    "protease_stable",
+    "relax_learning_rate",
+    "relax_min_sep",
+    "relax_overlap_tol",
+    "relax_restraint_backbone",
+    "relax_restraint_sidechain",
+    "relax_steps",
+    "relax_weight_bond",
+    "relax_weight_clash",
+    "sparse_output",
+    "target_chain",
+    "termini_accessible",
+    "termini_together",
+    "validation_models",
+    "weights_binder_intra_hotspot",
+    "weights_coldspot_repel",
+    "weights_collective_softness",
+    "weights_com_distance",
+    "weights_distogram_cce",
+    "weights_experimentally_resolved",
+    "weights_fold_switching",
+    "weights_non_contact",
+    "weights_ptm_loss",
+    "weights_sequence_entropy",
+    "weights_target_helicity",
+    "weights_target_plddt",
+    "weights_target_rigidity",
+    "weights_target_rmsd",
+    "worker_launch_stagger",
+    "workers_per_gpu"
   ],
   "upstream_commit": "d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
 }
