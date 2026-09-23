@@ -24,9 +24,9 @@ BC2 is an option, not a mandatory upstream step or a replacement for existing ge
 
 ### Phase 3: experimental LigandMPNN sanity-check validation
 
-Add the custom, optional LigandMPNN interface-context check discussed with Christian. Preserve a selected CDR or target/binder patch and its declared structural context; assess recovery/compatibility of the opposing interface under an explicitly defined masking and comparison policy. This is NOT satisfied by adding another routine sequence-redesign selector.
+Deliver two independently selectable candidate assessments: LigandMPNN target amino-acid/structural-context compatibility on supplied geometry, and blind structure/pose verification through the existing suitable predictor. They may be requested separately or together; neither is mandatory for generator results or a refinement round. Preserve the selected binder/target patch and declared structural context, masking held-out identities/atoms for the LigandMPNN assessment. This is NOT satisfied by adding another routine sequence-redesign selector or by relabeling a supplied pose as recovered.
 
-Run it as a candidate assessment, analogous in workflow placement to the existing blind structure/pose-recovery check. Preserve both checks' separate results. If both applicable, validly completed checks fail their declared recovery criteria, mark the candidate **computationally rejected by the selected sanity checks**. A skipped, unsupported, unqualified or broken run is not a scientific failure and must not produce that rejection. Passing either check is not proof of binding.
+Run either assessment on selected candidates after a round, or select a subset for a later bounded assessment/refinement round. Preserve both checks' separate raw results and the original candidates. Operator-defined cutoffs are applied after inspecting exploratory results, with a saved policy/version and explicit re-evaluation of existing evidence; no cutoff is hard-coded to make tests green. Only if the operator selects the dual-failure policy, both checks are applicable and valid, and both fail their selected criteria is the candidate **computationally rejected by that policy**. Unrun, unsupported, unqualified or broken runs are not failures. Passing either check is not proof of binding.
 
 LigandMPNN by itself evaluates/designs sequence on supplied backbone geometry; it does not generate an absent partner backbone or independently recover a binding pose. Label its evidence as context/sequence compatibility, not pose prediction or affinity. A new geometry generator, protein-interaction search service or generic scoring platform is NOT authorized by this phase. Reusing an already in-scope generator for a specifically agreed experiment can be proposed separately without replacing the required LigandMPNN diagnostic.
 
@@ -49,7 +49,7 @@ These instructions MUST accompany every implementation dispatch, together with t
 7. **MUST remove replaced active code and stale tests/imports after checking references.** Keep at most the required bounded historical reader. No permanent dual write paths, generic fallback scanners, speculative abstraction layers or archaeology copies.
 8. **MUST keep scope focused.** No unrelated Project/NGS programme, generic workbench rewrite, global telemetry/dashboard, new approval bureaucracy, cosmetic overhaul, unrelated dependency upgrade or opportunistic repository cleanup. If a shared repair is necessary, name its direct in-scope consumer and smallest change.
 9. **MUST test at the existing owner and report actual evidence.** Focused tests plus required integrated/native acceptance, not repeated full-suite runs or an exhaustive Cartesian product. Never suppress failures, loosen scientific thresholds, delete acceptance tests or fabricate native fixtures/results to obtain green output.
-10. **MUST escalate consequential science choices.** State the precise choice, evidence, affected behavior and bounded options to the integrator. Only Christian changes product scope or approves an unresolved scientific policy. Unrelated lanes continue.
+10. **MUST escalate consequential science choices.** State the precise choice, evidence, affected behavior and bounded options to the integrator. The two independent candidate checks, optional execution and user-defined post-review cutoffs are already decided; do not reopen them as a planning prerequisite. Only Christian changes product scope or approves an unresolved scientific method. Unrelated lanes continue.
 11. **MUST respect execution permissions.** No child push, deploy, service restart, live database mutation, paid rental/start, cloud attach/provisioning or live scientific campaign unless that exact action is separately delegated after authorization. Do not manipulate active jobs or unrelated hardware.
 12. **MUST return a bounded handoff:** base/commit, owned changed paths, requirements satisfied, exact test commands and result files/counts/skips, native/live evidence if authorized, unresolved items and deletion summary. A prose claim without reproducible evidence is NOT accepted. Only the parent closes requirements.
 
@@ -62,11 +62,11 @@ The parent is the integrator, not a ninth independent implementation competing o
 - **A — Launcher and request experience:** Phase 1, consuming Phase 2/3 model-owned controls.
 - **B — Refinement transformations and blind structure validation:** Phase 1.
 - **C — Candidate identity, selection and shared result publication:** Phase 1; shared support for all phases.
-- **D — Existing alternative methods and analyses:** Phase 1.
+- **D — Existing alternative methods and analyses:** Phase 1; complex-contact method is separate from FrustraMPNN's single-residue prediction.
 - **E — BC2 settings and native campaign execution:** Phase 2.
 - **F — BC2 native publication and result projection:** Phase 2.
 - **G — Bridge placement, runtime closure and warm-start performance:** all phases.
-- **H — Experimental LigandMPNN interface-context validator:** Phase 3.
+- **H — Experimental LigandMPNN interface-context validator:** Phase 3; B owns the separately selectable blind pose assessment.
 
 The integrator records exact existing files/symbols and final new-file names before writers start. The paths below are ownership anchors, not permission to edit an entire directory. A path assigned to one lane cannot also be assigned to another. New files use existing repository conventions; internal lane/phase names MUST NOT become public product IDs or arbitrary schema versions.
 
@@ -112,7 +112,7 @@ One model-owned typed schema, relevant settings/defaults, requested versus effec
 
 ### I2 — Immutable selected candidate/document
 
-Existing source/root Job and Design/subject references, producer identity, exact structure document/state, artifact digest/reference, chain/residue/role map, current sequence and round/parent association. Include only fields the operation actually consumes or existing lineage requires. No filename/stem joins and no parallel candidate store. Distinguish an acceptance rank from a candidate identity.
+Existing source/root Job and Design/subject references, producer identity, exact structure document/state, artifact digest/reference, chain/residue/role map, current sequence and round/parent association. Include only fields the operation actually consumes or existing lineage requires. Support a subset selected after a completed round, including non-antibody roots, as a new bounded child round with exact parent for each source, even when sources span generators or states that are individually compatible with the chosen operation. No filename/stem joins and no parallel candidate store. Distinguish an acceptance rank from a candidate identity.
 
 ### I3 — Native publication and optional-stage outcome
 
@@ -138,7 +138,7 @@ Contract changes after this handshake are small explicit owner-to-consumer updat
 
 - Modality/objective first; compatible model options and relevant controls thereafter. RFantibody remains antibody-specific; seeded PPIFlow requires a seed. Do not hide legitimate BoltzGen/BC2 modes to match RFantibody.
 - Reuse model schemas/forms; preserve native advanced settings without a raw-JSON-only escape hatch.
-- Keep generation-only exit and candidate-selected refinement rounds obvious. Display selections, alternatives, exact source/state, and requested experimental checks without auto-enabling stages.
+- Keep generation-only exit and candidate-selected refinement rounds obvious. After each completed round, permit a user-selected compatible subset to be requeued with separately chosen refinement, LigandMPNN context and/or blind pose checks (or none), including from non-antibody roots. Display selections, alternatives, exact source/state and requested checks without auto-enabling stages or repeating off-operations.
 - Replace the current `deNovoDownstreamLocked` and BoltzGen/PPIFlow generator-only restoration restrictions with supported selection/continuation. Preserve their separate scientific routes; do not work around a frontend lock by merging those models into the RFantibody DAG.
 - Preserve save/load/clone/retry and separate model drafts. Changes identify incompatible settings instead of silently dropping/relabeling them.
 - Treat `routers/user_templates.py` as a parent-owned API dependency: its antibody-template normalizer currently rewrites framework paths, residue lists and `selected_chain` on writes and reads. New generic templates must round-trip without that coercion; only bounded documented historical antibody repair may use it. A frontend hydration test alone is insufficient.
@@ -147,7 +147,7 @@ Contract changes after this handshake are small explicit owner-to-consumer updat
 
 ### Pass/fail
 
-**PASS:** mounted requests for retained generators and BC2 use the correct model-owned contracts; unsupported modality combinations are explained; advanced native fields round-trip; explicit values, including `false` and zero, survive presets/hydration; agent/browser equivalence is demonstrated at the existing compiler; edits invalidate the approved preview; generator-only and repeated selected rounds remain usable; off-operations add no selected dependency; a refusal is visible.
+**PASS:** mounted requests for retained generators and BC2 use the correct model-owned contracts; unsupported modality combinations are explained; advanced native fields round-trip; explicit values, including `false` and zero, survive presets/hydration; agent/browser equivalence is demonstrated at the existing compiler; edits invalidate the approved preview; generator-only and post-round *subset* requeue with either/both/no optional checks remain usable; off-operations add no selected dependency; a refusal is visible.
 
 **FAIL:** rename-only UI; VHH defaults leak into generic requests; generator disappears; unknown selector becomes another engine; typed settings missing; raw JSON is the only complete path; saved request changes silently; new frontend scientific authority; render triggers runtime setup.
 
@@ -166,7 +166,7 @@ Dependencies: I1/I2 and E/H model components. A must not wait for native GPU acc
 - Use generic constrained FA-MPNN where appropriate. Post-flow redesign happens only when selected. Preserve all sampled descendants and exact parent/state mappings.
 - Retain actual PPIFlow checkpoint limits. Correct role disagreement instead of using the first chain or dropping requested chains. Report zero eligible anchors/seeds explicitly.
 - Remove synthetic sequence extraction; parse real structure identity including insertion codes. Pair every structure-validator sample with its own metrics. Preserve existing validator choice.
-- Any changed sequence/coordinates produces a descendant with fresh assessment state. Do not reuse parent acceptance/confidence for changed bytes.
+- Any changed sequence/coordinates produces a descendant with fresh assessment state. Do not reuse parent acceptance/confidence for changed bytes. Post-round subset requeue must materialize a new child operation from exact immutable selected candidates, not rerun every source or mutate the finished parent round.
 - Verify what the current end-of-loop blind check actually receives. Candidate interface coordinates or equivalent restraints must not be hidden inputs when advertising independent pose recovery. Required target structural context may remain if explicitly declared. If the native route cannot be blind, expose that fact and refer the exact scientific choice; do not silently change the predictor or claim independence.
 - Preserve requested sample budgets, output multiplicity, relevant predictor settings and native scoring. No automatic reruns until a candidate passes.
 
@@ -186,7 +186,7 @@ Dependencies: C's I2/I3; D/H leaf contracts. B can test selected compositions wi
 
 ### Required work
 
-- Bind selection to source/root, candidate/document/state, immutable bytes and roles. Ordinary iteration/manual mutation must not accept a foreign global ID.
+- Bind selection to source/root, candidate/document/state, immutable bytes and roles. A selected subset from a completed round keeps every chosen item's exact root/parent/state and results, including when different compatible sources are selected for the same operation; reject incompatible mixtures explicitly. Ordinary iteration/manual mutation must not accept a foreign global ID.
 - Use producer identities for sample/parent/state joins. Native CIF and derived PDB are related documents, not duplicates to pick by filename preference. Different target states must not collapse.
 - Preserve native CIF/mmCIF; repair actual consumers. Convert only at a genuinely PDB-only operation with a loss/map contract. Structureless records belong in native datasets, not fabricated Designs.
 - Primary generator and earlier-round results survive failed optional analyses/validators. Retain explicit failed stage state and allow bounded retry without duplicate candidates.
@@ -196,7 +196,7 @@ Dependencies: C's I2/I3; D/H leaf contracts. B can test selected compositions wi
 
 ### Pass/fail
 
-**PASS:** foreign/mismatched selections reject once at the owner; same-stem states/samples survive; native/derived mapping is reversible where required; multiround source/root/parent remains correct; optional failure cannot roll back primary candidates; re-ingestion is idempotent; native data and assessments reopen without the worker.
+**PASS:** foreign/mismatched selections reject once at the owner; same-stem states/samples survive; native/derived mapping is reversible where required; subset requeue from completed generic and antibody rounds preserves distinct source/root/parent/state identities, prior assessments and untouched siblings; optional failure cannot roll back primary candidates; re-ingestion is idempotent; native data and assessments reopen without the worker.
 
 **FAIL:** `.first()`/stem/path guessing establishes scientific identity; target states counted as independent accepted sequences; sequence-only join loses distinct samples; mutable artifact passes as approved input; fake PDB; failed optional stage erases valid primary output; changed candidate keeps its parent's verdict.
 
@@ -212,7 +212,7 @@ Dependencies: F supplies BC2 native publication, H diagnostic rows, D analysis r
 
 - Caliby: inspect existing parent runner, complete relevant controls/masks/context/output identity and selected runtime requirements; qualify rather than rebuild.
 - FrustraMPNN: reuse scheduler fan-out, settings and result persistence; bind exact chain/document/parent identity; retain its binder-local scope where native inference is chain-local.
-- Complex-contact analysis: retain the required work item and isolate the exact method/reference decision. Build reusable input/output plumbing without substituting another metric. Complete the agreed scientific method after that decision, not an unavailable placeholder.
+- Complex-contact analysis: retain the required work item and isolate the exact method/reference decision. The [FrustraMPNN preprint](https://doi.org/10.64898/2026.01.22.701012) and [repository](https://github.com/RosettaCommons/frustraMPNN) predict per-residue single-mutation frustration, **not** pairwise cross-chain contact frustration; the preprint distinguishes physics-based configurational/mutational pairwise analyses and calls pairwise prediction a future extension. For empirical interface precedent, [Ma et al. 2025](https://doi.org/10.1038/s41467-025-63713-7) and [Wei et al. 2025](https://pmc.ncbi.nlm.nih.gov/articles/PMC12262341/) use mutational pairwise Frustratometer/FrustratometeR indices on protein–protein interfaces. Present mutational versus configurational pairwise methods and exact decoy/reference meanings to Christian; do not claim approval of one. FrustraPy is an *unofficial* reimplementation whose own [README](https://github.com/engelberger/frustrapy) cautions verification against FrustratometeR, not proof that FrustraMPNN supports pairwise mode. Build reusable input/output plumbing without substituting another metric. Complete the agreed scientific method after that decision, not an unavailable placeholder.
 - All analyses remain optional to execute and failure-isolated. Their result routes must work locally/remotely through the common bridge.
 
 ### Pass/fail
@@ -308,61 +308,61 @@ Dependencies: E/H/D/B model manifests and C exact publication requirements. Exis
 
 ### Copy-ready assignment
 
-> Implement Phase 3 as the custom experimental interface-context sanity check, not ordinary binder redesign. Make the missing diagnostic executable under Foundry's sole LigandMPNN execution ownership; reuse shared selection/placement/publication, not a nonexistent existing LigandMPNN runner. Preserve a declared CDR or binder/target patch, evaluate the opposing interface using an explicit masked-input/context-recovery policy, and retain the original candidate unchanged. Pair its result with the existing blind structure-check result under section 13. Do not claim LigandMPNN independently predicts a pose, identifies natural partners, measures affinity or proves binding. Do not invent the remaining scientific recovery metric, masking policy, negative controls or cutoff. Present the precise choices for Christian, then implement the agreed version. Complete engineering plumbing in parallel; unresolved calibration is not a reason to reclassify this as a future feature.
+> Implement Phase 3 as the optional experimental LigandMPNN target amino-acid/structural-context compatibility check, not ordinary binder redesign. B separately owns the optional blind pose/structure check. Make the missing diagnostic executable under Foundry's sole LigandMPNN execution ownership; reuse shared selection/placement/publication, not a nonexistent runner. Preserve declared binder and target patches, evaluate held-out sequence/context on supplied geometry using an explicit leakage-safe policy, and retain the original candidate unchanged. Both assessments must be independently selectable after any round and applicable to user-selected subsets for requeue; their results can optionally be combined under section 13. Do not claim LigandMPNN independently predicts a pose, identifies natural partners, measures affinity or proves binding. Do not invent the remaining native metric, masking policy or negative controls. Preserve raw evidence so the operator can inspect results and define cutoffs afterward. Complete engineering plumbing in parallel; calibration is not a reason to reclassify this as a future feature.
 
 ### Required work
 
 - Inspect the actual Foundry/core-job runner and missing typed execution/result pieces. A registry row is not a runnable adapter, and a Project catalogue denial is not sufficient evidence of a missing core path. Complete the existing owner rather than duplicating it.
 - Distinguish two independent contracts sharing Foundry: this new binder interface-context diagnostic and the existing chemistry-context LigandMPNN sequence-design obligation in `docs/specs/2026-08-12-protein-in-silico-global-project-integration-sow.md`. Do not claim completion of that Project/ordinary-design path from a working diagnostic, or count ordinary redesign as Phase 3 acceptance. Reuse the sole scientific execution owner where possible; do not import unrelated Project adapter work into this binder SOW.
 - The checked baseline contains a chemistry-oriented `ligandmpnn.yaml` with `enabled: true` and `experimental: false`, but no explicit LigandMPNN route in the reviewed entrypoint map or invocation in `workflows/` or `modules/`. `apptainer/foundry.def` installs unpinned `rc-foundry[all]` and permits deferred checkpoint download. These do not establish a ready diagnostic. H must implement the missing executable diagnostic path under Foundry, pin its actual scientific/runtime capability, expose the new operation as experimental and complete selected asset readiness with G. Preserve the existing ligand/metal/nucleotide/DNA mode semantics rather than silently reclassifying or overwriting them; any advertised but unexecutable legacy mode needs its own truthful admission/availability handling at the existing owner. Do not inherit an unrelated registry row's claimed status or first-run download behavior.
-- Input binds exact source candidate/state/artifact, fixed patch/roles, scoring region, visible sequence/backbone/atomic context, checkpoint, sampling/scoring settings, comparator identity and assessment-policy version. Keep the surrounding structure when needed; a small scoring region does not imply an excised free peptide.
+- Input binds exact source candidate/state/artifact and round, fixed patch/roles, scoring region, visible sequence/backbone/atomic context, checkpoint, sampling/scoring settings and comparator identity. A later user-selected verdict policy is versioned separately from immutable raw evidence. Keep the surrounding structure when needed; a small scoring region does not imply an excised free peptide.
 - Distinguish recovering opposing sequence/context on supplied geometry from generating new geometry. Report exactly which information was supplied and which held out.
 - Prevent answer leakage: the residue identities/side-chain atoms being recovered cannot also be exposed as the answer in conditioning. Keep declared context and masking consistent across matched comparisons. Avoid scoring the whole fold and presenting it as interface-specific evidence.
 - Verify actual preprocessing/model visibility, not merely a UI residue mask. H must distinguish hiding an entire evaluated patch from single-position scoring while other native patch residues remain visible. A model's single-position conditional score MUST NOT be relabeled blind whole-patch recovery. Packing with withheld identities must not leak their geometry into diagnostic inputs; any such derivative is separately identified. If the pinned Foundry path cannot express the chosen diagnostic, report that exact blocker instead of silently approximating it or adding another implementation.
 - Preserve native probabilities/scores/sample outcomes, meaningful missingness and variability. Any sampled sequences are diagnostic artifacts, not automatically adopted descendants. Do not mutate the actual target or binder to manufacture recovery.
 - Use an explicitly selected, bounded diagnostic. No recursive generate/rescore-until-pass loop; no best-sample cherry-picking without the declared policy and full sample record.
-- Integrate a model-owned typed UI/API and experimental result section in existing candidate review. The same operation runs locally/remotely using G's closure; disabled means no assets/preparation/run.
+- Integrate a model-owned typed UI/API and experimental result section in existing candidate review. Offer the LigandMPNN check and B's blind pose check as separate optional actions after a round; allow selecting any compatible subset and requeuing selected assessment or refinement operations as a new child round without overwriting completed results. The same selected operations run locally/remotely using G's closure; disabled means no assets/preparation/run.
 - Attach separate execution, qualification and scientific outcomes. C/B combine exact candidate/check identities using section 13 without inheriting conclusions across changed sequences/structures or mismatched target states.
 
 ### Pass/fail
 
 **Engineering PASS:** declared masking/context inputs reach native execution unchanged; original candidate is byte-identical; all requested outputs retain identity; native result is parsed and reviewable; exact local/remote request/result parity; off-stage exclusion; runtime errors stay errors; dual-check decision cases are covered; no duplicate runner or mandatory diagnostic.
 
-**Scientific qualification PASS:** verify that the selected, pinned checkpoint and Foundry invocation support the actual protein–protein interface conditioning/held-out region being claimed; the existing YAML's ligand/metal/nucleotide/DNA modes are not such evidence. The specific recovery policy, score direction, conditioning, controls and threshold are agreed before blinded/held-out assessment; a bounded benign reference set includes meaningful binding and nonbinding/incorrect-context cases, not just trivial gross clashes; results support the declared limited sanity-check use and uncertainty. Report false rejection and false support rather than only favorable examples. Calibration data are not reused as purported independent test data; account for related targets/scaffolds and plausible training overlap. Do not multiply the two checks as statistically independent probabilities. If the checkpoint cannot support the chosen task, report evidence as inconclusive rather than a binary verdict. This is a bounded experimental qualification, not an open-ended benchmarking programme or a universal binder classifier.
+**Scientific qualification PASS:** verify that the selected, pinned checkpoint and Foundry invocation support the actual protein–protein interface conditioning/held-out region being claimed; the existing YAML's ligand/metal/nucleotide/DNA modes are not such evidence. Show native metric direction, conditioning, controls, and a bounded benign reference set containing meaningful binding and nonbinding/incorrect-context cases, not just trivial gross clashes. Operators can examine exploratory/calibration results *before* choosing score cutoffs; raw metrics and qualification are delivered without a default pass/fail threshold. A user-defined, versioned cutoff then classifies the selected candidate evidence, including explicit re-evaluation of already completed results. Any later claim of independently tested classification must freeze the chosen policy before a distinct held-out assessment, not reuse the exploratory/calibration cases as such evidence; account for related targets/scaffolds and plausible training overlap. Report false rejection and false support where evaluated; do not multiply the two checks as statistically independent probabilities. If the checkpoint cannot support the chosen task, report evidence as inconclusive rather than a binary verdict. This is bounded experimental qualification, not an open-ended benchmarking programme or a universal binder classifier.
 
-**FAIL:** routine redesign presented as the requested validator; leaked held-out residues; supplied pose called recovered; likelihood labeled affinity; runtime error or unrun operation treated as negative evidence; arbitrary threshold chosen for green tests; claimed validation based on synthetic fixtures; all candidates pass because one best generated sample was retained; changed candidate inherits another assessment.
+**FAIL:** routine redesign presented as the requested validator; leaked held-out residues; supplied pose called recovered; likelihood labeled affinity; runtime error or unrun operation treated as negative evidence; arbitrary built-in threshold chosen for green tests; raw result hidden until a threshold exists; claimed validation based on synthetic fixtures; all candidates pass because one best generated sample was retained; changed candidate inherits another assessment.
 
-If qualification cannot support a binary verdict, preserve raw diagnostic evidence and report Phase 3's scientific gate as unresolved. Do not secretly waive the gate, hide a failed experiment, or declare the entire upgrade done. Christian decides any changed policy, not the implementing agent.
+If checkpoint applicability cannot be established, preserve raw diagnostic evidence labeled inconclusive and report that scientific qualification is unresolved. Do not pretend a user cutoff cures an unsupported model. In contrast, an applicable, runnable, honestly characterized optional assessment with raw results is a delivered feature *before* the operator chooses a cutoff; no arbitrary binary policy is a delivery gate.
 
-Dependencies: C exact candidate/document identity, B actual blind-check contract, G runtime closure. Foundry plumbing, typed controls and output schema can proceed before threshold selection.
+Dependencies: C exact candidate/document and subset/round identity, B actual separately selectable blind-check contract, G runtime closure. Foundry plumbing, typed controls, raw output schema and exploratory execution proceed without a threshold.
 
 ## 13. Phase 3 decision semantics
 
-This is a small candidate-review rule using existing result owners, not a new scoring engine. Each check records execution status separately from `pass`, `fail` or `inconclusive` scientific outcome, with its policy and assessed artifact/state.
+This is a small optional candidate-review rule using existing result owners, not a new scoring engine. The two checks are independently selectable; each records its raw metric/distribution, execution status, applicability/qualification, and exact assessed artifact/state. Without a user-defined cutoff it is **unclassified**, not pass or fail. A later saved cutoff/policy with provenance classifies current or retained prior evidence without changing the underlying scientific artifact or pretending the cutoff preceded the exploratory run.
 
 “Qualified” here is explicitly scoped experimental qualification of the chosen inputs, masking, recovery rule and bounded reference cases. It is not a requirement for a universal classifier, a clinical validation programme, proof of affinity, an invented accuracy target, or proof that LigandMPNN outperforms every existing score. Engineering correctness and the observed scientific usefulness must be reported separately. Do not convert uncertainty into an endless benchmarking prerequisite or silently relax the agreed check to force favorable results.
 
-Apply a combined conclusion only to the same candidate scientific identity and declared target context. If either input is stale, attached to another state, unqualified, unavailable or not validly completed, do not treat it as a failed check.
+Apply a combined conclusion only when the user selects both checks and their dual policy, each is classified under its saved cutoff, and both refer to the same candidate scientific identity and declared target context. If either is unclassified, stale, attached to another state, unqualified, unavailable or not validly completed, do not treat it as a failed check.
 
 - **Blind recovery PASS; LigandMPNN context PASS:** both selected checks support the candidate. No claim of experimental binding or calibrated affinity.
 - **Blind recovery PASS; LigandMPNN context FAIL:** discordant/mixed evidence; retain both results for review. Do not automatically reject under the dual-failure rule or hide the failed check.
 - **Blind recovery FAIL; LigandMPNN context PASS:** discordant/mixed evidence; retain both results. A context score does not erase failed pose recovery.
 - **Blind recovery FAIL; LigandMPNN context FAIL:** computationally reject under the selected experimental sanity-check policy. Retain the candidate and evidence; exclusion from the selected shortlist is not deletion of scientific records.
-- **Either check inconclusive, unqualified, skipped, unsupported, cancelled or errored:** combined assessment incomplete/inconclusive, not dual-failure rejection. Preserve whatever valid single-check evidence exists.
+- **Either check unclassified (no operator cutoff), inconclusive, unqualified, skipped, unsupported, cancelled or errored:** combined assessment incomplete/inconclusive, not dual-failure rejection. Preserve whatever valid single-check evidence exists.
 - **Both checks off:** unassessed, not failed. Generator-native acceptance remains visible separately.
 
-Do not force both checks merely to inspect or retain a candidate. If the operator requests the dual-check policy, both checks must complete validly before that policy can produce a definitive dual-check conclusion. Do not turn “one passed” into a universal validation pass.
+Do not force both checks merely to inspect or retain a candidate. A single chosen check's raw evidence and optional user-classified result remain useful on their own. If the operator requests the dual-check policy, both checks must complete validly and be classified under that policy before it can produce a definitive dual-check conclusion. Do not turn “one passed” into a universal validation pass.
 
-### Scientific choices still requiring an explicit answer
+### Native method verification and operator cutoff controls
 
 H and B produce one concise decision packet, not another general review cycle:
 
-1. Which patch/direction(s) are assessed initially, what geometry/sequence is fixed, and what information is held out? Support the agreed antibody and generic region selection without guessing a universal CDR policy.
-2. Which native context-recovery/compatibility metric and matched comparator are used? Exact sequence recovery alone is not automatically the agreed metric. No composite affinity score.
-3. What is the current blind predictor actually doing, what pose/context comparison constitutes recovery, and which existing criteria can be reused honestly?
-4. What recovery thresholds/sample aggregation and benign calibration/held-out set justify `pass`/`fail`, with what applicable model/modality scope?
+1. Verify the patch/direction(s), fixed geometry/sequence, held-out information and native model visibility for the operator-selected region. Support antibody and generic region selection without guessing a universal CDR policy.
+2. Expose the native context-recovery/compatibility metric and matched comparator, sample distribution and limitations. Exact sequence recovery alone is not automatically a calibrated binding metric; no composite affinity score.
+3. Verify the blind predictor's input and identify a pose/context comparison that does not feed the candidate pose as its own answer; preserve independently selectable controls and raw outputs.
+4. Show exploratory/calibration results first. Provide controls and bounded held-out cases to characterize each check; let the operator define/version cutoffs afterward, then explicitly classify/reclassify evidence under the selected policy. Freeze that policy before any later *independent* held-out claim. No default pass/fail threshold is a prerequisite for the feature or for subset requeue.
 
-The dual-failure policy itself is already Christian's direction. These questions define its evidence; they are not permission to replace it with conventional refinement or postpone the entire workflow.
+The optional dual-failure policy, separate selectable checks, later user-defined cutoffs and post-round subset requeue are already Christian's direction. These questions characterize evidence and executable model limits; they are not permission to postpone the workflow.
 
 ## 14. Execution order with real concurrency
 
@@ -370,7 +370,7 @@ The dual-failure policy itself is already Christian's direction. These questions
 
 Parent verifies current base and assigns exact ownership. A/B/C/D start Phase 1 refactor/defect fixtures. E/F start the full BC2 inventory/native boundary. G starts existing bridge mapping and measured baseline preparation. H starts Foundry/diagnostic contract inspection and masked-context plumbing. No lane waits for all of Phase 1 to finish.
 
-At the same early handoff, D presents the concrete complex-contact method/reference options and B/H present the blind-input and LigandMPNN recovery-policy options to Christian. Do not implement a binary scientific verdict, substitute an unrelated metric or claim scientific qualification before those decisions and bounded reference evidence. This blocks only those scientific behaviors, not the other concurrent engineering lanes.
+At the same early handoff, D presents concrete pairwise contact method/reference options and their literature basis to Christian. B/H verify native input visibility and produce the separate optional check/result contracts. Do not invent a binary default verdict or substitute an unrelated metric. Native raw results, subset requeue and remote-bridge work do not wait for user-defined cutoffs.
 
 ### Integrate contracts early
 
@@ -386,7 +386,7 @@ E/F/G qualify BC2's native-to-returned-result route while A/C integrate its cont
 
 Run the focused combined-tree suites, one bounded adversarial cross-lane review, authorized native local/remote acceptance and measured warm-path checks. Correct findings within the same owners. No repeated broad audit unless a material architecture/science change warrants it.
 
-Before exposing BC2 as an invocable option in Development or Production, record the actual API/UI audience and verify the deployed access controls against it: upstream permits internal use but requires separate commercial permission for third-party hosted/API/workflow access. Keep BC2 unexposed to an unlicensed third-party audience; a private remote GPU does not settle the audience question. Test admission and denial on the actual deployment boundary rather than relying on an internal-only intent. When implementation/deployment is authorized, parent alone reconciles current `origin/test`, follows the existing runtime authority freeze/bind and Development sync procedure, verifies remote ref plus canonical/API/frontend and the worker release actually consumed, and reopens the returned results. Do not enable an automatic sync timer or touch `main`/Production. No deployment while active staging makes it unsafe. Preserve a known-good rollback revision without weakening runtime authority checks.
+BC2 and all supported selected workflow operations must run on **our existing remote bridge** using installed/downloaded pinned model assets; the worker's rental status does not by itself make our internal run a third-party hosted product. Do not defer remote execution or impose a fictitious internal-remote licensing blocker. If the BMS API/UI is actually offered to third-party users, separately review upstream/dependency terms and verify access controls before enabling that audience. When implementation/deployment is authorized, parent alone reconciles current `origin/test`, follows the existing runtime authority freeze/bind and Development sync procedure, verifies remote ref plus canonical/API/frontend and the worker release actually consumed, and reopens the returned results. Do not enable an automatic sync timer or touch `main`/Production. No deployment while active staging makes it unsafe. Preserve a known-good rollback revision without weakening runtime authority checks.
 
 One integrated release can include all three phases. Incremental code integration is allowed; declaring the overall upgrade complete before all three acceptance gates close is not.
 
@@ -397,8 +397,8 @@ Use one compact requirement-to-test/evidence list in the implementation handoff 
 ### Phase 1 gate
 
 - **P1.1 (A):** agnostic modality/generator authoring with every retained route and model-correct controls; no silent coercion.
-- **P1.2 (B):** genuinely optional, separable, repeated refinement; real checkpoint limits; native sample/structure/metric fidelity.
-- **P1.3 (C):** exact immutable selection, native-format/state identity, parent lineage, failure-isolated publication and reopen.
+- **P1.2 (B):** genuinely optional, separable, repeated refinement on a post-round selected subset; real checkpoint limits; native sample/structure/metric fidelity.
+- **P1.3 (C):** exact immutable subset selection, native-format/state identity, per-item parent lineage, failure-isolated publication and reopen; untouched siblings remain untouched.
 - **P1.4 (D):** retained alternative methods/analyses integrated and qualified, with complex-contact science explicitly resolved rather than substituted.
 - **P1.5 (G):** whole selected workflow/continuation supported by the existing bridge; lean warm operation and measured behavior.
 - **P1.6 (parent):** all existing defect items C01–C14 closed with focused integrated evidence; non-antibody source selection passes the server's root/ownership/admission/launch boundary, saved generic requests survive server template read/write, and no existing supported generator/operation is lost.
@@ -417,8 +417,8 @@ No unexplained native field exclusions. Exercise all declared feature mappings a
 ### Phase 3 gate
 
 - **P3.1 (H):** selected masked-context diagnostic is actually native-executable, not a redesign placeholder.
-- **P3.2 (H+B):** assessment inputs and independence/leakage claims verified; selected checkpoint's protein-interface applicability demonstrated, and scientific policy agreed and qualified on the stated scope. Ordinary Foundry sequence-design availability is a separate acceptance record, not a substitute or an added binder prerequisite.
-- **P3.3 (C+H):** native diagnostic evidence and dual-check outcomes persist/reopen with exact identity; runtime failure never becomes a scientific reject.
+- **P3.2 (H+B):** separate LigandMPNN context and blind pose assessment inputs/independence/leakage claims verified; selected checkpoint's protein-interface applicability demonstrated, raw metrics and calibration evidence available before operator threshold choice. A user-specified policy/version can later classify retained raw results. Ordinary Foundry sequence-design availability is a separate acceptance record, not a substitute or an added binder prerequisite.
+- **P3.3 (C+H):** independent optional native diagnostic and pose evidence, selected subsets and descendant rounds, and any user-classified/dual-check outcomes persist/reopen with exact identity; runtime failure never becomes a scientific reject.
 - **P3.4 (G+A):** optional typed UI/API, placement parity, off-stage exclusion and no mandatory startup/setup costs for unselected diagnostics.
 
 ### Cross-phase gate
@@ -428,7 +428,7 @@ No unexplained native field exclusions. Exercise all declared feature mappings a
 - **X.3:** authorized native request-to-result runs and remote result readback, not merely provisioning, mocks, an enabled registry or a successful subprocess exit.
 - **X.4:** cold versus warm measurements and the agreed workload-qualified warm budget; no false speed claim from fixture timings.
 - **X.5:** stop/interruption/return/re-ingestion/continuation tests at changed boundaries; necessary ownership/integrity guarantees preserved.
-- **X.6:** source, deployed service and consumed worker artifact identities verified separately when deployed; all surviving results reopen without the worker. Before making BC2 invocable, record the deployment's audience/license decision and check actual API/UI access against it.
+- **X.6:** source, deployed service and consumed worker artifact identities verified separately when deployed; all surviving results reopen without the worker. Internal use through our remote bridge is required, not a third-party-hosting exception. If third-party API/UI access is actually enabled, separately establish licensing and audience controls before enabling it.
 
 A valid bounded generation run may produce zero accepted candidates. That can satisfy execution/failure-accounting checks, but does not exercise candidate selection/refinement. For BC2 handoff acceptance, use a real, provenance-bound BC2 structure-bearing candidate from the pinned native engine (accepted or explicitly reviewable under the declared policy); follow its exact state through selection and a compatible refinement/validation operation. A different model's candidate cannot fill this gap. Do not fabricate one or loosen native filters to conceal the gap.
 
