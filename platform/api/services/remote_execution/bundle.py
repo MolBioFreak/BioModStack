@@ -525,7 +525,7 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store"}
+                    "runtime_image_store", *(flag for flag, _ in IMAGE_SELECTORS.values())}
     runtime_fields = {"laproteina_checkpoint_dir", "laproteina_data_path",
                       "disco_checkpoint_path", "disco_cutlass_path"}
     for key in runtime_fields:
@@ -724,11 +724,11 @@ def compile_remote_dependencies(
     params = {key: value for key, value in params.items() if key not in omitted}
     # Resolve before inventory AND argv translation. This also covers saved-job
     # prewarm, whose argv is rebuilt by the ordinary Job command compiler.
-    names = {name for name, (flag, _) in IMAGE_SELECTORS.items() if flag in params}
-    if model_id.lower() == 'protenix':
-        names.add('protenix.sif')
-    if model_id.lower() == 'frustrampnn' or params.get('run_frustrampnn') is True:
-        names.add('frustrampnn.sif')
+    # A native request can retain settings for disabled optional operations.
+    # Only the selected plan owns image closure; neither a saved selector nor a
+    # top-level model name may turn an off-stage image into a launch requirement.
+    names = {row.relative_path for row in dependencies
+             if row.kind == 'image' and row.relative_path in IMAGE_SELECTORS}
     for name in sorted(names):
         flag, selector = IMAGE_SELECTORS[name]
         if name == 'frustrampnn.sif' and flag not in params and not os.environ.get(selector):
@@ -957,8 +957,14 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         # Each attempt owns its archive as well as its writable extracted tree.
         staged = source_root / '.bms-source.tar.gz'
         source_root.mkdir(parents=True, exist_ok=False)
-        shutil.copyfile(archive, staged)
-        if _sha256_file(staged) != expected:
+        # Hash the bytes as they enter this private attempt; rereading the
+        # staged copy after copyfile adds a full archive pass to every warm run.
+        staged_digest = hashlib.sha256()
+        with archive.open('rb') as source, staged.open('xb') as destination:
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                destination.write(chunk)
+                staged_digest.update(chunk)
+        if staged_digest.hexdigest() != expected:
             raise RemoteBundleError('Cached source archive changed during staging')
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
