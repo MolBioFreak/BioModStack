@@ -31,7 +31,8 @@ def _canonical(value: object) -> bytes:
 
 
 def compile_for_native(request: dict, project_folder: Path,
-                       resolve: Callable[[dict], dict] | None = None) -> dict:
+                       resolve: Callable[[dict], dict] | None = None,
+                       sweep_arms: Callable[[dict], tuple] | None = None) -> dict:
     """Resolve with upstream's own settings code and bind a finite job-owned campaign.
 
     The entire supplied native request is passed through unchanged, except system-owned
@@ -44,8 +45,6 @@ def compile_for_native(request: dict, project_folder: Path,
     limit = request.get("max_trajectories")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("max_trajectories must be an explicit positive integer")
-    if "parameter_sweep" in request:
-        raise ValueError("native sweep may exceed a requested total through per-arm clamping; budget admission pending")
     if resolve is None:
         # Never run on API discovery: native dependencies import accelerator libraries.
         from importlib import import_module
@@ -58,8 +57,20 @@ def compile_for_native(request: dict, project_folder: Path,
     if (effective.get("max_trajectories") != limit or effective.get("project_folder") != str(project_folder)
             or effective.get("resume") is not False):
         raise ValueError("native resolution changed system-bound budget, resume or campaign directory")
+    arms = ()
+    if effective.get("parameter_sweep"):
+        if sweep_arms is None:
+            from importlib import import_module
+            sweep_arms = getattr(import_module("bindcraft.parameter_sweep"), "parameter_sweep_arms")
+        arms = sweep_arms(effective)
+    arm_count = len(arms)
+    per_arm = max(1, limit // arm_count) if arm_count else limit
+    allowance = per_arm * arm_count if arm_count else limit
+    if allowance > limit:
+        raise ValueError(f"native sweep clamps {arm_count} arms to {allowance} attempts, exceeding requested {limit}")
     return {"schema_version": 1, "upstream_commit": PIN, "native_request": native,
-            "effective_settings": effective,
+            "effective_settings": effective, "sweep_budget": {"arms": arm_count, "per_arm": per_arm,
+            "aggregate_allowance": allowance},
             "effective_sha256": hashlib.sha256(_canonical(effective)).hexdigest()}
 
 

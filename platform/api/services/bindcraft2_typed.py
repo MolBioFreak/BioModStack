@@ -59,7 +59,29 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
         if field is None:
             raise ValueError(f"{name}: unknown BC2 setting")
         if name == "parameter_sweep":
-            raise ValueError("parameter_sweep: aggregate arm budget admission not qualified")
+            if not isinstance(value, dict):
+                raise ValueError("parameter_sweep: expected object")
+            allowed = set(data["nested_surfaces"]["parameter_sweep"]["fields"])
+            for key, item in value.items():
+                if key not in allowed:
+                    raise ValueError(f"parameter_sweep.{key}: unknown option")
+                if key == "axes":
+                    if not isinstance(item, list) or any(not isinstance(axis, str) or axis not in fields or axis in SYSTEM_KEYS or fields[axis]["status"] != "typed" or not set(fields[axis]["observed_types"]) <= {"number", "integer"} for axis in item):
+                        raise ValueError("parameter_sweep.axes: expected known operator setting names")
+                elif key == "levels":
+                    if not isinstance(item, list) or not item or any(isinstance(level, bool) or not isinstance(level, (int, float)) or not math.isfinite(level) or level <= 0 for level in item):
+                        raise ValueError("parameter_sweep.levels: expected positive finite numbers")
+                elif key == "multiplier":
+                    _check(item, ["number"], f"parameter_sweep.{key}")
+                    if item <= 0:
+                        raise ValueError("parameter_sweep.multiplier: expected positive number")
+                else:
+                    _check(item, ["integer"], f"parameter_sweep.{key}")
+                    if item < 1:
+                        raise ValueError(f"parameter_sweep.{key}: expected positive integer")
+            if "multiplier" in value and "levels" in value:
+                raise ValueError("parameter_sweep: multiplier and levels cannot both be set")
+            continue
         if field["status"] != "typed":
             raise ValueError(f"{name}: unresolved native type")
         _check(value, field["observed_types"], name)
@@ -132,9 +154,9 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
     return request
 
 
-def compile_typed(request: dict, project_folder: Path, resolve=None) -> dict:
+def compile_typed(request: dict, project_folder: Path, resolve=None, sweep_arms=None) -> dict:
     validated = validate_request(request)
-    compiled = compile_for_native(validated, project_folder, resolve)
+    compiled = compile_for_native(validated, project_folder, resolve, sweep_arms)
     compiled["requested_settings"] = validated
     compiled["request_sha256"] = hashlib.sha256(_canonical(validated)).hexdigest()
     return compiled

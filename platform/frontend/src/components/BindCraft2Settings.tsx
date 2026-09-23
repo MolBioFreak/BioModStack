@@ -40,6 +40,21 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
         <button type="button" onClick={() => set(key, lengths.filter((_, position) => position !== index))}>Remove length</button></label>)}
         <button type="button" onClick={() => set(key, [...lengths, 60])}>Add length</button><small>Two values define an inclusive range; other lengths are discrete.</small></div>
     }
+    if (key === 'parameter_sweep') {
+      const options = (current ?? {}) as Record<string, unknown>
+      const update = (name: string, next: unknown) => set(key, { ...options, [name]: next })
+      return <fieldset><legend>Native parameter sweep</legend>
+        <label>Axes<select multiple aria-label="parameter_sweep.axes" value={options.axes as string[] ?? []}
+          onChange={event => update('axes', Array.from(event.currentTarget.selectedOptions, option => option.value))}>
+          {Object.entries(inventory.fields).filter(([name, field]) => !internal.has(name) && field.status === 'typed' && ['number', 'integer'].includes(field.observed_types[0])).map(([name]) => <option key={name} value={name}>{name}</option>)}
+        </select></label>
+        {(['max_arms', 'block_trajectories'] as const).map(name => <label key={name}>{name}<input aria-label={`parameter_sweep.${name}`} type="number" min="1" step="1" value={options[name] as number ?? ''} onChange={event => update(name, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} /></label>)}
+        <label>Levels (multipliers){((options.levels ?? []) as number[]).map((level, index) => <span key={index}><input aria-label={`parameter_sweep.levels.${index}`} type="number" min="0" step="any" value={level} onChange={event => update('levels', ((options.levels ?? []) as number[]).map((old, pos) => pos === index ? Number(event.currentTarget.value) : old))} /><button type="button" onClick={() => update('levels', ((options.levels ?? []) as number[]).filter((_, pos) => pos !== index))}>Remove level</button></span>)}<button type="button" onClick={() => update('levels', [...((options.levels ?? []) as number[]), 1])}>Add level</button></label>
+        <label>Single multiplier<input aria-label="parameter_sweep.multiplier" type="number" min="0" step="any" value={options.multiplier as number ?? ''}
+          onChange={event => update('multiplier', event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} /></label>
+        <small>Native sweep divides max_trajectories among arms; compilation rejects an aggregate allowance above the requested limit.</small>
+      </fieldset>
+    }
     if (key === 'max_trajectories') return <input aria-label={key} type="number" min="1" step="1" required value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
     if (type === 'boolean') return <input aria-label={key} type="checkbox" checked={Boolean(current)} onChange={event => set(key, event.currentTarget.checked)} />
     if (type === 'number' || type === 'integer') return <input aria-label={key} type="number" step={type === 'integer' ? '1' : 'any'} value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
@@ -76,6 +91,8 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
             else { const copy = { ...entries }; delete copy[metric]; set(key, copy) }
           }} /></label>
           {entry && <>
+            <label>Prediction state<input aria-label={`${key}.${metric}.prediction_state`} type="text" value={entry.prediction_state as string ?? ''}
+              onChange={event => update(metric, { ...entry, prediction_state: event.currentTarget.value })} /></label>
             {key === 'filters' && <><label>Threshold <input type="number" step="any" required aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => update(metric, { ...entry, threshold: event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value) })} /></label>
               {(['higher', 'mandatory'] as const).map(flag => <label key={flag}>{flag}<input type="checkbox" aria-label={`${key}.${metric}.${flag}`} checked={entry[flag] !== false} onChange={event => update(metric, { ...entry, [flag]: event.currentTarget.checked })} /></label>)}</>}
             {Object.entries(info.params).map(([param, descriptor]) => {
@@ -97,7 +114,7 @@ export function BindCraft2Settings({ inventory, value, onChange }: {
   return <section aria-label="BindCraft2 settings"><p>Native settings inventory only; model execution is not enabled. Unresolved settings block full parity.</p>
     {Object.entries(inventory.fields).filter(([key]) => !internal.has(key)).map(([key, field]) => {
       const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
-        ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations'].includes(key))
+        ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep'].includes(key))
       return <div key={key}><label>{key}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}
         {supported ? control(key, field) : <span> Unsupported typed control / unresolved source type</span>}</label></div>
     })}
