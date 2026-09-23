@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -106,6 +106,117 @@ def _job(job_id: str, **overrides) -> Job:
     }
     values.update(overrides)
     return Job(**values)
+
+
+@pytest.mark.asyncio
+async def test_finalizer_isolates_optional_attachment_after_validated_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import result_ingester
+
+    root = tmp_path / 'published'
+    (root / 'results' / 'best_designs').mkdir(parents=True)
+    (root / 'results' / 'all_designs.csv').write_text('description,pr_plddt\ncandidate,87\n')
+    (root / 'results' / 'best_designs' / 'candidate.pdb').write_text(
+        'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 90.00           C\nEND\n'
+    )
+    factory, engine = await _session_factory(tmp_path)
+    calls = []
+
+    async def broken_attachment(job, output_root, session, *, commit):
+        calls.append(str(job.id))
+        session.add(Design(id='optional-partial', job_id=job.id, name='partial',
+                           pdb_path='absent.pdb', source_stage='frustrampnn'))
+        await session.flush()
+        raise RuntimeError('invalid FrustraMPNN manifest')
+
+    monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', broken_attachment)
+    async with factory() as session:
+        job = _job('optional-isolation', model_id='rfantibody', mode='design',
+                   output_dir=str(root), stage_outputs={'frustrampnn': ['bad-manifest']})
+        session.add(job)
+        await session.commit()
+        result = await finalize_successful_job(job, str(root), session)
+        assert not result.completed and result.integrity_state == 'ingestion_failed'
+
+    async with factory() as session:
+        job = await session.get(Job, 'optional-isolation')
+        designs = list((await session.scalars(select(Design).where(Design.job_id == job.id))).all())
+        assert job.status == job.queue_status == 'failed'
+        assert job.provenance['result_integrity']['primary_validated'] is True
+        assert job.provenance['result_integrity']['failed_stage'] == 'frustrampnn'
+        assert 'FrustraMPNN' in job.error_message
+        assert len(designs) == 1 and designs[0].name == 'candidate'
+        assert designs[0].plddt_overall == 87
+        assert calls == [job.id]
+        job.status = job.queue_status = 'running'
+        await session.commit()
+        async def valid_attachment(*_args, **_kwargs):
+            calls.append('retry')
+            return 0
+        monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', valid_attachment)
+        result = await finalize_successful_job(job, str(root), session)
+        assert result.completed and result.integrity_state == 'validated'
+        assert job.provenance['result_integrity']['idempotent_prior_results'] is True
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count(Design.id)).where(Design.job_id == 'optional-isolation')) == 1
+        assert (await session.get(Job, 'optional-isolation')).status == 'completed'
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_does_not_publish_unverified_primary_before_optional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import result_ingester
+
+    root = tmp_path / 'published'
+    (root / 'results').mkdir(parents=True)
+    (root / 'results' / 'all_designs.csv').write_text('description\nmissing\n')
+    calls = []
+    async def attachment(*_args, **_kwargs):
+        calls.append('attached')
+        return 0
+    monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', attachment)
+    factory, engine = await _session_factory(tmp_path)
+    async with factory() as session:
+        job = _job('unverified-primary', model_id='rfantibody', mode='design',
+                   output_dir=str(root), stage_outputs={'frustrampnn': ['manifest']})
+        session.add(job)
+        await session.commit()
+        result = await finalize_successful_job(job, str(root), session)
+        assert not result.completed and result.integrity_state == 'ingestion_failed'
+    async with factory() as session:
+        assert await session.scalar(select(func.count(Design.id)).where(Design.job_id == 'unverified-primary')) == 0
+        assert (await session.get(Job, 'unverified-primary')).status == 'failed'
+        assert calls == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_real_optional_manifest_failure_retains_primary(tmp_path: Path) -> None:
+    root = tmp_path / 'published'
+    (root / 'results' / 'best_designs').mkdir(parents=True)
+    (root / 'results' / 'all_designs.csv').write_text('description\ncandidate\n')
+    (root / 'results' / 'best_designs' / 'candidate.pdb').write_text(
+        'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 90.00           C\nEND\n'
+    )
+    factory, engine = await _session_factory(tmp_path)
+    async with factory() as session:
+        job = _job('real-optional-invalid', model_id='rfantibody', mode='design',
+                   output_dir=str(root), stage_outputs={'frustrampnn': ['bad-manifest']})
+        session.add(job)
+        await session.commit()
+        result = await finalize_successful_job(job, str(root), session)
+        assert not result.completed and result.integrity_state == 'ingestion_failed'
+    async with factory() as session:
+        job = await session.get(Job, 'real-optional-invalid')
+        assert job.status == 'failed'
+        assert 'missing, unsafe, or traverses a symlink' in job.error_message
+        assert job.provenance['result_integrity']['primary_validated'] is True
+        assert await session.scalar(select(func.count(Design.id)).where(Design.job_id == job.id)) == 1
+    await engine.dispose()
 
 
 def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
