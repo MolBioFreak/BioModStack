@@ -182,7 +182,8 @@ async def test_transport_disconnect_reclaims_partial_and_reuses_verified_bytes(s
         assert returned == manifest and staged == incoming and len(calls) == 2
         await ex.collect_remote_results(session, job, status)
     assert len(calls) == 2
-    assert list(incoming.parent.iterdir()) == [incoming]
+    assert set(incoming.parent.iterdir()) == {
+        incoming, gen.transfer_marker(incoming).with_suffix('.json.lock')}
 
 
 @pytest.mark.asyncio
@@ -329,7 +330,7 @@ async def test_process_death_before_and_after_database_commit(store, tmp_path, c
             assert (incoming / "first.txt").read_text() == "first"
 
 
-def test_api_death_during_transport_cannot_reuse_possible_live_writer(tmp_path):
+def test_api_death_before_transport_spawn_recovers_but_legacy_retains_fence(tmp_path):
     job = job_at(tmp_path)
     _, incoming, _ = package(job)
     pid = os.fork()
@@ -338,12 +339,15 @@ def test_api_death_during_transport_cannot_reuse_possible_live_writer(tmp_path):
         os._exit(73)
     _, code = os.waitpid(pid, 0)
     assert os.waitstatus_to_exitcode(code) == 73
-    with pytest.raises(gen.GenerationError, match="writer-quiescence"):
-        gen.prepare_transfer(incoming)
-    # A different kernel boot proves that local predecessor writers are gone.
-    gen.durable_json(gen.transfer_marker(incoming), {"boot_id": "00000000-0000-0000-0000-000000000000"})
     gen.prepare_transfer(incoming)
     assert not gen.transfer_marker(incoming).exists()
+    # An older unprotected boot fence cannot make the same-boot claim.
+    gen.durable_json(gen.transfer_marker(incoming), {
+        'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()})
+    with pytest.raises(gen.GenerationError, match='writer-quiescence'):
+        gen.prepare_transfer(incoming)
+    gen.durable_json(gen.transfer_marker(incoming), {"boot_id": "00000000-0000-0000-0000-000000000000"})
+    gen.prepare_transfer(incoming)
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import fcntl
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+import uuid
+
+_launch_generation: ContextVar[tuple[str, str] | None] = ContextVar('result_launch_generation', default=None)
+
+def launch_generation(incoming: Path) -> str | None:
+    current = _launch_generation.get()
+    return current[1] if current and current[0] == str(checked(incoming)) else None
 
 
 class GenerationError(ValueError):
@@ -83,17 +93,47 @@ def transfer_marker(incoming: Path) -> Path:
     return checked(incoming.with_name(incoming.name + ".transfer.json"))
 
 
-def prepare_transfer(incoming: Path) -> None:
-    """Require a transport-issued quiescence receipt or a different kernel boot.
+@contextmanager
+def transfer_handoff(incoming: Path):
+    """Lock the stable inode through launch; the child inherits this open description."""
+    path = checked(transfer_marker(incoming).with_suffix('.json.lock'))
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise GenerationError("Result transport launch handoff is still owned") from exc
+        yield fd
+    finally:
+        os.close(fd)
 
-    PID absence/reuse and API lock release are deliberately not death proofs.
-    Legacy and incomplete supervisor records retain the same-boot fence.
+
+def prepare_transfer(incoming: Path) -> None:
+    """Recover only proven never-spawned or supervisor-reaped transports.
+
+    The lock excludes an unfinished launcher and an inherited supervisor, not
+    an already-spawned writer. Never unlink the lock inode or infer PID death.
     """
-    marker = transfer_marker(incoming)
-    if marker.exists():
-        validate_transfer_receipt(json.loads(marker.read_text()), incoming)
-        marker.unlink()
-        sync_dir(marker.parent)
+    with transfer_handoff(incoming):
+        marker = transfer_marker(incoming)
+        if marker.exists():
+            record = json.loads(marker.read_text())
+            if record.get('handoff') == 'kernel-lock-v1' and record.get('phase') in (None, 'starting'):
+                try:
+                    uuid.UUID(record['generation'])
+                except (KeyError, ValueError, TypeError, AttributeError) as exc:
+                    raise GenerationError('Invalid pre-spawn generation') from exc
+                if (record.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                        or (record.get('phase') == 'starting' and
+                            (record.get('schema') != 'bms.local-result-transport.v1'
+                             or record.get('destination') != str(checked(incoming))
+                             or 'supervisor' in record or 'writer' in record))
+                        or (record.get('phase') is None and set(record) != {'boot_id', 'handoff', 'generation'})):
+                    raise GenerationError("Invalid pre-spawn transport ownership record")
+            else:
+                validate_transfer_receipt(record, incoming)
+            marker.unlink()
+            sync_dir(marker.parent)
 
 
 def validate_transfer_receipt(record: dict, incoming: Path) -> None:
@@ -131,8 +171,12 @@ def validate_transfer_receipt(record: dict, incoming: Path) -> None:
 
 def begin_transfer(incoming: Path) -> None:
     prepare_transfer(incoming)
-    durable_json(transfer_marker(incoming), dict(
-        boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip()))
+    generation = str(uuid.uuid4())
+    with transfer_handoff(incoming):
+        durable_json(transfer_marker(incoming), dict(
+            boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            handoff='kernel-lock-v1', generation=generation))
+    _launch_generation.set((str(checked(incoming)), generation))
 
 
 def end_transfer(incoming: Path) -> None:

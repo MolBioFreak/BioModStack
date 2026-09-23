@@ -13,7 +13,7 @@ import tempfile
 import sys
 import time
 
-from .result_generation import durable_json, transfer_marker
+from .result_generation import durable_json, transfer_marker, transfer_handoff, launch_generation
 from .transfer_supervisor import SCHEMA, process_identity
 from dataclasses import dataclass
 from copy import deepcopy
@@ -200,25 +200,31 @@ def _ssh_base(connection: RemoteConnection) -> list[str]:
 async def _run_owned(argv: Sequence[str], destination: Path, *, timeout: float) -> CommandResult:
     """Artifact transfers with a durable, API-death-aware lifecycle."""
     marker = transfer_marker(destination)
-    # Only the collector's freshly prepared legacy boot fence may launch. Do
-    # not overwrite an active or ambiguous supervisor record on a direct retry.
-    if not marker.exists() or json.loads(marker.read_text()) != {
-        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    }:
-        raise RemoteTransportError("Result transport requires a freshly prepared ownership fence")
-    durable_json(marker, dict(schema=SCHEMA, phase="starting",
-                             destination=str(destination.resolve()),
-                             boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                             controller=process_identity(os.getpid())))
     read_fd, write_fd = os.pipe()
     task = None
     try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, str(Path(__file__).with_name("transfer_supervisor.py")),
-            str(marker), str(read_fd), *argv, pass_fds=(read_fd,),
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, start_new_session=True,
-        )
+        # The inherited lock closes the gap between durable `starting` and
+        # child spawn, including controller death inside create_subprocess_exec.
+        with transfer_handoff(destination) as handoff_fd:
+            generation = launch_generation(destination)
+            if not generation or not marker.exists() or json.loads(marker.read_text()) != {
+                "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                "handoff": "kernel-lock-v1",
+                "generation": generation,
+            }:
+                raise RemoteTransportError("Result transport requires a freshly prepared ownership fence")
+            durable_json(marker, dict(schema=SCHEMA, phase="starting", handoff="kernel-lock-v1",
+                                     generation=generation,
+                                     destination=str(destination.resolve()),
+                                     boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                                     controller=process_identity(os.getpid())))
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, str(Path(__file__).with_name("transfer_supervisor.py")),
+                str(marker), str(read_fd), str(handoff_fd), *argv,
+                pass_fds=(read_fd, handoff_fd),
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, start_new_session=True,
+            )
         os.close(read_fd)
         read_fd = -1
         task = asyncio.create_task(process.communicate())
@@ -601,7 +607,7 @@ async def rsync_selected_from_remote(
         # The result collector has already fenced this generation. Other
         # selected-download users retain their existing transport contract.
         async def run_selected(argv):
-            if transfer_marker(destination).exists():
+            if launch_generation(destination) is not None or transfer_marker(destination).exists():
                 return await _run_owned(argv, destination, timeout=timeout)
             return await _run(argv, timeout=timeout)
 

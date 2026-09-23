@@ -185,24 +185,129 @@ async def test_leader_exit_reaps_still_writing_grandchild(tmp_path, exit_code):
 
 
 def test_controller_dies_before_supervisor_launch_never_starts_writer(tmp_path):
+    gen.begin_transfer(tmp_path)
     marker = gen.transfer_marker(tmp_path)
-    gen.durable_json(marker, dict(schema=SCHEMA, phase='starting',
-        destination=str(tmp_path.resolve()),
-        boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
-        controller=process_identity(os.getpid())))
-    read_fd, write_fd = os.pipe()
-    os.close(write_fd)
-    try:
-        result = subprocess.run(
-            [sys.executable, str(Path(transport.__file__).with_name('transfer_supervisor.py')),
-             str(marker), str(read_fd), sys.executable, '-c', WRITER, str(tmp_path)],
-            pass_fds=(read_fd,), timeout=5, capture_output=True)
-    finally:
-        os.close(read_fd)
+    with gen.transfer_handoff(tmp_path) as handoff_fd:
+        gen.durable_json(marker, dict(schema=SCHEMA, phase='starting', handoff='kernel-lock-v1',
+            generation=gen.launch_generation(tmp_path),
+            destination=str(tmp_path.resolve()),
+            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            controller=process_identity(os.getpid())))
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(Path(transport.__file__).with_name('transfer_supervisor.py')),
+                 str(marker), str(read_fd), str(handoff_fd), sys.executable, '-c', WRITER, str(tmp_path)],
+                pass_fds=(read_fd, handoff_fd), timeout=5, capture_output=True)
+        finally:
+            os.close(read_fd)
     assert result.returncode == 125, result.stderr
     assert not (tmp_path / 'ready').exists()
     assert record(tmp_path)['phase'] == 'quiescent'
     gen.prepare_transfer(tmp_path)
+
+
+def test_pre_spawn_crash_and_late_launcher_cannot_spawn(tmp_path):
+    gen.begin_transfer(tmp_path)
+    assert record(tmp_path)['handoff'] == 'kernel-lock-v1'
+    # A boot-only death is recoverable on this boot, before any supervisor.
+    gen.prepare_transfer(tmp_path)
+    gen.begin_transfer(tmp_path)
+    ready_r, ready_w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(ready_r)
+        try:
+            with gen.transfer_handoff(tmp_path):
+                gen.durable_json(gen.transfer_marker(tmp_path), dict(
+                    schema=SCHEMA, phase='starting', handoff='kernel-lock-v1',
+                    generation=gen.launch_generation(tmp_path),
+                    destination=str(tmp_path.resolve()),
+                    boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                    controller=process_identity(os.getpid())))
+                os.write(ready_w, b'1')
+                time.sleep(60)  # killed inside the real launch handoff
+        finally:
+            os._exit(0)
+    os.close(ready_w)
+    try:
+        assert os.read(ready_r, 1) == b'1'
+        with pytest.raises(gen.GenerationError, match='handoff'):
+            gen.prepare_transfer(tmp_path)
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        gen.prepare_transfer(tmp_path)
+        assert not gen.transfer_marker(tmp_path).exists()
+        with pytest.raises(transport.RemoteTransportError, match='freshly prepared'):
+            asyncio.run(transport._run_owned(
+                [sys.executable, '-c', WRITER, str(tmp_path)], tmp_path, timeout=2))
+        assert not (tmp_path / 'ready').exists()
+    finally:
+        os.close(ready_r)
+
+
+def test_delayed_launcher_cannot_consume_successor_generation(tmp_path):
+    gen.begin_transfer(tmp_path)
+    waiting_r, waiting_w = os.pipe()
+    reply_r, reply_w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(waiting_w)
+        os.close(reply_r)
+        os.read(waiting_r, 1)
+        try:
+            asyncio.run(transport._run_owned(
+                [sys.executable, '-c', WRITER, str(tmp_path)], tmp_path, timeout=2))
+            os.write(reply_w, b'bad')
+        except transport.RemoteTransportError:
+            os.write(reply_w, b'refused')
+        finally:
+            os._exit(0)
+    os.close(waiting_r)
+    os.close(reply_w)
+    try:
+        gen.prepare_transfer(tmp_path)
+        gen.begin_transfer(tmp_path)
+        os.write(waiting_w, b'1')
+        assert os.read(reply_r, 7) == b'refused'
+        assert os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 0
+        assert record(tmp_path)['generation'] == gen.launch_generation(tmp_path)
+        assert not (tmp_path / 'ready').exists()
+    finally:
+        os.close(waiting_w)
+        os.close(reply_r)
+
+
+def test_supervisor_before_spawn_remains_authority(tmp_path):
+    gen.begin_transfer(tmp_path)
+    pid = api_process(tmp_path, descendants=False)
+    try:
+        # The handoff lock has been released, but `supervising` is durable.
+        with gen.transfer_handoff(tmp_path):
+            pass
+        with pytest.raises(gen.GenerationError, match='writer-quiescence'):
+            gen.prepare_transfer(tmp_path)
+        assert record(tmp_path)['phase'] == 'supervising'
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        wait_for(lambda: record(tmp_path).get('phase') == 'quiescent')
+        gen.prepare_transfer(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_delayed_selected_download_never_falls_back_to_unowned_spawn(tmp_path, monkeypatch):
+    gen.begin_transfer(tmp_path)
+    gen.prepare_transfer(tmp_path)
+    async def unowned(*args, **kwargs):
+        pytest.fail('selected download escaped its retired generation')
+    monkeypatch.setattr(transport, '_run', unowned)
+    monkeypatch.setattr(transport, '_ssh_base', lambda _: ['ssh', 'fixture'])
+    with pytest.raises(transport.RemoteTransportError, match='freshly prepared'):
+        await transport.rsync_selected_from_remote(
+            transport.RemoteConnection('target', 'localhost', 22, 'user', '/remote'),
+            '/remote/results', tmp_path, ['payload'], max_file_bytes=100)
 
 
 @pytest.mark.asyncio
