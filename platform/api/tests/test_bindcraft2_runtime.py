@@ -110,3 +110,14 @@ def test_receipt_tampering_or_wrong_location_cannot_prepare(tmp_path):
 def test_native_exit_code_propagates_without_result_fabrication(tmp_path):
     assert run_campaign({"settings_path": str(tmp_path / "request.json")}, executable="/bin/false") != 0
     assert not list(tmp_path.iterdir())
+
+
+def test_native_environment_override_cannot_replace_compiled_science(tmp_path):
+    env = {**os.environ, "BINDCRAFT_BINDER_LENGTHS": "12-14"}
+    proc = subprocess.run(
+        [str(native_python()), str(SCRIPT), str(tmp_path / "missing.json"), str(tmp_path / "job"),
+         "--native-source", str(UPSTREAM)], env=env, text=True, capture_output=True,
+    )
+    assert proc.returncode != 0
+    assert "unbound native overrides: BINDCRAFT_BINDER_LENGTHS" in proc.stderr
+    assert not (tmp_path / "job").exists()
