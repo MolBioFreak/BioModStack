@@ -1,140 +1,351 @@
-# De Novo Binder Design Upgrade: Specification for Review
+# De Novo Binder Design Upgrade: Implementation Specification
 
-**Status:** Draft for Astra and Christian planning review; not authorized for implementation or deployment. A second, evidence-backed contract-freeze review follows the read-only native inventory before build lanes begin.
+**Status:** Revised after Astra's holistic source review and Christian's explicit scope clarification. Product scope is fixed below. This is a specification, not implementation, scientific-run, deployment or rental authorization. LigandMPNN's detailed scientific configuration remains open for discussion; its inclusion is not open.
 
-**Scope companion:** [De Novo Binder Design: Upgrade Outline](de-novo-binder-upgrade-outline.md). The outline states the product problem and agreed changes; this document specifies work packages, scientific boundaries and acceptance.
+**Companion:** [Upgrade outline](de-novo-binder-upgrade-outline.md).
 
-**Source baseline:** BMS `origin/test` at `ea3dc6797150a2e79ecccd26d4e79732059468e4`; BindCraft2 (BC2) `PacesaLab/BindCraft2` at `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f`. Reconfirm both and regenerate inventories before implementation. The pinned source, not an unversioned README or an old retired BindCraft image, is the runtime authority.
+**Evidence baseline:** BMS `96923d9470d86219451d6caf88f63308a369c007`, verified against canonical Development, `origin/test` and API build during review. BC2: `PacesaLab/BindCraft2` at `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f`, package `1.0.1`. Start implementation from current `origin/test` and reconcile changed owners against this baseline; the older documentation worktree is not the implementation base.
 
-**Controlling policy:** `AGENTS.md`, `docs/Model_Configuration_Operator_Control_and_Agent_Parity.md`, and the relevant authority boundaries in `docs/specs/2026-08-12-protein-in-silico-global-project-integration-sow.md`. If this spec would change an existing product policy, record an explicit decision rather than silently overriding it.
+**Scope authority:** Christian's workflow direction and subsequent clarification control the deliverables. The review's implementation simplifications do not authorize narrowing them. This revision supersedes the earlier draft's core-versus-research release split, mandatory second-review ceremony, claims that Caliby has no implementation, and false choice between a nullable `Design.pdb_path` migration and mandatory PDB conversion.
 
-**Naming:** “Version 2” was conversational shorthand for this upgrade, **not** a public product name, code namespace, replacement job ID or new schema suffix. Name concrete model and operation contracts on their own merits. Existing historical identifiers remain interpretable.
+**Repository policy:** Read `AGENTS.md`, [model configuration/operator parity policy](../Model_Configuration_Operator_Control_and_Agent_Parity.md), and existing model/workflow ownership in the [Protein In Silico SOW](2026-08-12-protein-in-silico-global-project-integration-sow.md). Reuse their working authorities. Do not mistake a Project-specific adapter gap for global model unavailability or silently import an unrelated Project/NGS programme as a prerequisite. Any genuine policy conflict requires an explicit decision, not hidden noncompliance.
 
-## 1. Required user experience
+**Naming:** The conversational “version 2” label is not a public product name, code namespace, new job ID convention or schema suffix. Version individual contracts only for actual compatibility changes.
 
-A user starts a De Novo Binder Design plan by selecting binder format and scientific objective, then sees generators, target controls and downstream operations that are actually compatible with that choice. BC2 is a first-class engine with its complete native campaign capabilities. The current RFantibody, BoltzGen and seeded PPIFlow options retain their distinct methods and historical routes. The established RFD3 general-design authority is not displaced merely because BC2 is added.
+## 1. Fixed outcome and complete scope
 
-A run can end with the generator's own candidates. The user can select a candidate or set of candidates and explicitly derive new candidates via sequence design or structure refinement, attach analyses to exact structures, validate exact resulting sequences/complexes, and compare the parent and descendants. A BC2-ranked candidate remains a reviewable result when optional branches fail or are not requested. Reopening, cloning, retrying and saved settings must reconstruct the same scientific request and result lineage, not a best-effort path scan.
+Deliver one first-class, modality-aware **De Novo Binder Design workflow**, replacing the nanobody-only product framing while retaining antibody-specific capabilities where relevant.
 
-No output metric is presented as a measured affinity, universal specificity, or experimental validation. A native BC2 acceptance decision, an MPNN conditional sequence score, local or pairwise frustration, Rosetta energy and validator confidence retain separate definitions and provenance.
+The user-facing structure is fixed:
 
-## 2. Starting-state ledger and preserved authorities
+1. Choose binder format/modality and scientific objective.
+2. Choose any compatible existing generator or BC2 as a first-class peer option.
+3. Configure and run generation; inspect that model's native results.
+4. Either retain the generator result and stop, or select candidates for the upgraded optional refinement loop.
+5. Choose compatible refinement, sequence design, validation and analysis operations; inspect their model-native results and parent/descendant comparisons.
+6. Select descendants for another round or finish. Reopen the same work later without reconstructing identity from filenames.
 
-- `platform/frontend/src/components/AntibodyDenovoTemplate.tsx` and `platform/api/config/models/antibody_denovo.yaml` frame the dedicated launcher as nanobody-specific. They embed heavy/light-chain, CDR, framework and BoltzGen nanobody assumptions. The product surface must generalize without making these antibody constraints generic.
-- `platform/api/services/nextflow.py` routes RFantibody to `workflows/antibody_denovo.nf`, BoltzGen nanobody to `workflows/protein_design.nf`, and seeded PPIFlow to `workflows/ppiflow_generator_design.nf`. Keep the generator entrypoints distinct; `antibody_denovo.nf` is RFantibody-first, not an existing common DAG.
-- `platform/api/antibody_pipeline_contract.py`, `platform/api/routers/jobs.py`, `platform/api/services/stage_review.py`, `platform/api/services/result_ingester.py` and the `Design` model already hold useful stage, selection and lineage machinery. Extend and adapt that authority rather than introducing a second candidate database. Current stage-name/path inference, PDB-only selection, PPIFlow name-based deduplication and global-ID-based iteration admission must be audited and replaced where insufficient.
-- The current Project capability catalogue (`platform/api/services/protein_project_capabilities.py`) can mark a registry-listed model unavailable. `ligandmpnn.yaml` being enabled does not make its Foundry dispatch, terminal result or viewer live. The Protein In Silico SOW assigns Foundry sole LigandMPNN execution ownership and positions RFD3 as chief general/non-nanobody de novo engine. Treat the SOW's future acceptance rows as requirements, not proof that every adapter already exists.
-- BMS has no runnable BC2 path at the baseline. The retired exact `bindcraft` ID and the frontend retired-name contract protect against accidental resurrection of its old stack. Admit a new BC2 identity explicitly and update only the test assertions that intentionally reject a legitimate new display name; preserve v1 retirement.
+The entire workflow is in scope, not just BC2's wrapper:
 
-## 3. BC2 full-native contract
+- Preserve RFantibody, BoltzGen and seeded PPIFlow choices and native routes, and reuse existing applicable general de novo/RFD3 capabilities without displacement or duplicate execution.
+- Integrate BC2's entire supported native scientific campaign surface, relevant controls, outputs and lifecycle. It is optional as a generator choice, not partial in implementation.
+- Generalize and upgrade the existing refinement loop for candidates from all these generators, using actual input/model compatibility rather than nanobody-only assumptions or producer-name restrictions.
+- Correct existing workflow defects, including request handling, stage execution, selection, lineage, samples, results and continuation.
+- Deliver working local and remote-bridge execution across generation and refinement, with efficient startup and reliable result return/reopening.
+- Deliver solid per-model settings and results, human/agent parity, useful review and repeatable iteration.
+- Include LigandMPNN as an optional refinement method. Continue discussion of its precise scientific use without demoting it to an uncommitted future feature.
+- Retain the agreed FA-MPNN, repack/anchor/PPIFlow, independent validation, FrustraMPNN, Caliby and complex-contact-frustration work.
 
-### 3.1 Inventory and completeness denominator
+**Optional for the operator does not mean optional to deliver.** There is one completion scope. Engineering milestones are not a smaller accepted product. An in-scope operation left unavailable is unfinished work unless Christian explicitly changes that requirement.
 
-One BC2 contract owner inventories the **pinned installed code**: `settings/core/reference.json`, core defaults and profiles, all `settings/modality/*.json`, `settings/property/*.json`, `settings/target/*.json`, `bindcraft/settings.py`, preflight, CLI, loss/filter/metric registries, campaign runtime, and native outputs. Record for every relevant native field its type, default or preset-derived value, units, applicability, incompatibilities, validation, model-native key, reproducibility significance, and operator/profile/scheduler authority. Reconcile generated aliases, nested loss/filter parameters, targets, arrays and sweep fields; do not derive completeness from `--list-settings` alone. The reviewed reference has 235 top-level fields, while the CLI listing is narrower and the VHH preset's `paratope_conformations` is accepted despite not appearing in that reference. A discrepancy is an inventory item, not a license to hide a field.
+Agnostic does not mean every checkpoint supports every molecule or format. Genuine native limitations must be explicit. They do not justify retaining antibody assumptions in otherwise generic infrastructure or abandoning qualification work that this upgrade requires.
 
-The review deliverable is a machine-readable **field and authority register**, not an unsupported claim that every reference key is scientific. Each record names the pinned source and accepted native key/path, type and shape, applicability, effective default and preset override, operator/profile/scheduler authority, reason for any excluded implementation-only field, global schema key, typed UI and agent representations, compiler mapping, receipt/result identity and focused positive/negative test. Include nested loss/filter registry entries, target forms, sweep dimensions and preset resolution as rows or typed children. A reconciliation report compares the accepted-code set, resolved-preset set, reference set, global schema set and UI/API/compiled sets; every difference has an explicit reviewed disposition. Freeze this register and its test fixtures at a second Astra gate **before** parallel implementation. A new upstream revision reopens the discrepancy report rather than inheriting approval.
+## 2. Current implementation and reuse boundaries
 
-The native denominator includes ten binder-format presets (`binder`, `large_binder`, `peptide`, `cyclic_peptide`, `homo_oligomer`, `multidomain`, `VHH`, `ARP`, `scFv`, `Fab`), composable `induced_fit` and `fold_switch` objectives, nine property presets, target presets, multi-positive and detarget design, and scientific stage/loss/filter/model/seed/sweep/acceptance settings. Some combinations are prohibited by upstream; expose them as a truthful incompatible state with a reason, not a silently coerced approximation. FASTA targets lack structure-numbered hotspots; scFv output has two variable domains but no designed linker; cyclic closure is a computational proxy, not a synthesized cyclic molecule. The generic `binder` preset is genuinely unscaffolded and is not VHH.
+### 2.1 Existing generator execution
 
-### 3.2 Requested, effective and native settings
+`platform/api/services/nextflow.py:507–527` routes RFantibody to `workflows/antibody_denovo.nf`, BoltzGen nanobody to `workflows/protein_design.nf`, and seeded PPIFlow to `workflows/ppiflow_generator_design.nf`. Preserve their scientific identities and reuse those modules. Refactor shared staging/continuation where necessary; do not build a universal scientific DAG inside the RFantibody parent.
 
-Define one closed, versioned **global BC2 scientific parameter schema** shared by browser and agent API. It must provide discovery of all supported controls; typed target, chain, residue, file, repeated-target, loss and filter editors; conditional and searchable advanced sections; explicit presets, editable defaults, fixed profile values and validation; saved/clone/retry fidelity; and clear cross-field errors before queue insertion. Runtime paths, credentials, physical GPU assignment, container digests and security policy stay system-owned, though their relevant identities appear in receipts. Raw JSON import/export may supplement the typed surface but cannot serve as a hidden settings escape hatch.
+The current `AntibodyDenovoTemplate.tsx` and `antibody_denovo.yaml` contain VHH roles, CDR/framework defaults, duplicated selectors and handwritten parameter assembly. Replace the touched assembly with model-owned request components beneath the agnostic launcher. Do not merely rename the card or append another large BC2 conditional branch.
 
-Resolve native presets in the pinned upstream order, including nested merge and list-replacement semantics. Server preview shows the exact requested settings, resolved effective campaign, input identities, incompatibilities/warnings and digest. Launch binds to that digest; any request-affecting change invalidates preview. No workflow module or frontend profile may quietly replace an operator value. Unknown keys and unsupported combinations fail closed. A parity test enumerates every native key and resolved preset and compares the installed native acceptance, global schema, UI controls, API discovery and campaign compiler. Native changes require inventory/schema review rather than automatic uncontrolled exposure.
+Existing general-design/RFD3 owners remain usable. Their existence is neither a reason to exclude BC2's general modalities nor a reason to create duplicate RFD3 execution.
 
-### 3.3 Execution and native results
+### 2.2 Existing downstream implementations
 
-BC2 owns a dedicated model/entrypoint/module/container and a unique, job-owned campaign folder. Nextflow stages exact inputs and invokes **one validated complete campaign JSON**; it does not reinterpret scientific settings across shell flags and hidden defaults. Require a finite attempt budget (`max_trajectories`) as well as accepted-design target. Preserve native resume state, but distinguish a retry of the **same immutable campaign** from a changed scientific request, which creates a new campaign lineage. Nextflow resume and BC2 campaign resume are separate mechanisms; neither can silently merge settings or double-count attempts.
+Generic constrained FA-MPNN exists in `modules/fampnn.nf`, `workflows/protein_sequence_design.nf` and `scripts/prep_fampnn_constraints_generic.py`. Reuse explicit design/fixed-region handling rather than passing generic binders through antibody masks.
 
-Pin a reproducible Python/JAX/CUDA image suitable for the intended GPUs, shared AF2 parameter provenance, model and container revision, durable compilation cache, GPU isolation and length-dependent worker/host-memory admission. Scheduler placement does not establish BC2's own workers-per-device bound. Image, weights and cache availability must be proven on the actual execution lane before a launch is advertised. A hosted third-party-facing route is blocked pending an explicit decision under BC2's source-available hosting restriction and separate dependency/weight terms. No rental/start is implied by this spec.
+Caliby has a parent-workflow path (`antibody_denovo.nf:2511–2555`), `modules/caliby.nf` and `scripts/run_caliby_sequence_design.py`. Its installed runtime, setting completeness and suitability for each proposed complex remain to be qualified. Describe it as implemented-but-needing-qualification, not absent or already proven.
 
-Ingest and retain `1_Trajectories` attempts, `2_Refolded` successes/failures and reasons, `3_Ranked/!_Ranked.csv` accepted/ranked designs, corresponding per-target mmCIFs, summary, `campaign_metadata.json`, optional free binder and relaxed structures, native state required for resumption, and declared optional artifacts. Target-order semicolon metrics, `/`-separated multichain sequences, absent scores, target-state objectives and per-attempt tuning remain typed and interpretable. Preserve native rank and score semantics rather than forcing a common BoltzGen or RFantibody ranking. Verify artifact identity and count against producer-native records; a folder existing is not completion.
+FrustraMPNN has canonical model settings, scheduler fan-out, artifact/result persistence and viewers. Reuse these owners, repairing workflow attachment and failure isolation instead of inventing another analysis runner.
 
-Campaign-level preview is not enough when BC2 autotuning or desperation changes settings for an attempt. Retain the actual per-attempt effective settings and a stable settings identity, including any changed initialization, target flexibility, validation model or recycle count, then join them to that attempt's trajectory, sequence draws, refold results and accepted rows. A native accepted candidate carries both campaign configuration and its effective attempt configuration. Comparison and aggregate statistics stratify or explicitly label attempt-setting differences; no silent pooling of variants produced under different scientific conditions.
+Foundry remains the single LigandMPNN execution owner under the existing architecture. Inspect and complete that path's actual missing pieces. A registry row is not a working integration; a Project catalogue denial alone is not a complete diagnosis of core execution.
 
-## 4. Shared candidate, selection and operation boundary
+### 2.3 Existing result and bridge infrastructure
 
-Use the existing Job/Design/artifact/selection authorities. Add the smallest shared **candidate envelope** that can prove: immutable candidate ID; root/producer/job/mode; modality and objective; original native artifact references and content identity; binder/target chain and residue mapping including insertion codes and target state; sequence and structure status; sample/trajectory/rank and raw/filtered/rejected disposition; metric semantics/missingness; requested/effective settings and runtime receipt; parent/origin and operation lineage. Define stable identity for separate samples and states, not a basename, path ordinal or display job name. Native BC2 campaign records remain reachable through this envelope, not copied into a parallel numerical store.
+Reuse Job/Design, scientific artifact receipts/datasets, model-native result adapters, selection and review services. `result_contracts.py` primarily routes viewer/analyzer capabilities; adding a row there does not establish native result integrity or implement a viewer.
 
-Make native row types explicit: a trajectory/attempt row may have no final structure; each ProteinMPNN/refolded sequence draw has its own outcome and possibly no saved structure; an accepted sequence has a retained identity/rank and **one structure per positive or detarget state** where emitted. Use the producer's trajectory hash, `_candidate` draw and `_seq` retained identifiers plus campaign and target-state identities to join them; never assume one PDB or one score per campaign candidate. Failed or unscored rows remain typed records with explicit missingness, not fabricated `Design` structures. Structure-bearing accepted/selected rows map into `Design` and its review manifest, while all native per-attempt/per-sequence rows use the shared scientific row/artifact authority. The candidate-envelope implementation must choose and prove an additive mmCIF path: `Design.pdb_path` is currently non-nullable, so either make it nullable with a required typed mmCIF artifact manifest and audit all consumers, or provide a verified, lossless PDB derivative while preserving native mmCIF and its chain/residue map. A fake `.pdb` path or failed-row placeholder is prohibited. Astra freezes the chosen migration after a consumer-impact audit.
+Reuse `NativeInvocation`, `SelectedExecutionPlan`, selected asset provisioning, worker lifecycle, checkpoint continuation and journaled remote result publication. Do not create BC2-specific scheduling, hydration, transfer or resume services beside these owners.
 
-A selection is a frozen set of candidate references and exact artifact versions with ownership/admission checks. Its API rejects foreign IDs, mixed incompatible states, missing/corrupt artifacts, mismatched chain maps, unsupported structures, and scientifically incompatible operations **before** queue insertion. PDB-only consumers get a verified, residue-preserving conversion with recorded map and loss checks, or an explicit refusal; a BC2 mmCIF must not be renamed to PDB or silently renumbered. A sequence or coordinate change creates a child candidate with its own validation state. Diagnostic analyses attach to the exact input artifact, and failures do not erase the parent.
+## 3. Launcher, settings and plan ownership
 
-Preserve existing VHH job IDs, saved templates, selections and reopenable historical results. Permit display aliases without deriving scientific identity from the alias. Migration is additive with historical read adapters; do not bulk-rewrite old candidate records or infer missing lineage as proven. A missing old field is shown as unknown, not invented. The result viewer offers parent/descendant comparisons only where sequence, target state, metric definition and evidence are compatible.
+### 3.1 Modality-aware authoring
 
-## 5. Launcher and stage capability rules
+Select format/objective first, then show compatible generators and their native controls. Preserve complete BC2 access to advanced formats/objectives. Do not force a lowest-common-denominator target or binder form across models. A model-specific input editor is appropriate when the native input differs.
 
-The launcher uses a backend-declared capability matrix that distinguishes **supported and executable**, **supported but unavailable pending an adapter**, **experimental research**, **incompatible**, and **not requested**. The browser and agent see the same reasons and valid parameter controls. Select binder format/objective first, generator second, then optional operations and validation. Preserve the separate RFantibody, BoltzGen and seeded PPIFlow routes. Seeded PPIFlow requires a prior compatible complex and must not be relabeled unseeded generation. BC2's native campaign is available in its complete form; downstream eligibility is independently checked.
+RFantibody, BoltzGen, seeded PPIFlow and BC2 must remain selectable within the same product. Seeded PPIFlow visibly requires a compatible prior complex; do not advertise it as unseeded generation. Existing supported non-VHH capabilities should become reachable where the generator actually supports them.
 
-| Source class | Native result and possible continuation | Do not assume |
-|---|---|---|
-| BC2 `binder` / `large_binder` | Unscaffolded complex; generic constrained sequence redesign, validated repack and independent assessment where exact chain/mask contract qualifies | CDR/framework controls or the antibody PPIFlow checkpoint |
-| VHH | RFantibody, BoltzGen, seeded PPIFlow and BC2 VHH remain distinct; antibody-aware masks and PPIFlow may qualify after chain/numbering/checkpoint proof | Equivalent native scores or universal PPIFlow acceptance |
-| scFv / Fab / ARP | Complete BC2 native format result; antibody-specific continuations only for proven chain, scaffold and checkpoint combinations | A linked scFv construct, automatic CDR handling or generic PPIFlow eligibility |
-| Peptide / cyclic peptide / oligomer / multidomain / conformational objective | Complete BC2 campaign output, review, provenance and independently qualified compatible operations | Chemical closure, single-chain masks, a single target score, or generic antibody maturation |
+When a user changes generator or modality, retain valid shared inputs, preserve model-specific drafts, identify incompatible values and require an explicit correction. Do not silently relabel chains, discard settings or substitute an engine.
 
-This matrix is a starting admission design, **not** permission to omit any BC2 native format. The subagent contract owner must turn it into executable positive/negative fixtures per format, target representation and objective. Any enabled UI choice must be backed by a real route and terminal result; disabled choices say why.
+Separate independent facts in the backend projection: scientific applicability, executable adapter, selected-target readiness, experimental designation and whether an operation is selected. “Not requested” is plan state, not a capability. Do not build a second general-purpose capability framework to represent these facts.
 
-For each operation the frozen admission record enumerates allowed modality/objective and target state; input sequence/structure class and native format; required target/binder chains, numbering, insertion codes, fixed/design masks and side-chain availability; eligible checkpoint/runtime; conversion and coordinate-loss tolerance; stage ordering and output cardinality; terminal artifact and validation-state transition. “Eligible complex” is not an admission rule. Generic FA-MPNN on BC2 mmCIFs, repack outside antibody modes and LigandMPNN on protein-target side-chain context are **qualification tasks**, not claims of an already accepted BMS path. Fixtures must prove both acceptance and rejection, including multiple target states and incompatible multi-chain formats.
+### 3.2 One scientific authority per model
 
-## 6. Selectable refinement, analysis and research operations
+Each model/operation owns one versioned scientific schema and native compiler. Registry and workflow definitions reference it; they do not redefine defaults in YAML, frontend state, Project schema, Nextflow and shell independently. Reuse BMS's typed control mechanisms with model-specific editors for targets, chains, regions, arrays and nested settings.
 
-Each operation has an explicit typed request, input artifact class, chain/mask and checkpoint requirements, original/derived artifact identity, cardinality, result semantics, failure state and downstream revalidation obligation. The operation graph is user-selectable and bounded; do not encode one massive Nextflow parent with engine-specific skip-flag branches.
+Required fields include native mapping, type/shape, effective default, units, applicability, incompatibilities, explanation, reproducibility significance and operator/profile/scheduler ownership. Browser and agent API expose the same relevant scientific options. Advanced sections manage density; raw JSON import/export supplements rather than replaces typed controls.
 
-1. **Stop at generator result.** BC2 acceptance or another generator's native output may be reviewed and selected without forced resequencing. Present this as a computational candidate, not a measured binder.
-2. **FA-MPNN redesign.** Offer a generic path for eligible full complexes with explicit designed binder chains, fixed target and protected binder positions. Keep antibody CDR/framework constraints on compatible antibody modes only. Every sampled sequence is a separate child; structure and interface validation refer to its exact sequence. Existing BC2 ProteinMPNN output remains a baseline, not overwritten.
-3. **Rosetta interface repack.** Extract a separately named side-chain/anchor-preparation operation from the current PPIFlow preparation where supported. It gets its own terminal structure and receipt. Report whether only side chains or an explicitly enabled backbone shell changed. Repack and anchor computation are not themselves PPIFlow partial-flow sampling or interface frustration.
-4. **PPIFlow partial flow.** Expose selectable backbone-refinement placement and controls, including source class, chain and CDR/region, anchor policy, checkpoint, sample identity and design-strength setting. Current shipped sampler is antibody/nanobody-specific: BC2 VHH compatibility requires an actual fixture/run; generic BC2 binders are unsupported until a validated appropriate model/adapter exists. Post-flow FA-MPNN redesign is separately selectable; no default can invisibly enable it. Repacking, flow and sequence changes each have distinct lineage and validation requirements.
-5. **Independent validation.** For each child run an explicit chosen structure/complex predictor or other qualified assessment against the exact child input. Unknown validator values cannot fall back to Boltz-2. Preserve zero yield, failed prediction, missing observation and target-state mismatch distinctly. BC2's internal filter and independent BMS validator retain different authorities.
-6. **FrustraMPNN.** Keep a binder-local per-residue mutation/frustration landscape attached to the exact structure and preserve full producer metadata through fan-out. Official `FrustraMPNN.predict()` parses requested chains individually, so a complex filename does not make binder predictions sensitive to the target chain. Do not label these outputs interface-contact frustration.
-7. **Cross-chain contact frustration.** Qualify FrustratometeR/FrustraPy or an equivalent method separately on actual binder–target complexes. Define and record chosen chains, contact pair IDs, reference/decoy model, metric interpretation and structure provenance; test that cross-chain rows are present and chain numbering is stable. This is a diagnostic research analysis, not an affinity or automatic mutation-benefit predictor. If no implementation/reference qualifies, show an explicit unimplemented state and require Astra/Christian scope decision; do not substitute FrustraMPNN or Rosetta pair energy under the name.
-8. **Caliby.** Planned, separate sequence-design comparator with its own checkpoint/context/constraint/result admission, not assumed live because a model row exists. Preserve non-interface versus interface design semantics and compare against matched BC2/FA-MPNN parents. Its addition must pass the same full scientific setting and output parity gate before being selectable.
-9. **LigandMPNN.** A bounded, opt-in structure-conditioned redesign comparison on an intact modeled binder–target complex: retain fixed target protein chains, specify binder design positions, compare fixed-residue side-chain context on/off and matched existing redesign baselines. Do not present conditional sequence probabilities as ΔΔG, binding-partner discovery or specificity. The Foundry-owned execution path must first gain typed coordinate/mask authority, runnable adapter, native result and viewer; do not create a second LigandMPNN runner. No failed research branch can silently replace a requested established stage.
+Presets are explicit initial values or visibly fixed profile choices. Loading, cloning, retrying, changing stages or refreshing global configuration must not overwrite saved/operator values. Unknown scientific selectors fail before queue insertion; aliases are interpreted only by one documented historical adapter.
 
-The user may choose a scientifically sensible subset and order. The compiler rejects cycles, unsupported artifact transitions, invalid target/chain maps and unbounded combinatorial fan-out. Every selected stage's failure is visible, while usable earlier candidates remain reviewable. No generic “all engines for all modalities” switch and no cross-model composite binder score without a separately reviewed scientific definition.
+Preview uses the existing submission/approval mechanism and displays exact requested and resolved effective settings, input identities and incompatibilities. Launch binds to that request identity. Nextflow consumes compiled settings and must not introduce another scientific-default layer.
 
-## 7. Work packages and subagent-first execution, **after Astra review**
+Runtime paths, credentials, storage roots, container identities and physical placement stay system-owned. Record applicable runtime identity once through the existing receipt mechanism. Treat worker/batching choices that change native sampling behavior explicitly rather than silently dismissing them as irrelevant.
 
-**Planning review first:** Astra reviews this full work plan, the preliminary BC2 denominator, BMS authority boundaries, proposed stage gates and acceptance method. Christian resolves consequential product/scientific choices and any changed SOW policy. The first review authorizes only read-only inventory/fixture preparation, not build work. The contract owner then produces the field/authority register, actual native/preset discrepancy report, result-row/mmCIF migration decision, operation admission fixtures and file-ownership map. **Second Astra contract-freeze review** examines these concrete inputs and Christian approves unresolved scientific choices before any implementation lane starts. A source revision change triggers a scoped inventory/contract recheck rather than blind carry-forward.
+### 3.3 Workflow plan and repeated rounds
 
-**Contract owner (single subagent):** In the read-only inter-review phase, owns the BC2 register, prospective typed global settings/schema and common candidate/operation envelopes; prepares fixture examples, API shape, compatibility matrix and ownership map. This lane alone reconciles contract questions raised by prospective downstream workers. Its evidence is checked by the parent/integrator and receives the second Astra review before dependent build work begins.
+The workflow stores explicit generator and selected operation references. It connects existing model jobs/stages; it is not another scientific engine. Support both preselected continuation and selection after generator review using the existing job/child/review mechanisms.
 
-**Parallel build lanes (separate subagents after contract freeze):**
+The refinement experience is an actual loop: select an exact candidate/state set, choose operations and their settings, run a bounded round, review descendants, compare with parents and select another round. Persist round/root/parent relationships. A user may branch multiple refinement alternatives from one parent without overwriting it.
 
-- **BC2 runtime lane:** pinned image/weights, dedicated Nextflow module and bounded campaign adapter, native resume and per-job output. Owns runtime files, not global model/request authority.
-- **Scientific results lane:** BC2 native parser, immutable artifact registration, target-state/chain mapping and viewer-backed result contract. Owns ingest and producer fixtures, not campaign settings or shared API registry.
-- **Launcher/API lane:** modality-first browser controls, shared typed discovery/preview/admission, saved-request hydration and agent parity. Consumes the contract; one designated integrator owns overlapping registry, router and shared schema files.
-- **Refinement lane:** staged extraction of candidate-to-FA-MPNN and Rosetta repack/PPIFlow adapters and per-operation result identity. Science eligibility is checked against frozen fixtures. Frustra lineage and complex-contact analysis can be a separate bounded lane once the common envelope exists.
-- **Research comparators lane:** Caliby and Foundry-owned LigandMPNN feasibility, matched candidate comparisons and scientific interpretation. It cannot mark a model live or create a parallel execution path. Any dependency that is not runnable or qualified becomes an explicit review item, not a silent omission.
+Bound per-round samples and selected inputs, and preview expected fan-out and selected dependencies. Do not introduce open-ended automatic optimization or a generic graph programming language. Reject cycles and incompatible artifact transitions using the owning operation's contract.
 
-**Parent integrator:** Assigns non-overlapping file/symbol ownership; is sole editor of shared registries, migrations and routing conflicts; verifies each child's exact diff, tests, commit/paths and parent contract; integrates in dependency order. Children do not close acceptance or push/deploy independently. Avoid one child owning an entire vertical or simultaneous edits to `jobs.py`, `JobSubmission.tsx`, `result_ingester.py` and global schema. Use isolated short-lived task worktrees and remove each after its integrated result is verified; this review worktree remains only until Astra/Christian close the spec thread.
+## 4. Full native BC2 integration
 
-**Integration order:** baseline behavioral fixtures and native inventory → schema/candidate/operation contract → BC2 runtime plus native results plus typed launcher lanes → preserved VHH migration and compatible stage adapters → research branches and full workbench → exact-tree cross-boundary tests → authorized Development activation and live checks. Parallelism begins only when contracts and ownership are frozen; it does not bypass scientific review or a broken prerequisite.
+### 4.1 Native denominator
 
-## 8. Verification and completion gates
+Inventory the pinned installed code: core reference/defaults/profiles, all modality/property/target presets, `bindcraft/settings.py`, preflight, CLI, loss/filter/metric registries, campaign and sweep execution, output writers and resume state. The reference and CLI listings alone are not exhaustive. Include preset-only and registry-generated fields and nested settings; the reviewed VHH `paratope_conformations` field illustrates this requirement.
 
-Separate the release denominators. **Core release** requires complete native BC2, modality-aware launcher, truthful existing-generator continuity, candidate/review/result authority, qualified generic FA-MPNN handoff, separately selectable supported repack/PPIFlow mechanisms, binder-local FrustraMPNN lineage, independent validation and every applicable global result-workbench gate. The **research expansion** covers true cross-chain frustration, Caliby and Foundry LigandMPNN after each has a qualified scientific contract, execution and results; they remain visible as planned/unavailable rather than falsely launchable. Astra and Christian must decide whether any expansion item is a blocker for the first release; the project-wide agreed scope is not silently cancelled by a core release.
+Generate a machine-checkable field/authority coverage register from that inventory and the authoritative BMS schema. For every relevant field, map UI, API, native compilation, saved values and result identity; explain any implementation-only exclusion. This register is coverage evidence, not a separately edited settings database. Resolve discrepancies before implementing the dependent controls and tests. Upstream changes require a scoped reconciliation, not blind inherited approval.
 
-The parent produces an evidence packet, not a list of claims:
+Cover all native format presets: `binder`, `large_binder`, `peptide`, `cyclic_peptide`, `homo_oligomer`, `multidomain`, `VHH`, `ARP`, `scFv`, `Fab`; conformational `induced_fit` and `fold_switch` objectives; all property and target presets; multi-positive/detarget design; native scientific model/stage/loss/filter/seed/sweep/acceptance/output controls; and supported standalone result ranking/filtering actions where exposed by the pinned CLI. Such postprocessing creates a new publication/view, not an unnoticed mutation of an already selected result.
 
-- **Native denominator:** machine-checked reconciliation of all pinned code-accepted relevant settings, nested registries and resolved presets to schema keys, typed UI controls, agent API fields and native JSON mapping. No unexplained field omission, hidden override or unsupported native mode presented as supported.
-- **Request identity:** identical browser and agent fixtures compile to the same effective campaign and preview digest. Saved/loaded, cloned and retried plans round-trip complete settings; unknown/incompatible values fail before queue insertion. Actual native campaign metadata and runtime receipt agree with the preview.
-- **Execution and scientific outputs:** bounded tests for each native modality/objective family and positive/negative compatibility cases; native upstream example and representative real internal campaign once execution is authorized. Count attempts, refolded, rejected and ranked candidates against native files; preserve mmCIF artifacts, multistate metrics, per-attempt effective-setting identity, zero yield and resume behavior. Prove native row joins and old/new `Design` consumer behavior. No fixture-only test counts as live acceptance.
-- **Workflow continuity:** old RFantibody/BoltzGen/seeded PPIFlow VHH launch, pause, selection, retry and reopen behavior still works; BC2 also opens through the same review/selection authority. Per-sample identity survives fan-out, ranking, selection and derivatives. Mixed/foreign/corrupt selections are rejected.
-- **Optional operations:** operation off means no operation or mutated structure; repack-only, flow-only and flow-plus-explicit-resequence have distinct receipts/artifacts. A changed sequence/backbone loses inherited validation. Generic FA-MPNN never receives antibody-default masks. Frustra binder-local and genuine cross-chain analyses have separately verified semantics; Caliby/LigandMPNN only appear selectable after their actual adapter, settings and result gates.
-- **Global result closure:** model-native typed row persistence and artifact integrity, bounded statistics/detail, tables/charts and structural projection, compatible comparisons, export of table/image/JSON/native artifacts, saved views/captures/annotations/review records, and consistent routing/reopening from every consuming workflow. Each capability is exercised on real BC2 output or marked as an explicit unmet policy gate, not counted from a generic viewer's existence.
-- **Deployment:** focused tests and frontend contracts, native example, branch-specific scientific fixtures, review of exact source/image/weights, and runtime-owned health/readiness. An affirmative audience/access-control decision precedes enabling even a Development route if third parties could invoke BC2; internal campaign approval does not authorize hosted access. Only after explicit approval: reconcile remote `test`, push a fast-forward update, verify remote SHA, prove the managed Development revision and read back actual results. Production promotion and remote GPU rental/start need separate authorization. No side effect or computational campaign is implied by approval of this planning document.
+Preserve target structures and FASTA forms, chain/residue targeting, scaffolds and editable regions, topology, multichain sequences and state-specific observations. Native restrictions remain truthful: FASTA does not supply structure-numbered hotspots; scFv does not imply a designed linker; a cyclic closure proxy is not experimental chemical closure. These caveats do not remove those modes.
 
-A complete BC2 integration requires its **entire native release denominator** and all relevant BMS model-control gates. The wider upgrade is not called complete while a named required workflow/result operation is missing. Work packages may be merged incrementally behind truthful unavailable gates, but no partial subset is advertised as the full product.
+### 4.2 Use native semantics, not a competing implementation
 
-## 9. Astra review checklist and decisions
+Use pinned native resolution/preflight functions as semantic authority. Differential tests compare BMS preview and the actual CLI-loaded settings, including target accumulation, property order, implicit binder insertion, nested settings, filter aliases and sparse-output behavior. Compatibility follows resolved native features, not only a manually maintained modality label matrix.
 
-1. Is the source/product boundary correct: RFD3 remains a chief general-design route, BC2 is another complete native generator, and no giant universal Nextflow workflow is created?
-2. Approve the exact candidate envelope and which existing `Design`, artifact, selection and result authorities it extends. Are stage/path fallbacks, PDB-only selection and global-ID lookup addressed without a parallel database?
-3. Review BC2's installed-code setting denominator and conflict matrix, including aliases and the VHH preset-only field. Which scientific settings are operator-owned, profile-fixed or scheduler-owned? What source/weight revision and deployment audience are intended?
-4. At the second review, approve the reconciled field/authority register, native row identities and mmCIF/`Design` migration, per-attempt effective-setting rules, and exact modality/operation admission fixtures. VHH-only PPIFlow until proven otherwise; explicit repack versus flow versus redesign; unknown validator failure; native target-state semantics. Which checkpoint/format combinations can actually be qualified?
-5. Decide the cross-chain frustration method and reference ensemble, and whether qualification belongs in this release or an explicitly gated subsequent scientific tranche. Caliby and Foundry LigandMPNN likewise need explicit live-versus-planned release decisions, not invented capability.
-6. Approve contract owner, shared-file integrator, independent subagent lanes, frozen fixture set and integration/review gates. Does any existing global Project SOW authority need an explicit change?
-7. Confirm authorization boundaries for later real scientific runs, paid workers, fast-forward Development push/deploy and any Production or third-party hosted exposure.
+Keep resolution isolated from accelerator/model initialization. Ordinary launcher rendering, schema discovery and API startup must not import GPU models, download weights or scan runtime trees. If a lightweight adapter is needed to call native settings logic, its behavior must be checked against the actual CLI rather than becoming a forked resolver.
 
-**Current state:** This specification is a review artifact. No implementation, GPU campaign, remote rental, push, deployment or Astra review has occurred by writing it.
+BC2 owns its native stages, workers, adaptive mechanisms, sweeps, filtering and ranking. No BMS attempt scheduler, second autotuner, forced external redesign stage or separate pipeline per modality.
+
+### 4.3 Execution, budgets and runtime
+
+Add a dedicated BC2 model identity, Nextflow entrypoint/module and reproducible image, deliberately admitting it without reviving retired BindCraft code/images. Nextflow stages inputs and invokes one complete compiled native campaign document in a job-owned durable campaign directory.
+
+Require a finite effective attempt budget and expose accepted-design targets where applicable. Preserve native sweep semantics: per-arm allocation can clamp to at least one and alter the effective total. Preview the true aggregate allowance; reject a request that cannot honor an explicitly hard cap rather than silently exceeding it. Preserve trajectory-only mode without requiring accepted designs.
+
+Distinguish requested/claimed attempts, emitted trajectories, scored draws, passing draws and retained sequences. Interrupted or deduplicated attempts need not yield corresponding CSV rows. Budget exhaustion and zero accepted yield are explicit native outcomes, not generic ingestion failure or grounds to fabricate a Design.
+
+Pin Python/JAX/CUDA and resolved image dependencies for intended hardware. Reuse shared AF2 parameters and packaged MPNN assets. First-use downloads are provisioning, not a supposedly ready launch. BC2 itself constructs single-row features and requires no external MSA search/database; downstream predictors retain their own preparation requirements.
+
+Reserve the selected GPU allocation once and let BC2 manage workers only within it. Admission uses padded complex length, actual allocation, usable VRAM and job host-memory limits, not binder length or host-wide `/proc/meminfo` alone. Native clamping to one worker is not sufficient admission when even one cannot fit. Bind a persistent compilation cache with compatible image/device/runtime identity and record resolved worker allocation.
+
+### 4.4 Adaptive settings and resume
+
+Native recipe hashes exclude some scientific settings and are not full effective-request identity. Capture campaign/arm settings and each attempt's actual effective settings, sampled values and adaptive changes. Use a narrow producer-bound recorder or demonstrably complete reconstruction; do not claim native output already includes a full settings snapshot. Preserve native hashes unchanged alongside BMS's complete setting identity.
+
+Native resume permits changed settings and can consume interrupted claims. BMS must enforce matching immutable scientific request/input identity for same-campaign continuation. A changed scientific request creates a new campaign/descendant lineage. Resuming means continuing native state, not necessarily replaying the interrupted trajectory or reproducing uninterrupted scheduling.
+
+Preserve hidden campaign counters/claims, deduplication state, sweep state and other pinned resume requirements. Ranked files alone are not a resume package. Keep BC2 continuation, Nextflow resume, interactive review continuation and a new refinement Job distinct; remote handling is specified in section 8.
+
+## 5. Per-model results, selection and lineage
+
+### 5.1 Shared mechanics, native science
+
+Extend existing Job/Design and scientific artifact persistence. Common references connect source, producer/model/mode, candidate/document/state, round/root/parent, immutable artifact identity and settings/runtime receipts. Native metrics and ranking remain owned by their producer. No universal binder score, parallel candidate database or workflow-specific copy of each model's viewer.
+
+Persist model-native typed data with explicit missingness; expose bounded tables/detail, appropriate structure/sequence/state views, compatible comparisons, exports and existing shared saved-view/review facilities. Satisfy applicable model-result guarantees through these owners. Do not turn this upgrade into a prerequisite to rebuild unrelated global analytics or Project infrastructure. A genuine missing applicable capability remains an explicit work item.
+
+### 5.2 BC2 publication contract
+
+Implement one versioned BC2-native publication contract consumed after either local output or verified remote return:
+
+- **Campaign/arm:** existing Job plus immutable request/input/settings identity, source/runtime version, sweep arm and continuation lineage.
+- **Attempt:** campaign/arm plus native trajectory identity/hash and claim identity where available; effective-attempt settings reference, outcome and optional artifacts.
+- **Scored draw:** attempt plus native `_candidateN`, sequence/chain identity, passed/rejected outcome, reasons, metrics and optional state structures.
+- **Retained sequence:** attempt plus native `_seqN`, explicit scored-draw association, native acceptance and rank within a publication snapshot. Rank is not identity.
+- **Structure document:** subject plus target-state and role such as complex, trajectory, free binder or relaxed derivative, with format, digest and complete chain/residue map.
+
+The pinned producer sorts/truncates scored draws before assigning retained `_seqN` names. It does not persist the original `ValidatedBinder.candidate_number` in the inspected accepted metadata. Capture this association explicitly at the producer boundary; never join ordinals. Historical reconstruction is permitted only when independently unambiguous and labeled as reconstructed, otherwise unknown.
+
+Preserve attempts/refolded/ranked records, emitted per-target CIFs, native summaries/metadata, settings and declared optional artifacts. Read emitted target names/weights and ordering before parsing semicolon metrics. Preserve `/`-separated multichain sequences. Do not require intentionally suppressed structures or stage directories that were never produced.
+
+Store structureless rows in model-native scientific datasets rather than fake Designs. Project reviewable structure-bearing records into existing Designs and manifests; group target-state documents under their retained/scored subject so they are not counted as extra accepted sequences. An emitted/reviewable raw structure remains distinct from native acceptance.
+
+### 5.3 Native mmCIF handling
+
+Keep native CIF/mmCIF authoritative. Existing `Design.pdb_path` already stores CIF/mmCIF paths; its non-nullability does not force a migration for structure-bearing rows. Use explicit artifact format and the existing chain/residue mapping contract. Repair format detection, review discovery and actual PDB-only consumers.
+
+Convert only at a genuinely PDB-only operation, retaining native input, derivative digest and residue/chain map. Reject loss that violates the operation's declared identity/coordinate requirements; do not rename CIF bytes, silently renumber residues or flatten unsupported assemblies. Do not undertake a wholesale database rename/migration just to add BC2.
+
+### 5.4 Immutable selection and publication isolation
+
+Use one existing-owner selection resolver for all generators and refinement rounds. Resolve source/root ownership, producer candidate/document/state, expected artifact digest, role map, required format and operation eligibility before materialization. Reject foreign IDs and incompatible mixed states. Use immutable snapshots or verified immutable references for local and remote inputs alike; mutable links alone do not prove approved input identity.
+
+Delete stem/global-name/path fallback as scientific identity for new results. Historical readers may display missing identity as unknown but must not infer proven lineage. Preserve origin Design and origin Job consistently across multiple generations.
+
+Publish verified generator/operation outputs independently from optional analysis attachments. A failed selected analysis is a visible failed stage, not grounds to roll back valid primary results. Existing remote publication journaling and model-specific corruption checks remain intact; separate transaction/completion ownership rather than weakening verification.
+
+A sequence or coordinate change produces a descendant with its own validation state. Unchanged sequence alone does not preserve validation of changed coordinates. Analyses attach to exact artifacts; no generator acceptance, predictor score or analysis is advertised as measured affinity or experimental validation.
+
+## 6. Upgraded optional refinement loop
+
+### 6.1 Common operation contract
+
+Every operation declares input artifact/sequence class, native format, modality/objective/state compatibility, binder/target roles, numbering, design/fixed masks, required side-chain context/checkpoint, settings, output cardinality, terminal artifacts and validation-state transition. Resolve these through model-owned schemas and existing workflow mechanisms, not a new universal operation engine.
+
+Eligibility is based on actual artifacts and supported science, not the generating model's name. Qualify inputs from all retained generators and BC2. Preserve antibody CDR/framework convenience controls but supply generic chain/region/protected-position controls for other formats. Source-model differences must not force separate user experiences for the same supported operation.
+
+The loop supports a selected subset of operations in scientifically valid orders, including branches that compare alternative sequence designers. Operations may be skipped; no hidden default adds repack, flow, redesign or independent prediction. User-requested native BC2 internal stages remain part of BC2, not these optional external operations.
+
+### 6.2 Sequence redesign: FA-MPNN and existing alternatives
+
+Reuse generic constrained FA-MPNN for full complexes with explicit designed binder regions/chains, fixed target and protected binder residues. Keep target-sidechain and sequence-lock semantics distinct. Retain antibody-specialized masks only for antibody operations. Every sampled sequence is an identifiable child with native outputs, masks, scores and source association.
+
+Preserve and reconcile existing supported sequence-design alternatives instead of deleting them to simplify the launcher. Remove duplicate selectors/booleans from new writes; translate historical requests at one boundary. Caliby and LigandMPNN have the specific obligations below.
+
+### 6.3 Repack and anchor analysis
+
+Extract a separately selectable Rosetta repack operation from current PPIFlow preparation. Declare whether it changes side chains only or includes an explicitly selected backbone shell. Verify actual coordinate changes and protected regions; report changed residues rather than equating shell membership with repacking.
+
+Anchor identification is independently selectable/read-only unless repack was explicitly selected. Repack-off must preserve input coordinates. Save anchor definitions against the exact source or repacked document. Repack, anchor analysis and partial flow must not share an ambiguous user-facing toggle.
+
+Generalize supported complex/chain handling beyond antibody labels. Qualification of generic repack is part of this work, not a reason to leave the entire loop VHH-only.
+
+### 6.4 PPIFlow partial-flow refinement
+
+Retain generator-seeded and downstream refinement identities. Expose stage placement, regions/CDRs, anchor policy, checkpoint, sampling controls and per-sample identity. Current antibody/nanobody checkpoint limitations remain explicit: generic binder support cannot be invented by relabeling chains. Qualify BC2 and other compatible antibody outputs against the real sampler; other modalities still use compatible generic loop operations.
+
+Resolve binder/target roles once and reject disagreement; do not substitute the first chain, drop requested chains or silently remap hotspots. Post-flow sequence redesign is an explicit selected operation, not enabled by omission. Preserve source, flow sample and optional redesign identities rather than enumerating recursive globs. Zero eligible anchors/seeds must produce a clear terminal outcome instead of an apparently successful empty workflow.
+
+### 6.5 Independent prediction and validation
+
+Expose the existing supported predictor choices through their model-owned contracts and native outputs. Reject unknown validators rather than falling back to Boltz-2. Preserve every requested native sample with the correct structure/metric pairing, target-state mapping and missingness. Saved validator choice must survive load/clone/retry.
+
+Independent validation is optional to request, but no modified descendant may claim inherited validation. A user may inspect unvalidated generator/refinement results without being forced through another model. When requested, validation runs against the exact child sequence/complex and remains separate from native generator filtering and scores.
+
+### 6.6 FrustraMPNN and complex-contact frustration
+
+Reuse FrustraMPNN's canonical fan-out/settings/results machinery and preserve complete parent/document/round lineage. Its official inference parses requested chains separately; a complex file does not make a binder-local prediction target-conditioned or provide cross-chain contact frustration. Present its mutation/local-frustration landscape with that scope and retain the unchanged parent for comparison.
+
+The agreed complex-contact-frustration work remains in scope. Qualify a genuinely complex-aware method such as FrustratometeR/FrustraPy through an explicitly chosen scientific contract: chain/contact-pair identity, reference/decoy ensemble, metric meaning and exact structure. Christian must resolve the method/reference choice before that scientific implementation. Do not substitute FrustraMPNN or Rosetta energy under the same label. If qualification fails, report the unresolved requirement for a decision; a disabled placeholder is not completion.
+
+### 6.7 Caliby
+
+Reuse and qualify the existing parent runner rather than reimplementing it. Establish checkpoint/context applicability, masks, complete scientific controls, native output cardinality and sequence/structure identity. Preserve interface versus non-interface design semantics and compare with exact unchanged parents and matched alternative designers. Bring its usable selection, execution and per-model results into the agnostic loop; do not label source implementation as either absent or already live-qualified.
+
+### 6.8 LigandMPNN — in scope, scientific choices pending discussion
+
+Deliver LigandMPNN as an optional refinement/sequence-design method through the single Foundry-owned execution path, integrated with the same candidate selection, local/remote placement, lineage and model-native result experience. It is not a new generator, compulsory step or unknown-partner finder. Inclusion is fixed; the choices below remain proposals until discussion.
+
+The agreed scientific starting point is an intact modeled binder–target structure/sequence complex. Preserve the target and protected binder regions; redesign declared binder positions with explicit structural context. Do not substitute excised free CDR peptides for the intended complex-conditioned question.
+
+Proposed selectable use cases are region-limited redesign and broader binder redesign with explicit protected positions. A controlled fixed-target-side-chain-context on/off comparison is a proposed experimental option, not an assumed improvement. Keep checkpoints, other settings, source structure and masks matched and preserve all results. Conditional sequence probabilities/confidences are model-native sequence compatibility evidence, not affinity, specificity, partner identity or ΔΔG.
+
+Separate optional packing from sequence redesign and retain both identities. Changed sequences can enter the existing explicit independent-validation and comparison steps. No silent replacement of FA-MPNN, Caliby or an unsuccessful requested method.
+
+Discussion must settle the initial selectable modes/defaults, target-context policy, masking/region UX, optional packing placement, comparator design and downstream assessment before implementing those scientific choices. The rest of the workflow can proceed once authorized without inventing answers or dropping this deliverable. Its final accepted settings, runtime, output and UI/API contract must be added to the same completion evidence.
+
+## 7. Required correction ledger for the current workflow
+
+These findings are mandatory implementation work. Extend the ledger if integration exposes more in-scope defects; do not preserve a bug merely for historical behavioral parity. Locations refer to the reviewed source and will move.
+
+- **C01 — Hidden request changes:** remove unknown-validator and unknown-gate fallback and silent stage-optimized overwrites in `routers/jobs.py:1357–1435`; reconcile duplicate frontend/Nextflow authorities. Test explicit values, profile changes, unknowns and saved round trips.
+- **C02 — Fabricated/incorrect sequence extraction:** remove the synthetic fallback in `antibody_denovo.nf:90–125`; use a canonical parser preserving insertion codes and chain identity. Test corrupt/empty structures and real residue identity edge cases.
+- **C03 — Chain-role substitution:** remove first-chain fallback, dropped requested chains and silent targeting remaps in `prepare_ppiflow_maturation.py` and `modules/ppiflow.nf`. Test exact roles and disagreement rejection.
+- **C04 — ESMFold2 sample loss/pairing:** replace independent last-glob selection in `normalize_esmfold2_validation.py:19–30` with producer-bound sample records. Preserve sample cardinality and reject missing/mismatched peers. Repair validator hydration in `AntibodyDenovoTemplate.tsx`.
+- **C05 — Entangled refinement:** separate repack/anchors/flow/redesign, remove omission-driven redesign and contradictory flag precedence, and correct repacked-residue reporting. Test repack-off invariance and each selected composition.
+- **C06 — Stale validation/terminal producer:** changed post-validation outputs must become unvalidated descendants, not reused `validated_structures`; terminal method follows actual producer, including preserved ancillary refinement branches such as IgGM. Test no stale parent confidence/acceptance inheritance.
+- **C07 — Sample identity/zero yield:** replace PPIFlow basename/flat-directory/glob enumeration with explicit source/sample/role manifests; retain cardinality checks and expose zero-anchor/zero-seed outcomes.
+- **C08 — Optional failure rollback:** separate primary publication from failed FrustraMPNN attachment in `result_ingester.py:4950–4977` without weakening component checks. Test fresh publication, preexisting parents and failure/retry isolation.
+- **C09 — Selection ownership/immutability:** repair global-ID ordinary iteration/manual-mutation lookup, missing state/digest bindings and mutable local selection references. Reuse the stronger existing dedicated selection ownership pattern. Test foreign sources and changed artifacts.
+- **C10 — Lineage/state collapse:** replace global path/name `.first()` parent inference, inconsistent origin Design/Job assignment and stem-based deduplication in new publications/review. Test duplicate basenames across stages/states, multiple rounds and same-stem native/derived formats.
+- **C11 — Format boundaries:** fix `.cif`/`.mmcif` case-insensitive explicit-format consumption, review discovery and PDB-only iteration admission/conversion. Test author/label chain IDs, insertion codes and refusal of lossy conversion.
+- **C12 — Duplicate request assembly:** collapse competing scientific defaults and duplicate new-write selectors in launcher, registry, router and Nextflow for touched models/operations. Preserve historical read adapters, not duplicate active write paths.
+- **C13 — Remote repeated work:** measure and correct avoidable selected-weight rescans/hashing, archive reconstruction/extraction and redundant bundle verification at their existing owners. Preserve immutable handoff/reconnect guarantees and private attempt trees. Test warm reuse and corruption/reconnect behavior.
+- **C14 — Existing branch continuity:** preserve established generator-only behavior, validation choices, analyses, pause/review, retries and reopen paths while generalizing the workflow. Resolve any discovered unsupported or nonfunctional advertised option explicitly; do not delete it silently to meet a smaller scope.
+
+Delete superseded code/tests/imports after checking references. Do not leave two competing normalizers or result adapters as a permanent compatibility strategy. Historical interpretation may remain in one bounded read adapter.
+
+## 8. Local and remote-bridge execution
+
+### 8.1 One compiled plan, two placements
+
+Compile the same model-owned scientific request to `NativeInvocation` and `SelectedExecutionPlan` for local and remote execution. Register BC2's model/image/weights bindings, native components, portable input/output roles, resources and terminal result contract in the existing registry/provisioning authorities. A Nextflow module alone is not remote integration.
+
+Refinement child jobs use the same placement mechanism. Portable selections bind exact artifacts and maps, not controller absolute paths. Only selected generators/stages contribute dependencies, preparation or transfer. Do not require all alternative generators and refiners to be installed for one selected job.
+
+No new remote-specific scientific defaults, BC2 runner, output scanner, result database or alternative hydration path. The returned native publication is consumed by the same model adapter as local output. Results must reopen with the worker unavailable.
+
+### 8.2 Fast startup and asset lifecycle
+
+Preposition pinned images, shared weights and required support runtime through existing provisioning. Advertise a lane as ready only for its actual selected closure. Separate unavailable assets from scientific incompatibility and from provider liveness. No model import, weight discovery or broad runtime validation on ordinary form rendering/API startup.
+
+Warm execution must not reinstall dependencies, redownload unchanged images/weights, rebuild unchanged image views unnecessarily or run preparation for off-stages. Use persistent native compilation caches where compatible; explain legitimate new-shape/device compilation rather than promising universal cache portability.
+
+The reviewed bridge already reuses assets but still records runtime trees, copies/verifies/extracts source archives, and verifies bundles at prepare/start. Measure these costs. Reuse immutable inventory/identity where valid and remove repeated work at the owner. Do not delete the start-time reconnect guarantee merely because prepare previously succeeded, share writable source trees, or remove rechecks of volatile GPU/CPU/RAM capacity.
+
+Acceptance measurements separate cold attach, missing selected assets, warm new campaign, native initialization/compilation, same-campaign resume, review continuation, refinement round and result return. Capture phase durations, transferred/hashed bytes, scanned files and cache behavior in bounded acceptance evidence, not a new permanent telemetry subsystem. Establish hardware/size-qualified budgets from the actual baseline; no invented universal startup number and no completion claim without the measurements.
+
+### 8.3 Resume, review and cancellation
+
+BC2 and other resumable operations preserve their native durable state in job-owned storage. Same-worker continuation uses existing checkpoint/generation ownership. New-worker recovery stages the declared native resume package and remaps system-owned paths while preserving scientific identity; if native exact continuation is impossible, expose an explicit new attempt rather than silently starting over. Loss of indispensable state is a clear limitation/failure, not fabricated resume success.
+
+Do not relaunch into sealed result generations or make parent publications writable. Preserve native ranked files against destructive UI selection/filtering. A changed request or refinement round writes a new owned output context.
+
+Use the bridge's selected review-artifact transfer mechanism. Multistate candidate sets may exceed its current bounded review budget; page/select documents or use the existing full-result transfer route. Do not silently truncate states or add an arbitrary BC2-only transfer service.
+
+Reuse result publication journals and exact generation/manifest identity. Cover interruption between filesystem publication and database commit, idempotent retries and cancellation during staging/return. Ordinary stop, controller restart and worker-supervisor loss are distinct cases. A missing supervisor PID alone does not prove orphan writers stopped; retain ownership until quiescence is established through the existing lifecycle.
+
+### 8.4 Internal execution and licensing
+
+BC2's hosting restriction concerns third-party invocable functionality, not merely remote infrastructure. Qualify authorized internal local/private-remote execution and retain dependency/weight terms. Third-party API/workflow exposure requires an explicit audience/licensing decision. Rental/start, live scientific campaigns and Production promotion retain their separate authorization requirements.
+
+## 9. Subagent-first implementation plan
+
+The holistic Astra review is complete as a source review, not live acceptance. This revised document incorporates its technical corrections without changing Christian's workflow direction. Implementation begins only when authorized. No extra ceremonial review is required to collect read-only inventory; actual unresolved science/contracts must be resolved before the dependent lane changes them.
+
+### 9.1 Ownership and dependencies
+
+The parent/integrator owns shared contract decisions, registry/router integration, source reconciliation and final acceptance. Assign disjoint files or clearly bounded symbols in isolated short-lived worktrees. Agents may own coherent vertical model slices; no blanket prohibition on that ownership. Children provide exact diffs/commits and evidence, but do not push/deploy or close the overall task independently.
+
+- **BC2 model lane:** complete native inventory and model-owned schema, native resolution bridge, image/campaign invocation, runtime state and necessary producer metadata capture. Own BC2-specific files and native fixtures.
+- **Native results/selection lane:** BC2 publication parser with model lane's agreed format, existing result/selection extensions, state-aware identity, mmCIF consumers, repeated-round lineage and primary/optional publication isolation. One assigned editor owns overlapping ingester/selection symbols.
+- **Launcher/API lane:** modality/objective and generator choice, model-owned forms, discovery/preview/submission, saved/clone/retry fidelity and one historical compatibility adapter. Preserve all existing generator surfaces.
+- **Refinement lane:** general FA-MPNN handoff, repack versus read-only anchors versus supported PPIFlow, independent validation, native sample identity, round orchestration and existing branch repairs. Coordinate explicit input/output contracts before parallel consumers land.
+- **Analysis/alternative-method lane:** FrustraMPNN reuse and lineage, Caliby qualification/integration, agreed complex-contact analysis, and Foundry-owned LigandMPNN completion after its scientific choices are discussed. These are delivery workstreams, not optional engineering extras.
+- **Bridge/runtime lane:** selected BC2 and refinement dependency closure, portable inputs/native resume state, cache bindings, warm-path corrections and local/remote acceptance instrumentation using existing lifecycle owners.
+
+The parent assigns actual file/symbol ownership before dispatch to avoid simultaneous changes to `jobs.py`, `model_registry.py`, `nextflow.py`, `result_ingester.py`, `JobSubmission.tsx` and shared schemas. Split oversized lanes into disjoint tasks when useful; do not create paperwork-only agents or a new global framework workstream.
+
+### 9.2 Engineering sequence, not reduced releases
+
+1. Capture existing-generator/refinement behavior and defect fixtures; finish native field/output inventory and concrete shared input/result references.
+2. Implement model-owned request boundaries and targeted identity/publication repairs; remove proven unsafe fallbacks as replacements land.
+3. Build BC2 invocation, native publication and bridge closure in parallel with launcher generalization against the agreed interfaces.
+4. Integrate and qualify the agnostic repeated refinement loop, existing alternatives/analyses and LigandMPNN's agreed design. Parallelize independent model work; unresolved scientific decisions block their own implementation, not a fictitious change of scope.
+5. Run focused combined-tree checks, then authorized local/remote model and workflow acceptance, including startup measurements and result reopening.
+6. Reconcile current `test`, follow supported Development deployment after authorization and verify the actual served/runtime revision and results. Remove integrated temporary worktrees and obsolete implementation code.
+
+A partially integrated slice may be reviewed or merged under truthful availability, but the whole upgrade remains incomplete until every required deliverable closes. No autonomous reclassification into a smaller core release or deferred expansion.
+
+## 10. Acceptance and completion checklist
+
+Each item requires named evidence from the owning model/operation and the integrated workflow. Fixtures are not live acceptance, an enabled registry row is not execution, and a successful transport is not a verified scientific result.
+
+- **A01 — Product structure:** the launcher is agnostic; all existing generator choices plus BC2 are retained as first-class options; relevant modality-specific controls appear without VHH assumptions in generic paths.
+- **A02 — Full native BC2:** all relevant installed-code settings, presets, modalities/objectives, supported native campaign/postprocessing actions, outputs and lifecycle behavior reconcile to UI/API/compilation/persistence with no unexplained omissions. Cover feature interactions with data-driven tests, not an unnecessary exhaustive Cartesian-product pipeline matrix.
+- **A03 — Request fidelity:** browser/agent equivalence and save/load/clone/retry round trips; requested/effective settings agree with native consumption; no silent engine fallback, hidden override or duplicated scientific authority.
+- **A04 — BC2 accounting:** claimed/emitted/scored/passing/retained counts remain distinct and reconcilable; exact scored-to-retained joins; state ordering; adaptive-setting identity; suppressed artifacts; sweeps; trajectory-only; budget-exhausted zero yield; and honest native resume behavior.
+- **A05 — Per-model results:** native tables/metrics/ranks and applicable views/exports/review tools use one numerical authority; model-native data and structures reopen after restart and remote worker loss; no universal confidence/affinity substitution.
+- **A06 — Selection and lineage:** source/root ownership, artifact/state identity, formats and role maps are preserved; repeated rounds and branches have correct parents/origins; foreign/mixed-incompatible/corrupt selections fail at the boundary; duplicate basenames do not collapse records.
+- **A07 — Optional loop delivery:** the upgraded loop can receive qualified candidates from every retained generator and BC2; generator-only exit works; repeated selected rounds work; off-stages neither execute, alter structures nor acquire assets. Genuine model limitations are explicit, not generic infrastructure limitations disguised as science.
+- **A08 — Refinement semantics:** repack-only, anchor-only, flow-only and explicitly composed redesign have distinct outputs; correct masks/roles/checkpoints and sample cardinality; coordinate/sequence changes invalidate inherited validation; exact predictor sample/metric pairing.
+- **A09 — Analyses and alternatives:** FrustraMPNN, Caliby, complex-contact-frustration work and LigandMPNN each close their agreed scientific request/execution/result/UI/API scope. Experimental labels do not waive execution or result correctness. Pending scientific decisions/unimplemented requirements keep the upgrade incomplete until resolved or explicitly changed by Christian.
+- **A10 — Failure isolation:** a failed optional stage leaves verified primary/earlier candidates available; zero yield, failure, missing artifacts and unrequested stages remain distinct; retries do not duplicate scientific identities or destroy parents.
+- **A11 — Existing workflow correction:** C01–C14 have focused regressions and integrated evidence; existing generator/refinement/review/reopen routes remain usable with unsafe behavior corrected. Further in-scope issues discovered during work join the checklist.
+- **A12 — Local/remote parity:** authorized runs exercise the same compiled request and native result contract on both placements, including generation, candidate selection, refinement and return. Preserve model-appropriate stochastic behavior; parity does not require bitwise identical predictions across different hardware.
+- **A13 — Startup and lifecycle:** cold/warm phase measurements, selected asset/cache reuse and elimination of demonstrated redundant work; resume/review continuation; interruption/cancellation/result-journal recovery; reopened results without a live worker. Do not claim a warm performance budget from static inspection.
+- **A14 — Integrated delivery:** focused tests on the combined current tree, representative real native branch execution after authorization, actual Development deployment revision/readback when authorized, clean repository and retirement of replaced code. A small smoke run need not yield an accepted binder; execution correctness and scientific yield are reported separately.
+
+Complete relevant model settings and solid results remain mandatory. Avoid redundant validation by locating checks at the owning request, immutable input, producer publication and transfer/selection boundaries and reusing their established evidence. Do not remove a necessary ownership or integrity check to make the path appear simpler.
+
+## 11. Remaining decisions, without reopening scope
+
+- **LigandMPNN:** discuss region-limited versus broader binder redesign, structural target context, side-chain-context comparison, packing, matched baselines and downstream assessment. Inclusion in the optional loop is already required.
+- **Complex-contact frustration:** choose and qualify the actual complex-aware method/reference ensemble. Binder-local FrustraMPNN is not a substitute.
+- **Concrete native interfaces:** finish generated BC2 coverage and exact producer metadata/publication details before dependent code; this is implementation work, not permission to narrow native scope.
+- **Execution acceptance:** select authorized representative inputs/hardware and set measured startup expectations. No paid instance or scientific campaign is implicitly approved by this document.
+- **Exposure:** settle any intended third-party hosted access under upstream/dependency terms; internal remote placement is a separate question.
+
+No open item permits changing the user-facing workflow structure, dropping existing generators, reducing BC2 coverage, leaving the loop nanobody-only, treating remote execution as later work, or omitting LigandMPNN because it is optional to run.

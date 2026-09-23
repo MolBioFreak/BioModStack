@@ -1,39 +1,69 @@
 # De Novo Binder Design: Upgrade Outline
 
-**Status:** Draft for Christian and Astra review. This is a scope and problem statement, not implementation authorization.
+**Status:** Revised after Astra's holistic review and Christian's scope clarification. This document fixes the product scope; it does not authorize implementation, scientific campaigns, deployment or worker rental.
 
-**Source baseline:** `origin/test` at `ea3dc6797150a2e79ecccd26d4e79732059468e4`; BindCraft2 upstream reviewed at `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f`. Recheck both revisions before execution.
+**Specification:** [De Novo Binder Design Upgrade](de-novo-binder-design-upgrade.md).
 
-## Outcome
+**Reviewed source:** BMS `96923d9470d86219451d6caf88f63308a369c007`; BindCraft2 `d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f` (package version `1.0.1`). Implementation must start from current `origin/test` and reconcile relevant changes against this evidence baseline.
 
-Make De Novo Binder Design a full, modality-aware design and iteration workflow. A user chooses the binder format and objective, then a compatible generator. Each candidate may be retained as a result or explicitly forked into compatible sequence redesign, structural refinement, validation, and analysis. BindCraft2 (BC2) becomes a first-class generator with its **entire supported native campaign surface**, not a VHH-only mode or a thin wrapper. Existing nanobody jobs remain readable and operable.
+## The product direction is fixed
 
-This upgrade does not replace BMS's established general de novo/RFD3 authority or turn every engine into the same scientific method. It joins distinct generator outcomes through a trustworthy candidate handoff and common review experience. The conversational shorthand “version 2” is not a product label, identifier, schema suffix, file naming convention, or instruction to rename historical routes.
+Upgrade the entire current de novo nanobody workflow into **agnostic De Novo Binder Design**. Keep all existing generators available through their supported capabilities and add **fully integrated BC2 as another first-class option**. Upgrade and generalize the existing refinement loop so candidates from any of those generators can enter it through a common, model-aware selection boundary. Running that loop is optional for the operator; delivering the upgraded loop is mandatory.
 
-## Core problems to solve
+The user chooses binder format and objective, chooses a compatible generator, runs generation, reviews its native results, and either stops or selects candidates for refinement. Refined candidates can be assessed, compared, selected and refined again. This structure is Christian's direction, not an open architectural question.
 
-1. **Product scope is incorrectly nanobody-shaped.** The dedicated launcher (`AntibodyDenovoTemplate.tsx`) offers RFantibody, BoltzGen nanobody, and seeded PPIFlow choices, but hard-coded heavy/light chains, CDRs, framework and antibody-specific defaults make the flow unsuitable as an agnostic binder tool. The generator routes already use different Nextflow entrypoints; a UI rename or more branches in `antibody_denovo.nf` would misrepresent them.
-2. **BC2 is absent.** BMS has no executable BC2 campaign, full setting authority, typed controls, or result contract. BC2 includes unscaffolded binders, larger binders, peptides, oligomeric/multidomain and scaffolded formats, conformational objectives, multi-target/detarget design and property presets. A VHH-first reduced release, raw-only campaign editor, or silent setting loss would not satisfy the agreed scope.
-3. **Candidate continuation is fragmented.** Current generator paths publish different artifact classes and selection flows. Filename/glob reconstruction, partial metadata projection and antibody-specific iteration assumptions cannot safely identify every multi-chain BC2 candidate, target state, sample, rank, sequence and transformation. A redesigned sequence or backbone must never inherit its parent's validation result.
-4. **Refinement controls blur distinct operations.** Rosetta interface repacking/anchor preparation, PPIFlow partial-flow backbone generation and optional subsequent sequence redesign are not one “rotamer alignment” switch. Existing PPIFlow checkpoints and masks are antibody/nanobody-specific; non-VHH eligibility needs proof. Current presets can overwrite chosen values, and stage placement changes the artifact and revalidation obligations.
-5. **Analysis can be over-interpreted.** FrustraMPNN's official inference parses each chain separately even when given a complex, so it does not calculate binder–target contact frustration. Cross-chain pairwise frustration requires a separate complex-aware analysis. Neither analysis, BC2 confidence, LigandMPNN conditional sequence scores nor structure-prediction scores establish measured affinity or specificity.
-6. **Model presence is not execution closure.** Caliby is planned rather than integrated. A LigandMPNN registry row exists, but the Project catalogue marks its Foundry execution path unavailable; a second ad hoc runner would violate the current ownership specification. Result contracts and global model-setting parity are recognized weak points, so a nominal model selector without exact request-to-result evidence is not completion.
+Local execution, remote-bridge execution, fast warm startup, solid per-model results and repair of existing workflow defects are all part of the same upgrade. LigandMPNN is an in-scope optional refinement method; its detailed scientific use remains the next discussion item. It is not an uncommitted later expansion.
 
-## Major changes agreed in principle
+There is no reduced “BC2 core” completion claim that excludes the launcher, existing generators, refinement loop, remote execution or agreed analyses. Engineering milestones may be sequenced and integrated separately, but they do not reduce the completion scope. Only Christian can remove or defer an agreed deliverable.
 
-- **Modality-first launcher:** choose binder format/objective, then see only compatible engines and settings. Retain VHH-specific CDR/framework operations where appropriate; expose BC2's full native campaigns, including advanced conditional controls, without implying all downstream tools work on all formats.
-- **Separate generator execution:** keep RFantibody, BoltzGen, seeded PPIFlow and BC2 in their appropriate entrypoints. Refactor shared staging, candidate registration, selection, and downstream dispatch rather than building a giant conditional nanobody workflow. Preserve historical job/template identifiers and reopenability.
-- **Complete BC2 authority:** pin installed code/weights; reconcile code registries, reference settings and resolved presets; provide one closed typed scientific schema with browser/agent parity, complete effective settings and preview/receipt identity. Bind validated campaign JSON to a bounded runtime and preserve native resume semantics. Ingest ranked, rejected and attempted designs, structures and campaign metadata without flattening target states or inventing comparable cross-model scores.
-- **Immutable candidate and fork contract:** retain source sequences/structures, target and binder chain/residue maps, target states, modality, generator/rank/sample, settings and native metrics. Every operation produces a new linked candidate or an analysis record; review can stop at a generator result or compare descendants against the unchanged parent.
-- **Selectable post-generation operations:** generic constrained FAMPNN redesign on eligible complexes; antibody-specific constraints only for antibody formats; a separately named interface repack; PPIFlow partial flow on proven-compatible formats with explicit anchor/region/sample choices and optional sequence redesign; independent validation and quality analysis as distinct branches. No implicit engine fallback or hidden stage overwrite.
-- **Scientific analysis and research branches:** binder-local FrustraMPNN remains diagnostic; separately assess true cross-chain contact frustration on complexes. Caliby is a later explicit sequence-design comparator, not a falsely live choice. LigandMPNN is an optional structure-and-sequence-context redesign experiment using the sole approved Foundry path once runnable; compare matched candidates with/without fixed target side-chain context and against existing sequence-design baselines. Do not claim partner discovery, affinity prediction, or automatic frustration-based improvement.
-- **Full result/review closure:** global model-native results remain distinct but share artifact, lineage, comparison, selection and reopening mechanisms. Persist effective settings, failed/zero-yield outcomes and all per-sample identities; make applicability and unsupported states visible.
+The conversational label “version 2” is not a product name, code namespace, schema suffix or reason to rename historical jobs.
 
-## Constraints and review boundary
+## Problems being addressed
 
-- No code or deployment work begins on this draft before Astra reviews the full plan and Christian resolves consequential scientific/product choices. A read-only contract subagent then prepares the pinned field/authority inventory, native result-row and mmCIF migration decision, compatibility fixtures and ownership map; Astra reviews that concrete contract at a second gate before implementation subagents start. The parent owns integration and verification.
-- Full native BC2 scope is the final acceptance denominator; intermediate engineering milestones are allowed but cannot be called complete or exposed as full coverage while native settings, modalities, artifacts, agent/API parity or live execution remain missing.
-- Current Protein In Silico SOW says RFD3 is the chief general/non-nanobody de novo engine and Foundry owns LigandMPNN. Any intended policy change must be explicit in review, not silently contradicted here.
-- No remote rental/start, Production promotion, or outside-user BC2 hosting is authorized by this document. BC2's source-available hosting restriction requires an audience/licensing decision before third-party service exposure.
+1. **The product is hard-coded around nanobodies.** Heavy/light-chain roles, CDRs, framework assumptions, VHH protocols and handwritten requests leak into otherwise general tasks. The launcher and refinement entrypoints must become modality-aware, retaining antibody-specific controls only where meaningful.
+2. **BC2 is missing.** Its complete native campaign surface must be integrated, including unscaffolded/scaffolded formats, conformational objectives, multi-target/detarget inputs, presets, advanced scientific settings, sweeps, adaptive attempts, native outputs and resume behavior. A VHH-only wrapper or raw-JSON-only editor is not sufficient.
+3. **Existing execution contains real defects.** Hidden profile overrides, unknown-validator fallback, synthetic sequence fallback, implicit redesign, chain-role substitution, sample loss and stale validation labels can change or misrepresent the requested work. These defects are in scope for correction, not grandfathered into the new workflow.
+4. **Candidate identity and continuation are fragile.** Filename/stem inference, incomplete source ownership, inconsistent selection materialization and generic result flattening cannot reliably retain states, samples and multiple refinement rounds. Optional analysis must not roll back usable generator results.
+5. **Refinement mechanisms are entangled.** Side-chain repack, anchor analysis, partial-flow backbone refinement, sequence redesign, prediction and diagnostic analysis need independent selection and truthful output identity. Generalizing the loop must not falsely generalize an antibody-specific checkpoint.
+6. **Remote operation is not just an image deployment.** The same scientific request must execute through existing local and bridge owners, using only selected dependencies, shared assets, persistent compatible caches, precise resume semantics and reopenable returned results. Warm-start overhead must be measured and unnecessary repeated work removed.
+7. **Documentation confuses implementation with qualification.** Generic constrained FA-MPNN, a Caliby parent-workflow path and substantial FrustraMPNN/result infrastructure already exist. They should be reused and qualified rather than reimplemented. Project catalogue unavailability is not proof that a core-job runner is absent.
 
-**Next artifact:** an implementation-ready specification with exact contracts, capability matrix, workstream dependencies, tests and acceptance gates, presented for Astra review before subagent implementation.
+## Required changes
+
+### Agnostic launcher with every existing generator plus BC2
+
+Preserve RFantibody, BoltzGen and seeded PPIFlow as distinct choices and routes. Reuse existing general de novo/RFD3 capabilities where applicable rather than displacing or duplicating them. BC2 is a peer option, not an obligatory stage, replacement generator or add-on restricted to VHH.
+
+Select modality/objective first; expose the selected model's relevant controls and real compatibility constraints. Selecting a new modality must not silently coerce an old request. A seeded route remains visibly seeded. Existing jobs, templates and results remain interpretable.
+
+### Complete BC2 integration
+
+Use one model-owned typed schema with browser/agent parity and pinned native preset resolution. Preserve native campaign stages, workers, sweeps, adaptive behavior, acceptance and ranking. A dedicated Nextflow entrypoint invokes the native campaign; it must not duplicate the scientific engine.
+
+Register the complete selected runtime dependency closure for local and remote execution. Preserve shared weights, GPU isolation and persistent compilation cache. BC2 itself does not require external MSA search.
+
+### Upgraded optional refinement loop
+
+Candidates from every generator enter the same selection/continuation experience, subject to actual artifact and model compatibility rather than generator-name whitelists.
+
+Deliver general constrained sequence redesign, independently selectable repack and anchor analysis, supported PPIFlow partial flow, independently selected prediction/validation, binder-local FrustraMPNN, Caliby qualification and integration, the agreed complex-contact-frustration work, and LigandMPNN as an optional refinement method. Keep each operation's settings and results model-owned. LigandMPNN's exact scientific options and the cross-chain-analysis method require explicit scientific decisions, not silent removal from scope.
+
+Preserve parents and all round/sample/state identities. A changed sequence or structure creates a descendant with fresh validation state. The user can repeat the loop, compare parent and descendants, and stop without being forced through another model.
+
+### Per-model results and reliable selection
+
+Reuse existing Job/Design, scientific artifacts, native result adapters and review infrastructure. Add BC2-native attempt/draw/retained-sequence/state records; do not invent a universal binder score or parallel candidate database.
+
+Keep native CIF/mmCIF authoritative. `Design.pdb_path` already stores those formats despite its legacy name. Fix actual PDB-only consumers; convert only at an operation that truly requires it. No fabricated structures for failed or structureless attempts.
+
+### Local/remote parity and removal of unnecessary work
+
+Use the same compiled scientific invocation and model result adapter for either placement. Provision selected immutable assets once and reuse them. Off-stages neither execute nor acquire dependencies. Measure provisioning, warm launch, native compilation, resume and result return separately. Retain ownership/corruption checks at real boundaries without adding duplicate validation systems.
+
+## Implementation and completion
+
+Subagents implement bounded workstreams with explicit file ownership and one parent integrator. The existing holistic review supplies evidence; no ceremonial second review is required merely to inspect code. Concrete unresolved contracts must be resolved before dependent implementation, and consequential scientific choices remain Christian's decisions.
+
+Acceptance covers the **whole workflow**: all existing generators, full native BC2, modality-aware controls, repeated optional refinement, repaired defects, per-model results, local execution, remote execution and measured warm behavior. An unavailable in-scope operation is unfinished work, not a completed feature because a disabled selector explains it.
+
+Simplify the machinery, not the product. Reuse global configuration/result facilities and preserve their applicable guarantees without turning this upgrade into an unrelated platform rewrite. Licensing restrictions on third-party invocable BC2 functionality remain distinct from authorized internal local/private-remote use.
