@@ -46,6 +46,49 @@ it('antibody de novo clone restores selected sequence stage and sends scope thro
     expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
     expect(mocks.submit.mock.calls[0][0].params.fampnn_analysis_overrides).toEqual({ mutation: [] });
 });
+it('mounted BoltzGen clone sends its own mode and saved native controls, not RFantibody defaults', async () => {
+    sourceFetch();
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{
+        mode: 'nanobody_binder', target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1',
+        boltzgen_num_designs: 7, boltzgen_use_framework_template: false,
+        boltzgen_scaffold_length: '95-110', boltzgen_cdr_h3_length: '8-12',
+        boltzgen_skip_inverse_folding: true, boltzgen_avoid_cysteine: false,
+        boltzgen_filter_biased: false, boltzgen_alpha: 0, boltzgen_step_scale: 0,
+    }} />);
+    await click('Launch BoltzGen Nanobody Batch');
+    expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
+    const request = mocks.submit.mock.calls[0][0];
+    expect([request.model_id, request.mode]).toEqual(['antibody_denovo', 'nanobody_binder']);
+    expect(request.params).toMatchObject({ boltzgen_num_designs: 7,
+        boltzgen_use_framework_template: false, boltzgen_scaffold_length: '95-110',
+        boltzgen_cdr_h3_length: '8-12', boltzgen_skip_inverse_folding: true,
+        boltzgen_avoid_cysteine: false, boltzgen_filter_biased: false,
+        boltzgen_alpha: 0, boltzgen_step_scale: 0 });
+});
+it('mounted seeded PPIFlow clone submits its distinct native route without target substitution', async () => {
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{
+        mode: 'generator_backbone_refine', ppiflow_seed_complex_path: 'data/seed.pdb',
+        antibody_chains: 'H,L', antigen_chains: 'T',
+    }} />);
+    await click('Launch PPIFlow Seeded Batch');
+    expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
+    const request = mocks.submit.mock.calls[0][0];
+    expect([request.model_id, request.mode]).toEqual(['antibody_denovo', 'generator_backbone_refine']);
+    expect(request.params).toMatchObject({ ppiflow_seed_complex_path: 'data/seed.pdb', antibody_chains: 'H,L', antigen_chains: 'T' });
+});
+it('selected post-round subset is sent intact to iteration rather than a generator resubmission', async () => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[{
+        pathname: '/submit', state: { refinementMode: true, sourceJobId: 'round-two',
+            selectedDesignIds: ['candidate-2', 'candidate-4'], sourceOutputSourceFilter: 'ppiflow' },
+    }]}><AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: 'fampnn' }} /></MemoryRouter></QueryClientProvider>));
+    await click('Launch Antibody Refinement');
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.iteration).toHaveBeenCalledTimes(1);
+    expect(mocks.iteration.mock.calls[0][0]).toMatchObject({ source_job_id: 'round-two',
+        design_ids: ['candidate-2', 'candidate-4'], action: 'ui_refinement' });
+});
 const mutation = { mutation: [{ chain_id: 'H', author_number: 0, insertion_code: 'A' }] };
 it('antibody refinement preserves mutation-only scope through actual iteration and saved-template callbacks', async () => {
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: 'fampnn', fampnn_analysis_overrides: mutation }} />, true);
@@ -84,7 +127,7 @@ it('antibody saved template reload replaces mutation scope without copying prote
 });
 it('antibody saved summary overrides are visibly forbidden and never submitted', async () => {
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: 'fampnn', fampnn_analysis_overrides: { summary: [], mutation: [] } }} />, true);
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('summary');
+    expect([...document.querySelectorAll('[role="alert"]')].map(el => el.textContent).join(' ')).toContain('summary');
     await click('Launch Antibody Refinement');
     expect(mocks.iteration).not.toHaveBeenCalled();
 });
@@ -97,7 +140,7 @@ it('local redraw rehydrates new prefill scopes and preserves exact draft instead
 });
 it('local malformed prefill is visible and fails closed, not a render crash or default', async () => {
     await mount(<ProteinLocalRedesignTemplate onBack={() => {}} submissionModelId="protein_modification_experimental" initialValues={{ seq_method: 'fampnn', fampnn_analysis_overrides: { mutation: 'bad' } }} />);
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('FA-MPNN');
+    expect([...document.querySelectorAll('[role="alert"]')].map(el => el.textContent).join(' ')).toContain('FA-MPNN');
     await click('Launch RFD3 + Sequence + Validation');
     expect(mocks.submit).not.toHaveBeenCalled();
 });

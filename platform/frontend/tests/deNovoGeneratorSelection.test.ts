@@ -15,6 +15,9 @@ test('saved native generator mode restores its own route and unknown selectors r
     assert.equal(resolveExistingDeNovoGenerator({ mode: 'generator_backbone_refine' }), 'ppiflow');
     assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'rfantibody' }), 'rfantibody');
     assert.equal(resolveExistingDeNovoGenerator({}), 'rfantibody'); // legacy antibody request
+    assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'rfantibody', mode: 'nanobody_binder' }), null);
+    assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'boltzgen', mode: 'generator_backbone_refine' }), null);
+    assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'ppiflow', mode: 'antibody_denovo_pipeline' }), null);
     assert.equal(resolveExistingDeNovoGenerator({ denovo_generator: 'bindcraft2', mode: 'nanobody_binder' }), null);
     assert.equal(resolveExistingDeNovoGenerator({ generator: 'unknown' }), null);
     assert.equal(resolveExistingDeNovoGenerator({ mode: 'unknown' }), null);

@@ -5,7 +5,16 @@ export function resolveExistingDeNovoGenerator(values: Record<string, unknown> =
     const explicit = values.denovo_generator ?? values.generator;
     if (explicit !== undefined && explicit !== null && String(explicit).trim()) {
         const selected = String(explicit).trim().toLowerCase();
-        return selected === 'rfantibody' || selected === 'boltzgen' || selected === 'ppiflow' ? selected : null;
+        if (selected !== 'rfantibody' && selected !== 'boltzgen' && selected !== 'ppiflow') return null;
+        // A saved selector cannot override a different model-owned execution mode.
+        const mode = values.mode ?? (values.stage_family === 'ppiflow' ? values.stage_mode : undefined);
+        if (mode !== undefined && mode !== null && String(mode).trim()) {
+            const expected = mode === 'generator_backbone_refine' ? 'ppiflow'
+                : mode === 'nanobody_binder' ? 'boltzgen'
+                    : ['antibody_denovo', 'antibody_denovo_pipeline', 'antibody_refinement_pipeline'].includes(String(mode)) ? 'rfantibody' : null;
+            if (expected !== selected) return null;
+        }
+        return selected;
     }
     const stage = values.stage_family === 'ppiflow' ? values.stage_mode : values.mode;
     if (stage === 'generator_backbone_refine') return 'ppiflow';
