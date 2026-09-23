@@ -1363,7 +1363,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
     if structure_validator == "boltz":
         structure_validator = "boltz2"
     if structure_validator not in {"boltz2", "protenix", "esmfold2"}:
-        structure_validator = "boltz2"
+        raise HTTPException(status_code=422, detail=f"Unsupported structure validator: {structure_validator}")
     normalized["structure_validator"] = structure_validator
 
     canonical_post_validation = normalized.get("run_post_validation_maturation")
@@ -1399,7 +1399,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         if normalized_gate_stage == "post_boltz_validation":
             normalized_gate_stage = "post_structure_validation"
         if normalized_gate_stage not in {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}:
-            normalized_gate_stage = "post_fampnn"
+            raise HTTPException(status_code=422, detail=f"Unsupported interactive gate stage: {normalized_gate_stage}")
         normalized["interactive_gate_stage"] = normalized_gate_stage
 
     if "rfantibody_screen_reference_scope" in normalized:
@@ -1432,7 +1432,8 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
             ppiflow_tuning_profile = "manual"
         normalized["ppiflow_tuning_profile"] = ppiflow_tuning_profile
         if ppiflow_tuning_profile == "stage_optimized":
-            normalized.update(_stage_optimized_ppiflow_defaults(inferred_ppiflow_stage_mode))
+            for key, value in _stage_optimized_ppiflow_defaults(inferred_ppiflow_stage_mode).items():
+                normalized.setdefault(key, value)
     if "ppiflow_stage_target" in normalized:
         normalized["ppiflow_stage_target"] = str(normalized.get("ppiflow_stage_target") or "").strip().lower() or None
     ppiflow_objective_mode = str(normalized.get("ppiflow_objective_mode") or "").strip().lower() or None

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -1001,6 +1002,34 @@ def test_normalize_antibody_job_params_applies_stage_optimized_ppiflow_defaults_
     assert normalized["ppiflow_require_anchors"] is True
     assert normalized["ppiflow_objective_mode"] == "balanced"
     assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+def test_normalize_antibody_job_params_preserves_explicit_stage_values() -> None:
+    normalized = _normalize_antibody_job_params({
+        "run_ppiflow_maturation": True,
+        "ppiflow_stage_mode": "post_fampnn",
+        "ppiflow_tuning_profile": "stage_optimized",
+        "ppiflow_start_t": 0.45,
+        "ppiflow_samples_per_target": 2,
+        "ppiflow_require_anchors": False,
+        "ppiflow_objective_threshold": 0.0,
+    })
+
+    assert normalized["ppiflow_start_t"] == 0.45
+    assert normalized["ppiflow_samples_per_target"] == 2
+    assert normalized["ppiflow_require_anchors"] is False
+    assert normalized["ppiflow_objective_threshold"] == 0.0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("structure_validator", "unknown_predictor"),
+    ("interactive_gate_stage", "unknown_gate"),
+])
+def test_normalize_antibody_job_params_rejects_unknown_scientific_choices(field: str, value: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _normalize_antibody_job_params({field: value})
+    assert exc.value.status_code == 422
+    assert value in str(exc.value.detail)
 
 
 def test_normalize_antibody_job_params_disables_stage_optimized_profile_for_both_mode() -> None:
