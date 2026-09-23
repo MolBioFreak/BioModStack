@@ -246,7 +246,8 @@ function PreparationStatus({ target, onChanged }: Props) {
   const verified = artifacts.filter(artifact => artifact.state === 'verified').reduce((sum, artifact) => sum + (artifact.size_bytes || 0), 0);
   const verifiedCount = artifacts.filter(artifact => artifact.state === 'verified').length;
   // Receipts only report completed objects, not live transfer bytes or throughput.
-  const elapsed = elapsedLabel(operation.started_at, operation.updated_at);
+  // Poll-driven rerenders advance active elapsed time; settled receipts end at their last update.
+  const elapsed = elapsedLabel(operation.started_at, ACTIVE_PHASES.includes(operation.phase) ? undefined : operation.updated_at);
   async function requestCancel() {
     if (lock.current || !cancellable || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;

@@ -326,7 +326,7 @@ describe('remote execution operator surfaces', () => {
             await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click());
             await flush();
             expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
-            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
+            target = { ...target, state: 'unavailable', active: true, setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
             await flush(5_020);
             expect(container.textContent).toContain('Setup · failed: Worker verification failed');
             expect(container.textContent?.split('Worker verification failed')).toHaveLength(2);

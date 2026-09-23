@@ -1385,7 +1385,8 @@ export function InfraLiveTelemetry({
         if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
             (target) => target.provider === 'vast'
                 && target.provider_instance_id === attachVastMutation.variables
-                && target.active,
+                && target.active && target.state === 'ready'
+                && target.setup?.phase === 'ready' && !target.last_error,
         )) {
             attachVastMutation.reset();
         }

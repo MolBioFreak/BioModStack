@@ -51,6 +51,8 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     <button type="button" disabled={!canPreload || !validRecipe} onClick={() => void submit()} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-sm disabled:opacity-50">
       {busy ? 'Preloading…' : preload?.phase === 'failed' ? 'Retry preload' : 'Preload selected worker'}
     </button>
+      </div>
+    </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
       {preload.phase === 'source_download_ready' && <p>Source/download ready — not scientific Ready</p>}
@@ -64,7 +66,5 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       {progress.activity && <p>{progress.activity.stage}: {progress.activity.state}</p>}
       <p className="text-xs text-[var(--text-muted)]">Job {progress.job_id} · Updated {progress.updated_at}</p>
     </div>}
-      </div>
-    </details>
   </section>;
 }

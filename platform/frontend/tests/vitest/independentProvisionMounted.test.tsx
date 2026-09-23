@@ -77,6 +77,21 @@ it('keeps optional preparation closed on load and polling, retaining a form choi
   expect(posts).toEqual([]);
 });
 
+it('shows persisted worker activity outside closed preparation controls without posting', async () => {
+  target = { ...ready, preload: { operation_id: 'op', job_id: 'recipe', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
+    request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'runtime/image', message: 'Downloading runtime',
+    started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z' },
+    progress: { operation_id: 'run', job_id: 'job', phase: 'running', artifact: 'inputs/sample', message: 'Staging inputs', updated_at: '2026-09-20T23:56:14Z' } };
+  await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={changed} /></QueryClientProvider>); await settle(); });
+  const details = container.querySelector<HTMLDetailsElement>('[aria-label="Remote preload and activity"] > details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('[aria-label="Worker activity"]')).toBeNull();
+  expect(details.querySelector('[aria-label="Preload progress"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain('Staging inputs');
+  expect(container.querySelector('[aria-label="Preload progress"]')?.textContent).toContain('Downloading runtime');
+  expect(posts).toEqual([]);
+});
+
 it('keeps attached runtime-unready workers disabled for independent provisioning', async () => {
   target = { ...ready, state: 'unavailable', active: true, last_error: 'Mount namespaces unavailable; use a compatible VM' };
   await render(); await select('Provision model', 'protenix');
@@ -428,6 +443,7 @@ it('lazily discloses exact dependency files without hiding blockers or posting',
 });
 
 it('leads with the running preparation, its verified bytes and the stop control', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-20T23:56:14Z'));
   target.preload = { operation_id: 'live1', selection: catalog[0], source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40),
     request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'weights/protenix.bin', message: 'Downloading artifact from Hugging Face',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', sequence: 3,
@@ -439,11 +455,17 @@ it('leads with the running preparation, its verified bytes and the stop control'
   expect(container.textContent).toContain('1,234 bytes verified of 3,234 bytes declared');
   expect(container.textContent).toContain('Transfer progress and rate are not reported');
   expect(container.textContent).toContain('2m 0s elapsed');
+  clock.mockReturnValue(Date.parse('2026-09-20T23:57:14Z'));
+  await render();
+  expect(container.textContent).toContain('3m 0s elapsed');
   expect(container.textContent).not.toContain('MB/s average');
   expect(container.querySelector('[role="progressbar"]')).toBeNull();
   expect(container.textContent!.indexOf('Downloading assets')).toBeLessThan(container.textContent!.indexOf('Provision scope'));
   expect(button('Cancel provision')).toBeTruthy();
   expect(posts).toEqual([]);
+  target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' } };
+  await render();
+  expect(container.textContent).toContain('2m 0s elapsed');
 });
 
 it('states the preparation caveat once and keeps the technical evidence collapsed', async () => {

@@ -41,6 +41,21 @@ it('fresh mounts and refreshes use backend states without downloading; returning
     expect(post).not.toHaveBeenCalled();
 });
 
+it('does not promise worker retention without provider verification, while preserving explicit pull and local import', () => {
+    const post = vi.spyOn(api, 'post');
+    const view = mount(ready);
+    expect(view.container.textContent).toContain('Results reported ready on worker');
+    expect(view.container.textContent).toContain('worker availability is checked when you pull');
+    expect(view.container.textContent).not.toContain('results remain on worker');
+    expect(view.container.querySelector('button')?.textContent).toBe('Pull results');
+    view.render({ ...ready, remote_state: 'result_pull_failed' });
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain('Worker copy has not been re-verified');
+    view.render({ ...ready, remote_state: 'result_pull_failed', provenance: { remote_execution_receipt: { received_manifest_sha256: 'digest', result_manifest_sha256: 'digest' } } });
+    expect(view.container.textContent).toContain('Verified bytes are retained locally');
+    expect(view.container.querySelector('button')?.textContent).toBe('Retry import');
+    expect(post).not.toHaveBeenCalled();
+});
+
 it('duplicate surfaces send one explicit POST; retry is explicit and persisted failure survives reload', async () => {
     const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('Connection lost'));
     const view = mount(ready, 2);
@@ -109,7 +124,7 @@ it('ESMFold2 launcher copy distinguishes cached files from placement; submission
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:1');
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
     const params = { model_variant: 'full', local_files_only: true };
-    await submitJob({ name: 'ESM remote', model_id: 'esmfold2', mode: 'structure_prediction', params });
+    await submitJob({ name: 'ESM remote', model_id: 'esmfold2', mode: 'structure_prediction', params, execution_plan_approval: 'a'.repeat(64) });
     expect(post).toHaveBeenCalledWith('/api/jobs', expect.objectContaining({ execution_target_id: 'vast:1', params }), undefined);
 });
 
