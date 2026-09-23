@@ -299,6 +299,11 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         keys.update({'target_pdb', 'selected_input_dir', 'selected_input_manifest',
                      'rfantibody_input_pdbs', 'fampnn_collected_pdbs',
                      'manual_mutation_fixed_positions_json'})
+    if mode == 'maturation_child' and model_id == 'template_antibody_denovo':
+        keys.add('source_identity_json')
+        for index, path in enumerate(str(params.get('pdb_paths') or '').split(',')):
+            if path.strip():
+                visit(path.strip(), None, ('pdb_paths', index))
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
     for key in sorted(keys & params.keys()):

@@ -536,8 +536,12 @@ def _input_assets(
             continue
         if str(Path(value).resolve()) not in (runtime_references or {}):
             raise RemoteBundleError(f"Native runtime field has no selected dependency binding: {key}")
-    candidates = _flatten_strings({key: value for key, value in params.items()
-                                   if key not in destinations and key not in runtime_fields})
+    candidates = list(_flatten_strings({key: value for key, value in params.items()
+                                   if key not in destinations and key not in runtime_fields
+                                   and key != 'pdb_paths'}))
+    if native_invocation.mode == 'maturation_child' and params.get('pdb_paths'):
+        # Native child syntax is a comma-separated list, not one filesystem path.
+        candidates.extend(part.strip() for part in str(params['pdb_paths']).split(',') if part.strip())
     for raw in candidates:
         if not raw.startswith("/"):
             continue
@@ -662,6 +666,11 @@ def _rewrite(value: str, path_map: dict[str, str]) -> str:
             continue
         return str(PurePosixPath(remote) / relative)
     return value
+
+
+def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
+    """Place each native comma-delimited child input without changing its order."""
+    return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
 def compile_remote_dependencies(
@@ -1280,6 +1289,10 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
+    if job.mode == 'maturation_child' and '--pdb_paths' in command:
+        position = command.index('--pdb_paths') + 1
+        translated_command[position] = _rewrite_maturation_pdb_paths(
+            str(command[position]), path_map)
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
