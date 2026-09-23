@@ -35,6 +35,7 @@ PROCESS_CONTRACTS = {
     'modules/boltz.nf:AlignBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path designs', 'val design_type'), ('tuple path("aligned/*.pdb"), path("aligned/*.json"), emit: pdbs_jsons', 'path "alignment_*.log"', 'path ("boltz_metadata_*.jsonl"), topic: metadata_ch_fold_seq'), (), ()),
     'modules/boltz.nf:FilterBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_boltz_${task.index}.log"), emit: log', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
     'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('path input_config',), ("path 'cp_results', emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), (), ()),
+    'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py',), ('container "${params.container_dir}/bindcraft2.sif"',)),
     'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/*.pdb', emit: pdbs, optional: true", "path 'published/*.cif', emit: cifs, optional: true", "path 'published/*.json', emit: jsons, optional: true", "path 'published/*.npz', emit: npzs, optional: true"), (), ()),
     'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', 'path input_pdb', 'path ligand_pdb', 'path dna_structure', 'path target_pdb'), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
     'modules/boltzgen.nf:RunBoltzGen': (('BoltzGen', 'gpu'), ('path yaml_configs',), ('path "output/designs/*.pdb", emit: pdbs, optional: true', 'path "output/designs/*.{json,npz,csv}", emit: jsons, optional: true', 'path "*.log"'), ('scripts/lib/boltzgen_inputs.py',), ()),
@@ -820,6 +821,14 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.msa('protenix', ('PrepConforNetsRequest',), consumer='modules/confornets_experimental.nf:RunConforNets')
         return True
 
+    if workflow == 'bindcraft2' and model_id == 'bindcraft2':
+        # The installed image ships MPNN weights; only AF2 params are external.
+        # Keep the disabled model's availability distinct from this source closure.
+        weights = a.asset('weights', 'alphafold/params',
+            'modules/bindcraft2.nf:RunBindCraft2:BINDCRAFT_AF2_PARAMS')
+        a.stage('RunBindCraft2', extra=(weights,))
+        return True
+
     if workflow == 'boltz_cp_experimental':
         after = a.chain(['RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'])
         if p.get('bcp_repo_path'):
@@ -913,7 +922,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         after = a.chain(['IdentifyAnchorResidues', 'RunPartialFlow', 'ScorePartialFlowImprovement'])
         if workflow == 'maturation_child':
             # Preserve the native redesign predicate and top-N ranking authority.
-            redesign = p.get('maturation_redesign_enabled') is not False and p.get('ppiflow_mode') != 'backbone_refine'
+            redesign = p.get('maturation_redesign_enabled') is True and p.get('ppiflow_mode') != 'backbone_refine'
             if redesign:
                 after = a.chain(['ANARCII', 'PrepMaturationRedesign', 'RunMaturationFAMPNN', 'ScoreMaturationImprovement'], after,
                                 condition='maturation_child_core.runRedesign && redesign_enabled')
