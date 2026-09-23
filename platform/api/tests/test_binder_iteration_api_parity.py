@@ -1,4 +1,4 @@
-"""Selected binder root and native generator request boundaries."""
+"""Native generator request identity and antibody iteration source boundaries."""
 from types import SimpleNamespace
 
 import pytest
@@ -11,11 +11,7 @@ from database import UserTemplate
 from model_registry import get_registry
 from routers.jobs import normalize_job_request
 from schemas import JobCreate
-from routers.jobs import (
-    _build_antibody_iteration_job,
-    _resolve_antibody_root_job,
-    _validate_selected_design_owners,
-)
+from routers.jobs import _resolve_antibody_root_job, _validate_selected_design_owners
 
 
 class Session:
@@ -34,29 +30,21 @@ def job(id, model, *, params=None, parent=None):
 
 
 @pytest.mark.asyncio
-async def test_generic_bc2_root_and_selected_same_root_sibling(tmp_path):
+async def test_bc2_campaign_does_not_become_an_antibody_refinement_root():
     root = job('root', 'bindcraft2', params={'bc2_native_only': {'objective': 'native'}})
     source = job('round-1', 'template_antibody_denovo',
                  params={'iteration_source_root_job_id': 'root', 'iteration_source_job_id': 'root'})
-    sibling = job('round-2', 'template_antibody_denovo',
-                  params={'iteration_source_root_job_id': 'root', 'iteration_source_job_id': 'root'})
-    session = Session(root, source, sibling)
+    session = Session(root, source)
     resolved_source, resolved_root = await _resolve_antibody_root_job(session, source.id)
-    assert (resolved_source.id, resolved_root.id) == ('round-1', 'root')
-    selected = [SimpleNamespace(id='selected', job_id=sibling.id, lineage_root_job_id=root.id)]
-    await _validate_selected_design_owners(session, source, root, selected)
-    child = _build_antibody_iteration_job(root, source, 'ui_refinement', tmp_path,
-                                          ['selected'], None, {}, selected_designs=[])
-    assert child.model_id == 'template_antibody_denovo'
-    assert child.mode == 'antibody_refinement_pipeline'
-    assert child.params['iteration_source_design_ids'] == ['selected']
-    assert child.params['iteration_source_root_job_id'] == root.id
-    assert 'bc2_native_only' not in child.params
+    assert (resolved_source.id, resolved_root.id) == ('round-1', 'round-1')
+    with pytest.raises(HTTPException) as exc:
+        await _resolve_antibody_root_job(session, root.id)
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_foreign_root_and_unrelated_design_refused():
-    root = job('root', 'bindcraft2')
+    root = job('root', 'template_antibody_denovo')
     source = job('source', 'template_antibody_denovo',
                  params={'iteration_source_root_job_id': root.id})
     foreign = job('foreign', 'bindcraft2')

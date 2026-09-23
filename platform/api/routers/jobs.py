@@ -2656,14 +2656,6 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
     )
 
 
-def _looks_like_binder_root(job: Optional[Job]) -> bool:
-    """Scientific lineage roots need not use the historical antibody identity."""
-    return job is not None and (
-        _looks_like_antibody_job(job)
-        or str(getattr(job, "model_id", "") or "").strip().lower() == "bindcraft2"
-    )
-
-
 def _should_spawn_antibody_refinement_on_resume(job: Optional[Job]) -> bool:
     if job is None or not getattr(job, "awaiting_input", False):
         return False
@@ -2693,7 +2685,7 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
 
     if iteration_root_id:
         explicit_root = await session.get(Job, iteration_root_id)
-        if explicit_root is not None and _looks_like_binder_root(explicit_root):
+        if explicit_root is not None and _looks_like_antibody_job(explicit_root):
             return source_job, explicit_root
 
     lineage: List[Job] = []
@@ -2706,12 +2698,12 @@ async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) 
             break
         current = await session.get(Job, current.parent_job_id)
 
-    binder_jobs = [job for job in lineage if _looks_like_binder_root(job)]
-    root_job = binder_jobs[-1] if binder_jobs else lineage[-1]
-    if not _looks_like_binder_root(root_job):
+    antibody_jobs = [job for job in lineage if _looks_like_antibody_job(job)]
+    root_job = antibody_jobs[-1] if antibody_jobs else lineage[-1]
+    if not _looks_like_antibody_job(root_job):
         raise HTTPException(
             status_code=422,
-            detail="Selected job is not part of a binder-design lineage.",
+            detail="Selected job is not part of an antibody or nanobody refinement-compatible lineage.",
         )
     return source_job, root_job
 
@@ -4544,10 +4536,7 @@ def _build_antibody_iteration_job(
             ),
         )
 
-    # Native BC2 campaign settings are generator-owned, not child defaults.
-    # The selected input manifest below carries candidate identity forward.
-    root_params = {} if getattr(root_job, "model_id", None) == "bindcraft2" else root_job.params
-    launch_params = _prune_iteration_params(root_params if isinstance(root_params, dict) else {})
+    launch_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
     source_stage_payload = _derive_source_stage_payload(source_job, selected_designs or [], selection_dir)
     launch_params.update({
         "iteration_source_job_id": source_job.id,
