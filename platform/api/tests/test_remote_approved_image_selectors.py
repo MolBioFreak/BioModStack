@@ -198,6 +198,43 @@ def test_public_availability_and_cm_callback_gate_are_unchanged(approved, monkey
     assert images.resolve_image('confornets.sif', containers) == containers / 'confornets.sif'
 
 
+def test_disabled_optional_image_selector_does_not_add_transport_or_input(approved, monkeypatch, tmp_path):
+    """Saved off-stage selectors are not selected assets (offline fixture only)."""
+    containers, _, _, _ = approved
+    missing = str(containers / 'missing-frustra.sif')
+    argv = ['nextflow', 'run', 'workflows/structure_prediction.nf',
+            '--frustrampnn_container_path', missing]
+    invocation = selector_invocation('protenix', argv, {
+        'run_frustrampnn': False, 'frustrampnn_container_path': missing})
+    assert invocation.execution_plan is not None
+    assert not any(d.relative_path == 'frustrampnn.sif'
+                   for d in invocation.execution_plan.dependencies)
+    resolved = []
+    original = bundle.resolve_image
+
+    def tracked(name, *args, **kwargs):
+        resolved.append(name)
+        if name == 'frustrampnn.sif':
+            raise AssertionError('Disabled operation selected an image')
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(bundle, 'resolve_image', tracked)
+    command, effective = bundle.compile_remote_dependencies('protenix', 'predict', argv,
+        native_invocation=invocation)
+    assert command[:len(argv)] == argv
+    assert command[command.index('--protenix_container_path') + 1] == str(approved[2])
+    assert effective['frustrampnn_container_path'] == missing
+    assert resolved == ['protenix.sif']
+    assert all(relative != 'containers/frustrampnn.sif' for _, relative in
+               bundle._runtime_assets('protenix', 'predict', effective, native_invocation=invocation))
+    monkeypatch.setattr(bundle, 'get_data_root', lambda: tmp_path)
+    monkeypatch.setattr(bundle, 'get_inputs_dir', lambda: tmp_path)
+    monkeypatch.setattr(bundle, 'get_results_dir', lambda: tmp_path)
+    assert bundle._input_assets(effective, native_invocation=invocation,
+                                repo_root=tmp_path / 'source', runtime_paths=set(),
+                                output_dir=tmp_path / 'output') == []
+
+
 def test_invalid_lane_cannot_reinstate_original(approved, monkeypatch):
     containers, root, image, digest = approved
     (containers / 'protenix.sif').write_bytes(b'not a fallback')
