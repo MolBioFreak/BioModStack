@@ -330,7 +330,6 @@ export function BioXpCockpit() {
     const currentLifecycleCommandId = lifecycleGenerationCurrent ? lifecycleCommandId : null;
     const currentLifecycleActionId = lifecycleGenerationCurrent ? lifecycleActionId : null;
     const [deckTarget, setDeckTarget] = useState('');
-    const [transferBusy, setTransferBusy] = useState(false);
     const [deckCameraOffset, setDeckCameraOffset] = useState(false);
     const [deckSelectionCatalog, setDeckSelectionCatalog] = useState<{
         generation: number; options: BioXpDeckDestinationV1[];
@@ -662,7 +661,7 @@ export function BioXpCockpit() {
         // A cached enabled row is not reserved admission or an OEM submission queue.
         // Keep independent Stop buttons outside this normal-action check.
         const pendingReadOnly = operatorActionById(invokeOperatorAction.variables?.actionId ?? '')?.safety_class === 'read_only';
-        const conflictingSubmission = transferBusy || normalSubmissionRef.current !== null || axisOutcomeUnresolved || axisAmbiguousError || interruptAnyPending || componentStop.isPending || xyPending || invokeLifecycleActionMutation.isPending || lifecycleStatusRecoveryPending || lifecycleReceipt?.status === 'ambiguous'
+        const conflictingSubmission = normalSubmissionRef.current !== null || axisOutcomeUnresolved || axisAmbiguousError || interruptAnyPending || componentStop.isPending || xyPending || invokeLifecycleActionMutation.isPending || lifecycleStatusRecoveryPending || lifecycleReceipt?.status === 'ambiguous'
             || invokeDeckAction.isPending || invokeYAction.isPending
             || (invokeOperatorAction.isPending && !pendingReadOnly);
         if (conflictingSubmission) return 'A command is pending; wait for its receipt before another normal action.';
@@ -967,7 +966,7 @@ export function BioXpCockpit() {
     // polling, recovery panel) but never disable a new movement. The robot's
     // admission re-evaluates current state on every submission, so a stale
     // record cannot wedge the deck lane.
-    const deckDisabledReason = (transferBusy ? 'A compound command is live or unresolved; wait for its receipt.' : !v2AuthorityCoherent
+    const deckDisabledReason = (!v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
             ? 'Fresh matching catalog and dashboard deck authority is unavailable.'
@@ -1284,10 +1283,7 @@ export function BioXpCockpit() {
                 <YOperatorError label="Deck enqueue" error={currentDeckInvokeError} />
                 {deckResolution && <p className="text-sm text-slate-300">Earlier move reconciled. Historical outcome remains {deckReceipt?.status}; this does not retry the command. {deckRecoveryResolved ? 'New movement still requires fresh robot authority.' : 'Awaiting current robot authority at or after the recovery revision.'}</p>}
                 <YOperatorError label="Deck receipt" error={deckReceiptQuery.error} />
-                <BioXpTransferControls key={`${generation}:${active}`} generation={generation} connected={linkConnected}
-                    controlsEnabled={robotControlReady && v2AuthorityCoherent}
-                    commandBusy={busy || deckPending || (currentDashboardV2?.active_commands ?? []).some(command => !command.terminal)}
-                    onBusy={setTransferBusy} />
+                <BioXpTransferControls key={`${generation}:${active}`} generation={generation} connected={linkConnected} />
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">

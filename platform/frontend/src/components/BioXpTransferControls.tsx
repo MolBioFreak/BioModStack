@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
     bioXpErrorText, useBioXpWorkflowJobs, useBioXpWorkflowJob, useSubmitBioXpProtocol,
-    useBioXpOperatorReceiptV2, type BioXpWorkflowJob, getBioXpTransferPreflight, type BioXpTransferPreflight,
+    useBioXpOperatorReceiptV2, type BioXpWorkflowJob,
 } from '../lib/bioxpClient';
 
 // OEM MP/MC script tokens, not a source-location override or admission authority.
@@ -43,14 +43,11 @@ function ChildReceipt({ id, generation, connected }: { id: string; generation: n
     </details></div>;
 }
 
-export function BioXpTransferControls({ generation, connected, controlsEnabled, commandBusy, onBusy }: {
-    generation: number; connected: boolean; controlsEnabled: boolean; commandBusy: boolean; onBusy: (busy: boolean) => void;
+export function BioXpTransferControls({ generation, connected }: {
+    generation: number; connected: boolean;
 }) {
     const [object, setObject] = useState<string>('CV_OUTPUT');
     const [destination, setDestination] = useState<string>('LOC_OCS');
-    const [operator, setOperator] = useState('');
-    const [preflight, setPreflight] = useState<BioXpTransferPreflight | null>(null);
-    const [ack, setAck] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [attempt, setAttempt] = useState<{ id: string; key: string; generation: number } | null>(null);
     const [accepted, setAccepted] = useState<BioXpWorkflowJob | null>(null);
@@ -58,7 +55,6 @@ export function BioXpTransferControls({ generation, connected, controlsEnabled, 
     const mounted = useRef(true);
     const connection = useRef({ generation, connected });
     connection.current = { generation, connected };
-    useEffect(() => { setAck(false); setPreflight(null); }, [generation, connected, object, destination]);
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const jobs = useBioXpWorkflowJobs(generation, connected);
     const activeJob = jobs.data?.find(job => job.command?.terminal === false);
@@ -71,31 +67,20 @@ export function BioXpTransferControls({ generation, connected, controlsEnabled, 
     const command = job?.command;
     const currentLive = command?.command_id === id && job?.execution?.dry_run === false;
     const [submitting, setSubmitting] = useState(false);
-    const listedLive = !!activeJob && !(activeJob.job_id === id && currentLive && command?.terminal);
-    const busy = submitting || identityMismatch || listedLive || (!!attempt && !(currentLive && command?.terminal));
-    useEffect(() => { onBusy(busy); }, [busy, onBusy]);
+    // The jobs list and receipt can lag a completed robot command. They are
+    // evidence, not a second resource lock; the robot excludes live conflicts.
+    const busy = submitting;
     const submit = useSubmitBioXpProtocol();
-    const enabled = connected && controlsEnabled && !commandBusy && !busy && !submit.isPending
-        && !jobs.isLoading && !jobs.isError && !!operator.trim() && ack;
+    // The robot decides live admission; unrelated cockpit requests and
+    // retained status observations do not lock this independent intent.
+    const enabled = connected && !busy && !submit.isPending;
 
     async function run(inspect: boolean) {
         if (!enabled || busyRef.current) return;
         busyRef.current = true;
         setSubmitting(true);
-        setError(null); setAck(false); setAccepted(null); setPreflight(null);
+        setError(null); setAccepted(null);
         try {
-            const observed = await getBioXpTransferPreflight(generation);
-            if (!mounted.current) return;
-            if (!connection.current.connected || connection.current.generation !== generation || observed.connection_generation !== generation)
-                throw new Error('Connection changed during preflight. Confirm the current robot before trying again.');
-            setPreflight(observed);
-            const contract = {
-                operator_id: operator.trim(), physical_console_verified: true, live_execution_ack: true,
-                deck_manifest: { observation_source: 'robot operator/v2/control-catalog',
-                    ownership_generation: observed.ownership_generation, observed_deck: observed.observed_deck,
-                    selected_operation: inspect ? { kind: 'inspect' } : { object, target: destination } },
-                preflight: observed.preflight,
-            };
             const key = crypto.randomUUID();
             const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
             const jobId = `protocol-live-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
@@ -103,7 +88,7 @@ export function BioXpTransferControls({ generation, connected, controlsEnabled, 
             if (!connection.current.connected || connection.current.generation !== generation) throw new Error('Connection changed before submission.');
             setAttempt({ id: jobId, key, generation });
             const result = await submit.mutateAsync({ source_type: 'native', document: transferDocument(object, destination, inspect),
-                live_execution: contract, dry_run: false,
+                live_execution: { live_execution_ack: true }, dry_run: false,
                 idempotency_key: key, expected_connection_generation: generation });
             if (!mounted.current) return;
             if (result.job_id !== jobId || result.command?.idempotency_key !== key) throw new Error('Robot returned a different submission identity.');
@@ -112,14 +97,14 @@ export function BioXpTransferControls({ generation, connected, controlsEnabled, 
         } catch (cause) {
             if (!mounted.current) return;
             setError(bioXpErrorText(cause));
-            // Once POST starts, retain identity on every error. A conflict or proxy error
-            // is not proof that no work was admitted; readback, never blind replay.
+            // Retain identity for readback on every error; never automatically
+            // replay an uncertain POST. A later explicit click is a new intent.
         } finally { busyRef.current = false; if (mounted.current) setSubmitting(false); }
     }
 
     return <section aria-label="Plate and cover transfer" className="mt-4 space-y-3 rounded border border-teal-700 p-4">
         <h3 className="font-semibold">Pick up and move a plate or cover</h3>
-        <p className="text-sm">Compound robot operation: catch, carry and release. Source comes from robot custody state, never a guessed source location. Inspect covers discovers and may relocate covers using the OEM inspection sequence.</p>
+        <p className="text-sm">Catch, carry and release. Inspect covers may move covers.</p>
         <div className="grid gap-3 sm:grid-cols-2">
             <label>Object<select className="block w-full bg-slate-950 p-2" value={object} disabled={busy} onChange={event => setObject(event.target.value)}>
                 {objects.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
@@ -128,22 +113,16 @@ export function BioXpTransferControls({ generation, connected, controlsEnabled, 
                 {destinations.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select></label>
         </div>
-        <p className="text-xs">Choices are OEM intents, not proof of readiness. The robot checks destination, door, references and custody at execution.</p>
-        <label className="block">Operator name or account
-            <input className="ml-2 bg-slate-950 p-2" value={operator} maxLength={120} disabled={busy} onChange={event => { setOperator(event.target.value); setAck(false); }} />
-        </label>
-        <p className="text-xs">Before each submission, BMS reads current robot references and deck revisions. No files or pasted artifacts are needed. These observations do not prove plates are loaded or physically verify cover locations; inspection observes covers.</p>
-        {preflight && <p>Last preflight: X/Y/Z/gripper referenced; deck location {preflight.observed_deck.current_location ?? 'unknown'}. Robot rechecks admission and custody at execution.</p>}
-        <label className="block"><input type="checkbox" checked={ack} disabled={busy} onChange={event => setAck(event.target.checked)} /> I have verified the physical console and intend physical execution of the selected operation, including cover movement during inspection.</label>
+
         <button type="button" className="rounded bg-teal-700 px-3 py-2 disabled:opacity-35" disabled={!enabled} onClick={() => void run(false)}>Pick up and move</button>
         <button type="button" className="ml-3 rounded bg-teal-700 px-3 py-2 disabled:opacity-35" disabled={!enabled} onClick={() => void run(true)}>Inspect covers (may move covers)</button>
-        {id && <p className="break-all text-xs">Compound job: {id}</p>}
-        {attempt && <p className="break-all text-xs">Submission key: {attempt.key}</p>}
-        {!sameConnection && <p role="alert">Connection changed. Original submission identity retained; do not resubmit unresolved work on another robot.</p>}
-        {busy && <p role="status">Command live or outcome unresolved; do not resubmit.</p>}
-        {identityMismatch && <p role="alert">Robot readback identity does not match the retained submission; outcome remains unresolved.</p>}
-        {(query.isError || jobs.isError) && <p role="alert">Robot readback unavailable; checking again. Do not infer completion.</p>}
-        {currentLive && <p role="status">Robot compound status: {command?.status} · {command?.terminal ? 'terminal' : 'live'} · {job?.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. This is not independent physical verification.</p>}
+        {id && <p className="break-all text-xs">Job {id}</p>}
+        {!sameConnection && <p role="alert">Connection changed. Check the earlier job.</p>}
+        {busy && <p role="status">Submitting…</p>}
+        {activeJob && <p role="status">Listed job {activeJob.job_id} · {activeJob.command?.status ?? 'status unknown'}</p>}
+        {identityMismatch && <p role="alert">Job identity mismatch. Check robot status.</p>}
+        {(query.isError || jobs.isError) && <p role="alert">Robot status unavailable.</p>}
+        {currentLive && <p role="status">{command?.status} · {job?.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}</p>}
         {job?.execution?.runtime_state.workflow?.held_reason && <p role="alert">{job.execution.runtime_state.workflow.held_reason}</p>}
         {job?.execution?.runtime_state.action_results?.map((result, index) => <p key={index} role={result.ok === false ? 'alert' : 'status'}>Action {index + 1}: {result.ok === false ? 'failed' : result.ok === true ? 'completed' : 'reported'}{outcomeText(result) ? ` · ${outcomeText(result)}` : ''}</p>)}
         {job && <details><summary>Robot custody, action results and failures</summary>

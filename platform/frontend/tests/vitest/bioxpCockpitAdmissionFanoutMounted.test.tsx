@@ -1,5 +1,6 @@
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +16,7 @@ import actualY5Detail from '../fixtures/bioxp_xy_y5_detail.json';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { api } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false }));
+const nativeMetadataMode = vi.hoisted(() => ({ enabled: false, receipts: false, mutations: false, protocols: false }));
 import retainedHistory from '../fixtures/bioxp_retained_history.json';
 import manualCatalogProducer from '../fixtures/bioxpManualCatalogProducer.json';
 import zTargetProducer from '../fixtures/bioxp_z_target_producer.json';
@@ -425,7 +426,7 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
     bioXpDeckRecoveryResolution: real.bioXpDeckRecoveryResolution,
     useBioXpWorkflowJobs: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
     useBioXpWorkflowJob: () => ({ data: undefined, isError: false }),
-    useSubmitBioXpProtocol: () => ({ isPending: false, mutateAsync: vi.fn() }),
+    useSubmitBioXpProtocol: () => nativeMetadataMode.protocols ? real.useSubmitBioXpProtocol() : ({ isPending: false, mutateAsync: vi.fn() }),
     BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
     BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
     BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,
@@ -3634,6 +3635,37 @@ describe('OEM software Abort distinct from addressed Stops', () => {
     const stops = () => ['X Axis', 'Y Axis', 'Z Axis', 'Gripper'].map(label => {
         const panel = [...container.querySelectorAll('article')].find(p => p.querySelector('h3')?.textContent === label)!;
         return [...panel.querySelectorAll('button')].find(b => b.textContent === 'Stop')!;
+    });
+    it('keeps addressed Stops independent of a real pending protocol mutation', async () => {
+        nativeMetadataMode.protocols = true;
+        vi.stubGlobal('crypto', webcrypto);
+        state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        let reject!: (reason: unknown) => void;
+        vi.mocked(api.post).mockReset().mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const transfer = container.querySelector('[aria-label="Plate and cover transfer"]')!;
+            const move = [...transfer.querySelectorAll('button')].find(b => b.textContent === 'Pick up and move')!;
+            expect(move.disabled).toBe(false);
+            await act(async () => { move.click(); move.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(api.post).mock.calls[0][0]).toBe('/api/bioxp/protocols/submit');
+            expect(move.disabled).toBe(true);
+            for (const stop of stops()) {
+                expect(stop.disabled).toBe(false);
+                await act(async () => stop.click());
+            }
+            expect(state.yInterruptCalls.map(v => v.actionId)).toEqual(['oem.x.stop', 'oem.y.stop', 'oem.z.stop']);
+            expect(state.componentStopCalls).toHaveLength(1);
+            await act(async () => reject(new Error('offline response lost')));
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(move.disabled).toBe(false);
+            expect(api.post).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => root.render(null));
+            client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
+        }
     });
     it('sends exactly one software cancellation and no addressed fanout; independent XYZG Stops remain reachable while abort pending', async () => {
         state.catalog.data.actions.push({ ...xMoveAction(), action_id: 'component-stop', informational_path: '/motion/diagnostics/stop', safety_class: 'stop', enabled: true });

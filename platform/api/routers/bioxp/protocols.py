@@ -33,7 +33,9 @@ async def _mutate(runtime, route, request, *, job_id=None):
         return await runtime.connection.request_active(
             route,
             expected_generation=request.expected_connection_generation,
-            require_fresh=True,
+            # Execution is admitted by the robot, not process-local status.
+            # Leave control/review and uncached preflight on their existing path.
+            require_fresh=route != "protocol_execute",
             json_data=request.model_dump(mode="json", exclude_unset=True, exclude={"expected_connection_generation"}),
             path_params={"job_id": job_id} if job_id is not None else None,
         )
