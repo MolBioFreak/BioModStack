@@ -234,126 +234,39 @@ def test_lifecycle_routes_do_not_inject_authentication_headers() -> None:
     asyncio.run(client.close())
 
 
-def test_probe_refreshes_stale_hardware_evidence_inline() -> None:
-    target = ValidatedBioXpTarget(
-        api_url="http://robot:8123",
-        scheme="http",
-        hostname="robot",
-        port=8123,
-        resolved_addresses=(ip_address("100.64.0.10"),),
-    )
-    transport = SnapshotRefreshTransport(stale=True)
-    client = BioXpRobotClient(target, transport=transport)
-
-    payload = asyncio.run(client.probe())
-
-    assert payload["cache_state"] == "fresh"
-    assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
-        ("GET", "/status"),
-    ]
-    assert transport.requests[1].extensions["timeout"]["read"] <= 15.0
-    import json
-    assert json.loads(transport.requests[1].content) == {"automatic": True}
-    asyncio.run(client.close())
-
-
-def test_foreground_deferral_does_not_trigger_failure_backoff() -> None:
-    class Deferred(SnapshotRefreshTransport):
-        deferred = True
-        async def handle_async_request(self, request):
-            if request.method == "POST" and self.deferred:
-                self.requests.append(request)
-                return httpx.Response(200, json={"ok": False, "published": False,
-                    "reason": "operator_action_pending"}, request=request)
-            return await super().handle_async_request(request)
-    transport = Deferred(stale=True)
-    now = [0.0]
+def test_passive_probe_never_collects_stale_or_half_expired_evidence() -> None:
     target = ValidatedBioXpTarget(api_url="http://robot:8123", scheme="http",
         hostname="robot", port=8123, resolved_addresses=(ip_address("100.64.0.10"),))
-    client = BioXpRobotClient(target, transport=transport, monotonic_clock=lambda: now[0])
-    first = asyncio.run(client.probe())
-    assert first["automatic_snapshot_refresh"]["reason"] == "operator_action_pending"
-    assert first["automatic_snapshot_refresh"]["published"] is False
-    now[0] = .1
-    asyncio.run(client.probe())
-    assert len([r for r in transport.requests if r.method == "POST"]) == 1
-    now[0] = .51
-    transport.deferred = False
-    final = asyncio.run(client.probe())
-    assert final["automatic_snapshot_refresh"]["published"] is True
-    assert len([r for r in transport.requests if r.method == "POST"]) == 2
-    assert all(r.url.path in {"/status", "/hardware/snapshot/collect"} for r in transport.requests)
-    asyncio.run(client.close())
+    async def scenario():
+        for stale, age in [(True, 31.0), (False, 15.0), (False, 0.0)]:
+            transport = SnapshotRefreshTransport(stale=stale, age_s=age)
+            client = BioXpRobotClient(target, transport=transport)
+            try:
+                for _ in range(4):
+                    row = await client.probe()
+                    assert row["cache_state"] == ("stale" if stale else "fresh")
+                    assert "automatic_snapshot_refresh" not in row
+                assert [(r.method, r.url.path) for r in transport.requests] == [("GET", "/status")] * 4
+            finally:
+                await client.close()
+    asyncio.run(scenario())
 
 
-def test_failed_automatic_snapshot_refresh_uses_retry_backoff() -> None:
-    target = ValidatedBioXpTarget(
-        api_url="http://robot:8123",
-        scheme="http",
-        hostname="robot",
-        port=8123,
-        resolved_addresses=(ip_address("100.64.0.10"),),
-    )
-    now = [0.0]
-    transport = SnapshotRefreshTransport(stale=True, snapshot_status=503)
-    client = BioXpRobotClient(
-        target,
-        transport=transport,
-        monotonic_clock=lambda: now[0],
-        snapshot_retry_backoff_seconds=30.0,
-    )
-
-    first = asyncio.run(client.probe())
-    now[0] = 10.0
-    second = asyncio.run(client.probe())
-
-    assert first["automatic_snapshot_refresh"]["attempted"] is True
-    assert second["automatic_snapshot_refresh"]["attempted"] is False
-    assert second["automatic_snapshot_refresh"]["retry_deferred"] is True
-    assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
-        ("GET", "/status"),
-    ]
-    asyncio.run(client.close())
-
-
-def test_probe_does_not_collect_when_advertised_hardware_evidence_is_fresh() -> None:
-    target = ValidatedBioXpTarget(
-        api_url="http://robot:8123",
-        scheme="http",
-        hostname="robot",
-        port=8123,
-        resolved_addresses=(ip_address("100.64.0.10"),),
-    )
-    transport = SnapshotRefreshTransport(stale=False)
-    client = BioXpRobotClient(target, transport=transport)
-
-    payload = asyncio.run(client.probe())
-
-    assert payload["cache_state"] == "fresh"
-    assert [(request.method, request.url.path) for request in transport.requests] == [("GET", "/status")]
-    asyncio.run(client.close())
-
-
-def test_probe_refreshes_hardware_evidence_at_freshness_half_life() -> None:
-    target = ValidatedBioXpTarget(
-        api_url="http://robot:8123",
-        scheme="http",
-        hostname="robot",
-        port=8123,
-        resolved_addresses=(ip_address("100.64.0.10"),),
-    )
-    transport = SnapshotRefreshTransport(stale=False, age_s=15.0)
-    client = BioXpRobotClient(target, transport=transport)
-
-    asyncio.run(client.probe())
-
-    assert [(request.method, request.url.path) for request in transport.requests] == [
-        ("GET", "/status"),
-        ("POST", "/hardware/snapshot/collect"),
-        ("GET", "/status"),
-    ]
-    asyncio.run(client.close())
+def test_explicit_full_collection_still_posts_and_status_reads_back_result() -> None:
+    target = ValidatedBioXpTarget(api_url="http://robot:8123", scheme="http",
+        hostname="robot", port=8123, resolved_addresses=(ip_address("100.64.0.10"),))
+    transport = SnapshotRefreshTransport(stale=True)
+    async def scenario():
+        client = BioXpRobotClient(target, transport=transport)
+        try:
+            assert (await client.probe())["cache_state"] == "stale"
+            result = await client.request("collect_hardware_snapshot", json_data={})
+            assert result["published"] is True
+            assert (await client.probe())["cache_state"] == "fresh"
+            assert [(r.method, r.url.path) for r in transport.requests] == [
+                ("GET", "/status"), ("POST", "/hardware/snapshot/collect"), ("GET", "/status")]
+            assert transport.requests[1].content == b"{}"
+            assert transport.requests[1].extensions["timeout"]["read"] == 210.0
+        finally:
+            await client.close()
+    asyncio.run(scenario())
