@@ -101,7 +101,6 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
 
 _ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
 
-_AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS = 15.0
 MAX_CAMERA_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_CAMERA_STATUS_BYTES = 64 * 1024
 MAX_CAMERA_ERROR_BYTES = 1000
@@ -258,21 +257,13 @@ class BioXpRobotClient:
         routes: Mapping[str, tuple[str, str, float]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         monotonic_clock: Callable[[], float] | None = None,
-        snapshot_retry_backoff_seconds: float = 30.0,
     ) -> None:
-        if snapshot_retry_backoff_seconds <= 0:
-            raise ValueError("automatic snapshot retry backoff must be positive")
         self.target = target
         self.routes = dict(routes or DEFAULT_ROBOT_ROUTES)
         self._monotonic_clock = monotonic_clock or time.monotonic
         # Per-client (therefore per-connection) evidence anchor. Keep only the
         # latest identity; source capture timestamps remain source-owned.
         self._camera_age_anchor: tuple[tuple[int, int, object, object], float] | None = None
-        self._snapshot_retry_backoff_seconds = snapshot_retry_backoff_seconds
-        self._snapshot_retry_after = 0.0
-        # Scheduling cost only, never an observation or command permission.
-        # A new generation-bound client cannot inherit the previous target's cost.
-        self._snapshot_acquisition_seconds: float | None = None
         pinned_transport = PinnedAddressTransport(target, transport=transport)
         self._client = httpx.AsyncClient(
             base_url=target.api_url,
@@ -283,72 +274,8 @@ class BioXpRobotClient:
         )
 
     async def probe(self) -> dict[str, Any]:
-        started = self._monotonic_clock()
-        payload = await self.probe_status_only()
-        now = self._monotonic_clock()
-        needs_refresh = _hardware_evidence_needs_refresh(payload, self._snapshot_acquisition_seconds)
-        if needs_refresh and now < self._snapshot_retry_after:
-            payload = dict(payload)
-            payload["automatic_snapshot_refresh"] = {
-                "attempted": False,
-                "published": False,
-                "retry_deferred": True,
-                "retry_after_s": max(0.0, self._snapshot_retry_after - now),
-            }
-            return payload
-        if needs_refresh:
-            try:
-                collected = await self.request(
-                    "collect_hardware_snapshot",
-                    json_data={"automatic": True},
-                    timeout_override=_AUTOMATIC_SNAPSHOT_TIMEOUT_SECONDS,
-                )
-                if collected.get("published") is False and collected.get("reason") == "operator_action_pending":
-                    # Foreground priority is not a failed controller query.
-                    # Retry observation on a subsequent poll, not after the
-                    # thirty-second transport-failure backoff. Never retry motion.
-                    self._snapshot_retry_after = self._monotonic_clock() + 0.5
-                    return {**payload, "automatic_snapshot_refresh": {
-                        "attempted": True, "published": False, "retry_deferred": True,
-                        "retry_after_s": 0.5, "reason": "operator_action_pending"}}
-                snapshot_id = _require_published_snapshot(collected)
-                payload = await self.probe_status_only()
-                # Include status, admission/transport, the whole collection and
-                # final readback, not just the producer's hardware phase.
-                elapsed = self._monotonic_clock() - started
-                if math.isfinite(elapsed) and elapsed >= 0:
-                    self._snapshot_acquisition_seconds = elapsed
-                payload = dict(payload)
-                payload["automatic_snapshot_refresh"] = {
-                    "attempted": True,
-                    "published": True,
-                    "snapshot_id": snapshot_id,
-                }
-                # A deck sample can already be several seconds old when the
-                # full collection returns. Do not then unconditionally sleep a
-                # whole status tick. Only successful, still-fresh observations
-                # can request an earlier next probe; missing/failed evidence
-                # retains normal polling/backoff rather than a zero-delay loop.
-                if _hardware_refresh_due_in(payload) > 0:
-                    next_probe = _hardware_refresh_due_in(payload, self._snapshot_acquisition_seconds)
-                    if next_probe > 0 or (self._snapshot_acquisition_seconds is not None
-                                          and self._snapshot_acquisition_seconds >= 1.0):
-                        payload["automatic_snapshot_refresh"]["next_probe_after_s"] = next_probe
-                self._snapshot_retry_after = 0.0
-            except (RobotResponseError, RobotTransportError) as exc:
-                # Runtime reachability remains truthful when only the query-only
-                # evidence refresh fails. The stale payload is still useful and
-                # must not be relabeled as a disconnected robot.
-                payload = dict(payload)
-                payload["automatic_snapshot_refresh"] = {
-                    "attempted": True,
-                    "published": False,
-                    "error": str(exc) or exc.__class__.__name__,
-                }
-                self._snapshot_retry_after = (
-                    self._monotonic_clock() + self._snapshot_retry_backoff_seconds
-                )
-        return payload
+        """Passive observation only; collection belongs to explicit operator actions."""
+        return await self.probe_status_only()
 
     async def probe_status_only(self) -> dict[str, Any]:
         payload = await self.request("status", retry_read_once=True)
@@ -747,71 +674,3 @@ async def _read_limited_body(
             raise RobotTransportError(overflow_message)
         body.extend(chunk)
     return bytes(body)
-
-
-def _hardware_evidence_needs_refresh(
-    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
-) -> bool:
-    runtime_ready = payload.get("runtime_ready")
-    if not isinstance(runtime_ready, bool):
-        runtime_ready = payload.get("runtime_available")
-    if runtime_ready is not True:
-        return False
-    capabilities = payload.get("capabilities")
-    if not isinstance(capabilities, (list, tuple, set)) or "collect_hardware_snapshot" not in capabilities:
-        return False
-    return _hardware_refresh_due_in(payload, acquisition_seconds) <= 0.0
-
-
-def _hardware_refresh_due_in(
-    payload: Mapping[str, Any], acquisition_seconds: float | None = None,
-) -> float:
-    """Query scheduling only; these observations never grant command authority.
-
-    Generic status covers different domains and may remain fresh after motion
-    invalidates axes/gripper. Require the producer's admission-domain projection
-    and the independent deck sample, with their original source-owned budgets.
-    Missing or malformed evidence requests collection, never stale readiness.
-    """
-    remaining = []
-    for key in ("admission_observation", "deck_authority"):
-        observation = payload.get(key)
-        if not isinstance(observation, Mapping):
-            return 0.0
-        # A fresh negative observation (for example unreferenced axes) is
-        # still a completed query. It is not permission and must not cause a
-        # full-collection storm; absence/invalidation is expressed by freshness.
-        if key == "admission_observation" and observation.get("cache_state") != "fresh":
-            return 0.0
-        freshness = observation.get("freshness")
-        if not isinstance(freshness, Mapping) or freshness.get("state") != "fresh":
-            return 0.0
-        age, window = freshness.get("age_s"), freshness.get("fresh_for_s")
-        if (isinstance(age, bool) or not isinstance(age, (int, float))
-                or isinstance(window, bool) or not isinstance(window, (int, float))
-                or not math.isfinite(age) or not math.isfinite(window)
-                or age < 0 or window <= 0):
-            return 0.0
-        # The existing worker checks at <=1s. Reserve that tick as well as
-        # the measured previous full replacement cost, retaining half-budget
-        # when earlier. Neither cost nor scheduling can extend source expiry.
-        threshold = window / 2.0
-        if acquisition_seconds is not None:
-            threshold = min(threshold, window - acquisition_seconds - 1.0)
-        remaining.append(max(0.0, threshold - age))
-    return min(remaining)
-
-
-def _require_published_snapshot(response: object) -> str:
-    payload = response if isinstance(response, Mapping) else {}
-    snapshot = payload.get("snapshot")
-    snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, Mapping) else None
-    if (
-        payload.get("ok") is True
-        and payload.get("published") is True
-        and isinstance(snapshot_id, str)
-        and snapshot_id
-    ):
-        return snapshot_id
-    detail = payload.get("error") or payload.get("detail") or "automatic hardware snapshot was not published"
-    raise RobotTransportError(str(detail))

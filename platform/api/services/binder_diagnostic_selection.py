@@ -1,4 +1,4 @@
-"""Diagnostic-only resolution of existing Job/Design/document provenance.
+"""Shared resolution of existing Job/Design/document provenance.
 
 No model settings, numerical interpretation or continuation policy lives here.
 """
@@ -43,9 +43,29 @@ async def declared_targets(source, session):
 
 
 def documents(source, design):
-    publication = (getattr(source, 'provenance', None) or {}).get('bindcraft2_native_publication') or {}
-    return next((row.get('structures', []) for row in publication.get('candidates', [])
+    key = {'ppiflow': 'ppiflow_generation_publication',
+           'boltzgen': 'boltzgen_generation_publication'}.get(
+               getattr(source, 'model_id', None), 'bindcraft2_native_publication')
+    publication = (getattr(source, 'provenance', None) or {}).get(key) or {}
+    rows = next((row.get('structures', []) for row in publication.get('candidates', [])
                  if row.get('design_id') == design.id), [])
+    # Use the existing governed file transport, not viewer-local artifact IDs.
+    from paths import to_allowed_relative
+    from urllib.parse import quote
+    result = []
+    for doc in rows:
+        item = dict(doc)
+        relative = doc.get('path')
+        if relative is None and str(doc.get('logical_path', '')).startswith('bindcraft2/native/'):
+            relative = doc['logical_path'].removeprefix('bindcraft2/native/')
+        if publication.get('root') and relative:
+            path = Path(publication['root']) / publication.get('campaign_root', '.') / relative
+            try:
+                item['download_url'] = '/api/files/download/' + quote(to_allowed_relative(path), safe='/')
+            except ValueError:
+                pass  # Inspection availability is not a selection prerequisite.
+        result.append(item)
+    return result
 
 
 async def selected_document(source, design, selector, session):
@@ -69,7 +89,8 @@ async def selected_document(source, design, selector, session):
             raise ValueError('Selected document differs from its owned artifact')
         path = artifact.storage_path
         identity.update(artifact_id=artifact.id, target_state=doc.get('target_state'),
-                        logical_path=artifact.logical_path, artifact_sha256=artifact.sha256)
+                        logical_path=artifact.logical_path, artifact_sha256=artifact.sha256,
+                        producer_document={key: value for key, value in doc.items() if key != 'download_url'})
     else:
         identity.update(artifact_id=provenance.get('primary_artifact_id'),
                         target_state=provenance.get('primary_target_state'))

@@ -1064,6 +1064,11 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
+    elif reviewed and model_id == 'ppiflow' and workflow == 'ppiflow_generation':
+        # Initial native producer records are not partial-flow maturation scores.
+        from services.ppiflow_generation import generation_result_contract as ppiflow_result_contract
+        result_payload = ppiflow_result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
     elif model_id == 'molecular_dynamics' and mode == 'simulate' and reviewed:
         # MD owns native aggregate/mandatory-analysis completion, not Design
         # analysis rows. Bind that existing authority instead of demanding a

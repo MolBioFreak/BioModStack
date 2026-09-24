@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
 import BinderDiagnosticRawResults from './BinderDiagnosticRawResults';
 import { fetchDiagnosticSelectionContext, type CandidateDocuments, type DiagnosticSelectionContext } from '../lib/binderDiagnosticSelection';
 import { isAxiosError } from 'axios';
@@ -29,17 +30,23 @@ interface Props {
     sourceParams: Record<string, unknown>;
     selectedDesignIds: string[];
     candidateDocuments?: CandidateDocuments;
+    launchContextId?: string | null;
     resultJob?: { id: string; model_id: string; mode: string; status: string; error_message?: string | null };
     onOpenJob: (id: string) => void;
 }
 
 /** Independent exploratory actions; source ownership and chain validity are resolved by the API. */
-export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, sourceParams, selectedDesignIds, candidateDocuments, resultJob, onOpenJob }: Props) {
+export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, sourceParams, selectedDesignIds, candidateDocuments, launchContextId, resultJob, onOpenJob }: Props) {
     const [blindSettings, setBlindSettings] = useState(initialBlindSettings);
     const [targetName, setTargetName] = useState('');
     const [context, setContext] = useState<DiagnosticSelectionContext | null>(null);
     const [documents, setDocuments] = useState<CandidateDocuments>({});
-    useEffect(() => { setContext(null); setDocuments({}); setTargetName(''); setBinderChains({}); }, [sourceJobId]);
+    useEffect(() => {
+        setContext(null); setDocuments(readBinderCandidateDocuments(sourceJobId)); setTargetName(''); setBinderChains({});
+        const sync = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.jobId === sourceJobId) setDocuments(detail.documents); };
+        window.addEventListener('bms:binder-documents', sync);
+        return () => window.removeEventListener('bms:binder-documents', sync);
+    }, [sourceJobId]);
     const selectedDocuments = Object.fromEntries(selectedDesignIds.flatMap(id => {
         const choice = candidateDocuments?.[id] ?? documents[id];
         return choice ? [[id, choice]] : [];
@@ -80,6 +87,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
             if (kind === 'blind') {
                 const response = await submitBlindPoseSelected({
                     source_job_id: sourceJobId,
+                    ...(launchContextId ? { launch_context_id: launchContextId } : {}),
                     ...(targetName ? { target_name: targetName } : {}),
                     ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}),
                     design_ids: [...selectedDesignIds],
@@ -89,7 +97,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
                 });
                 jobId = response.id;
             } else {
-                const response = await submitLigandInterfaceContext({ ...selection!, ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}) });
+                const response = await submitLigandInterfaceContext({ ...selection!, ...(launchContextId ? { launch_context_id: launchContextId } : {}), ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}) });
                 jobId = response.job.id;
             }
             setSubmittedJobId(jobId);
@@ -116,9 +124,10 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
         {context && <p>Source {context.source_job_id}; scientific root {context.lineage_root_job_id}</p>}
         {selectedDesignIds.map(id => (context?.candidate_documents[id]?.length ?? 0) > 0 && <label className="block" key={id}>Document/state for {id}
             <select aria-label={`Document/state for ${id}`} value={selectedDocuments[id]?.artifact_id ?? ''} disabled={Boolean(candidateDocuments?.[id])}
-                onChange={event => { const artifact = context!.candidate_documents[id].find(row => row.artifact_id === event.target.value); setDocuments(current => {
-                    const next = { ...current }; if (artifact) next[id] = { artifact_id: artifact.artifact_id, target_state: artifact.target_state }; else delete next[id]; return next;
-                }); }}>
+                onChange={event => { const artifact = context!.candidate_documents[id].find(row => row.artifact_id === event.target.value);
+                    const next = { ...documents }; if (artifact) next[id] = { artifact_id: artifact.artifact_id, ...(artifact.target_state != null ? { target_state: artifact.target_state } : {}) }; else delete next[id];
+                    writeBinderCandidateDocuments(sourceJobId, next); setDocuments(next);
+                }}>
                 <option value="">Design primary document</option>{context!.candidate_documents[id].map(row => <option key={row.artifact_id} value={row.artifact_id}>{row.target_state ?? 'Unspecified state'} · {row.logical_path ?? row.artifact_id}</option>)}
             </select></label>)}
         <details><summary className="cursor-pointer font-semibold">Blind pose (experimental)</summary>

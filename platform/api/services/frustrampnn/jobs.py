@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, FrustraMPNNResult, Job
 from paths import get_results_dir
+from services.binder_diagnostic_selection import CandidateDocument, selected_document
 
 from .configuration import execution_configuration
 from .contracts import canonical_json_bytes, validate_schema
@@ -140,12 +141,16 @@ async def design_selections(
     source_parent: Job,
     design_ids: Sequence[str],
     expected_sha256: dict[str, str] | None = None,
+    candidate_documents: dict[str, CandidateDocument] | None = None,
 ) -> list[SourceSelection]:
     """Resolve ordered Design authority and read each exact no-follow generation."""
 
     if not design_ids or len(set(design_ids)) != len(design_ids):
         raise FrustraMPNNChildError("design_ids must be a non-empty ordered set")
     expected_sha256 = expected_sha256 or {}
+    candidate_documents = candidate_documents or {}
+    if set(candidate_documents) - set(design_ids):
+        raise FrustraMPNNChildError("candidate_documents contains an unselected Design")
     result = await session.execute(select(Design).where(Design.id.in_(list(design_ids))))
     by_id = {str(item.id): item for item in result.scalars().all()}
     if set(by_id) != set(design_ids):
@@ -172,6 +177,11 @@ async def design_selections(
         if not allowed:
             raise FrustraMPNNChildError("selected Design crosses the source-parent authority boundary")
         source_path = str(design.pdb_path or "")
+        document_identity = None
+        selector = candidate_documents.get(design_id)
+        if selector and (selector.artifact_id is not None or selector.target_state is not None):
+            path, document_identity = await selected_document(owner, design, selector, session)
+            source_path = str(path)
         owner_root = str(owner.child_output_dir or owner.output_dir or "")
         if not source_path or not owner_root or not _path_within(source_path, owner_root):
             raise FrustraMPNNChildError("selected Design path is outside its owning Job root")
@@ -180,6 +190,8 @@ async def design_selections(
         )
         digest = hashlib.sha256(payload).hexdigest()
         supplied = expected_sha256.get(design_id)
+        if document_identity is not None and digest != document_identity["artifact_sha256"]:
+            raise FrustraMPNNChildError("selected document source SHA-256 does not match authority")
         if supplied is not None and supplied != digest:
             raise FrustraMPNNChildError("selected Design source SHA-256 does not match authority")
         source_format, media_type, _ = _format_for_name(source_path)
@@ -199,6 +211,10 @@ async def design_selections(
                 "source_stage_family": design.source_stage_family,
                 "source_stage_mode": design.source_stage_mode,
                 "artifact_class": design.artifact_class,
+                **({
+                    "selected_document": copy.deepcopy(document_identity),
+                    "target_state": document_identity.get("target_state"),
+                } if document_identity is not None else {}),
             },
         ))
     return selections

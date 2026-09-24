@@ -378,16 +378,20 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
         except ValueError:
             continue  # Publication outside a configured download root remains readable.
         downloads[name] = "/api/files/download/" + quote(relative, safe="/")
-    candidates = [binding for binding in receipt.get("candidates", []) if binding["arm"] == page["arm"]]
+    generation = page["stage"] == "generation"
+    candidates = [binding for binding in receipt.get("candidates", [])
+                  if generation or binding["arm"] == page["arm"]]
+    generation_bindings = {item["candidate_key"]: item for item in candidates} if generation else {}
     rows = []
     for source in page["rows"]:
         row = dict(source)
-        binding = next((item for item in candidates
-                        if page["stage"] == "retained" and item["retained_design"] == row.get("design")), None)
+        binding = (generation_bindings.get(row.get("candidate_key", row.get("candidate_id")))
+                   if generation else next((item for item in candidates
+                   if page["stage"] == "retained" and item["retained_design"] == row.get("design")), None))
         if binding:
             row["design_id"] = binding["design_id"]
             row["structures"] = [{**structure,
-                "download_url": downloads.get(structure["logical_path"].removeprefix("bindcraft2/native/"))}
+                "download_url": downloads.get(structure.get("path", structure["logical_path"].removeprefix("bindcraft2/native/")))}
                 for structure in binding["structures"]]
         if page["stage"] == "document":
             row["download_url"] = downloads.get(row["path"])

@@ -5057,6 +5057,10 @@ async def _ingest_job_results(
         # These leaves publish generator sidecars in their collected terminal root,
         # not an all_designs.csv. Never import their inputs or intermediate stages.
         return await ingest_loose_files(job_id, output_path, session, current_job, commit=False)
+    if current_job is not None and current_job.model_id == "ppiflow":
+        from services.ppiflow_generation import MODES, publish_generation_results
+        if current_job.mode in MODES:
+            return await publish_generation_results(current_job, output_path, session, commit=False)
     if current_job is not None and current_job.model_id == "bindcraft2":
         from services.bindcraft2_publication import publish_native_results
         return await publish_native_results(current_job, output_path, session, commit=False)

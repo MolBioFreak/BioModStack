@@ -319,6 +319,7 @@ def _exact_molbio_member_surface(payload: dict[str, Any]) -> dict[str, Any]:
 _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "design": _design_surface,
     "typed_core_job_result": _design_surface,
+    "native_binder_job_result": _design_surface,
     "rfd3_local_redesign_request": _rfd3_surface,
     "conformational_mapping_request": _cm_surface,
     "md_result": _md_surface,
@@ -352,6 +353,7 @@ _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 _EXPLICITLY_UNSUPPORTED_COMPARISON_REASONS = {
     "design": "No registered producer-native compatibility receipt exists for arbitrary Design results.",
     "typed_core_job_result": "Typed core Job results require a family-specific compatibility adapter before comparison.",
+    "native_binder_job_result": "Native campaigns and diagnostics retain their model-owned comparison semantics.",
     "rfd3_local_redesign_request": "RFD3 whole-result candidate sets have no registered Project comparison adapter.",
     "conformational_mapping_request": "CM cross-request and cross-backend comparison requires a separate immutable compatibility authority.",
     "md_result": "MD runs have no registered Project comparison adapter with replica, units, and analysis compatibility.",

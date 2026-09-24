@@ -80,8 +80,25 @@ def _integrity_provenance(job: Job, payload: dict[str, Any]) -> dict[str, Any]:
     return provenance
 
 
+def _native_binder_generation_key(job: Job) -> str | None:
+    """Select existing model-owned publication, including its valid zero yield."""
+    if job.model_id == 'ppiflow':
+        from services.ppiflow_generation import MODES, PUBLICATION_KEY
+        if job.mode in MODES:
+            return PUBLICATION_KEY
+    elif job.model_id == 'boltzgen':
+        from services.boltzgen_request_compatibility import BOLTZGEN_GENERATION_PROTOCOLS
+        if job.mode in BOLTZGEN_GENERATION_PROTOCOLS:
+            return 'boltzgen_generation_publication'
+    return None
+
+
 def job_expects_design_results(job: Job) -> bool:
-    """Return whether a successful workflow is expected to publish Design rows."""
+    """Return whether a successful workflow requires positive Design yield."""
+    if _native_binder_generation_key(job):
+        # The native publication owner validates projected rows. A zero-yield
+        # receipt is still a completed campaign, including on administrative repair.
+        return False
     params = job.params if isinstance(job.params, dict) else {}
     if job.model_id == 'esmfold2' and job.mode == 'blind_pose':
         return False
@@ -280,6 +297,12 @@ async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output
 
 
 async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
+    if _native_binder_generation_key(job):
+        # Child rounds have independent publications; they are not this native
+        # campaign's yield even when a parent page displays their Designs too.
+        return int(await session.scalar(select(func.count(Design.id)).where(
+            Design.job_id == job.id, Design.source_stage.is_(None),
+        )) or 0)
     if job_expects_rfd3_local_redesign_candidates(job):
         return await _rfd3_candidate_count(session, str(job.id))
     return await _design_count(session, str(job.id))
@@ -482,6 +505,11 @@ async def finalize_successful_job(
     strict_revision = None
     bc2_native = default_ingester and str(job.model_id or '').strip().lower() == 'bindcraft2'
     bc2_prior_publication = bool((job.provenance or {}).get('bindcraft2_native_publication')) if bc2_native else False
+    generation_key = _native_binder_generation_key(job) if default_ingester else None
+    generation_prior_publication = bool((job.provenance or {}).get(generation_key)) if generation_key else False
+    if generation_key == 'boltzgen_generation_publication':
+        generation_prior_publication = generation_prior_publication or bool(
+            (job.provenance or {}).get('core_protein_candidate_publication'))
     optional_attachment = (
         default_ingester
         and str(job.model_id or '').strip().lower() not in {'frustrampnn', 'conformational_mapping'}
@@ -552,6 +580,17 @@ async def finalize_successful_job(
                 raise RuntimeError('BC2 projected Design count differs from native publication')
             result_kind = 'bindcraft2_native_publication'
             idempotent_prior_results = bc2_prior_publication
+        elif generation_key:
+            # Use the model's existing artifact/Design custody and native
+            # accounting, not the generic positive-yield/score contract.
+            if generation_key == 'ppiflow_generation_publication':
+                from services.ppiflow_generation import read_published_generation_results
+            else:
+                from services.boltzgen_candidate_publication import read_published_generation_results
+            native_result = await read_published_generation_results(job, session)
+            count = len(native_result['publication']['candidates'])
+            result_kind = generation_key
+            idempotent_prior_results = generation_prior_publication
         elif default_ingester and job.model_id == 'ligandmpnn' and job.mode == 'interface_context':
             from services.ligandmpnn_interface_publication import read_selected
             await read_selected(job, session)

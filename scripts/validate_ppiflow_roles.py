@@ -7,20 +7,27 @@ import re
 from pathlib import Path
 
 
-def chain_ids(path: Path) -> set[str]:
+def _pdb_identities(path: Path):
+    """Read role and hotspot identities once from the same document bytes."""
     chains = set()
+    residues = set()
     for line in path.read_text().splitlines():
         if line.startswith("ATOM  "):
             if len(line) < 27 or not line[21].strip():
                 raise ValueError("Malformed or blank-chain ATOM record")
             chains.add(line[21])
+            residues.add((line[21], line[22:26].strip(), line[26].strip()))
     if not chains:
         raise ValueError("No ATOM chains in PDB")
-    return chains
+    return chains, residues
+
+
+def chain_ids(path: Path) -> set[str]:
+    return _pdb_identities(path)[0]
 
 
 def roles(path: Path, heavy: str, light: str, antigen: str, hotspots: str = "") -> str:
-    present = chain_ids(path)
+    present, residues = _pdb_identities(path)
     for role, chain in (("heavy", heavy), ("light", light)):
         if role == "heavy" and not chain:
             raise ValueError("Missing heavy-chain role")
@@ -44,9 +51,7 @@ def roles(path: Path, heavy: str, light: str, antigen: str, hotspots: str = "") 
         if not match or match.group(1) != antigen:
             raise ValueError(f"Hotspot {token!r} does not identify the selected antigen chain {antigen!r}")
         number, icode = int(match.group(2)), match.group(3)
-        if not any(line.startswith("ATOM  ") and len(line) >= 27 and line[21] == antigen
-                   and line[22:26].strip() == str(number) and line[26].strip() == icode
-                   for line in path.read_text().splitlines()):
+        if (antigen, str(number), icode) not in residues:
             raise ValueError(f"Hotspot {token!r} absent from selected antigen structure")
     return antigen
 

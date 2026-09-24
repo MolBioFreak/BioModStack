@@ -9,6 +9,31 @@ def paramValueOrDefault(params, String key, defaultValue) {
     return value
 }
 
+// Native INITIAL generation. Do not route this through RunPartialFlow.
+process RunPPIFlowGeneration {
+    label 'gpu'
+    label 'PPIFlow'
+    publishDir "${params.out_dir}", mode: 'copy'
+
+    input:
+    path generation_request, stageAs: 'generation_request'
+
+    output:
+    path 'ppiflow_generation', emit: native_results
+
+    script:
+    def codeRoot = params.code_root.toString().replace("'", "'\\''")
+    """
+    set -euo pipefail
+    export HOME="\$PWD"
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    export TORCH_EXTENSIONS_DIR="\${XDG_CACHE_HOME}/torch_extensions"
+    export TRITON_CACHE_DIR="\${XDG_CACHE_HOME}/triton"
+    python '${codeRoot}/scripts/run_ppiflow_generation.py' \\
+        --request generation_request --output ppiflow_generation
+    """
+}
+
 process IdentifyAnchorResidues {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/ppiflow/results", mode: 'copy', pattern: "*_anchors.json"
@@ -30,8 +55,8 @@ process IdentifyAnchorResidues {
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
-    def antigenChains = params.antigen_chains ?: ''
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
+    def antigenChains = params.get('target_chains') ?: params.antigen_chains ?: ''
     def energyThreshold = paramValueOrDefault(params, 'maturation_anchor_threshold', -5.0)
     def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
     def enrichmentEnabled = params.get('maturation_repack_enabled') != null ? params.maturation_repack_enabled : (params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true)
@@ -45,8 +70,14 @@ process IdentifyAnchorResidues {
     def relaxAntibodyBackboneShell = paramValueOrDefault(params, 'ppiflow_relax_antibody_backbone_shell', false)
     def regionMode = params.ppiflow_region_mode ?: 'selected_cdrs'
     def selectedLoopsSpec = params.ppiflow_selected_loops ?: ''
-    def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
-    def manualCdrDefinitionsJson = groovy.json.JsonOutput.toJson(params.get('manual_cdr_definitions') ?: [])
+    // DSL2 modules retain include-time params; decode typed CLI JSON here,
+    // not through assignments in the calling workflow's parameter scope.
+    def loopValue = params.get('cdr_positions_by_loop') ?: [:]
+    def manualValue = params.get('manual_cdr_definitions') ?: []
+    if (loopValue instanceof CharSequence) loopValue = new groovy.json.JsonSlurper().parseText(loopValue.toString())
+    if (manualValue instanceof CharSequence) manualValue = new groovy.json.JsonSlurper().parseText(manualValue.toString())
+    def cdrPositionsByLoopJson = groovy.json.JsonOutput.toJson(loopValue)
+    def manualCdrDefinitionsJson = groovy.json.JsonOutput.toJson(manualValue)
     """
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
@@ -108,26 +139,29 @@ process RunPartialFlow {
     label 'PPIFlow'
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "fixed_positions.txt"
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "ppiflow_mask_validation.json"
+    publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_ppiflow_accounting.json'
 
     input:
     tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)
 
     output:
     tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones
+    tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting
 
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def antibodyList = antibodyChains.toString().split(',')*.trim().findAll { it }
     def heavyChain = params.ppiflow_heavy_chain ?: (antibodyList ? antibodyList[0] : 'H')
     def lightChain = params.ppiflow_light_chain ?: (antibodyList.size() > 1 ? antibodyList[1] : '')
     if (antibodyList != ([heavyChain, lightChain].findAll { it })) {
         throw new IllegalArgumentException("PPIFlow chain roles disagree with requested antibody_chains: ${antibodyChains}")
     }
-    def antigenChain = params.ppiflow_antigen_chain ?: (params.antigen_chains ?: '')
-    if (params.ppiflow_antigen_chain && params.antigen_chains &&
-        params.ppiflow_antigen_chain.toString() != params.antigen_chains.toString()) {
+    def requestedAntigenChains = params.get('target_chains') ?: params.antigen_chains
+    def antigenChain = params.ppiflow_antigen_chain ?: (requestedAntigenChains ?: '')
+    if (params.ppiflow_antigen_chain && requestedAntigenChains &&
+        params.ppiflow_antigen_chain.toString() != requestedAntigenChains.toString()) {
         throw new IllegalArgumentException('PPIFlow antigen chain disagrees with requested antigen_chains')
     }
     def startT = paramValueOrDefault(params, 'ppiflow_start_t', 0.8)
@@ -218,7 +252,7 @@ process RunPartialFlow {
     if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
             --producer ppiflow --root /app/ppiflow --reference "${original_complex_pdb}"
-            --binder "\${heavyChain},\${lightChain}" --target "${params.antigen_chains ?: antigenChain}"
+            --binder "\${heavyChain},\${lightChain}" --target "${requestedAntigenChains ?: antigenChain}"
             --selected "${ppiflow_positions}" --loops "${cdr_positions_by_loop_json}" --epitope "${params.epitope_residues ?: ''}" -- "\${ppiflow_script}")
     fi
     "\${nativeCommand[@]}" \\
@@ -242,7 +276,8 @@ import sys
 sys.path.insert(0, "${params.code_root}/scripts")
 from ppiflow_sample_identity import collect
 collect("ppiflow_out", "ppiflow_backbones", "${meta.id}", "ppiflow_backbones_manifest.json",
-        comparison="${params.get('core_protein_scientific_contract') ?: ''}" == "1")
+        comparison="${params.get('core_protein_scientific_contract') ?: ''}" == "1",
+        requested_count=int("${samplesPerTarget}"), accounting_path="${meta.id}_ppiflow_accounting.json")
 PY
     """
 }
@@ -262,7 +297,7 @@ process PrepMaturationRedesign {
     script:
     def frameworkType = params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
-    def antibodyChains = params.antibody_chains ?: defaultAntibodyChains
+    def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
     def designMode = designModeRaw == 'inherit' ? (params.antibody_design_mode ?: 'cdr_only') : designModeRaw
     def selectedLoopsSpec = (params.ppiflow_region_mode ?: 'selected_cdrs').toString() == 'selected_cdrs'

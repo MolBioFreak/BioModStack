@@ -12,6 +12,9 @@ import { ResultsViewer } from '../../src/components/ResultsViewer';
 import BlindPoseSelectedControls from '../../src/components/BlindPoseSelectedControls';
 import { ProjectReturnBanner } from '../../src/components/project-manager/ProjectReturnBanner';
 import { api } from '../../src/lib/api';
+import BinderSelectedControls from '../../src/components/BinderSelectedControls';
+import { BindCraft2NativeActions } from '../../src/components/BindCraft2JobResults';
+import { parseMolecularDynamicsHandoffRoute, buildMolecularDynamicsHandoffInitialValues } from '../../src/components/gen2StartingStructureState';
 
 const text = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
 const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
@@ -52,7 +55,8 @@ test('BC2 native records supplement the mounted Design selection and comparison 
         }) };
     }));
     try {
-        await setup('/designs/parent', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
+        await setup('/designs/parent?launch_context_id=context', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
+        expect(renderer!.root.findByType(BindCraft2NativeActions).props.launchContextId).toBe('context');
         expect(text(renderer!.root)).toContain('native-evidence');
         expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
         await act(async () => renderer!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'retained' } }));
@@ -159,6 +163,25 @@ test('bound native document reads direct PAE without saved-analysis GET or queue
         expect(fetcher.mock.calls.some(call=>String(call[0]).includes('/pae?max_size=1024'))).toBe(true);
     } finally {vi.unstubAllGlobals();}
 });
+test.each([null, 'context'])('Results MD handoff preserves explicit destination %s through the real receiving parser', async destination => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const designId = '22222222-2222-4222-8222-222222222222';
+    const source = { ...job, id: sourceId, params: { launch_context_id: 'source-not-destination' } };
+    const candidate = { ...design(designId, 'boltz2'), job_id: sourceId };
+    await setup(`/designs/${sourceId}?design_id=${designId}${destination ? `&launch_context_id=${destination}` : ''}`, false, [candidate], source);
+    await act(async () => renderer!.root.findByType(BinderSelectedControls).props.onStartMD(designId));
+    await flush();
+    const location = renderer!.root.findAllByType('span').find(node => node.props['data-location'])!.props['data-location'];
+    const url = new URL(location, 'http://test');
+    expect(url.pathname).toBe('/submit');
+    expect(url.searchParams.get('launch_context_id')).toBe(destination);
+    const received = buildMolecularDynamicsHandoffInitialValues(parseMolecularDynamicsHandoffRoute(url.search), null);
+    expect(received.source_prediction_job_id).toBe(sourceId);
+    expect(received.source_design_id).toBe(designId);
+    expect(received).not.toHaveProperty('launch_context_id');
+    expect(url.searchParams.has('artifact_id')).toBe(false); // Existing MD seam explicitly uses Design primary.
+});
+
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
 const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;

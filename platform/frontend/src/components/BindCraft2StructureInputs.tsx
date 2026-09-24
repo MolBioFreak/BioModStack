@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { BC2Inventory, BC2Request } from './BindCraft2Settings';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
+import { StructuralSourceFiles } from './StructuralSourceFiles';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
-import { downloadSabdabFramework, fetchFiles, getSabdabAttribution, getSabdabFilterOptions, listCachedFrameworks, searchSabdabFrameworks } from '../lib/api';
-import { acquireBC2Source, bc2Targets, editVisualResidues, fastaChains, hasInitialScaffoldSlot, hasInitialTargetSlot, parseBC2Document, readBC2Source, replaceTargetSource, residueKey, selectedChains, textValue, visualResidues, type BC2Document, type BC2InitialSources, type BC2Source, type BC2Target } from '../lib/bindcraft2StructureInputs';
+import { downloadSabdabFramework, getSabdabAttribution, getSabdabFilterOptions, listCachedFrameworks, searchSabdabFrameworks } from '../lib/api';
+import { createBC2SourceSession, bc2Targets, editVisualResidues, fastaChains, hasInitialScaffoldSlot, hasInitialTargetSlot, replaceTargetSource, residueKey, selectedChains, textValue, visualResidues, type BC2Document, type BC2InitialSources, type BC2Source, type BC2Target } from '../lib/bindcraft2StructureInputs';
 import type { Chain } from '../utils/pdbUtils';
 
 const surface = 'rounded-2xl border border-[var(--border-color)] bg-[var(--bg-secondary)]';
@@ -52,45 +53,33 @@ function ScaffoldLibrary({ onSelect }: { onSelect: (source: BC2Source) => void }
 
 function SourceChooser({ scaffold, onSelect, onClose }: { scaffold: boolean; onSelect: (source: BC2Source) => void; onClose: () => void }) {
     const [tab, setTab] = useState<'file' | 'catalog' | 'library'>('file');
-    const [folder, setFolder] = useState('/');
-    const [entries, setEntries] = useState<Array<{ path: string; name: string; is_directory: boolean }> | null>(null);
-    const [error, setError] = useState('');
-    const [busy, setBusy] = useState(false);
-    const epoch = useRef(0);
     const alive = useRef(true);
-    useEffect(() => { alive.current = true; return () => { alive.current = false; epoch.current++; }; }, []);
+    useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
     const choose = (source: BC2Source) => { if (alive.current) { alive.current = false; onSelect(source); } };
-    const browse = async (path: string) => {
-        const token = ++epoch.current; setBusy(true); setError('');
-        try { const response = await fetchFiles(path); if (alive.current && token === epoch.current) { setEntries(response.data.entries); setFolder(path); } }
-        catch (error) { if (alive.current && token === epoch.current) setError(message(error)); }
-        finally { if (alive.current && token === epoch.current) setBusy(false); }
-    };
     return <div className={`${surface} space-y-4 p-4`} aria-label={scaffold ? 'Choose scaffold source' : 'Choose target source'}>
         <div className="flex flex-wrap justify-between gap-2"><div className="flex flex-wrap gap-1" role="tablist" aria-label="Source locations">{([['file', 'Upload / files'], ['catalog', 'Runs / presets / RCSB'], ...(scaffold ? [['library', 'Antibody library']] : [])] as const).map(([key, label]) => <button type="button" role="tab" aria-selected={tab === key} key={key} className={`${button} ${tab === key ? 'border-accent bg-accent/10 text-accent' : ''}`} onClick={() => setTab(key as typeof tab)}>{label}</button>)}</div><button className={button} type="button" onClick={onClose}>Close</button></div>
         {tab === 'file' && <div className="space-y-3"><label className="block cursor-pointer rounded-xl border border-dashed border-accent/40 bg-accent/5 p-5"><span className="block font-medium">Choose {scaffold ? 'a scaffold structure' : 'a structure or FASTA'}</span><span className={`${small} mb-3 block`}>{scaffold ? 'PDB · mmCIF' : 'PDB · mmCIF · FASTA'} · bytes are stored through the governed files service</span><input className="block w-full text-sm" aria-label={scaffold ? 'Upload scaffold source' : 'Upload target source'} type="file" accept={scaffold ? '.pdb,.cif,.mmcif' : '.pdb,.cif,.mmcif,.fa,.fasta,.faa'} onChange={event => { const file = event.currentTarget.files?.[0]; if (file) choose({ file, name: file.name }); }} /></label>
-            <button className={button} type="button" disabled={busy} onClick={() => void browse(folder)}>Browse managed files</button>
-            {entries && <div className="max-h-64 overflow-auto rounded-lg border border-[var(--border-color)] p-2"><div className="flex items-center gap-2"><button type="button" className={button} disabled={folder === '/'} onClick={() => void browse('/' + folder.split('/').filter(Boolean).slice(0, -1).join('/'))}>Up one folder</button><span className={`${small} break-all`}>{folder}</span></div>{entries.filter(entry => entry.is_directory || (scaffold ? /\.(pdb|cif|mmcif)$/i : /\.(pdb|cif|mmcif|fa|fasta|faa)$/i).test(entry.path)).map(entry => <button type="button" className="block w-full rounded p-2 text-left text-sm hover:bg-accent/10" key={entry.path} onClick={() => entry.is_directory ? void browse(entry.path) : choose({ path: entry.path, name: entry.name })}>{entry.is_directory ? '▸ ' : ''}{entry.name}</button>)}</div>}
+            <StructuralSourceFiles allowSequence={!scaffold} onSelect={choose} />
         </div>}
         {tab === 'catalog' && <TargetAntigenSelector key="catalog" label={scaffold ? 'Scaffold structure' : 'Target structure'} initialTab="runs" onSelect={source => { if (source) choose(source); }} />}
         {tab === 'library' && <ScaffoldLibrary onSelect={choose} />}
-        {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
     </div>;
 }
 
 type Cache = Map<string, BC2Document>;
-function useSourceDocument(path: string, cache: Cache) {
+function useSourceDocument(path: string, cache: Cache, session: ReturnType<typeof createBC2SourceSession>) {
     const [loaded, setLoaded] = useState<{ path: string; document: BC2Document }>();
     const [failure, setFailure] = useState<{ path: string; error: string }>();
     const [retry, setRetry] = useState(0);
     useEffect(() => {
         if (!path || cache.has(path)) return;
-        const controller = new AbortController();
-        void readBC2Source({ path, name: path }, controller.signal).then(content => parseBC2Document(content, path)).then(document => {
-            if (!controller.signal.aborted) { cache.set(path, document); setLoaded({ path, document }); }
-        }).catch(error => { if (!controller.signal.aborted) setFailure({ path, error: message(error) }); });
-        return () => controller.abort();
-    }, [path, cache, retry]);
+        let cancelled = false;
+        void session.read({ path, name: path }).then(document => {
+            cache.set(path, document);
+            if (!cancelled) { setLoaded({ path, document }); setFailure(undefined); }
+        }).catch(error => { if (!cancelled) setFailure({ path, error: message(error) }); });
+        return () => { cancelled = true; };
+    }, [path, cache, retry, session]);
     return { document: cache.get(path) || (loaded?.path === path ? loaded.document : undefined), error: failure?.path === path ? failure.error : '', retry: () => { setFailure(undefined); setRetry(old => old + 1); } };
 }
 
@@ -104,12 +93,21 @@ function NativeTargetFields({ target, index, update }: { target: BC2Target; inde
 
 /** The canonical request is the only scientific state. Documents/cache are previews
  * keyed by exact materialized source; asynchronous work never owns the request. */
-export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources }: {
+export function BindCraft2StructureInputs({ value, onChange, inventory, initialSources, onSourcePrepared }: {
     value: BC2Request; onChange: (next: BC2Request) => void; inventory: BC2Inventory; initialSources?: BC2InitialSources;
+    /** Optional draft provenance handoff; not part of the native scientific request. */
+    onSourcePrepared?: (entry: { role: 'target' | 'scaffold'; targetIndex?: number; path: string; source: BC2Source }) => void;
 }) {
     const latest = useRef(value); latest.current = value;
     const change = useRef(onChange); change.current = onChange;
+    const preparedCallback = useRef(onSourcePrepared); preparedCallback.current = onSourcePrepared;
     const cache = useRef<Cache>(new Map()).current;
+    const [session] = useState(createBC2SourceSession);
+    const modelFiles = useRef(new WeakMap<BC2Document, Map<number, File>>()).current;
+    // A source changed away and back is still a new editing revision.
+    const sourceSignature = JSON.stringify([value.binder_scaffold, bc2Targets(value).map(target => target.target_path)]);
+    const sourceRevision = useRef({ signature: sourceSignature, revision: 0 });
+    if (sourceRevision.current.signature !== sourceSignature) sourceRevision.current = { signature: sourceSignature, revision: sourceRevision.current.revision + 1 };
     const closedInitialSlots = useRef(new Set<'target' | 'scaffold'>());
     if (!hasInitialTargetSlot(value)) closedInitialSlots.current.add('target');
     if (!hasInitialScaffoldSlot(value)) closedInitialSlots.current.add('scaffold');
@@ -138,25 +136,30 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
             if (!source || closedInitialSlots.current.has(role) || !(role === 'target' ? hasInitialTargetSlot(latest.current) : hasInitialScaffoldSlot(latest.current))) return;
             try {
                 const content = role === 'target' ? initialSources.target?.modelPdb : initialSources.scaffold?.pdbContent;
-                const prepared: BC2Source = content && (role === 'target' || !source.path && !source.file) ? { name: source.name, file: new File([content], `${source.name.replace(/\.(pdb|cif|mmcif)$/i, '')}.pdb`) } : source;
-                const result = await acquireBC2Source(prepared);
+                const prepared: BC2Source = content && (role === 'target' || !source.path && !source.file) ? { name: source.name, file: new File([content], `${source.name.replace(/\.(pdb|cif|mmcif)$/i, '')}.pdb`), derivedFrom: source } : source;
+                const result = await session.acquire(prepared);
                 if (cancelled || !mounted.current || sourceEpoch.current !== epoch || closedInitialSlots.current.has(role)) return;
                 const current = latest.current;
                 if (role === 'target' && hasInitialTargetSlot(current)) {
                     cache.set(result.path, result.document);
                     const target = initialSources.target!;
                     emit({ ...current, targets: [{ name: target.name, target_path: result.path, ...(target.chains !== undefined ? { chains: target.chains } : {}), ...(target.hotspots !== undefined ? { hotspots: target.hotspots } : {}) }] });
-                } else if (role === 'scaffold' && hasInitialScaffoldSlot(current)) { cache.set(result.path, result.document); emit({ ...current, binder_scaffold: result.path }); }
+                    preparedCallback.current?.({ role, targetIndex: 0, path: result.path, source: result.document.source || prepared });
+                } else if (role === 'scaffold' && hasInitialScaffoldSlot(current)) {
+                    cache.set(result.path, result.document); emit({ ...current, binder_scaffold: result.path });
+                    preparedCallback.current?.({ role, path: result.path, source: result.document.source || prepared });
+                }
             } catch (error) { if (!cancelled && mounted.current && sourceEpoch.current === epoch) setError(message(error)); }
         };
         void adopt('target'); void adopt('scaffold');
         return () => { cancelled = true; };
-    }, [initialSources?.target?.file, initialSources?.target?.path, initialSources?.target?.url, initialSources?.target?.name, initialSources?.target?.chains, initialSources?.target?.hotspots, initialSources?.target?.modelPdb, initialSources?.scaffold?.file, initialSources?.scaffold?.path, initialSources?.scaffold?.url, initialSources?.scaffold?.name, initialSources?.scaffold?.pdbContent, cache]);
+    }, [initialSources?.target?.file, initialSources?.target?.path, initialSources?.target?.url, initialSources?.target?.name, initialSources?.target?.chains, initialSources?.target?.hotspots, initialSources?.target?.modelPdb, initialSources?.scaffold?.file, initialSources?.scaffold?.path, initialSources?.scaffold?.url, initialSources?.scaffold?.name, initialSources?.scaffold?.pdbContent, cache, session]);
     const targets = bc2Targets(value);
     const target = typeof active === 'number' ? targets[active] : undefined;
     const activePath = active === 'scaffold' ? textValue(value.binder_scaffold) : textValue(target?.target_path);
-    const loaded = useSourceDocument(activePath, cache);
+    const loaded = useSourceDocument(activePath, cache, session);
     const document = loaded.document;
+    const sourceIdentity = document?.source?.derivedFrom || document?.source;
     const modelFamily = modelFamilies.get(activePath) || document;
     const model = document?.models[0];
     const chains = useMemo(() => document?.format === 'fasta' ? fastaChains(document, textValue(target?.chains)) : model?.chains || [], [document, model, target?.chains]);
@@ -169,11 +172,12 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
     const selectSource = async (slot: number | 'scaffold', source: BC2Source, family?: BC2Document, modelNumber?: number) => {
         closedInitialSlots.current.add(slot === 'scaffold' ? 'scaffold' : 'target');
         const token = ++sourceEpoch.current;
+        const revision = sourceRevision.current.revision;
         const oldPath = slot === 'scaffold' ? latest.current.binder_scaffold : bc2Targets(latest.current)[slot]?.target_path;
         setChooser(null); setBusy(slot); setError('');
         try {
-            const result = await acquireBC2Source(source);
-            if (!mounted.current || token !== sourceEpoch.current) return;
+            const result = await session.acquire(source);
+            if (!mounted.current || token !== sourceEpoch.current || revision !== sourceRevision.current.revision) return;
             const currentPath = slot === 'scaffold' ? latest.current.binder_scaffold : bc2Targets(latest.current)[slot]?.target_path;
             if (oldPath !== currentPath || slot !== 'scaffold' && !bc2Targets(latest.current)[slot]) return;
             cache.set(result.path, result.document);
@@ -181,6 +185,7 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
             if (modelNumber !== undefined) selectedModels.set(result.path, modelNumber);
             if (slot === 'scaffold') emit({ ...latest.current, binder_scaffold: result.path });
             else setTarget(slot, old => replaceTargetSource(old, result.path, source.name));
+            preparedCallback.current?.({ role: slot === 'scaffold' ? 'scaffold' : 'target', ...(typeof slot === 'number' ? { targetIndex: slot } : {}), path: result.path, source: result.document.source || source });
             setActive(slot);
         } catch (error) { if (mounted.current && token === sourceEpoch.current) setError(message(error)); }
         finally { if (mounted.current && token === sourceEpoch.current) setBusy(null); }
@@ -194,7 +199,10 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
     const useModel = (number: number) => {
         const chosen = modelFamily?.models.find(item => item.number === number);
         if (!chosen || !modelFamily) return;
-        void selectSource(active, { name: `model-${number}.${modelFamily.format}`, file: new File([chosen.content], `model-${number}.${modelFamily.format}`) }, modelFamily, number);
+        if (!modelFiles.has(modelFamily)) modelFiles.set(modelFamily, new Map());
+        const files = modelFiles.get(modelFamily)!;
+        if (!files.has(number)) files.set(number, new File([chosen.content], `model-${number}.${modelFamily.format}`));
+        void selectSource(active, { name: `model-${number}.${modelFamily.format}`, file: files.get(number), derivedFrom: modelFamily.source, modelNumber: number }, modelFamily, number);
     };
     const useScaffoldSubset = async () => {
         if (!document || active !== 'scaffold') return;
@@ -203,7 +211,7 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
             const { sliceBC2Structure } = await import('../lib/bindcraft2StructureInputs');
             const sliced = await sliceBC2Structure(document, chosenScaffoldChains);
             if (token !== sourceEpoch.current || !mounted.current || latest.current.binder_scaffold !== activePath) return;
-            await selectSource('scaffold', { file: new File([sliced], `scaffold-chains.${document.format}`), name: `scaffold-chains.${document.format}` });
+            await selectSource('scaffold', { file: new File([sliced], `scaffold-chains.${document.format}`), name: `scaffold-chains.${document.format}`, derivedFrom: document.source, chainIds: [...chosenScaffoldChains] });
         } catch (error) { if (token === sourceEpoch.current && mounted.current) { setError(message(error)); setBusy(null); } }
     };
     const profileScaffold = inventory.fields.binder_scaffold?.native_default;
@@ -228,6 +236,7 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4"><div><h4 className="font-semibold">{active === 'scaffold' ? 'Scaffold inspection' : textValue(target?.name) || 'Target inspection'}</h4><p className={small}>{document?.format === 'fasta' ? 'Sequence source · native FASTA record and positions' : 'Structure source · original chain IDs and residue numbering'}</p></div><div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="bc2-inspection-source">Inspect source</label><select id="bc2-inspection-source" className={`${input} !w-auto max-w-full`} value={active} onChange={event => setActive(event.currentTarget.value === 'scaffold' ? 'scaffold' : Number(event.currentTarget.value))}>{targets.map((row, index) => <option key={index} value={index}>Target: {textValue(row.name) || index + 1}</option>)}<option value="scaffold">Binder scaffold</option></select><button type="button" className={`${button} ${view === 'structure' ? 'text-accent' : ''}`} aria-pressed={view === 'structure'} onClick={() => setView('structure')}>3D + sequence</button><button type="button" className={`${button} ${view === 'sequence' ? 'text-accent' : ''}`} aria-pressed={view === 'sequence'} onClick={() => setView('sequence')}>Sequence</button></div></div>
             <div className="grid min-w-0 gap-5 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
                 <div className="min-w-0 space-y-4">
+                    {sourceIdentity && <p className={small} aria-label="Source identity">{sourceIdentity.name} · {document?.format === 'cif' ? 'mmCIF' : document?.format.toUpperCase()}{sourceIdentity.document && <> · source document {sourceIdentity.document.artifact_id} · state {sourceIdentity.document.target_state ?? 'not recorded'}</>}{document?.source?.derivedFrom && <> · derived source{document.source.modelNumber !== undefined ? ` · model ${document.source.modelNumber}` : ''}{document.source.chainIds ? ` · chains ${document.source.chainIds.join(', ')}` : ''}</>}</p>}
                     {modelFamily && modelFamily.models.length > 1 && <label className={small}>Use a model from this source<select className={input} aria-label="Use source model" value={selectedModels.get(activePath) ?? ''} onChange={event => { if (event.currentTarget.value) useModel(Number(event.currentTarget.value)); }}><option value="">First model (native) · choose to materialize another</option>{modelFamily.models.map(item => <option value={item.number} key={item.number}>Model {item.number} · {item.chains.length} chains</option>)}</select><span className="mt-1 block">Choosing a model saves that slice as the new source and resets source-coordinate selections.</span></label>}
                     {target && typeof active === 'number' && <><label className={small}>{document?.format === 'fasta' ? 'FASTA record / native chain' : 'Target chains'}<input className={input} aria-label={`targets.${active}.chains`} placeholder="All chains (native)" value={textValue(target.chains)} onChange={event => update(active, 'chains', event.currentTarget.value)} /></label>
                         {document?.format === 'fasta' && Object.keys(document.records || {}).length > 1 && <select className={input} aria-label="FASTA record" value={textValue(target.chains)} onChange={event => update(active, 'chains', event.currentTarget.value)}><option value="">Choose record</option>{Object.keys(document.records || {}).map(id => <option key={id}>{id}</option>)}</select>}
@@ -242,7 +251,7 @@ export function BindCraft2StructureInputs({ value, onChange, inventory, initialS
                     {!activePath && <p className={small}>Choose a source above to inspect its structure and sequence.</p>}
                 </div>
                 <div className="min-w-0 space-y-4">
-                    {document && document.format !== 'fasta' && view === 'structure' && <EpitopeMolstarViewer key={`${activePath}:${model?.number}`} pdbData={model?.content || document.content} format={document.format} height={380} selectedResidueRefs={active === 'scaffold' ? [] : visibleChains.flatMap(chain => chain.residues.filter(residue => selected.has(residueKey(residue))).map(residue => ({ documentId: 'primary', authAsymId: residue.chainId, authSeqId: residue.resNum, insertionCode: residue.iCode })))} onResidueRefClick={residue => { if (active === 'scaffold') return; const candidate = visibleChains.flatMap(chain => chain.residues).find(item => item.chainId === residue.authAsymId && item.resNum === residue.authSeqId && (item.iCode || '') === (residue.insertionCode || '')); if (!candidate) return; const after = new Set(selected); const key = residueKey(candidate); if (after.has(key)) after.delete(key); else after.add(key); applyResidues(after); }} />}
+                    {document && document.format !== 'fasta' && <div hidden={view !== 'structure'}><EpitopeMolstarViewer key={`${activePath}:${model?.number}`} pdbData={model?.content || document.content} format={document.format} sourceLabel={active === 'scaffold' ? 'Scaffold' : textValue(target?.name) || 'Target'} height={380} selectedResidueRefs={active === 'scaffold' ? [] : visibleChains.flatMap(chain => chain.residues.filter(residue => selected.has(residueKey(residue))).map(residue => ({ documentId: 'primary', authAsymId: residue.chainId, authSeqId: residue.resNum, insertionCode: residue.iCode })))} onResidueRefClick={residue => { if (active === 'scaffold') return; const candidate = visibleChains.flatMap(chain => chain.residues).find(item => item.chainId === residue.authAsymId && item.resNum === residue.authSeqId && (item.iCode || '') === (residue.insertionCode || '')); if (!candidate) return; const after = new Set(selected); const key = residueKey(candidate); if (after.has(key)) after.delete(key); else after.add(key); applyResidues(after); }} /></div>}
                     {visibleChains.length > 0 && (active === 'scaffold' ? <ScaffoldSequences chains={chains} /> : <div key={`${activePath}:${mode}`}><EpitopeSelector chains={visibleChains} selectedResidues={selected} onSelectionChange={applyResidues} selectedLabel={mode === 'hotspots' ? 'Hotspots' : 'Coldspots'} /></div>)}
                     {document?.format === 'fasta' && !visibleChains.length && <p className={small}>Choose a FASTA record to inspect its sequence.</p>}
                 </div>

@@ -8,9 +8,10 @@ import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { parseBC2Document, preparePdbStructureSource, acquireBC2Source } from '../lib/bindcraft2StructureInputs';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
-import { TargetAntigenSelector } from './TargetAntigenSelector';
+import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { DesignModeSelector } from './DesignModeSelector';
 import {
     QualitySettingsPanel,
@@ -43,12 +44,14 @@ import {
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { hydrateInitialStageSelection, resolveExistingDeNovoGenerator, type ExistingDeNovoGenerator } from './deNovoGeneratorSelection';
 import { DeNovoModalityNotice } from './DeNovoModalityNotice';
+import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
 import { BindCraft2Campaign } from './BindCraft2Campaign';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
 import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
 import { BinderGeneratorChooser, type BinderNativeRoute } from './BinderGeneratorChooser';
 import { previewBindCraft2Campaign, type BC2CampaignPreview } from '../lib/bindcraft2AuthoringApi';
+import { portableNativeSource } from '../lib/nativeBinderAuthoring';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -63,10 +66,13 @@ import {
     hydrateFrustraMpnnSettings,
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
-interface AntibodyDenovoTemplateProps {
+export interface AntibodyDenovoTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, UntypedApiValue>;
     onOpenNativeRoute?: (route: BinderNativeRoute) => void;
+    initialDraft?: Record<string, UntypedApiValue>;
+    onDraftChange?: (draft: Record<string, UntypedApiValue>) => void;
+    onSubmitRequest?: (request: UntypedApiValue, draft: Record<string, UntypedApiValue>) => ReturnType<typeof submitJob>;
 }
 
 type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
@@ -232,7 +238,11 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 const hydrateDeNovoStageSelection = hydrateInitialStageSelection;
 
-export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues, onOpenNativeRoute }) => {
+export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onSubmitRequest }) => {
+    const initialValues = useMemo(() => initialDraft ? { ...savedValues, ...initialDraft } : savedValues, [savedValues, initialDraft]);
+    const [retainedDraft, setRetainedDraft] = useState(initialValues ?? {});
+    const [workspaceSection, setWorkspaceSection] = useState('sources');
+    useEffect(() => { setRetainedDraft(initialValues ?? {}); }, [initialValues]);
     const location = useLocation();
     const { gpuOptions } = useLiveGpuCatalog();
     const refinementQueryEnabled = useMemo(
@@ -401,7 +411,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
     const [lockGpus, setLockGpus] = useState(false);
     const [targetPdb, setTargetPdb] = useState<File | null>(null);
-    const [targetSource, setTargetSource] = useState<{ type: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | null>(null);
+    const [targetSource, setTargetSource] = useState<Omit<SelectedTarget, 'file'> | null>(null);
     const [numDesigns, setNumDesigns] = useState(10);
     const [seqDesigner, setSeqDesigner] = useState<SeqDesigner>('fampnn');
     const [fampnnOverrides, setFampnnOverrides] = useState<unknown>(initialValues?.fampnn_analysis_overrides);
@@ -653,6 +663,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [frameworkType, setFrameworkType] = useState<FrameworkType>('standard-fv');
     const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
     const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
+    const [customFrameworkSource, setCustomFrameworkSource] = useState<SelectedTarget | undefined>(initialValues?.custom_framework_source);
+    useEffect(() => { setCustomFrameworkSource(initialValues?.custom_framework_source); }, [initialValues]);
     const [sabdabFramework, setSabdabFramework] = useState<SelectedFramework | null>(null);
 
     // ANARCII CDR detection state
@@ -672,6 +684,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const uploadedFileRef = useRef<File | null>(null);
 
     const [parsedTargetStructure, setParsedTargetStructure] = useState<ParsedPDB | null>(null);
+    const [targetFormat, setTargetFormat] = useState<'pdb' | 'cif'>('pdb');
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [parsedFrameworkChains, setParsedFrameworkChains] = useState<Chain[]>([]);
     const [selectedTargetModel, setSelectedTargetModel] = useState<number | null>(
@@ -994,7 +1007,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     }, [getSavedResidueSelection, getSavedTargetModelNumber]);
 
     const restoreTargetFromSaved = useCallback(async (saved: Record<string, UntypedApiValue>) => {
-        const savedSource = saved.target_source as { type?: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | undefined;
+        const loadToken = targetLoadControllerRef.current.begin();
+        const savedSource = saved.target_source as Omit<SelectedTarget, 'file'> | undefined;
         const savedUploadedPath = typeof saved.uploaded_path === 'string' ? saved.uploaded_path : '';
         const rawPath = (savedSource?.path || savedUploadedPath || saved.target_pdb || '').trim();
         const rcsbMatch = rawPath.match(/(?:^|\/)([a-z0-9]{4})\.pdb$/i);
@@ -1024,7 +1038,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const sourceName = savedSource?.name || rawPath.split('/').pop() || 'target.pdb';
         setUploadedPath(savedUploadedPath || (sourceType === 'upload' ? rawPath : null));
         setTargetSource({
-            type: sourceType || 'preset',
+            ...savedSource,
+            type: (sourceType || 'preset') as SelectedTarget['type'],
             url: fetchUrl || undefined,
             path: rawPath || undefined,
             designId: savedSource?.designId,
@@ -1035,6 +1050,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (!fetchUrl) return;
 
         const file = await loadPdbFileFromUrl(fetchUrl, sourceName);
+        if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
         setTargetPdb(file);
     }, [buildFilesApiUrl, loadPdbFileFromUrl]);
 
@@ -1042,7 +1058,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const queryClient = useQueryClient();
 
     const submitMutation = useMutation({
-        mutationFn: async (data: UntypedApiValue) => submitJob(data),
+        mutationFn: async (data: UntypedApiValue) => onSubmitRequest ? onSubmitRequest(data, authoringDraft) : submitJob(data),
         onSuccess: async (response) => {
             clearAntibodyRefinementLaunchState();
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -1108,6 +1124,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             throw new Error('Failed to determine PDB file path');
         }
 
+        if (deNovoGenerator === 'rfantibody' && /\.(cif|mmcif)$/i.test(pdbPath)) {
+            const prepared = await preparePdbStructureSource({ ...targetSource, path: pdbPath,
+                name: targetSource?.name || pdbPath, modelNumber: selectedTargetModel ?? undefined });
+            pdbPath = prepared.path;
+            setTargetSource(previous => ({ ...previous, ...portableNativeSource(prepared.document.source!),
+                type: previous?.type ?? 'upload', name: previous?.name ?? 'Target', path: prepared.path }));
+        }
         if (selectedChain && (parsedChains.length > 1 || availableTargetModels.length > 1)) {
             const extractResult = await extractChain(
                 pdbPath,
@@ -1475,6 +1498,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 setShowDnaInput(true);
             }
 
+            if (['protenix', 'boltz2', 'esmfold2'].includes(initialValues.structure_validator)) setStructureValidator(initialValues.structure_validator);
+
             // Sequence Designer
             if (initialValues.seq_design_fampnn) setSeqDesigner('fampnn');
             else if (initialValues.seq_design_caliby) setSeqDesigner('caliby');
@@ -1559,10 +1584,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (!targetPdb) {
             setParsedTargetStructure(null);
             setParsedChains([]);
-            setSelectedChain(null);
-            setSelectedTargetModel(1);
             setIsParsing(false);
             if (!restoringSelectionRef.current) {
+                setSelectedChain(null);
+                setSelectedTargetModel(1);
                 setSelectedResidues(new Set());
             }
             return;
@@ -1570,9 +1595,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         setIsParsing(true);
 
-        parsePDBFile(targetPdb)
-            .then((result) => {
+        targetPdb.text().then(content => parseBC2Document(content, targetPdb.name))
+            .then((document) => {
                 if (!targetParseControllerRef.current.isCurrent(parseToken)) return;
+                // Preserve native CIF author identity and exact model bytes.
+                // PDB-only consumers require checked server conversion, not the
+                // legacy browser CIF-to-PDB display approximation.
+                setTargetFormat(document.format === 'cif' ? 'cif' : 'pdb');
+                const result: ParsedPDB = { chains: document.models[0]?.chains || [], models: document.models.map((model, index) => ({ index, modelNumber: model.number, label: `Model ${model.number}`, chains: model.chains, content: model.content })) };
                 setParsedTargetStructure(result);
                 const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
                 setSelectedTargetModel((currentModel) => {
@@ -2348,18 +2378,241 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const availableTargetModels = parsedTargetStructure?.models ?? [];
     const activeTargetModel = parsedTargetStructure ? getModelByNumber(parsedTargetStructure, selectedTargetModel) : null;
     const activeTargetResidues = buildAvailableResidueKeySet(parsedChains);
+    const authoringDraft: Record<string, UntypedApiValue> = {
+                    ...retainedDraft,
+                    bindcraft2_settings: bc2Settings,
+                    model_id: deNovoGenerator === null ? retainedDraft.model_id : deNovoGenerator === 'bindcraft2' ? 'bindcraft2' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : 'antibody_denovo',
+                    mode: deNovoGenerator === null ? retainedDraft.mode : deNovoGenerator === 'bindcraft2' ? 'campaign' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : ANTIBODY_DENOVO_PIPELINE_MODE,
+                    openmm_enabled: physicsSettings.enabled,
+                    openmm_compute_tier: physicsSettings.computeTier,
+                    openmm_cdr_only: physicsSettings.cdrOnly,
+                    openmm_restraint_mode: physicsSettings.restraintMode,
+                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+                    openmm_force_field: physicsSettings.forceField,
+                    openmm_top_n_percentage: physicsSettings.topNPercentage,
+                    openmm_max_iterations: physicsSettings.maxIterations,
+                    openmm_tolerance: physicsSettings.tolerance,
+                    openmm_restraint_strength: physicsSettings.restraintStrength,
+                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
+                    openmm_platform: physicsSettings.platform,
+
+                    fampnn_analysis_overrides: fampnnOverrides,
+                    // Core settings
+                    job_name: jobName,
+                    denovo_generator: deNovoGenerator ?? retainedDraft.denovo_generator,
+                    generator: deNovoGenerator ?? retainedDraft.generator,
+                    stage_family: deNovoGenerator === 'ppiflow' ? 'ppiflow' : 'boltzgen',
+                    stage_mode: deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : 'nanobody_binder',
+                    initial_orchestration_sequence_design: deNovoStageSelection.sequence_design,
+                    initial_orchestration_ppiflow: deNovoStageSelection.ppiflow,
+                    initial_orchestration_validation: deNovoStageSelection.validation,
+                    initial_orchestration_qc: deNovoStageSelection.qc,
+                    framework_type: frameworkType,
+                    framework_pdb: frameworkType === 'sabdab'
+                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
+                        : (customFrameworkPath || undefined),
+                    seq_designer: seqDesigner,
+                    rfantibody_num_designs: numDesigns,
+                    seqs_per_design: seqsPerDesign,
+                    run_immunogenicity_scoring: useAntiberty,
+                    run_thermompnn: qualitySettings.run_thermompnn,
+                    run_stability_scoring: qualitySettings.run_thermompnn,
+                    run_structure_validation: runStructureValidation,
+                    msa_preset: qualitySettings.msa_preset,
+                    structure_validator: structureValidator,
+                    protenix_model_weights: qualitySettings.protenix_model_weights,
+                    protenix_seeds: qualitySettings.protenix_seeds,
+                    protenix_n_sample: qualitySettings.protenix_n_sample,
+                    protenix_n_step: qualitySettings.protenix_n_step,
+                    protenix_n_cycle: qualitySettings.protenix_n_cycle,
+                    protenix_use_msa: qualitySettings.protenix_use_msa,
+                    protenix_msa_backend: qualitySettings.protenix_msa_backend,
+                    ...hydrateNeurosnapMsaSettings(qualitySettings),
+                    ...hydrateColabfoldMsaSettings(qualitySettings),
+                    protenix_use_template: qualitySettings.protenix_use_template,
+                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
+                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
+                    protenix_enable_cache: qualitySettings.protenix_enable_cache,
+                    protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
+                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
+                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
+                    protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
+                    protenix_oom_retry_attempts: qualitySettings.protenix_oom_retry_attempts,
+                    colabfold_api_host: qualitySettings.colabfold_api_host.trim() || undefined,
+                    msa_use_gpu: qualitySettings.msa_use_gpu,
+                    msa_local_db: qualitySettings.msa_local_db.trim() || undefined,
+                    msa_cache_dir: qualitySettings.msa_cache_dir.trim() || undefined,
+                    msa_threads: qualitySettings.msa_threads ?? undefined,
+                    msa_gpu_mode: qualitySettings.msa_gpu_mode,
+                    msa_gpu_threshold: qualitySettings.msa_gpu_threshold,
+                    msa_preferred_gpus: qualitySettings.msa_preferred_gpus.trim() || undefined,
+                    msa_excluded_gpus: qualitySettings.msa_excluded_gpus.trim() || undefined,
+                    msa_gpu_server_mode: qualitySettings.msa_gpu_server_mode,
+                    msa_gpu_server_wait_timeout: qualitySettings.msa_gpu_server_wait_timeout,
+                    msa_gpu_server_db_load_mode: qualitySettings.msa_gpu_server_db_load_mode,
+                    msa_gpu_server_startup_wait: qualitySettings.msa_gpu_server_startup_wait,
+                    fampnn_checkpoint: resolvedFampnnCheckpoint,
+                    fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
+                    lock_target_chains: qualitySettings.lock_target_chains,
+                    lock_antibody_framework: qualitySettings.lock_antibody_framework,
+                    run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
+                    run_ppiflow_maturation: runPpiFlowMaturation,
+                    run_maturation: runPpiFlowMaturation,
+                    ppiflow_stage_mode: ppiflowStageMode,
+                    ppiflow_tuning_profile: qualitySettings.ppiflow_tuning_profile,
+                    ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
+                    ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
+                    ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
+                    ppiflow_maturation_loop_scope: effectivePpiFlowMaturationLoopScope || undefined,
+                    ppiflow_objective_mode: qualitySettings.ppiflow_objective_mode,
+                    ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
+                    run_post_validation_maturation: false,
+                    run_post_boltz_maturation: false,
+                    ...buildFrustraMpnnLaunchParams(runFrustrampnn, frustrampnnSettings),
+                    run_anarcii_post: runAnarciiPost,
+                    anarcii_include_children: anarciiIncludeChildren,
+                    interactive_swa: interactiveWorkflow,
+                    interactive_gating: interactiveWorkflow,
+                    interactive_gate_stage: interactiveGateStage,
+                    parallel_mode: parallelMode,
+                    designs_per_job: designsPerJob,
+                    pdbs_per_job: pdBsPerJob,
+                    seqs_per_boltz_job: seqsPerBoltzJob,
+                    seqs_per_validation_job: seqsPerBoltzJob,
+                    // Design mode
+                    design_mode: designMode,
+                    antibody_design_mode: designMode,
+                    selected_cdr_loops: Array.from(selectedCDRLoops),
+                    antibody_design_loops: Array.from(selectedCDRLoops).join(','),
+                    rfantibody_loop_length_mode: rfantibodyLoopLengthMode,
+                    rfantibody_loop_length_ranges_config: rfantibodyLoopLengthRanges,
+                    rfantibody_loop_length_ranges: rfantibodyLoopLengthMode === 'custom_ranges'
+                        ? `[${Array.from(selectedCDRLoops)
+                            .sort()
+                            .filter((loopId) => frameworkType !== 'nanobody' || loopId.startsWith('H'))
+                            .map((loopId) => {
+                                const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
+                                const min = Math.max(1, Number(range?.min) || 1);
+                                const max = Math.max(min, Number(range?.max) || min);
+                                return `${loopId}:${min}${max !== min ? `-${max}` : ''}`;
+                            })
+                            .join(',')}]`
+                        : undefined,
+                    enable_rfantibody_filter: enableRfantibodyFilter,
+                    rfantibody_screen_reference_scope: rfantibodyScreenReferenceScope,
+                    rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
+                    rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
+                    rfantibody_min_target_contacts: rfantibodyMinTargetContacts,
+                    rfantibody_max_target_distance: rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
+                    rfantibody_max_epitope_centroid_distance: rfantibodyMaxEpitopeCentroidDistance,
+                    rfantibody_contact_distance_threshold: rfantibodyContactDistanceThreshold,
+                    rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
+                    protect_tetrad: protectTetrad,
+                    protect_vhh_tetrad: protectTetrad,
+                    boltzgen_mode: 'nanobody_binder',
+                    boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
+                    boltzgen_scaffold_source: boltzgenScaffoldSource,
+                    boltzgen_view_reference_structure: boltzgenViewReferenceStructure,
+                    boltzgen_batch_size: boltzgenBatchSize,
+                    boltzgen_parallel_mode: boltzgenParallelMode,
+                    boltzgen_designs_per_job: boltzgenDesignsPerJob,
+                    boltzgen_reuse: boltzgenReuseExisting,
+                    boltzgen_scaffold_length: boltzgenScaffoldLength,
+                    boltzgen_nanobody_framework: boltzgenNanobodyFramework,
+                    boltzgen_cdr_h1_length: boltzgenCdrH1Length,
+                    boltzgen_cdr_h2_length: boltzgenCdrH2Length,
+                    boltzgen_cdr_h3_length: boltzgenCdrH3Length,
+                    boltzgen_checkpoint_mode: boltzgenCheckpointMode,
+                    boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding,
+                    boltzgen_inverse_fold_avoid: boltzgenInverseFoldAvoid,
+                    boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences,
+                    boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
+                    boltzgen_step_scale: boltzgenStepScale,
+                    boltzgen_noise_scale: boltzgenNoiseScale,
+                    boltzgen_budget: boltzgenBudget,
+                    boltzgen_alpha: boltzgenAlpha,
+                    boltzgen_max_rmsd: boltzgenMaxRmsd,
+                    boltzgen_min_plddt: boltzgenMinPlddt,
+                    boltzgen_min_conf_score: boltzgenMinConfScore,
+                    boltzgen_filter_biased: boltzgenFilterBiased,
+                    boltzgen_metrics_override: (boltzgenMetricsOverride.trim() || undefined),
+                    boltzgen_additional_filters: (boltzgenAdditionalFilters.trim() || undefined),
+                    boltzgen_size_buckets: (boltzgenSizeBuckets.trim() || undefined),
+                    ppiflow_seed_input_dir: ppiflowSeedInputDir.trim() || undefined,
+                    ppiflow_seed_complex_path: ppiflowSeedComplexPath || undefined,
+                    // Framework protection (for framework_allowed and full_design modes)
+                    protected_positions: frameworkProtection.protectedPositions.join(','),
+                    protect_disulfides: frameworkProtection.protectDisulfides,
+                    protect_fr_contacts: frameworkProtection.protectFrContacts,
+                    // Target info - now includes full source context
+                    target_pdb: uploadedPath || targetSource?.path || undefined,
+                    target_model_number: selectedTargetModel || undefined,
+                    target_source: targetSource,
+                    uploaded_path: uploadedPath,
+                    selected_chain: selectedChain,
+                    antigen_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntigenChains.trim() || selectedChain || undefined) : selectedChain,
+                    antibody_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntibodyChains.trim() || 'H') : undefined,
+                    selected_residues: Array.from(selectedResidues),
+                    epitope_residues: Array.from(selectedResidues).sort().join(','),
+                    target_dna_seq: targetDnaSeq.trim() || undefined,
+                    pinned_gpus: pinnedGpus,
+                    lock_gpus: lockGpus,
+                    out_dir: customOutputDir.trim() || undefined,
+                    // Quality settings
+                    quality_settings: qualitySettings,
+                    sabdab_framework: sabdabFramework ? {
+                        type: sabdabFramework.type,
+                        id: sabdabFramework.id,
+                        name: sabdabFramework.name,
+                        pdbCode: sabdabFramework.pdbCode,
+                        sequence: sabdabFramework.sequence,
+                        filePath: sabdabFramework.filePath,
+                        cdrH3Length: sabdabFramework.cdrH3Length,
+                        hChain: sabdabFramework.hChain,
+                        lChain: sabdabFramework.lChain,
+                        antigenChain: sabdabFramework.antigenChain,
+                    } : null,
+                    custom_framework_source: customFrameworkSource ? portableNativeSource(customFrameworkSource) : undefined,
+                    custom_framework_path: frameworkType === 'sabdab'
+                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
+                        : customFrameworkPath,
+                    // Manual CDR definitions - serialize Sets to arrays
+                    manual_cdr_definitions: manualCDRDefinitions.map(d => ({
+                        ...d,
+                        residues: Array.from(d.residues)
+                    })),
+                };
+    const serializedDraft = JSON.stringify(authoringDraft);
+    const lastReportedDraft = useRef<string | null>(null);
+    useEffect(() => {
+        // Let synchronous hydration settle before publishing a Project draft.
+        const timer = setTimeout(() => {
+            if (onDraftChange && lastReportedDraft.current !== serializedDraft) {
+                lastReportedDraft.current = serializedDraft;
+                onDraftChange(JSON.parse(serializedDraft));
+            }
+        }, 0);
+        return () => clearTimeout(timer);
+    }, [serializedDraft, onDraftChange]);
+
+    const openNativeRoute = onOpenNativeRoute ? (route: BinderNativeRoute) => {
+        const path = targetSource?.path || uploadedPath;
+        const frameworkPath = sabdabFramework?.filePath || customFrameworkPath;
+        onOpenNativeRoute({ ...route, sources: route.sources ?? {
+            ...(path ? { target: { reference: targetSource ?? undefined, path, name: targetSource?.name, source: targetSource?.type,
+                modelNumber: selectedTargetModel, chain: selectedChain, residues: Array.from(selectedResidues) } } : {}),
+            ...(frameworkPath ? { framework: { path: frameworkPath } } : {}),
+        } });
+    } : undefined;
+    const workspaceSections = deNovoGenerator === 'boltzgen'
+        ? [{ id: 'sources', label: 'Sources' }, { id: 'design', label: 'Binder & protocol' }, { id: 'generation', label: 'Generation' }, { id: 'operations', label: 'Native selection' }, { id: 'expert', label: 'Expert' }]
+        : deNovoGenerator === 'ppiflow'
+            ? [{ id: 'sources', label: 'Targets & templates' }, { id: 'design', label: 'Design' }, { id: 'generation', label: 'Generation' }, { id: 'expert', label: 'Expert' }]
+            : [{ id: 'sources', label: 'Target' }, { id: 'design', label: 'Framework & regions' }, { id: 'generation', label: 'Generation' }, { id: 'operations', label: 'Optional operations' }, { id: 'expert', label: 'Expert' }];
+    const sectionHidden = (section: string) => !isRefinementMode && workspaceSection !== (deNovoGenerator === 'ppiflow' && section === 'operations' ? 'generation' : section);
+
     const deNovoGeneratorSelector = !isRefinementMode ? (
         <div className="mb-6 space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-            <div>
-                <div className="text-sm font-medium text-[var(--text-primary)]">Binder modality and generation engine</div>
-                <DeNovoModalityNotice generator={deNovoGenerator} />
-            </div>
-            <BinderGeneratorChooser generator={deNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} onSelect={engine => {
-                setDeNovoGenerator(engine);
-                setShowBoltzgenFrameworkBrowser(false);
-                if (engine !== 'bindcraft2') setInteractiveGateStage(engine === 'boltzgen' ? 'post_boltzgen' : engine === 'ppiflow' ? 'post_ppiflow_generator' : 'post_rfantibody');
-            }} />
-
             <div className="rounded-xl border p-4" style={themedInsetStyle}>
                 <div className="flex items-center justify-between gap-3">
                     <div>
@@ -2439,9 +2692,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 path: sourcePath || undefined,
                 url: targetSource?.url,
                 name: targetPdb?.name || targetSource?.name || 'Selected target',
+                document: targetSource?.document,
                 chains: selectedChain || undefined,
                 hotspots: selectedResidues.size ? [...selectedResidues].join(',') : undefined,
-                modelPdb: availableTargetModels.length > 1 ? activeTargetModel?.content : undefined,
+                modelPdb: targetFormat === 'pdb' && availableTargetModels.length > 1 ? activeTargetModel?.content : undefined,
+                ...(targetFormat === 'cif' && availableTargetModels.length > 1 && activeTargetModel ? {
+                    file: new File([activeTargetModel.content], `model-${activeTargetModel.modelNumber}.cif`), path: undefined, url: undefined,
+                    derivedFrom: { ...targetSource, file: targetPdb ?? undefined, name: targetSource?.name || targetPdb?.name || 'Selected target' }, modelNumber: activeTargetModel.modelNumber,
+                } : {}),
             } } : {}),
             ...(scaffoldPath || scaffoldFile || selectedScaffold?.pdbContent ? { scaffold: {
                 path: scaffoldPath || undefined,
@@ -2453,12 +2711,379 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         };
     }, [targetSource, targetPdb, uploadedPath, frameworkType, sabdabFramework, customFrameworkPath,
         customFrameworkFile, selectedChain, selectedResidues, availableTargetModels.length,
-        activeTargetModel, frameworkPdbUrl]);
+        activeTargetModel, frameworkPdbUrl, targetFormat]);
 
-    if (!isRefinementMode && deNovoGenerator === 'bindcraft2') return (
+    const boltzgenSelectionControls = <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="text-xs text-slate-500">
+                                        Native pLDDT unavailable — leave empty (not design pTM)
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={boltzgenMinPlddt}
+                                            onChange={(e) => setBoltzgenMinPlddt(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Max refold RMSD
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.1}
+                                            value={boltzgenMaxRmsd}
+                                            onChange={(e) => setBoltzgenMaxRmsd(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Min affinity probability (0–1)
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={1}
+                                            step={0.01}
+                                            value={boltzgenMinConfScore}
+                                            onChange={(e) => setBoltzgenMinConfScore(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <BoltzGenRankControls value={boltzgenMetricsOverride} onChange={setBoltzgenMetricsOverride} />
+                                    <label className="text-xs text-slate-500 sm:col-span-2">
+                                        Additional filters
+                                        <input
+                                            type="text"
+                                            value={boltzgenAdditionalFilters}
+                                            onChange={(e) => setBoltzgenAdditionalFilters(e.target.value)}
+                                            placeholder="affinity_probability>0.8 design_ptm>0.75"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+    </div>;
+    const submitControls = <>
+            {/* Submit Button */}
+            <div className="mt-8 flex justify-end gap-3">
+                {/* Template Manager Button */}
+                <button
+                    type="button"
+                    onClick={() => setShowTemplateManager(true)}
+                    className="px-6 py-3 text-accent bg-accent/20 hover:bg-accent/30 border border-accent/30 font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                    Save Template
+                </button>
+                <button
+                    onClick={handleSubmit}
+                    disabled={
+                        (effectiveSeqDesigner === 'fampnn' && Boolean(fampnnError)) ||
+                        submitMutation.isPending ||
+                        launchMutagenesisMutation.isPending ||
+                        isUploading ||
+                        (isRefinementMode && !refinementHasLaunchSource) ||
+                        // Refinement mode and skip modes don't require target PDB or hotspots
+                        (!(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!(targetPdb || targetSource?.path || uploadedPath) || selectedResidues.size === 0)) ||
+                        // When skipping, require the skip paths
+                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
+                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim()) ||
+                        (!isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput) ||
+                        (isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn)
+                    }
+                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                    {isUploading ? (
+                        <>
+                            Uploading PDB...
+                        </>
+                    ) : (submitMutation.isPending || launchMutagenesisMutation.isPending) ? (
+                        <>
+                            Submitting...
+                        </>
+                    ) : isRefinementMode ? (
+                        <>
+                            {useManualMutagenesis
+                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
+                                : 'Launch Antibody Refinement'} ({refinementInputCount} outputs)
+                        </>
+                    ) : (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn)) ? (
+                        <>
+                            Run Skipped Workflow
+                        </>
+                    ) : deNovoGenerator === 'boltzgen' ? (
+                        <>
+                            Launch BoltzGen Nanobody Batch
+                        </>
+                    ) : deNovoGenerator === 'ppiflow' ? (
+                        <>
+                            Launch PPIFlow Seeded Batch
+                        </>
+                    ) : showOnlyCoreGeneratorStep ? (
+                        <>
+                            Launch RFantibody Batch ({selectedResidues.size} hotspots)
+                        </>
+                    ) : (
+                        <>
+                            Launch De Novo Nanobody Pipeline ({selectedResidues.size} hotspots)
+                        </>
+                    )}
+                </button>
+            </div>
+
+    </>;
+    const library = <>
+            {/* Template Manager Modal */}
+            <TemplateManagerModal
+                isOpen={showTemplateManager}
+                onClose={() => setShowTemplateManager(false)}
+                onSelect={(template) => {
+                    console.log('[TEMPLATE_LOAD] ======= LOADING TEMPLATE =======');
+                    console.log('[TEMPLATE_LOAD] Template name:', template.name);
+                    console.log('[TEMPLATE_LOAD] Template id:', template.id);
+                    console.log('[TEMPLATE_LOAD] All params:', JSON.stringify(template.params, null, 2));
+                    try {
+                        // Load template params into state
+                        const p = template.params || {};
+                        setRetainedDraft(p);
+                        setFampnnOverrides(p.fampnn_analysis_overrides);
+                        const loaded: string[] = [];
+                        const skipped: string[] = [];
+                        interactiveWorkflowTouchedRef.current = false;
+                        interactiveGateStageTouchedRef.current = false;
+
+                        // Core settings (check both new and old field names for backward compatibility)
+                        if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
+                        if (!isRefinementMode) {
+                            setDeNovoGenerator(resolveExistingDeNovoGenerator(p));
+                            if (p.bindcraft2_settings && typeof p.bindcraft2_settings === 'object' && !Array.isArray(p.bindcraft2_settings)) {
+                                setBc2Settings(p.bindcraft2_settings);
+                            }
+                            loaded.push('denovo_generator');
+                            setDeNovoStageSelection(hydrateDeNovoStageSelection(p));
+                            if (
+                                p.initial_orchestration_sequence_design !== undefined ||
+                                p.initial_orchestration_ppiflow !== undefined ||
+                                p.initial_orchestration_validation !== undefined ||
+                                p.initial_orchestration_qc !== undefined
+                            ) {
+                                loaded.push('initial_orchestration_*');
+                            }
+                        }
+                        if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
+                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); }
+                        else if (p.seq_design_caliby === true) { setSeqDesigner('caliby'); loaded.push('seq_design_caliby'); }
+                        else if (p.seq_design_fampnn === false && p.seq_design_caliby === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
+                        else { skipped.push('seq_designer'); }
+                        if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
+                        if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
+                        if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
+                        if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
+                        else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
+                        if (typeof p.run_frustrampnn === 'boolean') { updateRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
+                        if (p.frustrampnn_settings !== undefined) {
+                            setFrustrampnnSettings(hydrateFrustraMpnnSettings(p.frustrampnn_settings));
+                            loaded.push('frustrampnn_settings');
+                        }
+                        if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
+                        if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
+                        if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
+                        if (typeof p.boltzgen_use_framework_template === 'boolean') {
+                            setBoltzgenUseFrameworkTemplate(p.boltzgen_use_framework_template);
+                            loaded.push('boltzgen_use_framework_template');
+                        }
+                        if (typeof p.boltzgen_batch_size === 'number') {
+                            setBoltzgenBatchSize(p.boltzgen_batch_size);
+                            loaded.push('boltzgen_batch_size');
+                        } else if (typeof p.batch_size === 'number') {
+                            setBoltzgenBatchSize(p.batch_size);
+                            loaded.push('batch_size');
+                        }
+                        if (typeof p.boltzgen_parallel_mode === 'boolean') {
+                            setBoltzgenParallelMode(p.boltzgen_parallel_mode);
+                            loaded.push('boltzgen_parallel_mode');
+                        }
+                        if (typeof p.boltzgen_designs_per_job === 'number') {
+                            setBoltzgenDesignsPerJob(p.boltzgen_designs_per_job);
+                            loaded.push('boltzgen_designs_per_job');
+                        }
+                        if (typeof p.boltzgen_view_reference_structure === 'boolean') {
+                            setBoltzgenViewReferenceStructure(p.boltzgen_view_reference_structure);
+                            loaded.push('boltzgen_view_reference_structure');
+                        }
+                        if (typeof p.boltzgen_reuse === 'boolean') {
+                            setBoltzgenReuseExisting(p.boltzgen_reuse);
+                            loaded.push('boltzgen_reuse');
+                        }
+                        if (typeof p.boltzgen_nanobody_framework === 'string') {
+                            setBoltzgenNanobodyFramework(p.boltzgen_nanobody_framework);
+                            loaded.push('boltzgen_nanobody_framework');
+                        }
+                        if (p.boltzgen_scaffold_source === 'default_ensemble' || p.boltzgen_scaffold_source === 'selected_scaffold' || p.boltzgen_scaffold_source === 'sequence_template') {
+                            setBoltzgenScaffoldSource(p.boltzgen_scaffold_source);
+                            loaded.push('boltzgen_scaffold_source');
+                        }
+                        if (typeof p.boltzgen_scaffold_length === 'string') {
+                            setBoltzgenScaffoldLength(p.boltzgen_scaffold_length);
+                            loaded.push('boltzgen_scaffold_length');
+                        }
+                        if (typeof p.boltzgen_cdr_h1_length === 'string') { setBoltzgenCdrH1Length(p.boltzgen_cdr_h1_length); loaded.push('boltzgen_cdr_h1_length'); }
+                        if (typeof p.boltzgen_cdr_h2_length === 'string') { setBoltzgenCdrH2Length(p.boltzgen_cdr_h2_length); loaded.push('boltzgen_cdr_h2_length'); }
+                        if (typeof p.boltzgen_cdr_h3_length === 'string') { setBoltzgenCdrH3Length(p.boltzgen_cdr_h3_length); loaded.push('boltzgen_cdr_h3_length'); }
+                        if (p.boltzgen_checkpoint_mode === 'both' || p.boltzgen_checkpoint_mode === 'diverse' || p.boltzgen_checkpoint_mode === 'adherence') {
+                            setBoltzgenCheckpointMode(p.boltzgen_checkpoint_mode);
+                            loaded.push('boltzgen_checkpoint_mode');
+                        }
+                        if (typeof p.boltzgen_skip_inverse_folding === 'boolean') { setBoltzgenSkipInverseFolding(p.boltzgen_skip_inverse_folding); loaded.push('boltzgen_skip_inverse_folding'); }
+                        if (typeof p.boltzgen_inverse_fold_avoid === 'string') { setBoltzgenInverseFoldAvoid(p.boltzgen_inverse_fold_avoid); loaded.push('boltzgen_inverse_fold_avoid'); }
+                        if (typeof p.boltzgen_inverse_fold_num_sequences === 'number') { setBoltzgenInverseFoldNumSequences(p.boltzgen_inverse_fold_num_sequences); loaded.push('boltzgen_inverse_fold_num_sequences'); }
+                        if (typeof p.boltzgen_avoid_cysteine === 'boolean') { setBoltzgenAvoidCysteine(p.boltzgen_avoid_cysteine); loaded.push('boltzgen_avoid_cysteine'); }
+                        if (typeof p.boltzgen_step_scale === 'number') { setBoltzgenStepScale(p.boltzgen_step_scale); loaded.push('boltzgen_step_scale'); }
+                        if (typeof p.boltzgen_noise_scale === 'number') { setBoltzgenNoiseScale(p.boltzgen_noise_scale); loaded.push('boltzgen_noise_scale'); }
+                        if (typeof p.boltzgen_budget === 'number') { setBoltzgenBudget(p.boltzgen_budget); loaded.push('boltzgen_budget'); }
+                        if (typeof p.boltzgen_alpha === 'number') { setBoltzgenAlpha(p.boltzgen_alpha); loaded.push('boltzgen_alpha'); }
+                        if (typeof p.boltzgen_max_rmsd === 'number') { setBoltzgenMaxRmsd(p.boltzgen_max_rmsd); loaded.push('boltzgen_max_rmsd'); }
+                        if (typeof p.boltzgen_min_plddt === 'number' || p.boltzgen_min_plddt === null) { setBoltzgenMinPlddt(p.boltzgen_min_plddt ?? ''); loaded.push('boltzgen_min_plddt'); }
+                        if (typeof p.boltzgen_min_conf_score === 'number') { setBoltzgenMinConfScore(p.boltzgen_min_conf_score); loaded.push('boltzgen_min_conf_score'); }
+                        if (typeof p.boltzgen_filter_biased === 'boolean') { setBoltzgenFilterBiased(p.boltzgen_filter_biased); loaded.push('boltzgen_filter_biased'); }
+                        if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
+                        if (typeof p.boltzgen_additional_filters === 'string') { setBoltzgenAdditionalFilters(p.boltzgen_additional_filters); loaded.push('boltzgen_additional_filters'); }
+                        if (typeof p.boltzgen_size_buckets === 'string') { setBoltzgenSizeBuckets(p.boltzgen_size_buckets); loaded.push('boltzgen_size_buckets'); }
+                        if (typeof p.ppiflow_seed_input_dir === 'string') { setPpiflowSeedInputDir(p.ppiflow_seed_input_dir); loaded.push('ppiflow_seed_input_dir'); }
+                        else if (typeof p.selected_input_dir === 'string' && p.stage_family === 'ppiflow') { setPpiflowSeedInputDir(p.selected_input_dir); loaded.push('selected_input_dir'); }
+                        if (typeof p.ppiflow_seed_complex_path === 'string') { setPpiflowSeedComplexPath(p.ppiflow_seed_complex_path); loaded.push('ppiflow_seed_complex_path'); }
+                        if (typeof p.antibody_chains === 'string' && p.antibody_chains.trim()) { setPpiflowSeedAntibodyChains(p.antibody_chains); loaded.push('antibody_chains'); }
+                        if (typeof p.antigen_chains === 'string' && p.antigen_chains.trim()) { setPpiflowSeedAntigenChains(p.antigen_chains); loaded.push('antigen_chains'); }
+                        if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
+                        else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
+                        if (
+                            p.interactive_gate_stage === 'post_rfantibody' ||
+                            p.interactive_gate_stage === 'post_boltzgen' ||
+                            p.interactive_gate_stage === 'post_ppiflow_generator' ||
+                            p.interactive_gate_stage === 'post_caliby' ||
+                            p.interactive_gate_stage === 'post_structure_validation' ||
+                            p.interactive_gate_stage === 'post_fampnn'
+                        ) {
+                            setInteractiveGateStage(p.interactive_gate_stage);
+                            loaded.push('interactive_gate_stage');
+                        }
+                        if (p.structure_validator === 'protenix' || p.structure_validator === 'boltz2' || p.structure_validator === 'esmfold2') { setStructureValidator(p.structure_validator); loaded.push('structure_validator'); }
+                        if (p.parallel_mode) { setParallelMode(p.parallel_mode); loaded.push('parallel_mode'); } else { skipped.push('parallel_mode'); }
+                        if (p.designs_per_job) { setDesignsPerJob(p.designs_per_job); loaded.push('designs_per_job'); }
+                        if (p.pdbs_per_job) { setPdBsPerJob(p.pdbs_per_job); loaded.push('pdbs_per_job'); }
+                        else if (p.seqs_per_job) { setPdBsPerJob(p.seqs_per_job); loaded.push('seqs_per_job'); }
+                        if (p.seqs_per_validation_job) { setSeqsPerBoltzJob(p.seqs_per_validation_job); loaded.push('seqs_per_validation_job'); }
+                        else if (p.seqs_per_boltz_job) { setSeqsPerBoltzJob(p.seqs_per_boltz_job); loaded.push('seqs_per_boltz_job'); }
+                        if (Array.isArray(p.pinned_gpus)) { setPinnedGpus(p.pinned_gpus); loaded.push('pinned_gpus'); }
+                        if (typeof p.lock_gpus === 'boolean') { setLockGpus(p.lock_gpus); loaded.push('lock_gpus'); }
+                        if (typeof p.out_dir === 'string') { setCustomOutputDir(p.out_dir); loaded.push('out_dir'); }
+                        // Design mode
+                        if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
+                        if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
+                        if (p.rfantibody_loop_length_mode === 'custom_ranges' || p.rfantibody_loop_length_mode === 'defaults') {
+                            setRfantibodyLoopLengthMode(p.rfantibody_loop_length_mode);
+                            loaded.push('rfantibody_loop_length_mode');
+                        }
+                        if (p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges) {
+                            setRfantibodyLoopLengthRanges(
+                                parseLoopLengthRanges(p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges)
+                            );
+                            loaded.push('rfantibody_loop_length_ranges');
+                        }
+                        if (!isRefinementMode && typeof p.enable_rfantibody_filter === 'boolean') {
+                            setEnableRfantibodyFilter(p.enable_rfantibody_filter);
+                            loaded.push('enable_rfantibody_filter');
+                        }
+                        if (!isRefinementMode && p.rfantibody_screen_reference_scope !== undefined) {
+                            setRfantibodyScreenReferenceScope(normalizeRfScreeningScope(p.rfantibody_screen_reference_scope));
+                            loaded.push('rfantibody_screen_reference_scope');
+                        }
+                        if (!isRefinementMode && p.rfantibody_min_epitope_contacts !== undefined) {
+                            setRfantibodyMinEpitopeContacts(Math.max(0, Number(p.rfantibody_min_epitope_contacts) || 0));
+                            loaded.push('rfantibody_min_epitope_contacts');
+                        }
+                        if (!isRefinementMode && p.rfantibody_max_epitope_distance !== undefined) {
+                            setRfantibodyMaxEpitopeDistance(Math.max(0, Number(p.rfantibody_max_epitope_distance) || 0));
+                            loaded.push('rfantibody_max_epitope_distance');
+                        }
+                        if (!isRefinementMode && p.rfantibody_min_target_contacts !== undefined) {
+                            setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
+                            loaded.push('rfantibody_min_target_contacts');
+                        }
+                        if (!isRefinementMode && (p as UntypedApiValue).rfantibody_max_target_distance !== undefined) {
+                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as UntypedApiValue).rfantibody_max_target_distance) || 0));
+                            loaded.push('rfantibody_max_target_distance');
+                        }
+                        if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
+                            setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
+                            loaded.push('rfantibody_max_epitope_centroid_distance');
+                        }
+                        if (!isRefinementMode && p.rfantibody_contact_distance_threshold !== undefined) {
+                            setRfantibodyContactDistanceThreshold(Math.max(0, Number(p.rfantibody_contact_distance_threshold) || 0));
+                            loaded.push('rfantibody_contact_distance_threshold');
+                        }
+                        if (!isRefinementMode && p.rfantibody_target_contact_distance_threshold !== undefined) {
+                            setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(p.rfantibody_target_contact_distance_threshold) || 0));
+                            loaded.push('rfantibody_target_contact_distance_threshold');
+                        }
+                        if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
+                        else if (typeof p.protect_vhh_tetrad === 'boolean') { setProtectTetrad(p.protect_vhh_tetrad); loaded.push('protect_vhh_tetrad'); }
+                        if (p.uploaded_path) { loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
+                        if (p.target_source) {
+                            loaded.push('target_source');
+                        }
+                        queueRestoredSelection(p);
+                        restoreTargetFromSaved(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore target state:', err));
+                        if (p.selected_chain || p.antigen_chains) { loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
+                        if (getSavedResidueSelection(p).length > 0) { loaded.push('selected_residues'); } else { skipped.push('selected_residues'); }
+                        if (p.target_dna_seq) { setTargetDnaSeq(p.target_dna_seq); setShowDnaInput(true); loaded.push('target_dna_seq'); }
+                        // Quality settings - check both old and new field names
+                        const hasQualityOverrides = Boolean(
+                            p.quality_settings ||
+                            p.qualitySettings ||
+                            (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
+                        );
+                        setPhysicsSettings(hydratePhysicsSettings(p));
+                        setLegacyPhysicsVisible(Object.keys(p).some(key => key.startsWith('openmm_')));
+                        setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(p));
+                        if (hasQualityOverrides) {
+                            setQualitySettings(mergeQualitySettingsFromParams(p));
+                            loaded.push('quality_settings');
+                        }
+                        // Manual CDR definitions - deserialize from arrays
+                        if (Array.isArray(p.manual_cdr_definitions)) {
+                            const defs = p.manual_cdr_definitions.map((d: UntypedApiValue) => ({
+                                ...d,
+                                residues: new Set(d.residues || [])
+                            }));
+                            setManualCDRDefinitions(defs);
+                            setShowCDREditor(defs.length > 0);
+                            loaded.push('manual_cdr_definitions');
+                        }
+                        if (p.custom_framework_path && p.framework_type !== 'sabdab') {
+                            setCustomFrameworkPath(p.custom_framework_path);
+                            loaded.push('custom_framework_path');
+                        }
+                        if (p.sabdab_framework) {
+                            setSabdabFramework(p.sabdab_framework);
+                            loaded.push('sabdab_framework');
+                        }
+                        restoreFrameworkPreview(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore framework state:', err));
+
+                        console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
+                        console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
+                        console.log('[TEMPLATE_LOAD] Successfully loaded template ✓');
+                    } catch (err) {
+                        console.error('[TEMPLATE_LOAD] Error loading template:', err);
+                    }
+                }}
+                currentParams={authoringDraft}
+                currentModelId="template_antibody_denovo"
+                currentMode={isRefinementMode ? ANTIBODY_REFINEMENT_PIPELINE_MODE : ANTIBODY_DENOVO_PIPELINE_MODE}
+                baseTemplateId="antibody_denovo"
+            />    </>;
+
+    const bc2Workspace = !isRefinementMode && deNovoGenerator === 'bindcraft2' ? (
         <BindCraft2Campaign
             name={jobName} onNameChange={setJobName} onBack={onBack}
-            generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} />}
+            generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             requestedSettings={bc2Settings} preview={activeBc2Preview}
             section={bc2Section} onSectionChange={setBc2Section}
             previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
@@ -2493,50 +3118,36 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 onSelect={template => {
                     const params = template.params || {};
                     if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') return;
+                    setRetainedDraft(params);
                     setJobName(params.job_name ?? template.name);
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
                 }}
-                currentParams={{ job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings }}
+                currentParams={{ ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings }}
                 currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />}
         >
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} section={bc2Section}
-                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources} />} />
+                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources}
+                    onSourcePrepared={entry => setRetainedDraft(previous => ({ ...previous, bc2_source_references: { ...(previous.bc2_source_references || {}), [entry.role === 'target' ? `target:${entry.targetIndex}` : 'scaffold']: { path: entry.path, source: portableNativeSource(entry.source) } } }))} />} />
                 : <div className="rounded-xl border p-6" style={themedPanelStyle}><p role={bc2DiscoveryError ? 'alert' : 'status'}>{bc2DiscoveryError ?? 'Loading BindCraft2 settings…'}</p></div>}
         </BindCraft2Campaign>
-    );
+    ) : null;
 
     return (
-        <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <ExecutionTargetPicker workflowRequest={workflowRequest} />
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <button
-                        onClick={onBack}
-                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
-                    >
-                        ← Back
-                    </button>
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-                                {isRefinementMode ? 'Antibody Refinement' : 'De Novo Binder Design'}
-                            </h2>
-                            <span
-                                className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em]"
-                                style={isRefinementMode ? themedTagStyle('var(--accent-primary)') : themedMutedInsetStyle}
-                            >
-                                {isRefinementMode ? 'Refinement Mode' : 'De Novo Mode'}
-                            </span>
-                        </div>
-                        <p className="text-sm text-[var(--text-secondary)]">
-                            {isRefinementMode ? `Configuring a modular downstream run for ${refinementInputCount} locked outputs.` : 'Generate de novo nanobody binders and carry selected outputs into modular downstream refinement.'}
-                        </p>
-                    </div>
-                </div>
-            </div>
-
+        <>
+        {bc2Workspace}
+        <div hidden={Boolean(bc2Workspace)}>
+        <BinderWorkflowWorkspace
+            title={isRefinementMode ? 'Antibody Refinement' : 'De Novo Binder Design'}
+            description={<><button type="button" onClick={onBack}>← Back</button><span className="ml-3">Model-native settings; optional operations remain explicit.</span></>}
+            sections={isRefinementMode ? [] : workspaceSections}
+            activeSection={workspaceSection} onSectionChange={setWorkspaceSection}
+            engineChooser={!isRefinementMode && <BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
+            summary={<span>{deNovoGenerator ?? 'Unrecognized saved generator'} · {jobName || 'Unnamed request'}</span>}
+            executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            submitControls={submitControls} library={!bc2Workspace && library}
+        >
+            <DeNovoModalityNotice generator={deNovoGenerator} />
             <ModelDocumentationLinks
                 topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}
                 summary="Generator and validator background is linked out; this launcher keeps controls and review gates up front."
@@ -2544,7 +3155,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 className="mb-6"
             />
 
-            {deNovoGeneratorSelector}
+            <div hidden={sectionHidden('operations')}>{deNovoGeneratorSelector}{deNovoGenerator === 'boltzgen' && boltzgenSelectionControls}</div>
 
             {isRefinementMode && (
                 <div
@@ -2571,6 +3182,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
             )}
 
+            <div hidden={sectionHidden('generation')}>
             {/* Pipeline Visualization */}
             <div className="mb-6 rounded-lg border p-4" style={themedPanelStyle}>
                 <div className="flex items-start justify-between gap-4 mb-3">
@@ -2588,7 +3200,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     <div className="flex flex-wrap justify-end gap-2 text-[11px]">
                         <span className="rounded-full border px-2.5 py-1" style={themedMutedInsetStyle}>
-                            Validator: <span className="font-medium text-[var(--accent-primary)]">{structureValidator === 'protenix' ? 'Protenix' : 'Boltz2'}</span>
+                            Validator: <span className="font-medium text-[var(--accent-primary)]">{structureValidator === 'protenix' ? 'Protenix' : structureValidator === 'esmfold2' ? 'ESMFold2' : 'Boltz2'}</span>
                         </span>
                         {interactiveWorkflow && (
                             <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
@@ -2640,7 +3252,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 optional: true,
                             },
                             {
-                                title: structureValidator === 'protenix' ? 'Protenix' : 'Boltz2',
+                                title: structureValidator === 'protenix' ? 'Protenix' : structureValidator === 'esmfold2' ? 'ESMFold2' : 'Boltz2',
                                 detail: effectiveRunStructureValidation ? 'Structure validation' : 'Hidden until enabled',
                                 accent: effectiveRunStructureValidation ? 'var(--accent-primary)' : undefined,
                                 muted: !effectiveRunStructureValidation,
@@ -3207,10 +3819,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
             )}
 
+            </div>
             {/* Form - 2 Column Layout */}
-            <div className="grid grid-cols-2 gap-8">
+            <div className="space-y-5">
                 {/* LEFT COLUMN: Target & Epitope Selection */}
                 <div className="space-y-5">
+                    <div hidden={sectionHidden('sources')} className="space-y-5">
                     {/* Job Name & GPU Pinning */}
                     <div className="flex gap-6">
                         <div className="flex-1">
@@ -3271,8 +3885,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Target PDB Selection - Now with multiple sources */}
                     {!isRefinementMode && (
                         <TargetAntigenSelector
+                            onInspect={() => { setViewerMode('target'); setShow3DViewer(true); }}
                             onSelect={async (target) => {
                                 const loadToken = targetLoadControllerRef.current.begin();
+                                restoringSelectionRef.current = null;
+                                setSelectedChain(null);
+                                setSelectedResidues(new Set());
+                                setSelectedTargetModel(1);
                                 uploadedFileRef.current = null;
                                 setUploadedPath(null);
                                 setTargetPdb(null);
@@ -3281,10 +3900,23 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     if (target.type === 'upload' && target.file) {
                                         if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
                                         setTargetPdb(target.file);
-                                        setTargetSource({ type: 'upload' });
+                                        const { file: _file, ...reference } = target;
+                                        setTargetSource(reference);
+                                        try {
+                                            const prepared = await acquireBC2Source(target);
+                                            if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
+                                            uploadedFileRef.current = target.file;
+                                            setUploadedPath(prepared.path);
+                                            setTargetSource({ ...reference, path: prepared.path });
+                                        } catch (error) {
+                                            if (targetLoadControllerRef.current.isCurrent(loadToken)) window.alert(`Source upload failed: ${error instanceof Error ? error.message : String(error)}`);
+                                        }
                                     } else if (target.url) {
+                                        const { file: _file, ...sourceReference } = target;
                                         setTargetSource({
+                                            ...sourceReference,
                                             type: target.type,
+                                            name: target.name,
                                             url: target.url,
                                             path: target.path,
                                             designId: target.designId,
@@ -3295,7 +3927,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             if (!res.ok) throw new Error(`Failed to load target (${res.status})`);
                                             const blob = await res.blob();
                                             if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
-                                            const file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                                            const content = await blob.text();
+                                            const document = await parseBC2Document(content, target.path || target.name);
+                                            if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
+                                            const file = new File([content], `${target.name.replace(/\.(pdb|cif|mmcif)$/i, '')}.${document.format}`, { type: 'text/plain' });
                                             setTargetPdb(file);
                                         } catch (err) {
                                             if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
@@ -3308,7 +3943,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     setTargetSource(null);
                                 }
                             }}
-                            selectedTarget={targetPdb ? { type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetPdb.name } : undefined}
+                            selectedTarget={targetPdb || targetSource ? { ...targetSource, type: (targetSource?.type || 'upload') as 'upload' | 'run' | 'preset' | 'rcsb', name: targetSource?.name || targetPdb?.name || 'Selected target' } : undefined}
                         />
                     )}
 
@@ -3423,6 +4058,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     </div>
                                     <EpitopeMolstarViewer
                                         structureUrl={viewerMode === 'framework' && frameworkPdbUrl ? frameworkPdbUrl : pdbBlobUrl || ''}
+                                        format={viewerMode === 'target' ? targetFormat : 'pdb'}
+                                        documentId={viewerMode === 'target' ? `${targetSource?.document?.artifact_id || targetSource?.path || targetSource?.url || targetPdb?.name || 'target'}:model-${selectedTargetModel}` : frameworkPdbUrl || 'framework'}
+                                        sourceLabel={viewerMode === 'target' ? targetSource?.name || targetPdb?.name || 'Target' : 'Framework'}
+                                        defaultFullView
                                         height={400}
                                         selectedResidues={viewerMode === 'target' ? selectedResidues : (() => {
                                             // When viewing framework, highlight detected CDR residues using raw array mapping
@@ -3485,10 +4124,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Fallback text input if no PDB */}
                     {parsedChains.length === 0 && targetPdb && !isParsing && (
                         <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
-                            Warning: Could not parse PDB file. Please ensure it's a valid PDB format.
+                            Warning: Could not parse the structure file. Please ensure it is valid PDB or mmCIF.
                         </div>
                     )}
 
+                    </div>
+                    <div hidden={sectionHidden('design')} className="space-y-5">
                     {!isRefinementMode && deNovoGenerator === 'boltzgen' ? (
                         <div className="space-y-5">
                             <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
@@ -3773,52 +4414,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             step={0.01}
                                             value={boltzgenNoiseScale}
                                             onChange={(e) => setBoltzgenNoiseScale(e.target.value ? Number(e.target.value) : '')}
-                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-slate-500">
-                                        Native pLDDT unavailable — leave empty (not design pTM)
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            max={100}
-                                            step={1}
-                                            value={boltzgenMinPlddt}
-                                            onChange={(e) => setBoltzgenMinPlddt(e.target.value ? Number(e.target.value) : '')}
-                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-slate-500">
-                                        Max refold RMSD
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            step={0.1}
-                                            value={boltzgenMaxRmsd}
-                                            onChange={(e) => setBoltzgenMaxRmsd(e.target.value ? Number(e.target.value) : '')}
-                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
-                                        />
-                                    </label>
-                                    <label className="text-xs text-slate-500">
-                                        Min affinity probability (0–1)
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            max={1}
-                                            step={0.01}
-                                            value={boltzgenMinConfScore}
-                                            onChange={(e) => setBoltzgenMinConfScore(e.target.value ? Number(e.target.value) : '')}
-                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
-                                        />
-                                    </label>
-                                    <BoltzGenRankControls value={boltzgenMetricsOverride} onChange={setBoltzgenMetricsOverride} />
-                                    <label className="text-xs text-slate-500 sm:col-span-2">
-                                        Additional filters
-                                        <input
-                                            type="text"
-                                            value={boltzgenAdditionalFilters}
-                                            onChange={(e) => setBoltzgenAdditionalFilters(e.target.value)}
-                                            placeholder="affinity_probability>0.8 design_ptm>0.75"
                                             className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
                                         />
                                     </label>
@@ -4363,28 +4958,28 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             {/* Custom framework upload */}
                             {frameworkType === 'custom' && (
                                 <div className="mt-3">
-                                    <input
-                                        type="file"
-                                        accept=".pdb"
-                                        onChange={(e) => {
-                                            frameworkLoadControllerRef.current.begin();
-                                            const file = e.target.files?.[0] || null;
-                                            setCustomFrameworkFile(file);
-                                            setCustomFrameworkPath(null);
-                                            setDetectedCDRs(null);
-
-                                            if (file) {
-                                                const blobUrl = URL.createObjectURL(file);
-                                                replaceFrameworkPdbUrl(blobUrl);
-                                                setViewerMode('framework');
-                                                setShow3DViewer(true);
-                                            } else {
-                                                replaceFrameworkPdbUrl(null);
-                                                setParsedFrameworkChains([]);
+                                    <TargetAntigenSelector label="RFantibody framework" requiredFormat="pdb" selectedTarget={customFrameworkSource}
+                                        onInspect={() => { setViewerMode('framework'); setShow3DViewer(true); }}
+                                        onSelect={async source => {
+                                            const token = frameworkLoadControllerRef.current.begin();
+                                            setCustomFrameworkSource(source ?? undefined); setDetectedCDRs(null);
+                                            if (!source) {
+                                                setCustomFrameworkFile(null); setCustomFrameworkPath(null);
+                                                replaceFrameworkPdbUrl(null); setParsedFrameworkChains([]); return;
                                             }
-                                        }}
-                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer"
-                                    />
+                                            try {
+                                                const prepared = await preparePdbStructureSource(source);
+                                                if (!frameworkLoadControllerRef.current.isCurrent(token)) return;
+                                                const reference = { ...source, ...portableNativeSource(prepared.document.source || source), path: prepared.path };
+                                                setCustomFrameworkSource(reference); setCustomFrameworkPath(prepared.path);
+                                                const file = new File([prepared.document.content], 'framework.pdb', { type: 'chemical/x-pdb' });
+                                                setCustomFrameworkFile(file); setParsedFrameworkChains(prepared.document.models[0]?.chains ?? []);
+                                                replaceFrameworkPdbUrl(buildFilesApiUrl('download', prepared.path));
+                                                setViewerMode('framework'); setShow3DViewer(true);
+                                            } catch (error) {
+                                                if (frameworkLoadControllerRef.current.isCurrent(token)) window.alert(error instanceof Error ? error.message : String(error));
+                                            }
+                                        }} />
                                     <p className="mt-1 text-xs text-slate-500">Upload HLT-formatted framework PDB with chain H (Heavy) and L (Light)</p>
                                 </div>
                             )}
@@ -4765,10 +5360,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         </>
                     )}
 
+                    </div>
                 </div> {/* End LEFT COLUMN */}
 
                 {/* RIGHT COLUMN: Quality Settings & Debug */}
                 <div className="space-y-5">
+                    <div hidden={sectionHidden('operations')} className="space-y-5">
                     {!isRefinementMode && showOnlyCoreGeneratorStep && (
                         <div className="rounded-lg border p-4" style={themedInsetStyle}>
                             <div className="text-sm font-semibold text-[var(--text-primary)]">Generator-Only Batch</div>
@@ -5016,6 +5613,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     )}
 
+                    </div>
+                    <div hidden={sectionHidden('generation')} className="space-y-5">
                     {/* Number of Backbones */}
                     {!isRefinementMode && deNovoGenerator !== 'ppiflow' && (
                         <div>
@@ -5335,6 +5934,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </div>
                     )}
 
+                    </div>
+                    <div hidden={sectionHidden('expert')} className="space-y-5">
                     {/* Debug Settings Panel - Hidden by default */}
                     {showDebugPanel && (
                     <div className="mt-6 border border-amber-600/30 rounded-lg overflow-hidden">
@@ -5444,6 +6045,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         )}
                     </div>
                     )}
+                    </div>
                 </div> {/* End RIGHT COLUMN */}
             </div > {/* End grid */}
 
@@ -5451,519 +6053,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 allowSummaryOverride={false}
                 summaryDefault="Sequence-designed antibody region, including already-authorized framework design"
                 mutationDefault="Resolved CDR residues minus fixed/protected positions" />}
-            {/* Submit Button */}
-            <div className="mt-8 flex justify-end gap-3">
-                {/* Template Manager Button */}
-                <button
-                    type="button"
-                    onClick={() => setShowTemplateManager(true)}
-                    className="px-6 py-3 text-accent bg-accent/20 hover:bg-accent/30 border border-accent/30 font-medium rounded-lg transition-colors flex items-center gap-2"
-                >
-                    Save Template
-                </button>
-                <button
-                    onClick={handleSubmit}
-                    disabled={
-                        (effectiveSeqDesigner === 'fampnn' && Boolean(fampnnError)) ||
-                        submitMutation.isPending ||
-                        launchMutagenesisMutation.isPending ||
-                        isUploading ||
-                        (isRefinementMode && !refinementHasLaunchSource) ||
-                        // Refinement mode and skip modes don't require target PDB or hotspots
-                        (!(isRefinementMode || deNovoGenerator === 'ppiflow' || (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn))) && (!(targetPdb || targetSource?.path || uploadedPath) || selectedResidues.size === 0)) ||
-                        // When skipping, require the skip paths
-                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipRFantibody && !rfantibodyInputPdbs.trim()) ||
-                        (!isRefinementMode && deNovoGenerator === 'rfantibody' && skipFampnn && !fampnnCollectedPdbs.trim()) ||
-                        (!isRefinementMode && deNovoGenerator === 'ppiflow' && !hasPpiFlowSeedLaunchInput) ||
-                        (isRefinementMode && !useManualMutagenesis && effectiveSeqDesigner === 'none' && !anyPpiFlowStageEnabled && !effectiveRunStructureValidation && !effectiveRunFrustrampnn)
-                    }
-                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
-                >
-                    {isUploading ? (
-                        <>
-                            Uploading PDB...
-                        </>
-                    ) : (submitMutation.isPending || launchMutagenesisMutation.isPending) ? (
-                        <>
-                            Submitting...
-                        </>
-                    ) : isRefinementMode ? (
-                        <>
-                            {useManualMutagenesis
-                                ? (mutagenesisLaunchMode === 'seeded_refinement' ? 'Launch Mutation-Seeded Refinement' : 'Launch Exact Mutant Evaluation')
-                                : 'Launch Antibody Refinement'} ({refinementInputCount} outputs)
-                        </>
-                    ) : (deNovoGenerator === 'rfantibody' && (skipRFantibody || skipFampnn)) ? (
-                        <>
-                            Run Skipped Workflow
-                        </>
-                    ) : deNovoGenerator === 'boltzgen' ? (
-                        <>
-                            Launch BoltzGen Nanobody Batch
-                        </>
-                    ) : deNovoGenerator === 'ppiflow' ? (
-                        <>
-                            Launch PPIFlow Seeded Batch
-                        </>
-                    ) : showOnlyCoreGeneratorStep ? (
-                        <>
-                            Launch RFantibody Batch ({selectedResidues.size} hotspots)
-                        </>
-                    ) : (
-                        <>
-                            Launch De Novo Nanobody Pipeline ({selectedResidues.size} hotspots)
-                        </>
-                    )}
-                </button>
-            </div>
 
-            {/* Template Manager Modal */}
-            <TemplateManagerModal
-                isOpen={showTemplateManager}
-                onClose={() => setShowTemplateManager(false)}
-                onSelect={(template) => {
-                    console.log('[TEMPLATE_LOAD] ======= LOADING TEMPLATE =======');
-                    console.log('[TEMPLATE_LOAD] Template name:', template.name);
-                    console.log('[TEMPLATE_LOAD] Template id:', template.id);
-                    console.log('[TEMPLATE_LOAD] All params:', JSON.stringify(template.params, null, 2));
-                    try {
-                        // Load template params into state
-                        const p = template.params || {};
-                        setFampnnOverrides(p.fampnn_analysis_overrides);
-                        const loaded: string[] = [];
-                        const skipped: string[] = [];
-                        interactiveWorkflowTouchedRef.current = false;
-                        interactiveGateStageTouchedRef.current = false;
-
-                        // Core settings (check both new and old field names for backward compatibility)
-                        if (p.job_name) { setJobName(p.job_name); loaded.push('job_name'); } else { skipped.push('job_name'); }
-                        if (!isRefinementMode) {
-                            setDeNovoGenerator(resolveExistingDeNovoGenerator(p));
-                            if (p.bindcraft2_settings && typeof p.bindcraft2_settings === 'object' && !Array.isArray(p.bindcraft2_settings)) {
-                                setBc2Settings(p.bindcraft2_settings);
-                            }
-                            loaded.push('denovo_generator');
-                            setDeNovoStageSelection(hydrateDeNovoStageSelection(p));
-                            if (
-                                p.initial_orchestration_sequence_design !== undefined ||
-                                p.initial_orchestration_ppiflow !== undefined ||
-                                p.initial_orchestration_validation !== undefined ||
-                                p.initial_orchestration_qc !== undefined
-                            ) {
-                                loaded.push('initial_orchestration_*');
-                            }
-                        }
-                        if (p.framework_type) { setFrameworkType(p.framework_type); loaded.push('framework_type'); } else { skipped.push('framework_type'); }
-                        if (p.seq_designer) { setSeqDesigner(p.seq_designer); loaded.push('seq_designer'); }
-                        else if (p.seq_design_caliby === true) { setSeqDesigner('caliby'); loaded.push('seq_design_caliby'); }
-                        else if (p.seq_design_fampnn === false && p.seq_design_caliby === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
-                        else { skipped.push('seq_designer'); }
-                        if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
-                        if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
-                        if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
-                        if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
-                        else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
-                        if (typeof p.run_frustrampnn === 'boolean') { updateRunFrustrampnn(p.run_frustrampnn); loaded.push('run_frustrampnn'); }
-                        if (p.frustrampnn_settings !== undefined) {
-                            setFrustrampnnSettings(hydrateFrustraMpnnSettings(p.frustrampnn_settings));
-                            loaded.push('frustrampnn_settings');
-                        }
-                        if (typeof p.run_structure_validation === 'boolean') { setRunStructureValidation(p.run_structure_validation); loaded.push('run_structure_validation'); }
-                        if (typeof p.run_anarcii_post === 'boolean') { setRunAnarciiPost(p.run_anarcii_post); loaded.push('run_anarcii_post'); }
-                        if (typeof p.anarcii_include_children === 'boolean') { setAnarciiIncludeChildren(p.anarcii_include_children); loaded.push('anarcii_include_children'); }
-                        if (typeof p.boltzgen_use_framework_template === 'boolean') {
-                            setBoltzgenUseFrameworkTemplate(p.boltzgen_use_framework_template);
-                            loaded.push('boltzgen_use_framework_template');
-                        }
-                        if (typeof p.boltzgen_batch_size === 'number') {
-                            setBoltzgenBatchSize(p.boltzgen_batch_size);
-                            loaded.push('boltzgen_batch_size');
-                        } else if (typeof p.batch_size === 'number') {
-                            setBoltzgenBatchSize(p.batch_size);
-                            loaded.push('batch_size');
-                        }
-                        if (typeof p.boltzgen_parallel_mode === 'boolean') {
-                            setBoltzgenParallelMode(p.boltzgen_parallel_mode);
-                            loaded.push('boltzgen_parallel_mode');
-                        }
-                        if (typeof p.boltzgen_designs_per_job === 'number') {
-                            setBoltzgenDesignsPerJob(p.boltzgen_designs_per_job);
-                            loaded.push('boltzgen_designs_per_job');
-                        }
-                        if (typeof p.boltzgen_view_reference_structure === 'boolean') {
-                            setBoltzgenViewReferenceStructure(p.boltzgen_view_reference_structure);
-                            loaded.push('boltzgen_view_reference_structure');
-                        }
-                        if (typeof p.boltzgen_reuse === 'boolean') {
-                            setBoltzgenReuseExisting(p.boltzgen_reuse);
-                            loaded.push('boltzgen_reuse');
-                        }
-                        if (typeof p.boltzgen_nanobody_framework === 'string') {
-                            setBoltzgenNanobodyFramework(p.boltzgen_nanobody_framework);
-                            loaded.push('boltzgen_nanobody_framework');
-                        }
-                        if (p.boltzgen_scaffold_source === 'default_ensemble' || p.boltzgen_scaffold_source === 'selected_scaffold' || p.boltzgen_scaffold_source === 'sequence_template') {
-                            setBoltzgenScaffoldSource(p.boltzgen_scaffold_source);
-                            loaded.push('boltzgen_scaffold_source');
-                        }
-                        if (typeof p.boltzgen_scaffold_length === 'string') {
-                            setBoltzgenScaffoldLength(p.boltzgen_scaffold_length);
-                            loaded.push('boltzgen_scaffold_length');
-                        }
-                        if (typeof p.boltzgen_cdr_h1_length === 'string') { setBoltzgenCdrH1Length(p.boltzgen_cdr_h1_length); loaded.push('boltzgen_cdr_h1_length'); }
-                        if (typeof p.boltzgen_cdr_h2_length === 'string') { setBoltzgenCdrH2Length(p.boltzgen_cdr_h2_length); loaded.push('boltzgen_cdr_h2_length'); }
-                        if (typeof p.boltzgen_cdr_h3_length === 'string') { setBoltzgenCdrH3Length(p.boltzgen_cdr_h3_length); loaded.push('boltzgen_cdr_h3_length'); }
-                        if (p.boltzgen_checkpoint_mode === 'both' || p.boltzgen_checkpoint_mode === 'diverse' || p.boltzgen_checkpoint_mode === 'adherence') {
-                            setBoltzgenCheckpointMode(p.boltzgen_checkpoint_mode);
-                            loaded.push('boltzgen_checkpoint_mode');
-                        }
-                        if (typeof p.boltzgen_skip_inverse_folding === 'boolean') { setBoltzgenSkipInverseFolding(p.boltzgen_skip_inverse_folding); loaded.push('boltzgen_skip_inverse_folding'); }
-                        if (typeof p.boltzgen_inverse_fold_avoid === 'string') { setBoltzgenInverseFoldAvoid(p.boltzgen_inverse_fold_avoid); loaded.push('boltzgen_inverse_fold_avoid'); }
-                        if (typeof p.boltzgen_inverse_fold_num_sequences === 'number') { setBoltzgenInverseFoldNumSequences(p.boltzgen_inverse_fold_num_sequences); loaded.push('boltzgen_inverse_fold_num_sequences'); }
-                        if (typeof p.boltzgen_avoid_cysteine === 'boolean') { setBoltzgenAvoidCysteine(p.boltzgen_avoid_cysteine); loaded.push('boltzgen_avoid_cysteine'); }
-                        if (typeof p.boltzgen_step_scale === 'number') { setBoltzgenStepScale(p.boltzgen_step_scale); loaded.push('boltzgen_step_scale'); }
-                        if (typeof p.boltzgen_noise_scale === 'number') { setBoltzgenNoiseScale(p.boltzgen_noise_scale); loaded.push('boltzgen_noise_scale'); }
-                        if (typeof p.boltzgen_budget === 'number') { setBoltzgenBudget(p.boltzgen_budget); loaded.push('boltzgen_budget'); }
-                        if (typeof p.boltzgen_alpha === 'number') { setBoltzgenAlpha(p.boltzgen_alpha); loaded.push('boltzgen_alpha'); }
-                        if (typeof p.boltzgen_max_rmsd === 'number') { setBoltzgenMaxRmsd(p.boltzgen_max_rmsd); loaded.push('boltzgen_max_rmsd'); }
-                        if (typeof p.boltzgen_min_plddt === 'number' || p.boltzgen_min_plddt === null) { setBoltzgenMinPlddt(p.boltzgen_min_plddt ?? ''); loaded.push('boltzgen_min_plddt'); }
-                        if (typeof p.boltzgen_min_conf_score === 'number') { setBoltzgenMinConfScore(p.boltzgen_min_conf_score); loaded.push('boltzgen_min_conf_score'); }
-                        if (typeof p.boltzgen_filter_biased === 'boolean') { setBoltzgenFilterBiased(p.boltzgen_filter_biased); loaded.push('boltzgen_filter_biased'); }
-                        if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
-                        if (typeof p.boltzgen_additional_filters === 'string') { setBoltzgenAdditionalFilters(p.boltzgen_additional_filters); loaded.push('boltzgen_additional_filters'); }
-                        if (typeof p.boltzgen_size_buckets === 'string') { setBoltzgenSizeBuckets(p.boltzgen_size_buckets); loaded.push('boltzgen_size_buckets'); }
-                        if (typeof p.ppiflow_seed_input_dir === 'string') { setPpiflowSeedInputDir(p.ppiflow_seed_input_dir); loaded.push('ppiflow_seed_input_dir'); }
-                        else if (typeof p.selected_input_dir === 'string' && p.stage_family === 'ppiflow') { setPpiflowSeedInputDir(p.selected_input_dir); loaded.push('selected_input_dir'); }
-                        if (typeof p.ppiflow_seed_complex_path === 'string') { setPpiflowSeedComplexPath(p.ppiflow_seed_complex_path); loaded.push('ppiflow_seed_complex_path'); }
-                        if (typeof p.antibody_chains === 'string' && p.antibody_chains.trim()) { setPpiflowSeedAntibodyChains(p.antibody_chains); loaded.push('antibody_chains'); }
-                        if (typeof p.antigen_chains === 'string' && p.antigen_chains.trim()) { setPpiflowSeedAntigenChains(p.antigen_chains); loaded.push('antigen_chains'); }
-                        if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
-                        else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
-                        if (
-                            p.interactive_gate_stage === 'post_rfantibody' ||
-                            p.interactive_gate_stage === 'post_boltzgen' ||
-                            p.interactive_gate_stage === 'post_ppiflow_generator' ||
-                            p.interactive_gate_stage === 'post_caliby' ||
-                            p.interactive_gate_stage === 'post_structure_validation' ||
-                            p.interactive_gate_stage === 'post_fampnn'
-                        ) {
-                            setInteractiveGateStage(p.interactive_gate_stage);
-                            loaded.push('interactive_gate_stage');
-                        }
-                        if (p.structure_validator === 'protenix' || p.structure_validator === 'boltz2') { setStructureValidator(p.structure_validator); loaded.push('structure_validator'); }
-                        if (p.parallel_mode) { setParallelMode(p.parallel_mode); loaded.push('parallel_mode'); } else { skipped.push('parallel_mode'); }
-                        if (p.designs_per_job) { setDesignsPerJob(p.designs_per_job); loaded.push('designs_per_job'); }
-                        if (p.pdbs_per_job) { setPdBsPerJob(p.pdbs_per_job); loaded.push('pdbs_per_job'); }
-                        else if (p.seqs_per_job) { setPdBsPerJob(p.seqs_per_job); loaded.push('seqs_per_job'); }
-                        if (p.seqs_per_validation_job) { setSeqsPerBoltzJob(p.seqs_per_validation_job); loaded.push('seqs_per_validation_job'); }
-                        else if (p.seqs_per_boltz_job) { setSeqsPerBoltzJob(p.seqs_per_boltz_job); loaded.push('seqs_per_boltz_job'); }
-                        if (Array.isArray(p.pinned_gpus)) { setPinnedGpus(p.pinned_gpus); loaded.push('pinned_gpus'); }
-                        if (typeof p.lock_gpus === 'boolean') { setLockGpus(p.lock_gpus); loaded.push('lock_gpus'); }
-                        if (typeof p.out_dir === 'string') { setCustomOutputDir(p.out_dir); loaded.push('out_dir'); }
-                        // Design mode
-                        if (p.design_mode) { setDesignMode(p.design_mode); loaded.push('design_mode'); } else { skipped.push('design_mode'); }
-                        if (Array.isArray(p.selected_cdr_loops)) { setSelectedCDRLoops(new Set(p.selected_cdr_loops)); loaded.push('selected_cdr_loops'); }
-                        if (p.rfantibody_loop_length_mode === 'custom_ranges' || p.rfantibody_loop_length_mode === 'defaults') {
-                            setRfantibodyLoopLengthMode(p.rfantibody_loop_length_mode);
-                            loaded.push('rfantibody_loop_length_mode');
-                        }
-                        if (p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges) {
-                            setRfantibodyLoopLengthRanges(
-                                parseLoopLengthRanges(p.rfantibody_loop_length_ranges_config || p.rfantibody_loop_length_ranges)
-                            );
-                            loaded.push('rfantibody_loop_length_ranges');
-                        }
-                        if (!isRefinementMode && typeof p.enable_rfantibody_filter === 'boolean') {
-                            setEnableRfantibodyFilter(p.enable_rfantibody_filter);
-                            loaded.push('enable_rfantibody_filter');
-                        }
-                        if (!isRefinementMode && p.rfantibody_screen_reference_scope !== undefined) {
-                            setRfantibodyScreenReferenceScope(normalizeRfScreeningScope(p.rfantibody_screen_reference_scope));
-                            loaded.push('rfantibody_screen_reference_scope');
-                        }
-                        if (!isRefinementMode && p.rfantibody_min_epitope_contacts !== undefined) {
-                            setRfantibodyMinEpitopeContacts(Math.max(0, Number(p.rfantibody_min_epitope_contacts) || 0));
-                            loaded.push('rfantibody_min_epitope_contacts');
-                        }
-                        if (!isRefinementMode && p.rfantibody_max_epitope_distance !== undefined) {
-                            setRfantibodyMaxEpitopeDistance(Math.max(0, Number(p.rfantibody_max_epitope_distance) || 0));
-                            loaded.push('rfantibody_max_epitope_distance');
-                        }
-                        if (!isRefinementMode && p.rfantibody_min_target_contacts !== undefined) {
-                            setRfantibodyMinTargetContacts(Math.max(0, Number(p.rfantibody_min_target_contacts) || 0));
-                            loaded.push('rfantibody_min_target_contacts');
-                        }
-                        if (!isRefinementMode && (p as UntypedApiValue).rfantibody_max_target_distance !== undefined) {
-                            setRfantibodyMaxTargetDistance(Math.max(0, Number((p as UntypedApiValue).rfantibody_max_target_distance) || 0));
-                            loaded.push('rfantibody_max_target_distance');
-                        }
-                        if (!isRefinementMode && p.rfantibody_max_epitope_centroid_distance !== undefined) {
-                            setRfantibodyMaxEpitopeCentroidDistance(Math.max(0, Number(p.rfantibody_max_epitope_centroid_distance) || 0));
-                            loaded.push('rfantibody_max_epitope_centroid_distance');
-                        }
-                        if (!isRefinementMode && p.rfantibody_contact_distance_threshold !== undefined) {
-                            setRfantibodyContactDistanceThreshold(Math.max(0, Number(p.rfantibody_contact_distance_threshold) || 0));
-                            loaded.push('rfantibody_contact_distance_threshold');
-                        }
-                        if (!isRefinementMode && p.rfantibody_target_contact_distance_threshold !== undefined) {
-                            setRfantibodyTargetContactDistanceThreshold(Math.max(0, Number(p.rfantibody_target_contact_distance_threshold) || 0));
-                            loaded.push('rfantibody_target_contact_distance_threshold');
-                        }
-                        if (typeof p.protect_tetrad === 'boolean') { setProtectTetrad(p.protect_tetrad); loaded.push('protect_tetrad'); }
-                        else if (typeof p.protect_vhh_tetrad === 'boolean') { setProtectTetrad(p.protect_vhh_tetrad); loaded.push('protect_vhh_tetrad'); }
-                        if (p.uploaded_path) { loaded.push('uploaded_path'); } else { skipped.push('uploaded_path'); }
-                        if (p.target_source) {
-                            loaded.push('target_source');
-                        }
-                        queueRestoredSelection(p);
-                        restoreTargetFromSaved(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore target state:', err));
-                        if (p.selected_chain || p.antigen_chains) { loaded.push('selected_chain'); } else { skipped.push('selected_chain'); }
-                        if (getSavedResidueSelection(p).length > 0) { loaded.push('selected_residues'); } else { skipped.push('selected_residues'); }
-                        if (p.target_dna_seq) { setTargetDnaSeq(p.target_dna_seq); setShowDnaInput(true); loaded.push('target_dna_seq'); }
-                        // Quality settings - check both old and new field names
-                        const hasQualityOverrides = Boolean(
-                            p.quality_settings ||
-                            p.qualitySettings ||
-                            (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
-                        );
-                        setPhysicsSettings(hydratePhysicsSettings(p));
-                        setLegacyPhysicsVisible(Object.keys(p).some(key => key.startsWith('openmm_')));
-                        setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(p));
-                        if (hasQualityOverrides) {
-                            setQualitySettings(mergeQualitySettingsFromParams(p));
-                            loaded.push('quality_settings');
-                        }
-                        // Manual CDR definitions - deserialize from arrays
-                        if (Array.isArray(p.manual_cdr_definitions)) {
-                            const defs = p.manual_cdr_definitions.map((d: UntypedApiValue) => ({
-                                ...d,
-                                residues: new Set(d.residues || [])
-                            }));
-                            setManualCDRDefinitions(defs);
-                            setShowCDREditor(defs.length > 0);
-                            loaded.push('manual_cdr_definitions');
-                        }
-                        if (p.custom_framework_path && p.framework_type !== 'sabdab') {
-                            setCustomFrameworkPath(p.custom_framework_path);
-                            loaded.push('custom_framework_path');
-                        }
-                        if (p.sabdab_framework) {
-                            setSabdabFramework(p.sabdab_framework);
-                            loaded.push('sabdab_framework');
-                        }
-                        restoreFrameworkPreview(p).catch((err) => console.error('[TEMPLATE_LOAD] Failed to restore framework state:', err));
-
-                        console.log('[TEMPLATE_LOAD] Loaded fields:', loaded.join(', '));
-                        console.log('[TEMPLATE_LOAD] Skipped fields (not in template):', skipped.join(', '));
-                        console.log('[TEMPLATE_LOAD] Successfully loaded template ✓');
-                    } catch (err) {
-                        console.error('[TEMPLATE_LOAD] Error loading template:', err);
-                    }
-                }}
-                currentParams={{
-                    openmm_enabled: physicsSettings.enabled,
-                    openmm_compute_tier: physicsSettings.computeTier,
-                    openmm_cdr_only: physicsSettings.cdrOnly,
-                    openmm_restraint_mode: physicsSettings.restraintMode,
-                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
-                    openmm_force_field: physicsSettings.forceField,
-                    openmm_top_n_percentage: physicsSettings.topNPercentage,
-                    openmm_max_iterations: physicsSettings.maxIterations,
-                    openmm_tolerance: physicsSettings.tolerance,
-                    openmm_restraint_strength: physicsSettings.restraintStrength,
-                    openmm_implicit_solvent: physicsSettings.implicitSolvent,
-                    openmm_platform: physicsSettings.platform,
-
-                    fampnn_analysis_overrides: fampnnOverrides,
-                    // Core settings
-                    job_name: jobName,
-                    denovo_generator: deNovoGenerator,
-                    generator: deNovoGenerator,
-                    stage_family: deNovoGenerator === 'ppiflow' ? 'ppiflow' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : undefined,
-                    stage_mode: deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : undefined,
-                    initial_orchestration_sequence_design: deNovoStageSelection.sequence_design,
-                    initial_orchestration_ppiflow: deNovoStageSelection.ppiflow,
-                    initial_orchestration_validation: deNovoStageSelection.validation,
-                    initial_orchestration_qc: deNovoStageSelection.qc,
-                    framework_type: (deNovoGenerator === 'boltzgen' || deNovoGenerator === 'ppiflow') ? 'nanobody' : frameworkType,
-                    framework_pdb: frameworkType === 'sabdab'
-                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
-                        : (customFrameworkPath || undefined),
-                    seq_designer: seqDesigner,
-                    rfantibody_num_designs: numDesigns,
-                    seqs_per_design: seqsPerDesign,
-                    run_immunogenicity_scoring: useAntiberty,
-                    run_thermompnn: qualitySettings.run_thermompnn,
-                    run_stability_scoring: qualitySettings.run_thermompnn,
-                    run_structure_validation: runStructureValidation,
-                    msa_preset: qualitySettings.msa_preset,
-                    structure_validator: structureValidator,
-                    protenix_model_weights: qualitySettings.protenix_model_weights,
-                    protenix_seeds: qualitySettings.protenix_seeds,
-                    protenix_n_sample: qualitySettings.protenix_n_sample,
-                    protenix_n_step: qualitySettings.protenix_n_step,
-                    protenix_n_cycle: qualitySettings.protenix_n_cycle,
-                    protenix_use_msa: qualitySettings.protenix_use_msa,
-                    protenix_msa_backend: qualitySettings.protenix_msa_backend,
-                    ...hydrateNeurosnapMsaSettings(qualitySettings),
-                    ...hydrateColabfoldMsaSettings(qualitySettings),
-                    protenix_use_template: qualitySettings.protenix_use_template,
-                    protenix_anchor_target: qualitySettings.protenix_anchor_target,
-                    protenix_anchor_strict: qualitySettings.protenix_anchor_strict,
-                    protenix_enable_cache: qualitySettings.protenix_enable_cache,
-                    protenix_enable_fusion: qualitySettings.protenix_enable_fusion,
-                    boltz_anchor_target: qualitySettings.boltz_anchor_target,
-                    boltz_anchor_strict: qualitySettings.boltz_anchor_strict,
-                    protenix_auto_oom_retry: qualitySettings.protenix_auto_oom_retry,
-                    protenix_oom_retry_attempts: qualitySettings.protenix_oom_retry_attempts,
-                    colabfold_api_host: qualitySettings.colabfold_api_host.trim() || undefined,
-                    msa_use_gpu: qualitySettings.msa_use_gpu,
-                    msa_local_db: qualitySettings.msa_local_db.trim() || undefined,
-                    msa_cache_dir: qualitySettings.msa_cache_dir.trim() || undefined,
-                    msa_threads: qualitySettings.msa_threads ?? undefined,
-                    msa_gpu_mode: qualitySettings.msa_gpu_mode,
-                    msa_gpu_threshold: qualitySettings.msa_gpu_threshold,
-                    msa_preferred_gpus: qualitySettings.msa_preferred_gpus.trim() || undefined,
-                    msa_excluded_gpus: qualitySettings.msa_excluded_gpus.trim() || undefined,
-                    msa_gpu_server_mode: qualitySettings.msa_gpu_server_mode,
-                    msa_gpu_server_wait_timeout: qualitySettings.msa_gpu_server_wait_timeout,
-                    msa_gpu_server_db_load_mode: qualitySettings.msa_gpu_server_db_load_mode,
-                    msa_gpu_server_startup_wait: qualitySettings.msa_gpu_server_startup_wait,
-                    fampnn_checkpoint: resolvedFampnnCheckpoint,
-                    fampnn_checkpoint_path: qualitySettings.fampnn_checkpoint_path,
-                    lock_target_chains: qualitySettings.lock_target_chains,
-                    lock_antibody_framework: qualitySettings.lock_antibody_framework,
-                    run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
-                    run_ppiflow_maturation: runPpiFlowMaturation,
-                    run_maturation: runPpiFlowMaturation,
-                    ppiflow_stage_mode: ppiflowStageMode,
-                    ppiflow_tuning_profile: qualitySettings.ppiflow_tuning_profile,
-                    ppiflow_backbone_region_mode: ppiflowBackboneRegionMode,
-                    ppiflow_maturation_region_mode: ppiflowMaturationRegionMode,
-                    ppiflow_backbone_loop_scope: effectivePpiFlowBackboneLoopScope || undefined,
-                    ppiflow_maturation_loop_scope: effectivePpiFlowMaturationLoopScope || undefined,
-                    ppiflow_objective_mode: qualitySettings.ppiflow_objective_mode,
-                    ppiflow_objective_threshold: qualitySettings.ppiflow_objective_threshold,
-                    run_post_validation_maturation: false,
-                    run_post_boltz_maturation: false,
-                    ...buildFrustraMpnnLaunchParams(runFrustrampnn, frustrampnnSettings),
-                    run_anarcii_post: runAnarciiPost,
-                    anarcii_include_children: anarciiIncludeChildren,
-                    interactive_swa: interactiveWorkflow,
-                    interactive_gating: interactiveWorkflow,
-                    interactive_gate_stage: interactiveGateStage,
-                    parallel_mode: parallelMode,
-                    designs_per_job: designsPerJob,
-                    pdbs_per_job: pdBsPerJob,
-                    seqs_per_boltz_job: seqsPerBoltzJob,
-                    seqs_per_validation_job: seqsPerBoltzJob,
-                    // Design mode
-                    design_mode: designMode,
-                    antibody_design_mode: designMode,
-                    selected_cdr_loops: Array.from(selectedCDRLoops),
-                    antibody_design_loops: Array.from(selectedCDRLoops).join(','),
-                    rfantibody_loop_length_mode: rfantibodyLoopLengthMode,
-                    rfantibody_loop_length_ranges_config: rfantibodyLoopLengthRanges,
-                    rfantibody_loop_length_ranges: rfantibodyLoopLengthMode === 'custom_ranges'
-                        ? `[${Array.from(selectedCDRLoops)
-                            .sort()
-                            .filter((loopId) => frameworkType !== 'nanobody' || loopId.startsWith('H'))
-                            .map((loopId) => {
-                                const range = rfantibodyLoopLengthRanges[loopId] || DEFAULT_RFA_LOOP_LENGTH_RANGES[loopId];
-                                const min = Math.max(1, Number(range?.min) || 1);
-                                const max = Math.max(min, Number(range?.max) || min);
-                                return `${loopId}:${min}${max !== min ? `-${max}` : ''}`;
-                            })
-                            .join(',')}]`
-                        : undefined,
-                    enable_rfantibody_filter: enableRfantibodyFilter,
-                    rfantibody_screen_reference_scope: rfantibodyScreenReferenceScope,
-                    rfantibody_min_epitope_contacts: rfantibodyMinEpitopeContacts,
-                    rfantibody_max_epitope_distance: rfantibodyMaxEpitopeDistance,
-                    rfantibody_min_target_contacts: rfantibodyMinTargetContacts,
-                    rfantibody_max_target_distance: rfantibodyMaxTargetDistance > 0 ? rfantibodyMaxTargetDistance : undefined,
-                    rfantibody_max_epitope_centroid_distance: rfantibodyMaxEpitopeCentroidDistance,
-                    rfantibody_contact_distance_threshold: rfantibodyContactDistanceThreshold,
-                    rfantibody_target_contact_distance_threshold: rfantibodyTargetContactDistanceThreshold,
-                    protect_tetrad: protectTetrad,
-                    protect_vhh_tetrad: protectTetrad,
-                    boltzgen_mode: deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : undefined,
-                    boltzgen_use_framework_template: deNovoGenerator === 'boltzgen' ? boltzgenUseFrameworkTemplate : undefined,
-                    boltzgen_scaffold_source: deNovoGenerator === 'boltzgen' ? boltzgenScaffoldSource : undefined,
-                    boltzgen_view_reference_structure: deNovoGenerator === 'boltzgen' ? boltzgenViewReferenceStructure : undefined,
-                    boltzgen_batch_size: deNovoGenerator === 'boltzgen' ? boltzgenBatchSize : undefined,
-                    boltzgen_parallel_mode: deNovoGenerator === 'boltzgen' ? boltzgenParallelMode : undefined,
-                    boltzgen_designs_per_job: deNovoGenerator === 'boltzgen' ? boltzgenDesignsPerJob : undefined,
-                    boltzgen_reuse: deNovoGenerator === 'boltzgen' ? boltzgenReuseExisting : undefined,
-                    boltzgen_scaffold_length: deNovoGenerator === 'boltzgen' ? boltzgenScaffoldLength : undefined,
-                    boltzgen_nanobody_framework: deNovoGenerator === 'boltzgen' && boltzgenUseFrameworkTemplate ? boltzgenNanobodyFramework : undefined,
-                    boltzgen_cdr_h1_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH1Length : undefined,
-                    boltzgen_cdr_h2_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH2Length : undefined,
-                    boltzgen_cdr_h3_length: deNovoGenerator === 'boltzgen' ? boltzgenCdrH3Length : undefined,
-                    boltzgen_checkpoint_mode: deNovoGenerator === 'boltzgen' ? boltzgenCheckpointMode : undefined,
-                    boltzgen_skip_inverse_folding: deNovoGenerator === 'boltzgen' ? boltzgenSkipInverseFolding : undefined,
-                    boltzgen_inverse_fold_avoid: deNovoGenerator === 'boltzgen' ? boltzgenInverseFoldAvoid : undefined,
-                    boltzgen_inverse_fold_num_sequences: deNovoGenerator === 'boltzgen' ? boltzgenInverseFoldNumSequences : undefined,
-                    boltzgen_avoid_cysteine: deNovoGenerator === 'boltzgen' ? boltzgenAvoidCysteine : undefined,
-                    boltzgen_step_scale: deNovoGenerator === 'boltzgen' ? boltzgenStepScale : undefined,
-                    boltzgen_noise_scale: deNovoGenerator === 'boltzgen' ? boltzgenNoiseScale : undefined,
-                    boltzgen_budget: deNovoGenerator === 'boltzgen' ? boltzgenBudget : undefined,
-                    boltzgen_alpha: deNovoGenerator === 'boltzgen' ? boltzgenAlpha : undefined,
-                    boltzgen_max_rmsd: deNovoGenerator === 'boltzgen' ? boltzgenMaxRmsd : undefined,
-                    boltzgen_min_plddt: deNovoGenerator === 'boltzgen' ? boltzgenMinPlddt : undefined,
-                    boltzgen_min_conf_score: deNovoGenerator === 'boltzgen' ? boltzgenMinConfScore : undefined,
-                    boltzgen_filter_biased: deNovoGenerator === 'boltzgen' ? boltzgenFilterBiased : undefined,
-                    boltzgen_metrics_override: deNovoGenerator === 'boltzgen' ? (boltzgenMetricsOverride.trim() || undefined) : undefined,
-                    boltzgen_additional_filters: deNovoGenerator === 'boltzgen' ? (boltzgenAdditionalFilters.trim() || undefined) : undefined,
-                    boltzgen_size_buckets: deNovoGenerator === 'boltzgen' ? (boltzgenSizeBuckets.trim() || undefined) : undefined,
-                    ppiflow_seed_input_dir: ppiflowSeedInputDir.trim() || undefined,
-                    ppiflow_seed_complex_path: ppiflowSeedComplexPath || undefined,
-                    // Framework protection (for framework_allowed and full_design modes)
-                    protected_positions: frameworkProtection.protectedPositions.join(','),
-                    protect_disulfides: frameworkProtection.protectDisulfides,
-                    protect_fr_contacts: frameworkProtection.protectFrContacts,
-                    // Target info - now includes full source context
-                    target_pdb: uploadedPath || targetSource?.path || undefined,
-                    target_model_number: selectedTargetModel || undefined,
-                    target_source: targetSource,
-                    uploaded_path: uploadedPath,
-                    selected_chain: selectedChain,
-                    antigen_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntigenChains.trim() || selectedChain || undefined) : selectedChain,
-                    antibody_chains: deNovoGenerator === 'ppiflow' ? (ppiflowSeedAntibodyChains.trim() || 'H') : undefined,
-                    selected_residues: Array.from(selectedResidues),
-                    epitope_residues: Array.from(selectedResidues).sort().join(','),
-                    target_dna_seq: targetDnaSeq.trim() || undefined,
-                    pinned_gpus: pinnedGpus,
-                    lock_gpus: lockGpus,
-                    out_dir: customOutputDir.trim() || undefined,
-                    // Quality settings
-                    quality_settings: qualitySettings,
-                    sabdab_framework: sabdabFramework ? {
-                        type: sabdabFramework.type,
-                        id: sabdabFramework.id,
-                        name: sabdabFramework.name,
-                        pdbCode: sabdabFramework.pdbCode,
-                        sequence: sabdabFramework.sequence,
-                        filePath: sabdabFramework.filePath,
-                        cdrH3Length: sabdabFramework.cdrH3Length,
-                        hChain: sabdabFramework.hChain,
-                        lChain: sabdabFramework.lChain,
-                        antigenChain: sabdabFramework.antigenChain,
-                    } : null,
-                    custom_framework_path: frameworkType === 'sabdab'
-                        ? (sabdabFramework?.filePath || customFrameworkPath || undefined)
-                        : customFrameworkPath,
-                    // Manual CDR definitions - serialize Sets to arrays
-                    manual_cdr_definitions: manualCDRDefinitions.map(d => ({
-                        ...d,
-                        residues: Array.from(d.residues)
-                    })),
-                }}
-                currentModelId="template_antibody_denovo"
-                currentMode={isRefinementMode ? ANTIBODY_REFINEMENT_PIPELINE_MODE : ANTIBODY_DENOVO_PIPELINE_MODE}
-                baseTemplateId="antibody_denovo"
-            />
-        </div >
+        </BinderWorkflowWorkspace>
+        </div>
+        </>
     );
 };
 

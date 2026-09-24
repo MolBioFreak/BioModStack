@@ -180,6 +180,7 @@ def _compute_interface_pair_energy_breakdown(
 
 
 def _parse_position_spec(position_spec: str) -> Set[ResidueKey]:
+    """Read emitted masks as exact author identities, never number-only membership."""
     import re
 
     residues: Set[ResidueKey] = set()
@@ -187,9 +188,12 @@ def _parse_position_spec(position_spec: str) -> Set[ResidueKey]:
         token = token.strip()
         if not token:
             continue
+        # PDB chain is exactly one character, including numeric chains.
+        # Keep the author insertion code in the same key used by anchors.
         match = re.fullmatch(r"([A-Za-z0-9])(-?\d+)([A-Za-z]?)", token)
         if match:
-            residues.add((match.group(1), int(match.group(2)), match.group(3)))
+            chain, number, icode = match.groups()
+            residues.add((chain, int(number), icode))
             continue
         interval = re.fullmatch(r"([A-Za-z0-9])(-?\d+)-(-?\d+)", token)
         if interval:

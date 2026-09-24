@@ -52,6 +52,8 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
     cd /app
     git clone https://github.com/Mingchenchen/PPIFlow.git ppiflow
     cd ppiflow
+    # Match the installed source inventoried for initial and partial generation.
+    git checkout --detach 000ce45a4411e7b97c1523a22c0f1bece7ede5fc
     
     # Install PPIFlow (if setup.py exists)
     if [ -f "setup.py" ]; then

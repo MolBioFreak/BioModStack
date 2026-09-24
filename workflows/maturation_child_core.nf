@@ -182,7 +182,9 @@ workflow MATURATION_CHILD_CORE {
         .map { pdb ->
             def source = sourceByName[pdb.name]
             def sourceMeta = source?.source_meta instanceof Map ? source.source_meta : [:]
-            def meta = new LinkedHashMap(sourceMeta)
+            // Source evidence belongs to the original document, not its descendants.
+            // Keep only the explicit source join keys visible in transport metadata.
+            def meta = [source_meta: sourceMeta]
             meta.id = pdb.baseName
             meta.source_staged_name = source?.staged_name ?: pdb.name
             meta.source_document_id = sourceMeta.id ?: null

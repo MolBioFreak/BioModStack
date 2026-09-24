@@ -1,6 +1,7 @@
 import { isAxiosError } from 'axios';
 import { api, submitJob, type Job } from './api';
 import type { FrustraMpnnRequestedSettings } from '../components/frustrampnn/frustraMpnnSettingsState';
+import type { CandidateDocuments } from './binderDiagnosticSelection';
 
 export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'predict_boltz2' | 'predict_protenix';
 export interface BinderSelectedRequest {
@@ -10,6 +11,8 @@ export interface BinderSelectedRequest {
     params?: Record<string, unknown>;
     frustrampnn_settings?: FrustraMpnnRequestedSettings;
     execution_target_id?: string | null;
+    candidate_documents?: CandidateDocuments;
+    launch_context_id?: string | null;
 }
 export interface BinderSelectedResponse {
     source_job_id: string;
@@ -37,6 +40,19 @@ export async function submitBinderSelected(request: BinderSelectedRequest): Prom
         }
         return { ...detail.response_context, launched_jobs: launched };
     }
+}
+
+export function readBinderCandidateDocuments(jobId: string): CandidateDocuments {
+    try {
+        const value: unknown = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}:documents`) ?? '{}');
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+        return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof item === 'object' && !Array.isArray(item)
+            && Object.entries(item).every(([key, val]) => (key === 'artifact_id' || key === 'target_state') && typeof val === 'string')));
+    } catch { return {}; }
+}
+export function writeBinderCandidateDocuments(jobId: string, documents: CandidateDocuments) {
+    try { sessionStorage.setItem(`bms:selected-designs:${jobId}:documents`, JSON.stringify(documents)); } catch { /* storage unavailable */ }
+    window.dispatchEvent(new CustomEvent('bms:binder-documents', { detail: { jobId, documents } }));
 }
 
 export function readBinderSelection(jobId: string): string[] {

@@ -126,7 +126,7 @@ def parse_binding_site(binding_site_str):
         else:
             # Frontend format: A45, B100 (letter followed by number)
             import re
-            match = re.match(r'^([A-Z])(\d+)(?:-(\d+))?$', part)
+            match = re.match(r'^([A-Za-z])(\d+)(?:-(\d+))?$', part)
             if match:
                 chain = match.group(1)
                 start = int(match.group(2))
@@ -222,7 +222,14 @@ def preparation_parser():
     parser.add_argument("--cdr_h1_length", type=str, default="5-8", help="CDR-H1 length range (e.g., '5-8')")
     parser.add_argument("--cdr_h2_length", type=str, default="6-10", help="CDR-H2 length range (e.g., '6-10')")
     parser.add_argument("--cdr_h3_length", type=str, default="12-18", help="CDR-H3 length range (e.g., '12-18')")
-    parser.add_argument("--target_pdb", type=str, help="Target antigen PDB file for nanobody/antibody design")
+    parser.add_argument("--target_pdb", type=str, help="Target structure (PDB or native mmCIF file)")
+    parser.add_argument("--generation_mode", choices=["protein_binder", "peptide_binder", "nanobody_binder"])
+    parser.add_argument("--target_chains", type=str, help="Comma-separated exact native target chain IDs; omitted means all for generic generation")
+    parser.add_argument("--target_binding_positions", type=str, help="Native 1-indexed chain-local target positions, e.g. A:2-5,b:8; usable with mmCIF")
+    parser.add_argument("--binder_sequence", type=str, help="Native protein sequence/length template, not a VHH CDR template")
+    parser.add_argument("--scaffold_path", type=str, help="Generic binder scaffold PDB/mmCIF")
+    parser.add_argument("--scaffold_chain", type=str, help="Exact native scaffold chain ID")
+    parser.add_argument("--scaffold_design_ranges", type=str, help="Native 1-indexed scaffold design positions (e.g. 2..5,9)")
     
     parser.add_argument("--output_yaml", type=str, required=True, help="Output YAML file")
     
@@ -281,7 +288,7 @@ def build_design_config(args, *, preview=False, input_texts=None):
 
     binding_sites = parse_binding_site(args.binding_site_residues)
     unique_binding_site_chains = sorted({chain for chain, _, _ in binding_sites})
-    if len(unique_binding_site_chains) > 1:
+    if len(unique_binding_site_chains) > 1 and not getattr(args, 'generation_mode', None):
         print(
             "Warning: Multi-chain binding-site conditioning is not yet scaffold-aware in this prep path; "
             f"using only the mapped target chain context ({', '.join(unique_binding_site_chains)} requested)"
@@ -297,8 +304,103 @@ def build_design_config(args, *, preview=False, input_texts=None):
     target_position_map = {}
     target_position_chain = None
     
+    # Target antigen entity (if provided)
+    generic_binder = getattr(args, 'generation_mode', None) in ('protein_binder', 'peptide_binder')
+    if args.target_pdb and (getattr(args, 'generation_mode', None) or getattr(args, 'target_chains', None)):
+        # Native file entities retain coordinates, chain IDs and non-protein context.
+        # Do not infer an antibody scaffold or assemble a seed complex.
+        target_file = {'path': args.target_pdb}
+        selected_chains = [chain.strip() for chain in (args.target_chains or '').split(',') if chain.strip()]
+        if selected_chains:
+            target_file['include'] = [{'chain': {'id': chain}} for chain in selected_chains]
+        native_bindings = parse_binding_site(args.target_binding_positions)
+        if native_bindings:
+            target_file['binding_types'] = [
+                {'chain': {'id': chain, 'binding': _format_position_ranges(
+                    position for site_chain, start, end in native_bindings if site_chain == chain
+                    for position in range(start, end + 1))}}
+                for chain in dict.fromkeys(site[0] for site in native_bindings)
+            ]
+        if binding_sites:
+            bindings = []
+            # Preserve the established author-PDB -> chain-local position mapping.
+            residues = _read_protein_residues(args.target_pdb, input_text=input_texts.get(str(args.target_pdb)))
+            for chain in unique_binding_site_chains:
+                if selected_chains and chain not in selected_chains:
+                    continue
+                position_map = {number: index + 1 for index, (_, number, _) in enumerate(
+                    residue for residue in residues if residue[0] == chain)}
+                mapped = _map_binding_sites_to_sequence_positions(binding_sites, position_map, chain)
+                if mapped:
+                    bindings.append({'chain': {'id': chain, 'binding': mapped}})
+            if bindings:
+                target_file['binding_types'] = bindings
+            else:
+                print('Warning: Author-PDB binding residues did not map; for mmCIF use explicit native target_binding_positions')
+        target_entity = {'file': target_file}
+        entities.append(target_entity)
+    elif args.target_pdb and exists(args.target_pdb):
+        print(f"  Target antigen: {args.target_pdb}")
+        target_chain_hint = unique_binding_site_chains[0] if len(unique_binding_site_chains) == 1 else None
+        target_seq, target_position_chain, target_position_map = extract_sequence_and_position_map_from_pdb(
+            args.target_pdb,
+            target_chain_hint,
+            input_text=input_texts.get(str(args.target_pdb)),
+        )
+
+        if nanobody_scaffold_specs:
+            target_file = {
+                'path': args.target_pdb,
+                'include': [{'chain': {'id': target_position_chain or target_chain_hint or 'all'}}],
+            }
+            mapped_binding_positions = _map_binding_sites_to_sequence_positions(
+                binding_sites,
+                target_position_map,
+                target_position_chain,
+            ) if binding_sites and target_position_map else ''
+            if mapped_binding_positions and (target_position_chain or target_chain_hint):
+                target_file['binding_types'] = [
+                    {'chain': {'id': target_position_chain or target_chain_hint, 'binding': mapped_binding_positions}}
+                ]
+                print(f"  Applied target binding conditioning via file spec: {mapped_binding_positions}")
+            target_entity = {'file': target_file}
+            entities.append(target_entity)
+        elif target_seq:
+            target_entity = {
+                'protein': {
+                    'id': 'T',  # Target
+                    'path': args.target_pdb,
+                    'sequence': target_seq  # Required by BoltzGen schema
+                }
+            }
+            entities.append(target_entity)
+            print(f"  Target sequence: {len(target_seq)} AA")
+            if target_position_chain:
+                print(f"  Target conditioning chain: {target_position_chain}")
+        else:
+            # Fallback: just use path and hope BoltzGen handles it
+            print("  Warning: Could not extract sequence from target PDB")
+            target_entity = {
+                'protein': {
+                    'id': 'T',
+                    'path': args.target_pdb
+                }
+            }
+            entities.append(target_entity)
+
+    # New generic generation has its own native binder entity, not a VHH alias.
+    if generic_binder:
+        if args.scaffold_path:
+            scaffold = {'path': args.scaffold_path,
+                        'include': [{'chain': {'id': args.scaffold_chain}}],
+                        'design': [{'chain': {'id': args.scaffold_chain, 'res_index': args.scaffold_design_ranges}}]}
+            entities.append({'file': scaffold})
+        else:
+            entities.append({'protein': {'id': 'B', 'sequence': args.binder_sequence or scaffold_length}})
+        if smiles:
+            entities.append({'ligand': {'id': 'L', 'smiles': smiles}})
     # Mode 4: DNA-Protein Complex Prediction
-    if args.protein_sequence and args.dna_template_seq:
+    elif args.protein_sequence and args.dna_template_seq:
         print(f"Mode: DNA-Protein Complex Prediction")
         # Protein entity
         entities.append({
@@ -364,59 +466,10 @@ def build_design_config(args, *, preview=False, input_texts=None):
             }
         })
     # Mode 5: Nanobody design (VHH)
-    elif args.nanobody_framework or args.protocol == 'nanobody-anything':
+    elif args.nanobody_framework or args.protocol == 'nanobody-anything' or getattr(args, 'generation_mode', None) == 'nanobody_binder':
         print(f"Mode: Nanobody (VHH) design")
         
-        # Target antigen entity (if provided)
-        if args.target_pdb and exists(args.target_pdb):
-            print(f"  Target antigen: {args.target_pdb}")
-            target_chain_hint = unique_binding_site_chains[0] if len(unique_binding_site_chains) == 1 else None
-            target_seq, target_position_chain, target_position_map = extract_sequence_and_position_map_from_pdb(
-                args.target_pdb,
-                target_chain_hint,
-                input_text=input_texts.get(str(args.target_pdb)),
-            )
-
-            if nanobody_scaffold_specs:
-                target_file = {
-                    'path': args.target_pdb,
-                    'include': [{'chain': {'id': target_position_chain or target_chain_hint or 'all'}}],
-                }
-                mapped_binding_positions = _map_binding_sites_to_sequence_positions(
-                    binding_sites,
-                    target_position_map,
-                    target_position_chain,
-                ) if binding_sites and target_position_map else ''
-                if mapped_binding_positions and (target_position_chain or target_chain_hint):
-                    target_file['binding_types'] = [
-                        {'chain': {'id': target_position_chain or target_chain_hint, 'binding': mapped_binding_positions}}
-                    ]
-                    print(f"  Applied target binding conditioning via file spec: {mapped_binding_positions}")
-                target_entity = {'file': target_file}
-                entities.append(target_entity)
-            elif target_seq:
-                target_entity = {
-                    'protein': {
-                        'id': 'T',  # Target
-                        'path': args.target_pdb,
-                        'sequence': target_seq  # Required by BoltzGen schema
-                    }
-                }
-                entities.append(target_entity)
-                print(f"  Target sequence: {len(target_seq)} AA")
-                if target_position_chain:
-                    print(f"  Target conditioning chain: {target_position_chain}")
-            else:
-                # Fallback: just use path and hope BoltzGen handles it
-                print("  Warning: Could not extract sequence from target PDB")
-                target_entity = {
-                    'protein': {
-                        'id': 'T',
-                        'path': args.target_pdb
-                    }
-                }
-                entities.append(target_entity)
-        elif smiles:
+        if smiles and not target_entity:
             # Small molecule target
             print(f"  Small molecule target: {smiles[:50]}...")
             entities.append({
@@ -535,7 +588,7 @@ def build_design_config(args, *, preview=False, input_texts=None):
                 )
             else:
                 print("  Warning: Binding-site residues did not map onto the target sequence; skipping conditioning")
-        else:
+        elif not (target_entity and 'file' in target_entity):
             print("  Warning: Binding-site residues were provided without a protein target context; skipping conditioning")
     
     # Parse covalent bond constraints (disulfides, WHL staples, custom)
@@ -594,7 +647,7 @@ def build_design_config(args, *, preview=False, input_texts=None):
             
             # Find first protein entity and add secondary_structure
             for entity in entities:
-                if 'protein' in entity:
+                if 'protein' in entity and entity is not target_entity:
                     entity['protein']['secondary_structure'] = secondary_structure
                     break
             print(f"Secondary structure constraints: {secondary_structure}")

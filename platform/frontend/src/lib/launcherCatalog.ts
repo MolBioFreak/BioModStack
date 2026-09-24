@@ -19,11 +19,11 @@ export const launcherWorkflowTemplates = [
         {
             id: 'antibody_denovo',
             name: 'De Novo Binder Design',
-            description: 'Choose binder format and a model-native generator, preview BindCraft2 campaigns, then review candidates for optional selected refinement or GROMACS MD. RFantibody and VHH remain antibody-specific; seeded, general-protein and ligand routes retain their own settings.',
+            description: 'Choose BC2, BoltzGen, PPIFlow or RFantibody with model-native inputs and settings, then review candidates for optional selected refinement or GROMACS MD.',
             icon: 'flask',
             color: '#14B8A6',
             stages: [
-                { tool: 'RFantibody / BoltzGen VHH + ligand / seeded PPIFlow / BindCraft2 / RFD3' },
+                { tool: 'BindCraft2 / BoltzGen / PPIFlow / RFantibody' },
                 { tool: 'Candidate review' },
                 { tool: 'Compatible refinement (optional)' }
             ],

@@ -1,6 +1,7 @@
 """Non-science contracts for selected native-operation composition and identity."""
 from pathlib import Path
 import importlib.util
+import itertools
 import json
 import os
 import subprocess
@@ -217,7 +218,9 @@ process RunMaturationFAMPNN {
 '''
 
 
-@pytest.mark.parametrize('enabled', [('repack',), ('anchors',), ('flow',), ('redesign',), ('repack', 'anchors', 'flow', 'redesign')])
+@pytest.mark.parametrize('enabled', [tuple(name for name, on in zip(
+    ['repack', 'anchors', 'flow', 'redesign'], flags) if on)
+    for flags in itertools.product([False, True], repeat=4)])
 def test_nextflow_independent_composition_transport(nextflow, tmp_path, enabled):
     fixture = tmp_path / 'fixture_producers.nf'
     fixture.write_text(FIXTURE_PRODUCERS)
@@ -234,7 +237,9 @@ def test_nextflow_independent_composition_transport(nextflow, tmp_path, enabled)
     source.write_text(json.dumps([dict(staged_name=pdb.name, source_meta=dict(id='parent-design', validation_status='validated', plddt=98))]))
     out = tmp_path / 'out'
     params = dict(pdb_paths=str(pdb), source_identity_json=str(source), code_root=str(ROOT), out_dir=str(out),
-                  binder_chains='A', target_chains='B', ppiflow_region_mode='all_antibody')
+                  binder_chains='A', target_chains='B',
+                  ppiflow_region_mode='all_antibody' if 'flow' in enabled else 'selected_cdrs',
+                  ppiflow_selected_loops='H3')
     params.update({f'maturation_{name}_enabled': name in enabled for name in ['repack', 'anchors', 'flow', 'redesign']})
     trace = nextflow(workflow, params)
     assert ('IdentifyAnchorResidues' in trace) == bool(set(enabled) & {'repack', 'anchors'})

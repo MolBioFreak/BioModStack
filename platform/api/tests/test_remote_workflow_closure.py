@@ -1057,3 +1057,42 @@ def test_native_process_annotations_retain_current_output_requiredness():
         compact = ' '.join(text.split())
         for declaration in (*inputs, *outputs):
             assert ' '.join(declaration.split()) in compact, (authority, declaration)
+
+
+@pytest.mark.parametrize('source', [
+    'modules/ppiflow.nf', 'workflows/binder_refinement.nf',
+    'workflows/maturation_child_core.nf', 'modules/protenix.nf',
+    'modules/boltz_cp_experimental.nf',
+])
+def test_refinement_publication_descriptors_match_actual_process_sections(source):
+    """Reverse I/O comparison catches newly emitted outputs, not only stale ones."""
+    import re
+    from native_components import PROCESS_CONTRACTS
+    root = Path(__file__).resolve().parents[3]
+    parts = re.split(r'^process\s+(\w+)\s*\{', (root / source).read_text(), flags=re.MULTILINE)
+    for name, body in zip(parts[1::2], parts[2::2]):
+        authority = source + ':' + name
+        if authority not in PROCESS_CONTRACTS:
+            continue  # Other workflow processes are outside this descriptor subset.
+        labels, inputs, outputs, helpers, _ = PROCESS_CONTRACTS[authority]
+        assert tuple(re.findall(r"^\s*label\s+'([^']+)'", body, re.MULTILINE)) == labels
+        for section, expected in [('input', inputs), ('output', outputs)]:
+            match = re.search(r'^\s*' + section + r':\s*\n(.*?)(?=^\s*(?:input|output|script|when|shell|exec):)',
+                              body, re.MULTILINE | re.DOTALL)
+            assert match, (authority, section)
+            actual = tuple(line.strip() for line in match[1].splitlines()
+                           if line.strip() and not line.lstrip().startswith('//'))
+            assert actual == expected, (authority, section)
+        referenced = set(re.findall(r'\$\{params.code_root\}/(scripts/[\w/.-]+\.py)', body))
+        assert referenced <= set(helpers), (authority, referenced - set(helpers))
+        assert all((root / helper).is_file() for helper in helpers)
+
+
+def test_partial_flow_selected_closure_retains_accounting_and_identity_helpers():
+    from model_registry import selected_execution_metadata
+    metadata = selected_execution_metadata('binder_refinement', 'refine',
+        {'maturation_flow_enabled': True}, 'workflows/binder_refinement.nf')
+    serialized = repr(metadata)
+    assert '${meta.id}_ppiflow_accounting.json' in serialized
+    for helper in ('ppiflow_sample_identity.py', 'validate_ppiflow_roles.py'):
+        assert 'scripts/' + helper in serialized

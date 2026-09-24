@@ -11,10 +11,8 @@ import copy
 import hashlib
 import json
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 from services.workflow_adapter_registry import (
-    is_project_native_owner_registered,
     is_workflow_adapter_registered,
 )
 from template_registry import get_template_registry
@@ -559,6 +557,12 @@ _PROJECT_SCHEMA_AUTHORITIES = {
 
 
 def _has_active_canonical_publication(record: dict[str, Any]) -> bool:
+    schema = _PARAMETER_SCHEMAS.get(record.get('capability_id'), {})
+    if schema.get('x-bms-native-editor-draft'):
+        from model_registry import get_registry
+        pair = record['allowed_model_modes'][0]
+        model = get_registry().get_model(pair['model_id'])
+        return bool(model is not None and any(mode.id == pair['mode'] for mode in model.modes))
     publication_template_id = record.get("publication_template_id")
     if (
         not isinstance(publication_template_id, str)
@@ -578,26 +582,9 @@ def _has_active_canonical_publication(record: dict[str, Any]) -> bool:
 
 
 def _has_safe_native_setup_destination(record: dict[str, Any]) -> bool:
-    destination = record.get("project_setup_destination")
-    native_owner_id = record.get("project_native_owner_id")
-    if not isinstance(destination, str) or not isinstance(native_owner_id, str):
-        return False
-    if not native_owner_id or native_owner_id != native_owner_id.strip():
-        return False
-    if not is_project_native_owner_registered(native_owner_id):
-        return False
-    try:
-        parsed = urlsplit(destination)
-        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
-    except ValueError:
-        return False
-    return (
-        not parsed.scheme
-        and not parsed.netloc
-        and not parsed.fragment
-        and parsed.path == "/submit"
-        and query.get("template") == [native_owner_id]
-    )
+    from services.workflow_adapter_registry import is_project_native_destination_registered
+    return is_project_native_destination_registered(
+        record.get("project_native_owner_id"), record.get("project_setup_destination"))
 
 
 def _has_closed_parameter_schema(record: dict[str, Any]) -> bool:
@@ -691,6 +678,42 @@ def _with_project_setup_state(
     }
 
 
+# Native binder editors keep UI/source drafts separate from the Job request.
+# The executable Plan is built by normalized_job_plan_contract at preparation;
+# this is only the existing setup's editor-state transport schema.
+_NATIVE_BINDER_SETUP_PAIRS = {
+    'boltzgen': ('protein_binder', 'nanobody_binder', 'peptide_binder'),
+    'ppiflow': ('protein_binder', 'antibody_binder', 'nanobody_binder'),
+    'bindcraft2': ('campaign',),
+    'antibody_denovo': ('antibody_denovo_pipeline',),
+}
+for _model_id, _modes in _NATIVE_BINDER_SETUP_PAIRS.items():
+    for _mode in _modes:
+        _id = f'protein.native.{_model_id}.{_mode}'
+        # Project setup storage owns the universal binder-editor route. Native
+        # model/mode selection is explicit draft state, not a synthetic template.
+        _owner = 'antibody_denovo'
+        _destination = '/submit?template=antibody_denovo'
+        _native_schema = _schema(_id, f'{_model_id} native editor draft', {
+            'native_job_request': {'type': 'object', 'description': 'The typed native JobCreate request; validated by its model owner at preparation.'},
+            'editor_state': {'type': 'object', 'default': {'model_id': _model_id, 'mode': _mode,
+                'native_generation_authoring': _model_id in {'boltzgen', 'ppiflow'},
+                'binder_generator_model': _model_id}, 'description': 'Reopenable source and editor state; never scheduler parameters.'},
+        }, ['native_job_request'], authority='project_manager_typed_launcher_handoff')
+        _native_schema['x-bms-native-editor-draft'] = True
+        _PARAMETER_SCHEMAS[_id] = _native_schema
+        _PARAMETER_SCHEMA_BY_ID[_native_schema['$id']] = _native_schema
+        _CAPABILITIES.append(_capability(_id, label=f'{_model_id} · {_mode.replace("_", " ")}',
+            family='binder_design', category='binder_design', role='binder_generation',
+            allowed_modes=['design'], plannable=True, exposure_state='accepted',
+            availability_state='operational', availability_reason=None, workflow_family='typed_core_job',
+            workflow_adapter_id=f'bms.core-job.{_model_id}.adapter.v1', launch_mode='typed_launcher_handoff',
+            destination=_destination, model_modes=[{'model_id': _model_id, 'mode': _mode}],
+            result_adapter_ids=[f'bms.native-binder.{_model_id}.adapter.v1'] if _model_id != 'antibody_denovo' else ['bms.core-job.antibody_denovo.adapter.v1'],
+            result_contracts=['native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
+            receipt_contracts=[], project_setup_destination=_destination, project_native_owner_id=_owner))
+
+
 _CAPABILITY_BY_ID = {record["capability_id"]: record for record in _CAPABILITIES}
 if len(_CAPABILITY_BY_ID) != len(_CAPABILITIES):
     raise RuntimeError("duplicate Protein Project capability ID")
@@ -739,6 +762,61 @@ def protein_capability_record(capability_id: str) -> dict[str, Any]:
         capability,
         ready_capability_ids=_project_ready_capability_ids(_CAPABILITIES),
     ))
+
+
+def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None) -> dict[str, Any]:
+    """Pin the native normalizer's exact request, not a second settings schema.
+
+    This server-only child seam does not advertise a Project authoring surface.
+    The closed const properties are an immutable request identity; scientific
+    validation remains in the same normalizer used by ordinary Job creation.
+    """
+    from schemas import JobCreate
+    from routers.jobs import normalize_job_request
+    from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
+    from services.workflow_adapter_registry import TYPED_CORE_JOB_ADAPTERS
+
+    request = JobCreate.model_validate(job_request)
+    pair = (request.model_id, request.mode)
+    adapter_id = f"bms.core-job.{request.model_id}.adapter.v1"
+    if adapter_id not in TYPED_CORE_JOB_ADAPTERS:
+        raise ProteinProjectCapabilityError("native child has no registered typed Job owner")
+    if native_entrypoint is not None and MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(pair) != native_entrypoint:
+        raise ProteinProjectCapabilityError("native child entrypoint does not match its exact registered route")
+    if request.launch_context_id is not None:
+        raise ProteinProjectCapabilityError("native child must not reuse a destination launch context")
+    request = normalize_job_request(request, native_entrypoint=native_entrypoint)
+    supplied_adapter = request.params.pop("workflow_adapter", None)
+    if supplied_adapter not in (None, adapter_id):
+        raise ProteinProjectCapabilityError("native child workflow adapter disagrees")
+    capability_id = f"protein.native.{request.model_id}.{request.mode}"
+    if setup_capability_id is not None:
+        if (not _PARAMETER_SCHEMAS.get(setup_capability_id, {}).get("x-bms-native-editor-draft")
+                or request.mode not in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())):
+            raise ProteinProjectCapabilityError("native setup request must use a supported binder editor")
+        capability_id = setup_capability_id
+    schema_id = f"bms.workflow-parameters.{capability_id}.v1"
+    params = copy.deepcopy(request.params)
+    pair_document = {"model_id": request.model_id, "mode": request.mode}
+    capability = {
+        "capability_id": capability_id, "plannable": True, "exposure_state": "accepted",
+        "workflow_family": "typed_core_job", "workflow_adapter_id": adapter_id,
+        "launch_mode": "typed_launcher_handoff", "parameter_schema_id": schema_id,
+        "allowed_model_modes": [pair_document], "receipt_contracts": [],
+        "result_contracts": ["typed_core_job_result"],
+        "native_entrypoint": native_entrypoint,
+        "normalized_job_request": request.model_dump(mode="json"),
+    }
+    return {
+        "schema": "bms.workflow-plan-capability-contract.v1",
+        "capability": capability, "allowed_model_modes": [pair_document],
+        "parameter_schema": {
+            "$id": schema_id, "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object", "additionalProperties": False,
+            "properties": {key: {"const": value} for key, value in params.items()},
+            "required": list(params),
+        },
+    }
 
 
 def protein_parameter_schema(capability_id: str) -> dict[str, Any]:

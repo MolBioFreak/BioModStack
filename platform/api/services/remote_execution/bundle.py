@@ -184,6 +184,11 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if job.model_id == 'ppiflow':
+        from services.ppiflow_generation import generation_result_contract
+        native = generation_result_contract(job.mode)
+        if native is not None:
+            return native
     if job.model_id == 'protein_modification_experimental' and job.mode == 'de_novo_design':
         from services.rfd3_generation import generation_result_contract
         params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
@@ -532,6 +537,9 @@ def _input_assets(
         # The prepared tree is one native input. Its campaign destination is
         # writable output, never the read-only transported compilation folder.
         destinations.add('bc2_campaign_dir')
+    from scripts.lib.portable_inputs import prepared_generation_source_fields
+    destinations.update(prepared_generation_source_fields(
+        native_invocation.model_id, native_invocation.mode, params))
     runtime_fields = {"laproteina_checkpoint_dir", "laproteina_data_path",
                       "disco_checkpoint_path", "disco_cutlass_path"}
     for key in runtime_fields:

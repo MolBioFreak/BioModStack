@@ -1,6 +1,85 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { nativeActionDefaults, type BC2ActionField, type BC2Actions } from '../lib/bindcraft2Lifecycle';
+import { submitNativeBinderRequest } from '../lib/nativeBinderAuthoring';
+import type { Job } from '../lib/api';
 import type { BC2CampaignPreview } from '../lib/bindcraft2AuthoringApi';
 import type { BC2Request, BC2Section } from './BindCraft2Settings';
+
+/** Shared typed native action fields, including explicit false/zero/empty values. */
+export function BindCraft2ActionField({ name, field, value, onChange }: {
+    name: string; field: BC2ActionField; value: unknown; onChange: (value: unknown) => void;
+}) {
+    if (field.type === 'array') {
+        const rows = Array.isArray(value) ? value : [];
+        return <fieldset className="space-y-2 rounded border p-3"><legend>{name}</legend>{rows.map((row, index) => <div key={index}>
+            <BindCraft2ActionField name={`${name} ${index + 1}`} field={field.items ?? { type: 'string' }} value={row} onChange={next => onChange(rows.map((entry, i) => i === index ? next : entry))} />
+            <button type="button" onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove {name} {index + 1}</button>
+        </div>)}<button type="button" onClick={() => onChange([...rows, field.items?.type === 'object' ? {} : ''])}>Add {name}</button></fieldset>;
+    }
+    if (field.type === 'object') {
+        const object = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+        return <fieldset className="space-y-2 rounded border p-3"><legend>{name}</legend>{Object.entries(field.properties ?? {}).map(([key, child]) =>
+            <BindCraft2ActionField key={key} name={`${name} ${key}`} field={child} value={object[key]} onChange={next => onChange({ ...object, [key]: next })} />)}</fieldset>;
+    }
+    if (field.type === 'boolean') return <label className="flex gap-2"><input aria-label={name} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} />{name}</label>;
+    if (field.enum) return <label>{name}<select aria-label={name} value={String(value ?? '')} onChange={event => onChange(event.target.value)}><option value="">Choose {name}</option>{field.enum.map(option => <option key={option}>{option}</option>)}</select></label>;
+    const numeric = field.type === 'number' || field.type === 'integer';
+    return <label className="block">{name}<input className="ml-2 rounded border p-2" aria-label={name} type={numeric ? 'number' : 'text'} step={field.type === 'integer' ? 1 : 'any'} value={value == null ? '' : String(value)} onChange={event => onChange(numeric && event.target.value !== '' ? Number(event.target.value) : event.target.value)} /></label>;
+}
+
+/** Receiving editor for native action drafts; never reinterpret them as campaigns. */
+export function BindCraft2LifecycleDraft({ initialValues, onDraftChange, onSubmitRequest, onBack }: {
+    initialValues: Record<string, UntypedApiValue>;
+    onDraftChange?: (draft: Record<string, UntypedApiValue>) => void;
+    onSubmitRequest?: (request: Partial<Job>, draft: Record<string, UntypedApiValue>) => ReturnType<typeof submitNativeBinderRequest>;
+    onBack: () => void;
+}) {
+    const navigate = useNavigate();
+    const [operation, setOperation] = useState(String(initialValues.mode));
+    const [source, setSource] = useState(String(initialValues.bc2_source_job_id ?? ''));
+    const [name, setName] = useState(String(initialValues.job_name ?? `BindCraft2 ${initialValues.mode}`));
+    const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>(() => ({ ...initialValues.bc2_action_drafts,
+        [String(initialValues.mode)]: structuredClone(initialValues.bc2_action_options ?? {}) }));
+    const [target, setTarget] = useState<string | null>(initialValues.execution_target_id ?? null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const discovery = useQuery<BC2Actions>({ queryKey: ['bindcraft2-native-actions'], queryFn: async () => {
+        const response = await fetch('/api/models/bindcraft2/native-settings');
+        if (!response.ok) throw new Error('Native action metadata unavailable');
+        return (await response.json()).settings.native_actions;
+    } });
+    const descriptor = discovery.data?.[operation];
+    const options = { ...(descriptor ? nativeActionDefaults(descriptor) : {}), ...drafts[operation] };
+    const draft = { ...initialValues, model_id: 'bindcraft2', mode: operation, job_name: name, bc2_source_job_id: source,
+        bc2_action_options: options, bc2_action_drafts: { ...drafts, [operation]: options }, execution_target_id: target };
+    const serialized = JSON.stringify(draft);
+    const reported = useRef('');
+    useEffect(() => { if (reported.current !== serialized) { reported.current = serialized; onDraftChange?.(JSON.parse(serialized)); } }, [serialized, onDraftChange]);
+    const request: Partial<Job> = { name, model_id: 'bindcraft2', mode: operation, execution_target_id: target,
+        params: { bc2_source_job_id: source, bc2_action_options: options } };
+    return <section aria-label="BindCraft2 lifecycle draft" className="space-y-4 rounded-xl border p-5" style={surface}>
+        <button type="button" onClick={onBack}>Back to workflows</button><h2 className="text-xl font-semibold">BindCraft2 native action</h2>
+        <p>Continue or review a snapshot of an existing campaign. The source Job remains unchanged; this is not a new generation campaign.</p>
+        <label>Action name<input aria-label="Native action name" value={name} onChange={event => setName(event.target.value)} /></label>
+        <label>Source campaign Job<input aria-label="Source campaign Job" value={source} onChange={event => setSource(event.target.value)} /></label>
+        <label>Native operation<select aria-label="Native operation" value={operation} onChange={event => setOperation(event.target.value)}>
+            {!discovery.data?.[operation] && <option value={operation}>{operation}</option>}{Object.keys(discovery.data ?? {}).map(key => <option key={key}>{key}</option>)}
+        </select></label>
+        {descriptor && Object.entries(descriptor.properties).map(([key, field]) => <BindCraft2ActionField key={`${operation}:${key}`} name={key} field={field} value={options[key]} onChange={value => setDrafts(previous => ({ ...previous, [operation]: { ...options, [key]: value } }))} />)}
+        <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} workflowRequest={request} />
+        <button type="button" disabled={busy} onClick={async () => {
+            setBusy(true); setError(null);
+            try { const response = await (onSubmitRequest ? onSubmitRequest(request, draft) : submitNativeBinderRequest(request));
+                navigate(response.data.return_uri ?? `/jobs/${encodeURIComponent(response.data.id)}`); }
+            catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+            finally { setBusy(false); }
+        }}>Run native operation</button>
+        {(error || discovery.error) && <p role="alert">{error ?? discovery.error?.message}</p>}
+    </section>;
+}
 
 interface BindCraft2CampaignProps {
     name: string;

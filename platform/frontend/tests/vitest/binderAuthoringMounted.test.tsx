@@ -5,12 +5,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {} })), iteration: vi.fn(async (_body: any) => ({ data: {} })), select: null as any }));
-vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, fetchExecutionTargets: vi.fn(async () => ({ data: [] })), launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
+vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), fetchInputPresets: vi.fn(async () => ({ data: [] })), listCachedRcsbPdbs: vi.fn(async () => ({ data: { cached: [] } })), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, fetchExecutionTargets: vi.fn(async () => ({ data: [] })), launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: () => ({ gpuOptions: [], isLoading: false, isError: false }) }));
 vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null, useModelIntegrationConfig: () => ({ data: { workflows: {} }, isFetching: false, isError: false }) }));
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: ({ currentParams, onSelect }: any) => { mocks.select = onSelect; return <output data-saved>{JSON.stringify(currentParams)}</output>; } }));
 vi.mock('../../src/components/FrameworkBrowser', () => ({ FrameworkBrowser: () => null }));
-vi.mock('../../src/components/TargetAntigenSelector', () => ({ TargetAntigenSelector: () => null }));
+
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => null }));
 vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
 import { api } from '../../src/lib/api';
@@ -116,18 +116,20 @@ it('a preview arriving after a scientific edit cannot bind the newer request', a
     expect(document.querySelector('[aria-label="Compiled native campaign preview"]')).toBeNull();
     expect(mocks.submit).not.toHaveBeenCalled();
 });
-it('modality selection opens native ligand and RFD3 owners rather than an antibody payload', async () => {
+it('four-generator choice routes initial PPIFlow natively and keeps RFD3 separate', async () => {
     const select = vi.fn(); const open = vi.fn();
     await mount(<BinderGeneratorChooser generator="rfantibody" onSelect={select} onOpenNativeRoute={open} />);
     const choose = async (value: string) => { const input = document.querySelector<HTMLSelectElement>('[aria-label="Binder format / objective"]')!; await act(async () => { input.value = value; input.dispatchEvent(new Event('change', { bubbles: true })); }); };
     await choose('protein');
     expect(select).not.toHaveBeenCalled();
-    await click('RFD3'); expect(open).toHaveBeenLastCalledWith({ templateId: 'protein_modification_experimental' });
+    expect(document.body.textContent).not.toContain('RFD3');
+    await click('PPIFlow · protein binder generation'); expect(open).toHaveBeenLastCalledWith({ modelId: 'ppiflow', mode: 'protein_binder' });
+    await click('BoltzGen · protein binder'); expect(open).toHaveBeenLastCalledWith({ modelId: 'boltzgen', mode: 'protein_binder' });
     await click('BindCraft2 campaign'); expect(select).toHaveBeenLastCalledWith('bindcraft2');
     await choose('ligand');
     await click('BoltzGen · ligand binder'); expect(open).toHaveBeenLastCalledWith({ modelId: 'boltzgen', mode: 'ligand_binder' });
     await click('BoltzGen · nucleotide binder'); expect(open).toHaveBeenLastCalledWith({ modelId: 'boltzgen', mode: 'ntp_binder' });
-    await choose('seeded'); await click('PPIFlow Seeded'); expect(select).toHaveBeenLastCalledWith('ppiflow');
+    await choose('seeded'); await click('PPIFlow · retained partial flow'); expect(select).toHaveBeenLastCalledWith('ppiflow');
 });
 it('grouped native controls keep advanced relaxation reachable and distinguish omission from explicit zero', async () => {
     let latest: any;
@@ -177,4 +179,77 @@ it('registered list parameters and entry prediction state have typed controls', 
     await edit('losses.binder_pae.params.domain_ids.0', 'A');
     await edit('losses.binder_pae.prediction_state', 'complex');
     expect(latest.losses.binder_pae).toEqual({ prediction_state: 'complex', params: { domain_ids: ['A'] } });
+});
+
+
+it('saved ESMFold2 survives modal hydration and reports the same live Project draft', async () => {
+    const drafts = vi.fn();
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} onDraftChange={drafts} initialDraft={{ structure_validator: 'boltz2' }} />);
+    await act(async () => mocks.select({ name: 'saved ESMFold2', params: { structure_validator: 'esmfold2', initial_orchestration_validation: true, extra_native_setting: { enabled: false, count: 0, names: [], missing: null } } }));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+    expect(saved.structure_validator).toBe('esmfold2');
+    expect(drafts.mock.calls.at(-1)?.[0]).toEqual(saved);
+    expect(saved.extra_native_setting).toEqual({ enabled: false, count: 0, names: [], missing: null });
+});
+
+it('workspace navigation retains actual source acquisition tools and emits no scientific changes', async () => {
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialDraft={{ job_name: 'kept draft', boltzgen_step_scale: 0, boltzgen_filter_biased: false }} />);
+    await click('RCSB');
+    const sourceInput = document.querySelector<HTMLInputElement>('input[placeholder="4I27"]')!;
+    expect(sourceInput).not.toBeNull();
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(sourceInput, '1ABC'); sourceInput.dispatchEvent(new Event('input', { bubbles: true })); });
+    // The real picker stays mounted, including its active acquisition tab.
+    const before = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+
+    const nav = document.querySelector('nav[aria-label="Binder workspace sections"]')!;
+    await act(async () => [...nav.querySelectorAll('button')].find(button => button.textContent === 'Expert')!.click());
+    await act(async () => [...nav.querySelectorAll('button')].find(button => button.textContent === 'Target')!.click());
+    expect(sourceInput.isConnected).toBe(true);
+    expect(sourceInput.value).toBe('1ABC');
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!)).toEqual(before);
+    expect(before.boltzgen_step_scale).toBe(0);
+    expect(before.boltzgen_filter_biased).toBe(false);
+});
+
+
+it('a late saved-target load cannot undo deliberate clear in the real source picker', async () => {
+    let resolve!: (response: any) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(done => { resolve = done; })));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialDraft={{ target_source: { type: 'preset', path: 'inputs/saved-target.pdb', name: 'Saved target' }, selected_chain: 'a', selected_residues: ['a42A'] }} />);
+    expect(document.body.textContent).toContain('Saved target');
+    await click('Clear');
+    await act(async () => resolve({ ok: true, blob: async () => new Blob(['END\n']) }));
+    const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+    expect(saved.target_source).toBeNull();
+    expect(saved.selected_residues).toEqual([]);
+    expect(saved.selected_chain).toBeNull();
+    expect(document.body.textContent).not.toContain('Saved target');
+});
+
+it('native engine handoff preserves materialized source and role selection without a seed request', async () => {
+    const open = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} onOpenNativeRoute={open} initialDraft={{ target_source: { type: 'preset', path: 'inputs/saved-target.cif', name: 'Saved target' }, selected_chain: 'a', selected_residues: ['a42A'], target_model_number: 2 }} />);
+    await click('PPIFlow · antibody generation');
+    expect(open).toHaveBeenCalledWith({ modelId: 'ppiflow', mode: 'antibody_binder', sources: { target: { reference: expect.objectContaining({ path: 'inputs/saved-target.cif', type: 'preset' }), path: 'inputs/saved-target.cif', name: 'Saved target', source: 'preset', modelNumber: 2, chain: 'a', residues: ['a42A'] } } });
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+
+it('changing generation engines keeps the populated source tool mounted and inactive settings intact', async () => {
+    discovery();
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialDraft={{ boltzgen_step_scale: 0, boltzgen_filter_biased: false }} />);
+    await click('RCSB');
+    const sourceInput = document.querySelector<HTMLInputElement>('input[placeholder="4I27"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(sourceInput, '1ABC'); sourceInput.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('BindCraft2 campaign');
+    expect(sourceInput.isConnected).toBe(true);
+    await click('RFantibody Stack');
+    expect(sourceInput.isConnected).toBe(true);
+    expect(sourceInput.value).toBe('1ABC');
+    const draft = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+    expect(draft.boltzgen_step_scale).toBe(0);
+    expect(draft.boltzgen_filter_biased).toBe(false);
+    expect(draft.denovo_generator).toBe('rfantibody');
 });

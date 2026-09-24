@@ -865,6 +865,20 @@
                 "esmfold2_validation_num_diffusion_samples": {"type": "integer"}
             }
         },
+        "binder_generation_parameters": {
+            "title": "Model-owned Initial Binder Generation",
+            "type": "object",
+            "properties": {
+                "ppiflow_generation_request": {"type": "string", "format": "directory-path", "hidden": true, "description": "Owned PPIFlow request directory; preserves the model-native settings and source snapshots."},
+                "boltzgen_generation_mode": {"type": "string", "enum": ["protein_binder", "peptide_binder", "nanobody_binder"]},
+                "boltzgen_target_chains": {"type": ["string", "null"]},
+                "boltzgen_target_binding_positions": {"type": ["string", "null"]},
+                "boltzgen_binder_sequence": {"type": ["string", "null"]},
+                "boltzgen_scaffold_path": {"type": ["string", "null"]},
+                "boltzgen_scaffold_chain": {"type": ["string", "null"]},
+                "boltzgen_scaffold_design_ranges": {"type": ["string", "null"]}
+            }
+        },
         "scheduler_assignment_parameters": {
             "title": "Scheduler Assignment Parameters",
             "type": "object",
@@ -919,6 +933,9 @@
         },
         {
             "$ref": "#/definitions/blind_pose_parameters"
+        },
+        {
+            "$ref": "#/definitions/binder_generation_parameters"
         },
         {
             "$ref": "#/definitions/scheduler_assignment_parameters"

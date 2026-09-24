@@ -18,7 +18,7 @@ from .models import (
     BioXpSnapshot,
 )
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse, _hardware_refresh_due_in
+from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -125,13 +125,6 @@ class BioXpConnectionService:
         if v2_enqueue_timeout_seconds <= 0 or interrupt_timeout_seconds <= 0:
             raise ValueError("BioXP request timeouts must be positive")
         self.active_probe_interval_seconds = active_probe_interval_seconds
-        # Check the existing observer promptly after command invalidation. This
-        # is a status cadence, not a hardware collection interval or authority TTL.
-        self.snapshot_refresh_interval_seconds = (
-            1.0
-            if active_probe_interval_seconds is not None
-            else None
-        )
         self.v2_enqueue_timeout_seconds = v2_enqueue_timeout_seconds
         self.interrupt_timeout_seconds = interrupt_timeout_seconds
         self.clock = clock or _utcnow
@@ -164,7 +157,6 @@ class BioXpConnectionService:
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._active_probe_task: asyncio.Task[None] | None = None
-        self._snapshot_refresh_task: asyncio.Task[None] | None = None
         self._generation_leases: dict[int, _GenerationLease] = {}
         self._drain_tasks: set[asyncio.Task[None]] = set()
         self._remote_request_tasks: set[asyncio.Task[dict[str, Any]]] = set()
@@ -257,7 +249,6 @@ class BioXpConnectionService:
                 stale_candidate = True
             else:
                 self._stop_active_probe_locked()
-                self._stop_snapshot_refresh_locked()
                 self._mark_current_draining_locked(increment=False)
                 self._generation += 1
                 self.freshness_budget_seconds = profile.freshness_budget_seconds
@@ -266,7 +257,6 @@ class BioXpConnectionService:
                 self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
                 self._apply_probe_payload(payload, request_started_at=request_started_at)
                 self._start_active_probe_locked()
-                self._start_snapshot_refresh_locked()
                 stale_candidate = False
         if stale_candidate:
             await candidate.close()
@@ -330,7 +320,6 @@ class BioXpConnectionService:
                     close_candidate = True
                 else:
                     self._stop_active_probe_locked()
-                    self._stop_snapshot_refresh_locked()
                     self._mark_current_draining_locked(increment=False)
                     self._generation += 1
                     self._client = candidate
@@ -338,7 +327,6 @@ class BioXpConnectionService:
                     self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
                     self._apply_probe_payload(payload, request_started_at=request_started_at)
                     self._start_active_probe_locked()
-                    self._start_snapshot_refresh_locked()
                     close_candidate = False
             if close_candidate:
                 await candidate.close()
@@ -811,18 +799,6 @@ class BioXpConnectionService:
         self._last_error = str(exc) or exc.__class__.__name__
         self._observed_at = self.clock()
 
-    def _record_snapshot_refresh_failure(self, exc: Exception) -> None:
-        """Keep runtime reachability separate from failed hardware refresh."""
-        error = str(exc) or exc.__class__.__name__
-        self._automatic_snapshot_refresh = {
-            "attempted": True,
-            "published": False,
-            "error": error,
-        }
-        self._hardware_observation_fresh = False
-        self._last_hardware_ready = None
-        self._hardware_evidence_error = error
-
     async def _active_status_probe(self) -> None:
         async with self._transition_lock:
             client = self._client
@@ -880,7 +856,6 @@ class BioXpConnectionService:
 
     async def _deactivate_locked(self, *, increment: bool) -> None:
         self._stop_active_probe_locked()
-        self._stop_snapshot_refresh_locked()
         self._mark_current_draining_locked(increment=increment)
 
     def _start_active_probe_locked(self) -> None:
@@ -908,98 +883,6 @@ class BioXpConnectionService:
             raise
         except (ConnectionStateError, TargetPolicyError):
             return
-
-    def _start_snapshot_refresh_locked(self) -> None:
-        if self.snapshot_refresh_interval_seconds is None or self._client is None:
-            return
-        self._snapshot_refresh_task = asyncio.create_task(
-            self._snapshot_refresh_loop(),
-            name="bioxp-canonical-snapshot-refresh",
-        )
-
-    def _stop_snapshot_refresh_locked(self) -> None:
-        task = self._snapshot_refresh_task
-        self._snapshot_refresh_task = None
-        if task is None or task is asyncio.current_task():
-            return
-        task.cancel()
-
-    async def _snapshot_refresh_loop(self) -> None:
-        assert self.snapshot_refresh_interval_seconds is not None
-        delay = self.snapshot_refresh_interval_seconds
-        try:
-            while True:
-                await asyncio.sleep(delay)
-                next_delay = await self._snapshot_refresh_once()
-                delay = self.snapshot_refresh_interval_seconds if next_delay is None else next_delay
-        except asyncio.CancelledError:
-            raise
-        except (ConnectionStateError, TargetPolicyError):
-            return
-
-    async def _snapshot_refresh_once(self) -> float | None:
-        async with self._transition_lock:
-            client = self._client
-            generation = self._generation
-            if client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            lease = self._acquire_lease_locked(generation, require_fresh=False)
-        try:
-            # Full probe: robot-owned canonical snapshot is auto-collected by the
-            # client when its cached evidence is missing or stale, keeping the
-            # operator admission gate (door, axes, gripper) continuously fresh.
-            # Share one probe lane with the status monitor so a long snapshot
-            # cannot make an overlapping status request relabel the runtime as
-            # unreachable.
-            async with self._probe_lock:
-                request_started_at = self.clock()
-                payload = await client.probe()
-        except Exception as exc:
-            async with self._transition_lock:
-                if client is self._client and generation == self._generation:
-                    self._record_snapshot_refresh_failure(exc)
-            return
-        finally:
-            await self._release_lease(lease)
-        async with self._transition_lock:
-            if client is self._client and generation == self._generation:
-                self._apply_probe_payload(payload, request_started_at=request_started_at)
-                return self._snapshot_refresh_delay(payload)
-
-    def _snapshot_refresh_delay(self, payload: Mapping[str, Any]) -> float | None:
-        """Schedule this same worker from returned evidence, never renew its TTL.
-
-        The client refreshes at half the source freshness budget. Collection
-        time is already included in the returned observation age; a full sleep
-        after that work can consume the remaining lifetime a second time.
-        Foreground deferral is an observation retry, never a command retry.
-        """
-        interval = self.snapshot_refresh_interval_seconds
-        if interval is None:
-            return None
-        capabilities = payload.get("capabilities")
-        if (payload.get("runtime_ready", payload.get("runtime_available")) is not True
-                or not isinstance(capabilities, (list, tuple, set))
-                or "collect_hardware_snapshot" not in capabilities):
-            return interval
-        refresh = payload.get("automatic_snapshot_refresh")
-        if isinstance(refresh, Mapping):
-            retry = refresh.get("retry_after_s")
-            if (refresh.get("retry_deferred") is True and isinstance(retry, (int, float)) and not isinstance(retry, bool)
-                    and isfinite(retry) and retry > 0):
-                return min(interval, float(retry))
-            if refresh.get("error"):
-                return interval  # retain the client's transport-failure backoff
-            next_probe = refresh.get("next_probe_after_s")
-            if (refresh.get("published") is True and isinstance(next_probe, (int, float))
-                    and not isinstance(next_probe, bool) and isfinite(next_probe) and next_probe >= 0):
-                return min(interval, float(next_probe))
-        remaining = _hardware_refresh_due_in(payload)
-        if remaining > 0:
-            return min(interval, remaining)
-        # Missing/invalid evidence or a collection already past its refresh
-        # threshold must not spin this worker in a zero-delay retry loop.
-        return interval
 
     def _clear_observation(self) -> None:
         self._invalidate_v2_query_cache()

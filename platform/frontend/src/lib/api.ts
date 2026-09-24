@@ -1020,6 +1020,33 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
     });
 };
 
+export interface StructureMaterialization {
+    path: string; format: 'pdb' | 'cif'; sha256: string;
+    native_path: string; native_format: 'pdb' | 'cif'; native_sha256: string;
+    model_number: number | null; model_numbers: number[];
+    author_residues: Array<{ model_number: number; auth_asym_id: string; auth_seq_id: number; insertion_code: string; residue_name: string }>;
+    source_identity: Record<string, unknown>; source_path: string;
+}
+export interface StructureSourceSelection {
+    path?: string; design_id?: string; job_id?: string;
+    document?: { artifact_id?: string; target_state?: string };
+    output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
+}
+export const materializeExactStructure = async (source: StructureSourceSelection): Promise<StructureMaterialization> =>
+    (await api.post<StructureMaterialization>('/api/files/materialize-structure', source)).data;
+
+export interface ProjectStructureQuery {
+    project_id?: string; dataset_id?: string; revision_id?: string; receipt_id?: string; design_id?: string;
+    collection?: 'resources' | 'datasets'; offset?: number; limit?: number;
+}
+export interface ProjectStructureEntry extends ProjectStructureQuery {
+    kind: 'project' | 'dataset' | 'resource' | 'design' | 'document'; name: string;
+    job_id?: string; path?: string;
+    document?: { artifact_id?: string; target_state?: string; logical_path?: string; download_url?: string; sha256?: string; format?: string; primary?: boolean };
+}
+export const fetchProjectStructureSources = async (query: ProjectStructureQuery = {}) =>
+    (await api.get<{ items: ProjectStructureEntry[]; total: number; offset: number; limit: number }>('/api/files/structure-sources', { params: query })).data;
+
 /** Materialize a selected structure through the existing upload authority. */
 export const materializeStructureTarget = async (
     target: { path?: string; file?: File; url?: string; name: string },

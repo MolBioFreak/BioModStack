@@ -102,7 +102,7 @@ class _IterationSession:
         return _ScalarResult([SimpleNamespace(id="design-1", job_id="source-job", lineage_root_job_id="root-job")])
 
     async def get(self, _type, item_id):
-        return SimpleNamespace(id=item_id) if item_id == "source-job" else None
+        return SimpleNamespace(id=item_id, model_id="antibody_denovo") if item_id == "source-job" else None
 
     async def rollback(self) -> None:
         return None

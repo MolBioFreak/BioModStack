@@ -1,110 +1,39 @@
-"""Actual collection-start sample ages, not timestamp renewal at return."""
+"""Passive reads preserve source sample identity and expiry."""
 import asyncio
+from datetime import datetime, timedelta, timezone
 import httpx
 from services.bioxp.robot_client import BioXpRobotClient
-from test_bioxp_deck_refresh_observation import payload, _load, _service
+from tests.test_bioxp_connection import _load, _service
+from tests.test_bioxp_manual_readiness_schedule import payload
 
-def test_sample_captured_before_full_collection_return_does_not_expire(tmp_path, record_property):
-    """Wall-clock acceptance: no fake clock, sleep patch or injected cost."""
-    import json
-    import time
+
+def test_passive_polling_cannot_renew_same_sample_or_extend_expiry(tmp_path):
     _, Profile, _, _ = _load()
-    started = time.monotonic()
-    deck_at: list[float | None] = [None]
-    captures = []
-    posts, finished, during = [], [], []
-    complete = None
-
-    def status():
-        now = time.monotonic()
-        age = None if deck_at[0] is None else now - deck_at[0]
-        row = payload(age or 0)
-        if age is None:
-            for key in ("admission_observation", "deck_authority"):
-                row[key]["available"] = False
-                row[key]["cache_state"] = "missing"
-                row[key]["freshness"].update(state="missing", age_s=None)
-        elif age >= 15:
-            row["deck_authority"]["available"] = False
-            row["deck_authority"]["freshness"]["state"] = "stale"
-        return row
-
+    now = [datetime(2026, 9, 24, tzinfo=timezone.utc)]
+    row = {**payload(0), "hardware_ready": True, "snapshot_id": "unchanged"}
+    requests = []
     async def handle(request):
-        if request.method == "GET":
-            assert request.url.path == "/status"
-            return httpx.Response(200, json=status())
-        assert request.url.path == "/hardware/snapshot/collect"
-        assert request.content == b'{"automatic":true}'
-        posts.append(time.monotonic() - started)
-        sampled_at = None
-        for step in range(24):
-            await asyncio.sleep(0.5)  # real awaited controller subphase
-            if step == 18:
-                sampled_at = time.monotonic()  # sample begins before its validation ends
-            during.append((len(posts), time.monotonic() - started,
-                           status()["deck_authority"]["available"]))
-        assert sampled_at is not None
-        deck_at[0] = sampled_at
-        captures.append(sampled_at - started)
-        finished.append(time.monotonic() - started)
-        if len(finished) == 2:
-            assert complete is not None
-            complete.set()
-        return httpx.Response(200, json={"ok": True, "published": True,
-            "snapshot": {"snapshot_id": f"wall-{len(finished)}"}})
-
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json=row)
     async def scenario():
-        nonlocal complete
-        complete = asyncio.Event()
-        service = _service(tmp_path, [], active_probe_interval_seconds=10)
+        service = _service(tmp_path, [], clock=lambda: now[0], active_probe_interval_seconds=None)
         service.client_factory = lambda target: BioXpRobotClient(target, transport=httpx.MockTransport(handle))
         await service.save_profile(Profile(api_url="http://robot:8123"))
         await service.connect()
-        assert posts == []
-        service._stop_active_probe_locked()  # keep the genuine single refresh worker
+        captured = service.snapshot().hardware_observed_at
+        assert service.snapshot().hardware_ready is True
         try:
-            await asyncio.wait_for(complete.wait(), timeout=45)
-            async with service._probe_lock:
-                pass  # final readback/publication has left the probe lane
-            record_property("wallclock_trace", json.dumps({"posts": posts, "finished": finished,
-                "during": during, "captures": captures, "deadline": captures[0] + 15}))
-            assert len(posts) == 2
-            assert all(end - begin >= 12 for begin, end in zip(posts, finished))
-            assert finished[1] < captures[0] + 15
-            assert all(end - sample >= 2.5 for end, sample in zip(finished, captures))
-            assert all(available for number, _, available in during if number == 2)
+            for seconds in (10, 10, 11):
+                now[0] += timedelta(seconds=seconds)
+                await service._active_status_probe()
+                assert service.snapshot().hardware_observed_at == captured
+            snapshot = service.snapshot()
+            assert snapshot.runtime_ready is True
+            assert snapshot.hardware_ready is None
+            assert snapshot.hardware_observation_stale is True
+            assert snapshot.hardware_evidence_error is not None
+            assert "expired" in snapshot.hardware_evidence_error
+            assert requests == [("GET", "/status")] * 4
         finally:
             await service.disconnect()
-        assert service._snapshot_refresh_task is None
-    asyncio.run(scenario())
-
-
-def test_fast_or_missing_success_never_requests_zero_delay_spin(tmp_path):
-    from test_bioxp_deck_refresh_observation import DurationTransport, duration_client
-
-    async def scenario():
-        for mode in ('missing', 'short_budget', 'negative'):
-            transport = DurationTransport(duration=.12, negative=mode == 'negative')
-            original_status = transport.status
-            def status():
-                row = original_status()
-                for key in ('admission_observation', 'deck_authority'):
-                    if mode == 'missing':
-                        row[key]['freshness'].update(state='missing', age_s=None)
-                        row[key]['available'] = False
-                    elif mode == 'short_budget':
-                        row[key]['freshness']['fresh_for_s'] = .1
-                return row
-            transport.status = status
-            client = duration_client(transport)
-            try:
-                row = await client.probe()
-                assert row['automatic_snapshot_refresh']['published'] is True
-                assert row['automatic_snapshot_refresh'].get('next_probe_after_s') != 0
-                service = _service(tmp_path / mode, [])
-                service.snapshot_refresh_interval_seconds = 1
-                assert service._snapshot_refresh_delay(row) == 1
-                assert len(transport.posts) == 1
-            finally:
-                await client.close()
     asyncio.run(scenario())

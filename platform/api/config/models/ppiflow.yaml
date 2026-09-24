@@ -1,0 +1,460 @@
+id: ppiflow
+name: PPIFlow initial binder generation
+version: 1.0.0
+category: generative_design
+description: Native initial protein binder and antibody/nanobody backbone generation.
+  Separate from existing seeded partial-flow refinement.
+container: ppiflow.sif
+inputs:
+- pdb
+- csv
+outputs:
+- pdb
+- csv
+- json
+modes:
+- id: protein_binder
+  name: Protein Binder
+  description: Native initial generation; no previous generated candidate required.
+  params:
+  - target_pdb
+  - specified_hotspots
+  - samples_per_target
+  - num_timesteps
+  - min_t
+  - rotation_corrupt
+  - rotation_sample_schedule
+  - rotation_exp_rate
+  - translation_corrupt
+  - translation_var_scale
+  - self_condition
+  - input_csv
+  - target_chain
+  - binder_chain
+  - samples_min_length
+  - samples_max_length
+  - sample_hotspot_rate_min
+  - sample_hotspot_rate_max
+  - samples_batch_size
+  - sample_original_binder_len
+  - dataset_seed
+  - cache_num_res
+  - samples_min_hotspots
+- id: antibody_binder
+  name: Antibody Binder
+  description: Native initial generation; no previous generated candidate required.
+  params:
+  - target_pdb
+  - specified_hotspots
+  - samples_per_target
+  - num_timesteps
+  - min_t
+  - rotation_sample_schedule
+  - rotation_exp_rate
+  - translation_var_scale
+  - self_condition
+  - framework_pdb
+  - antigen_chain
+  - heavy_chain
+  - cdr_length
+  - light_chain
+- id: nanobody_binder
+  name: Nanobody Binder
+  description: Native initial generation; no previous generated candidate required.
+  params:
+  - target_pdb
+  - specified_hotspots
+  - samples_per_target
+  - num_timesteps
+  - min_t
+  - rotation_sample_schedule
+  - rotation_exp_rate
+  - translation_var_scale
+  - self_condition
+  - framework_pdb
+  - antigen_chain
+  - heavy_chain
+  - cdr_length
+params:
+- name: target_pdb
+  type: file
+  description: Native target/antigen PDB. Source owner preserves original document
+    identity and performs checked CIF conversion when needed.
+  native_cli:
+    protein_binder: input_pdb
+    antibody_binder: antigen_pdb
+    nanobody_binder: antigen_pdb
+  file_type: pdb
+  preset_type: pdb
+  section: Targets & templates
+- name: specified_hotspots
+  type: string
+  description: Native chain/residue hotspot list, bound to the selected target document.
+    Protein mode accepts integer numbering; antibody mode matches author numbering
+    including insertion codes.
+  native_cli: specified_hotspots
+  section: Design
+  default: null
+- name: samples_per_target
+  type: integer
+  description: Native sample count (antibody preprocessing creates N rows, then one
+    sample per row; no N squared expansion).
+  minimum: 1
+  native_cli: samples_per_target
+  section: Generation
+  default: 100
+- name: input_csv
+  type: file
+  description: Alternative native preprocessed CSV with processed_path pickle members.
+    The source owner authorizes these bytes; preparation snapshots members without
+    unpickling.
+  native_cli: input_csv
+  section: Targets & templates
+  default: null
+- name: target_chain
+  type: string
+  description: Exact single target chain; native preprocessing currently uppercases
+    structural chain dictionary keys.
+  pattern: '[A-Za-z0-9]'
+  native_cli: target_chain
+  section: Targets & templates
+  default: R
+- name: binder_chain
+  type: string
+  description: Native virtual binder chain ID for target-only preprocessing, or interface
+    partner ID when deriving hotspots from a supplied complex. Native process_file
+    requires this even though argparse defaults to None.
+  pattern: '[A-Za-z0-9]'
+  native_cli: binder_chain
+  section: Design
+  default: null
+- name: samples_min_length
+  type: integer
+  description: Inclusive minimum generated binder length.
+  native_cli: samples_min_length
+  section: Design
+  default: 50
+- name: samples_max_length
+  type: integer
+  description: Exclusive maximum generated binder length (numpy Generator.integers).
+  native_cli: samples_max_length
+  section: Design
+  default: 100
+- name: sample_hotspot_rate_min
+  type: number
+  description: Native CLI minimum hotspot sampling rate; native CLI forbids changing
+    this without specified hotspots.
+  native_cli: sample_hotspot_rate_min
+  section: Design
+  default: 0.2
+- name: sample_hotspot_rate_max
+  type: number
+  description: Native CLI maximum hotspot sampling rate; explicit hotspots cause dataset
+    to use all supplied positions.
+  native_cli: sample_hotspot_rate_max
+  section: Design
+  default: 0.5
+- name: samples_batch_size
+  type: integer
+  description: Native grouping; count must be divisible by this. Experiment uses batch
+    size 1 unless sample_original_binder_len is true.
+  minimum: 1
+  native_path: ppi_dataset.samples_batch_size
+  section: Expert
+  default: 1
+- name: sample_original_binder_len
+  type: boolean
+  description: Native original-binder-length switch. PDB preprocessing creates a virtual
+    binder with target length; this does NOT preserve a prior designed candidate.
+  native_path: ppi_dataset.sample_original_binder_len
+  section: Expert
+  default: false
+- name: dataset_seed
+  type: integer
+  description: Native numpy dataset RNG seed (length/hotspot draws only). This is
+    not a global sampling seed; Python/SciPy/Torch sampling has independent RNG state.
+  native_path: ppi_dataset.seed
+  section: Generation
+  default: 123
+- name: cache_num_res
+  type: integer
+  description: Native processed-feature cache threshold; affects dataset cache/reuse
+    behavior.
+  native_path: ppi_dataset.cache_num_res
+  section: Expert
+  default: 0
+- name: samples_min_hotspots
+  type: integer
+  description: Minimum random-hotspot count. Native random-hotspot consumer requires
+    this but the shipped binder config supplies no default; supply it when omitting
+    explicit hotspots.
+  native_path: ppi_dataset.samples_min_hotspots
+  section: Expert
+  default: null
+- name: framework_pdb
+  type: file
+  description: 'Native IMGT-numbered framework PDB with CDR loops removed: native
+    gaps identify CDR insertion sites. Separate from the antigen, not a generated
+    seed complex.'
+  native_cli: framework_pdb
+  file_type: pdb
+  preset_type: pdb
+  section: Targets & templates
+  required: true
+- name: antigen_chain
+  type: string
+  description: Exact single antigen chain. Despite CLI plural help text, native merge
+    compares one PDB column to this value.
+  native_cli: antigen_chain
+  pattern: '[A-Za-z0-9]'
+  section: Targets & templates
+  required: true
+- name: heavy_chain
+  type: string
+  description: Native heavy-chain framework role. Native preprocessing uppercases
+    structural chain dictionary keys; requested role is not silently rewritten.
+  native_cli: heavy_chain
+  pattern: '[A-Za-z0-9]'
+  section: Targets & templates
+  required: true
+- name: light_chain
+  type: string
+  description: Native light-chain framework role; required for antibody mode, absent
+    for nanobody mode.
+  native_cli: light_chain
+  pattern: '[A-Za-z0-9]'
+  section: Targets & templates
+  default: null
+- name: cdr_length
+  type: string
+  description: Native CDR-name,low-high pairs; inclusive random.randint bounds. Retains
+    the shipped CLI default, including unused light CDR ranges in heavy-only mode.
+    Render as typed per-loop range controls.
+  native_cli: cdr_length
+  section: Design
+  ui_control: cdr_length_ranges
+  default: CDRH1,5-12,CDRH2,4-17,CDRH3,5-26,CDRL1,5-12,CDRL2,3-10,CDRL3,4-13
+- name: num_timesteps
+  type: integer
+  description: Native flow integration timesteps.
+  native_path: interpolant.sampling.num_timesteps
+  section: Generation
+  default: 100
+- name: min_t
+  type: number
+  description: Native initial integration time.
+  native_path: interpolant.min_t
+  section: Expert
+  default: 0.01
+- name: rotation_corrupt
+  type: boolean
+  description: Native rotation corruption switch.
+  native_path: interpolant.rots.corrupt
+  section: Expert
+  default: true
+- name: rotation_sample_schedule
+  type: string
+  description: Native rotation integration schedule.
+  native_path: interpolant.rots.sample_schedule
+  section: Expert
+  enum:
+  - linear
+  - exp
+  default: exp
+- name: rotation_exp_rate
+  type: number
+  description: Native exponential rotation integration rate.
+  native_path: interpolant.rots.exp_rate
+  section: Expert
+  default: 10
+- name: translation_corrupt
+  type: boolean
+  description: Native translation corruption switch.
+  native_path: interpolant.trans.corrupt
+  section: Expert
+  default: true
+- name: translation_var_scale
+  type: number
+  description: Native initial translation Gaussian scale.
+  native_path: interpolant.trans.var_scale
+  section: Expert
+  default: 10
+- name: self_condition
+  type: boolean
+  description: Native self-conditioning; shipped interpolation resolves model.edge_features.self_condition=true.
+  native_path: interpolant.self_condition
+  section: Expert
+  default: true
+enabled: true
+experimental: true
+public_launch: true
+schema_version: ppiflow-generation/1
+native_source_revision: 000ce45a4411e7b97c1523a22c0f1bece7ede5fc
+native_profiles:
+  protein_binder:
+    entrypoint: sample_binder.py
+    config: configs/inference_binder.yaml
+    checkpoint: binder.ckpt
+    fixed_model_architecture:
+      node_embed_size: 256
+      edge_embed_size: 128
+      symmetric: false
+      use_gradient_checkpointing: false
+      use_deepspeed_evo_attention: false
+      node_features:
+        c_s: ${model.node_embed_size}
+        c_pos_emb: 128
+        c_timestep_emb: 128
+        c_aatype_emb: 128
+        max_num_res: 2000
+        timestep_int: 1000
+        embed_chain: true
+        embed_aatype: true
+        n_aatype: 22
+      edge_features:
+        single_bias_transition_n: 2
+        c_s: ${model.node_embed_size}
+        c_p: ${model.edge_embed_size}
+        relpos_k: 64
+        feat_dim: 64
+        rel_pos_feat_dim: 64
+        num_bins: 22
+        self_condition: true
+        embed_chain: true
+        embed_diffuse_mask: true
+        embed_hotspot_mask: true
+        embed_aatype: true
+      ipa:
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        c_hidden: 128
+        no_heads: 8
+        no_qk_points: 8
+        no_v_points: 12
+        seq_tfmr_num_heads: 4
+        seq_tfmr_num_layers: 2
+        num_blocks: 6
+      pairformer:
+        use: true
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        no_heads: 8
+        num_blocks: 4
+        c_hidden_pair_att: 16
+        no_heads_pair: 4
+    fixed_reason: Checkpoint architecture; model tensors are loaded strictly by native
+      Lightning. Not a separate trained model selection.
+  antibody_binder:
+    entrypoint: sample_antibody_nanobody.py
+    config: configs/inference_nanobody.yaml
+    checkpoint: antibody.ckpt
+    fixed_model_architecture:
+      node_embed_size: 256
+      edge_embed_size: 128
+      symmetric: false
+      use_gradient_checkpointing: false
+      use_deepspeed_evo_attention: false
+      node_features:
+        c_s: ${model.node_embed_size}
+        c_pos_emb: 128
+        c_timestep_emb: 128
+        c_aatype_emb: 128
+        max_num_res: 2000
+        timestep_int: 1000
+        embed_chain: true
+        embed_aatype: true
+        n_aatype: 22
+        task: binder_motif
+      edge_features:
+        single_bias_transition_n: 2
+        c_s: ${model.node_embed_size}
+        c_p: ${model.edge_embed_size}
+        relpos_k: 64
+        feat_dim: 64
+        rel_pos_feat_dim: 64
+        num_bins: 22
+        pairwise_direction: true
+        self_condition: true
+        embed_chain: true
+        embed_diffuse_mask: true
+        embed_hotspot_mask: true
+        embed_aatype: true
+        task: binder_motif
+      ipa:
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        c_hidden: 128
+        no_heads: 8
+        no_qk_points: 8
+        no_v_points: 12
+        seq_tfmr_num_heads: 4
+        seq_tfmr_num_layers: 2
+        num_blocks: 6
+      pairformer:
+        use: true
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        no_heads: 8
+        num_blocks: 4
+        c_hidden_pair_att: 16
+        no_heads_pair: 4
+      task: binder_motif
+    fixed_reason: Checkpoint architecture; model tensors are loaded strictly by native
+      Lightning. Not a separate trained model selection.
+  nanobody_binder:
+    entrypoint: sample_antibody_nanobody.py
+    config: configs/inference_nanobody.yaml
+    checkpoint: nanobody.ckpt
+    fixed_model_architecture:
+      node_embed_size: 256
+      edge_embed_size: 128
+      symmetric: false
+      use_gradient_checkpointing: false
+      use_deepspeed_evo_attention: false
+      node_features:
+        c_s: ${model.node_embed_size}
+        c_pos_emb: 128
+        c_timestep_emb: 128
+        c_aatype_emb: 128
+        max_num_res: 2000
+        timestep_int: 1000
+        embed_chain: true
+        embed_aatype: true
+        n_aatype: 22
+        task: binder_motif
+      edge_features:
+        single_bias_transition_n: 2
+        c_s: ${model.node_embed_size}
+        c_p: ${model.edge_embed_size}
+        relpos_k: 64
+        feat_dim: 64
+        rel_pos_feat_dim: 64
+        num_bins: 22
+        pairwise_direction: true
+        self_condition: true
+        embed_chain: true
+        embed_diffuse_mask: true
+        embed_hotspot_mask: true
+        embed_aatype: true
+        task: binder_motif
+      ipa:
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        c_hidden: 128
+        no_heads: 8
+        no_qk_points: 8
+        no_v_points: 12
+        seq_tfmr_num_heads: 4
+        seq_tfmr_num_layers: 2
+        num_blocks: 6
+      pairformer:
+        use: true
+        c_s: ${model.node_embed_size}
+        c_z: ${model.edge_embed_size}
+        no_heads: 8
+        num_blocks: 4
+        c_hidden_pair_att: 16
+        no_heads_pair: 4
+      task: binder_motif
+    fixed_reason: Checkpoint architecture; model tensors are loaded strictly by native
+      Lightning. Not a separate trained model selection.

@@ -23,6 +23,12 @@ TYPED_CORE_JOB_MODELS = {
     "rf3",
     "sequence_qc",
     "template_antibody_denovo",
+    "antibody_denovo",
+    "bindcraft2",
+    "binder_refinement",
+    "caliby_binder",
+    "frustrampnn",
+    "ligandmpnn",
 }
 TYPED_CORE_JOB_ADAPTERS = {
     f"bms.core-job.{model_id}.adapter.v1": model_id
@@ -45,12 +51,29 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
         "supports_initial_values": True,
         "supports_draft_reporting": True,
     },
+    "antibody_denovo": {
+        "setup_path": "/submit",
+        "supports_initial_values": True,
+        "supports_draft_reporting": True,
+    },
     "conformational_mapping": {
         "setup_path": "/submit",
         "supports_initial_values": True,
         "supports_draft_reporting": True,
     },
 }
+
+
+# JobSubmission's native generation forms report/reopen these exact modes.
+for _model, _modes in {
+    "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder"),
+    "ppiflow": ("protein_binder", "antibody_binder", "nanobody_binder"),
+}.items():
+    for _mode in _modes:
+        PROJECT_NATIVE_OWNER_REGISTRY[f"{_model}:{_mode}"] = {
+            "setup_path": "/submit", "setup_query": {"model": [_model], "mode": [_mode]},
+            "supports_initial_values": True, "supports_draft_reporting": True,
+        }
 
 
 def register_workflow_adapter(workflow_family: str, adapter_id: str) -> None:
@@ -78,12 +101,36 @@ def is_project_native_owner_registered(native_owner_id: Any) -> bool:
     contract = PROJECT_NATIVE_OWNER_REGISTRY.get(native_owner_id)
     return bool(
         isinstance(contract, dict)
-        and set(contract) == {
+        and set(contract) in ({
             "setup_path",
             "supports_initial_values",
             "supports_draft_reporting",
-        }
+        }, {"setup_path", "setup_query", "supports_initial_values", "supports_draft_reporting"})
         and contract["setup_path"] == "/submit"
         and contract["supports_initial_values"] is True
         and contract["supports_draft_reporting"] is True
+        and ("setup_query" not in contract or (
+            isinstance(contract["setup_query"], dict)
+            and set(contract["setup_query"]) == {"model", "mode"}
+            and all(isinstance(values, list) and len(values) == 1
+                    and isinstance(values[0], str) and bool(values[0])
+                    for values in contract["setup_query"].values())
+        ))
     )
+
+
+def is_project_native_destination_registered(native_owner_id: Any, destination: Any) -> bool:
+    from urllib.parse import parse_qs, urlsplit
+    if not is_project_native_owner_registered(native_owner_id) or not isinstance(destination, str):
+        return False
+    try:
+        parsed = urlsplit(destination)
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return False
+    contract = PROJECT_NATIVE_OWNER_REGISTRY[native_owner_id]
+    if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path != contract["setup_path"]:
+        return False
+    if "setup_query" in contract:
+        return query == contract["setup_query"]
+    return query.get("template") == [native_owner_id]
