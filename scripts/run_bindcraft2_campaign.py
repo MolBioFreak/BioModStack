@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare a pinned BC2 compilation for native design; --execute explicitly runs it.
 
-This is a leaf adapter for a future workflow owner, not a BMS launch route.
+This is the model-owned leaf for campaign, resume and native postprocessing.
 It does not install weights, claim a GPU, parse results, or enable the model.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ for name in ("bindcraft2_native", "bindcraft2_runtime"):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 from services.bindcraft2_native import PIN
-from services.bindcraft2_runtime import prepare_campaign, run_campaign
+from services.bindcraft2_runtime import prepare_campaign, run_campaign, materialize_runtime_compilation
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     from bindcraft.settings import load_settings, read_settings
 
     compiled = json.loads(args.compilation.read_text())
+    compiled = materialize_runtime_compilation(compiled, args.compilation.resolve().parent, args.destination)
     prepared = prepare_campaign(compiled, args.destination, load_settings, parameter_sweep_arms,
                                 lambda path: cleaned_campaign_settings(read_settings(path)))
     print(json.dumps(prepared, sort_keys=True), flush=True)

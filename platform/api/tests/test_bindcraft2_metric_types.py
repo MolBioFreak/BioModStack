@@ -21,7 +21,8 @@ def test_all_fourteen_nonliteral_metric_defaults_are_accounted_for():
     assert data['registered_metrics']['filters']['Binder_RMSD']['params']['reference_state']['resolved_default'] == 'binder_alone'
     assert data['registered_metrics']['filters']['Epitope_Residues_Contacted']['params']['epitope_cutoff']['resolved_default'] == 10.0
     assert data['registered_metrics']['losses']['binder_contacts']['params']['contact_residue_count']['native_default_encoding'] == '+Infinity'
-    assert data['coverage_status'].startswith('INCOMPLETE')
+    assert 'in-memory Array masks' in data['coverage_status']
+    assert 'registry-owned' in data['coverage_status']
 
 
 def test_metric_request_accepts_source_typed_overrides_not_unportable_mask():

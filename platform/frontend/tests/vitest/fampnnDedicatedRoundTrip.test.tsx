@@ -12,10 +12,11 @@ vi.mock('../../src/components/FrameworkBrowser', () => ({ FrameworkBrowser: () =
 vi.mock('../../src/components/TargetAntigenSelector', () => ({ TargetAntigenSelector: () => null }));
 vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => null }));
 vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
+import { api } from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { ProteinLocalRedesignTemplate } from '../../src/components/ProteinLocalRedesignTemplate';
 let root: Root; let client: QueryClient;
-afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function mount(node: React.ReactNode, refinement = false) {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -98,7 +99,7 @@ it('mounted BC2 saved campaign keeps native draft separate and never submits ant
     const discovery = vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: false, settings: inventory }) }));
     vi.stubGlobal('fetch', discovery);
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
-    expect(document.querySelector('[aria-label="BindCraft2 campaign draft"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="max_trajectories"]')).not.toBeNull();
     expect(document.body.textContent).toContain('Model execution is not enabled.');
     expect(document.body.textContent).not.toContain('Launch BindCraft2 campaign');
@@ -120,10 +121,12 @@ it('mounted available BC2 campaign submits its own saved native settings and pla
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
     expect(document.querySelector('[aria-label="Execution target"]')).not.toBeNull();
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { preview_digest: 'native-preview', effective_settings: {} } });
+    await click('Preview native campaign');
     await click('Launch BindCraft2 campaign');
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.submit.mock.calls[0][0]).toEqual({ name: expect.any(String), model_id: 'bindcraft2', mode: 'campaign',
-        params: { bindcraft2_settings: settings } });
+        params: { bindcraft2_settings: settings, bc2_preview_digest: 'native-preview' } });
     expect(mocks.iteration).not.toHaveBeenCalled();
 });
 it('BC2 campaign shows a submission refusal without translating it into antibody refinement', async () => {
@@ -133,6 +136,8 @@ it('BC2 campaign shows a submission refusal without translating it into antibody
     }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ model_id: 'bindcraft2', launch_available: true, settings: inventory }) })));
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 2 } }} />);
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { preview_digest: 'native-preview', effective_settings: {} } });
+    await click('Preview native campaign');
     await click('Launch BindCraft2 campaign');
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('Native campaign unavailable');
     expect(mocks.iteration).not.toHaveBeenCalled();

@@ -1,6 +1,8 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+include { PublishIgGMMaturedCandidates } from './maturation_child_core.nf'
+
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.util.Arrays
@@ -3354,14 +3356,34 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         if (params.run_structure_validation != false) {
             log.warn("IgGM affinity maturation completed, but a full post-IgGM Boltz revalidation loop is not yet wired in this workflow.")
         }
-        final_designs = matured_designs
+        // IgGM changes the candidate, not its parent's validation evidence.
+        // Preserve that evidence only under source_meta; no revalidation gate.
+        final_designs = matured_designs.flatMap { meta, pdbs ->
+            def outputs = pdbs instanceof List ? pdbs : [pdbs]
+            outputs.collect { pdb ->
+                def childMeta = [
+                    id: pdb.baseName,
+                    parent_id: meta.id,
+                    source_document_id: meta.id,
+                    source_meta: new LinkedHashMap(meta),
+                    source_structure_state: meta.structure_state ?: meta.target_state,
+                    validation_status: 'unvalidated',
+                    terminal_producer: 'iggm_affinity_maturation'
+                ]
+                tuple(childMeta, pdb)
+            }
+        }
+        PublishIgGMMaturedCandidates(final_designs)
+        final_designs = PublishIgGMMaturedCandidates.out.candidates
     }
     else {
         final_designs = stable_designs
         mutations = Channel.empty()
     }
 
-    def terminalStage = params.openmm_enabled == true
+    def terminalStage = params.run_affinity_maturation == true
+        ? 'iggm_affinity_maturation'
+        : params.openmm_enabled == true
         ? 'openmm_relaxation'
         : params.run_post_validation_maturation == true
             ? 'maturation_post_validation'
@@ -3370,7 +3392,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 : params.run_ppiflow_maturation == true || params.run_maturation == true
                     ? 'ppiflow_maturation'
                     : 'sequence_design_terminal'
-    def terminalMethod = params.openmm_enabled == true
+    def terminalMethod = params.run_affinity_maturation == true
+        ? 'iggm'
+        : params.openmm_enabled == true
         ? 'openmm'
         : params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
             ? 'ppiflow'

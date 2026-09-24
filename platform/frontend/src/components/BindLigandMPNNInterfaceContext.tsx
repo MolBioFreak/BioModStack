@@ -1,4 +1,5 @@
 /** Independent selected post-round diagnostic, never sequence redesign. */
+import type { CandidateDocuments } from '../lib/binderDiagnosticSelection';
 export interface BindInterfaceContextSettings {
   binder_chain: string;
   target_chain: string;
@@ -13,6 +14,7 @@ export interface BindInterfaceContextSelection {
   source_job_id: string;
   round_id: string;
   candidate_ids: string[];
+  candidate_documents?: CandidateDocuments;
   settings: BindInterfaceContextSettings;
 }
 

@@ -1,3 +1,6 @@
+import { BindCraft2SourcePicker } from './BindCraft2SourcePicker';
+import { BindCraft2ListEditor } from './BindCraft2ListEditor';
+
 /** Model-owned operator adapter. Discovery is the same inventory consumed by
  * services.bindcraft2_typed.validate_request; it does not enable the model. */
 export type BC2Field = {
@@ -21,6 +24,22 @@ export type BC2Inventory = {
 export type BC2Request = Record<string, unknown>
 const internal = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length'])
 const selectors = new Set(['core', 'modality', 'target'])
+const sections = ['Source and target', 'Binder and objective', 'Campaign budget and generation', 'Prediction and validation', 'Sequence design', 'Losses and filters', 'Native relaxation', 'Advanced native settings']
+function sectionFor(key: string): string {
+  if (/^(target|targets|crop_fasta|multitarget)/.test(key)) return sections[0]
+  if (/^(binder|modality|paratope|cyclic|oligomer|humaniz)/.test(key)) return sections[1]
+  if (/^(core|campaign|max_trajectories|num_|seed|trajectory|parameter_sweep|screen|refine|anneal|harden|mutate|adaptive|dedup)/.test(key)) return sections[2]
+  if (/^(validation|prediction|recycle|attention|subbatch)/.test(key)) return sections[3]
+  if (/^(mpnn|aa_bias|omit|sequence)/.test(key)) return sections[4]
+  if (/^(loss|filter|weight)/.test(key)) return sections[5]
+  if (/^relax/.test(key)) return sections[6]
+  return sections[7]
+}
+const readable = (key: string) => key.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())
+const defaultSummary = (value: unknown) => value !== null && typeof value === 'object'
+  ? Array.isArray(value) ? `${value.length} native entries (shown in controls)` : `${Object.keys(value).length} native entries (shown in controls)`
+  : JSON.stringify(value)
+
 
 export function BindCraft2Settings({ inventory, value, onChange, launchAvailable }: {
   inventory: BC2Inventory; value: BC2Request; onChange: (next: BC2Request) => void; launchAvailable?: boolean
@@ -35,7 +54,7 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
   }
   const control = (key: string, field: BC2Field) => {
     const type = field.observed_types[0]
-    const current = value[key] ?? (field.has_native_default ? field.native_default : undefined)
+    const current = Object.hasOwn(value, key) ? value[key] : (field.has_native_default ? field.native_default : undefined)
     if (field.choices) return <select aria-label={key} value={current as string ?? ''} onChange={event => set(key, event.currentTarget.value)}>
       <option value="">Select native choice</option>{field.choices.map(choice => <option value={choice} key={choice}>{choice}</option>)}
     </select>
@@ -89,12 +108,14 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
     if (key === 'max_trajectories') return <input aria-label={key} type="number" min="1" step="1" required value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
     if (type === 'boolean') return <input aria-label={key} type="checkbox" checked={Boolean(current)} onChange={event => set(key, event.currentTarget.checked)} />
     if (type === 'number' || type === 'integer') return <input aria-label={key} type="number" step={type === 'integer' ? '1' : 'any'} value={current as number ?? ''} onChange={event => set(key, event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} />
+    if (key === 'binder_scaffold') return <BindCraft2SourcePicker label={key} value={typeof current === 'string' ? current : ''} onChange={next => set(key, next)} structureOnly />
     if (type === 'string') return <input aria-label={key} type="text" value={current as string ?? ''} onChange={event => set(key, event.currentTarget.value)} />
     if (key === 'targets' && type === 'array') {
       const targets = (current ?? []) as Record<string, string | number>[]
       const update = (index: number, field: string, next: string | number) => set(key, targets.map((target, position) => position === index ? { ...target, [field]: next } : target))
       return <div>{targets.map((target, index) => <fieldset key={index}><legend>Target {index + 1}</legend>
-        {(['name', 'target_path', 'chains', 'hotspots', 'coldspots', 'objective', 'weight'] as const).map(field => <label key={field}>{field}<input aria-label={`targets.${index}.${field}`} type={field === 'weight' ? 'number' : 'text'} step={field === 'weight' ? 'any' : undefined}
+        <BindCraft2SourcePicker label={`targets.${index}.target_path`} value={String(target.target_path ?? '')} onChange={next => update(index, 'target_path', next)} />
+        {(['name', 'chains', 'hotspots', 'coldspots', 'objective', 'weight'] as const).map(field => <label key={field}>{field}<input aria-label={`targets.${index}.${field}`} type={field === 'weight' ? 'number' : 'text'} step={field === 'weight' ? 'any' : undefined}
           value={target[field] ?? ''} onChange={event => update(index, field, field === 'weight' ? Number(event.currentTarget.value) : event.currentTarget.value)} /></label>)}
         <button type="button" onClick={() => set(key, targets.filter((_, position) => position !== index))}>Remove target</button>
       </fieldset>)}<button type="button" onClick={() => set(key, [...targets, { name: '', target_path: '' }])}>Add target</button></div>
@@ -118,14 +139,16 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
             } else { const copy = { ...entries }; delete copy[metric]; set(key, copy) }
           }} /></label>
           {entry && <>
+            <label>Prediction state override<input aria-label={`${key}.${metric}.prediction_state`} value={entry.prediction_state as string ?? ''} onChange={event => { const next = { ...entry }; if (event.currentTarget.value === '') delete next.prediction_state; else next.prediction_state = event.currentTarget.value; update(metric, next) }} /></label>
             {key === 'filters' && <><label>Threshold <input type="number" step="any" aria-label={`${key}.${metric}.threshold`} value={entry.threshold as number ?? ''} onChange={event => { const next = { ...entry }; if (event.currentTarget.value === '') delete next.threshold; else next.threshold = Number(event.currentTarget.value); update(metric, next) }} /></label>
               {(['higher', 'mandatory'] as const).map(flag => <label key={flag}>{flag} (unset uses native behavior)<input type="checkbox" aria-label={`${key}.${metric}.${flag}`} checked={entry[flag] === true} onChange={event => update(metric, { ...entry, [flag]: event.currentTarget.checked })} /></label>)}</>}
             {Object.entries(info.params).map(([param, descriptor]) => {
               if (!descriptor.request_types) return <p key={param}>{param}: {descriptor.unresolved_reason ?? 'type unresolved'}</p>
-              const defaultValue = descriptor.resolved_default ?? descriptor.default_literal
+              const defaultValue = Object.hasOwn(descriptor, 'resolved_default') ? descriptor.resolved_default : descriptor.default_literal
               const params = (entry.params ?? {}) as Record<string, unknown>
               const actual = Object.hasOwn(params, param) ? params[param] : defaultValue
               const write = (next: unknown) => update(metric, { ...entry, params: { ...params, [param]: next } })
+              if (descriptor.request_types.includes('array')) return <div key={param}><span>{readable(param)}</span><BindCraft2ListEditor label={`${key}.${metric}.params.${param}`} value={Array.isArray(actual) ? actual : []} onChange={write} /></div>
               const nullable = descriptor.request_types.includes('null')
               const numeric = descriptor.request_types.includes('number') || descriptor.request_types.includes('integer')
               return <label key={param}>{param}{descriptor.native_default_encoding && <small> Native default: {descriptor.native_default_encoding}; explicit finite override only.</small>}
@@ -143,11 +166,24 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
     return <span>Typed nested editor pending; this setting cannot be submitted from this form.</span>
   }
   return <section aria-label="BindCraft2 settings"><p>{launchAvailable === true ? 'Launcher reports execution available.' : launchAvailable === false ? 'Model execution is not enabled.' : 'Launch availability is determined by the launcher.'} Unresolved settings prevent a full parity claim.</p>
-    {Object.entries(inventory.fields).filter(([key]) => !internal.has(key)).map(([key, field]) => {
-      const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
-        ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep', 'binder_shapes', 'validation_models', 'crop_fasta_sequence', 'multitarget_rounds_per_target'].includes(key))
-      return <div key={key}><label>{key}{field.applicable_when && <small> Applies when relax_accepted_designs is enabled; omitted values use native relaxation defaults.</small>}{field.has_native_default && <small> Native default: {JSON.stringify(field.native_default)}</small>}{!field.has_native_default && field.runtime_fallback !== undefined && <small> {field.fallback_authority ? 'Native relaxation fallback when omitted' : 'Native runtime fallback when omitted'}: {JSON.stringify(field.runtime_fallback)}</small>}
-        {supported ? control(key, field) : <span> Unsupported typed control / unresolved source type</span>}</label></div>
-    })}
+    <p className="text-sm">Controls show native defaults without adding omitted values to your request. Use “Use native default” to remove an override; explicit false, zero and empty lists remain explicit. Preview shows profile-resolved effective settings.</p>
+    {sections.map((section, sectionIndex) => <details key={section} open={sectionIndex < 3} className="rounded-lg border border-[var(--border-color)] p-4">
+      <summary className="cursor-pointer font-medium">{section}</summary>
+      <div className="mt-4 grid min-w-0 gap-5 xl:grid-cols-2 [&_input:not([type=checkbox])]:w-full [&_input]:min-w-0 [&_select]:w-full [&_select]:min-w-0 [&_label]:block [&_small]:block [&_fieldset]:space-y-2 [&_input]:rounded [&_input]:border [&_input]:p-2 [&_select]:rounded [&_select]:border [&_select]:p-2 [&_button]:rounded [&_button]:border [&_button]:px-2 [&_button]:py-1">
+      {Object.entries(inventory.fields).filter(([key]) => !internal.has(key) && sectionFor(key) === section).map(([key, field]) => {
+        const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
+          ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep', 'binder_shapes', 'validation_models', 'crop_fasta_sequence', 'multitarget_rounds_per_target'].includes(key))
+        return <div key={key} className={`min-w-0 space-y-2 ${['filters', 'losses', 'targets', 'parameter_sweep'].includes(key) ? 'xl:col-span-2' : ''}`}>
+          <label className="space-y-2"><span className="font-medium">{readable(key)}</span><small className="text-[var(--text-secondary)]">{key} · {Object.hasOwn(value, key) ? 'Requested override' : 'Native / selected profile default'}</small>
+            {field.applicable_when && <small>Applies when relax_accepted_designs is enabled; omitted values use native relaxation defaults.</small>}
+            {field.has_native_default && <small>Native default: {defaultSummary(field.native_default)}</small>}
+            {!field.has_native_default && field.runtime_fallback !== undefined && <small>{field.fallback_authority ? 'Native relaxation fallback when omitted' : 'Native runtime fallback when omitted'}: {defaultSummary(field.runtime_fallback)}</small>}
+            {supported ? control(key, field) : <span>Unsupported typed control / unresolved source type</span>}
+          </label>
+          {Object.hasOwn(value, key) && <button type="button" aria-label={`Reset ${key}`} onClick={() => { const next = { ...value }; delete next[key]; onChange(next) }}>Use native default</button>}
+        </div>
+      })}
+      </div>
+    </details>)}
   </section>
 }

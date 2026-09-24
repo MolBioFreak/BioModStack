@@ -36,8 +36,10 @@ def test_role_or_atom_inventory_change_rejected(after):
 
 def test_post_validation_maturation_never_inherits_validation():
     workflow = (SCRIPT.parents[1] / "workflows" / "antibody_denovo.nf").read_text()
-    assert "validation_status: 'unvalidated'" in workflow
-    assert "terminal_producer: 'ppiflow_maturation_post_validation'" in workflow
+    block = workflow[workflow.index('validated_structures = CollectValidatedMaturationOutputs.out.manifest'):]
+    assert "meta.validation_status = 'unvalidated'" in block
+    assert "meta.terminal_producer = 'ppiflow_maturation_post_validation'" in block
+    assert "meta.source_meta = sourceMeta" in block
 
 
 def test_post_flow_sequence_redesign_requires_explicit_selection():

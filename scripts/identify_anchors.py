@@ -13,8 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-import pyrosetta
-from pyrosetta import rosetta
+# Region/mask resolution is pure input preparation and needs no Rosetta runtime.
 
 
 def parse_chain_list(value):
@@ -374,6 +373,8 @@ def build_default_cdr_positions(antibody_chains, selected_loops=None):
 
 
 def main():
+    import pyrosetta
+
     parser = argparse.ArgumentParser(description="Identify interface anchors for PPIFlow")
     parser.add_argument("--pdb", required=True, help="Input complex PDB path")
     parser.add_argument("--antibody_chains", default="H,L",

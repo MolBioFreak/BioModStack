@@ -196,6 +196,18 @@
                     "description": "Design mode for maturation redesign constraints. Use 'inherit' to follow antibody_design_mode.",
                     "hidden": true
                 },
+                "maturation_repack_enabled": {
+                    "type": "boolean",
+                    "description": "Run selected side-chain repacking independently of partial flow."
+                },
+                "maturation_anchors_enabled": {
+                    "type": "boolean",
+                    "description": "Run selected anchor analysis independently of partial flow."
+                },
+                "maturation_flow_enabled": {
+                    "type": "boolean",
+                    "description": "Run partial flow only when selected."
+                },
                 "maturation_redesign_enabled": {
                     "type": "boolean",
                     "default": true,

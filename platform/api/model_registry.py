@@ -637,6 +637,7 @@ class ModelRegistry:
                     "file": isinstance(value, str),
                     "directory": isinstance(value, str),
                     "object": isinstance(value, dict),
+                    "array": isinstance(value, list),
                     "string_list": isinstance(value, list) and all(isinstance(item, str) for item in value),
                 }.get(wire_type, False)
                 if not valid_type:
@@ -1083,6 +1084,13 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
                                 else 'bms.blind-pose.selected.v1'),
             'qualification': 'unclassified',
             'design_count': 0,
+        }
+    elif reviewed and model_id == 'bindcraft2':
+        retrieval_authority = 'platform/api/services/bindcraft2_publication.py:read_published_native_results'
+        result_payload = {
+            'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/bindcraft2_publication.py:publish_native_results',
+            'publication_schema': 'bindcraft2.native-publication.v1',
         }
     elif result.analysis_contract_id is None:
         unresolved(model_id, 'result_contract', retrieval_authority,

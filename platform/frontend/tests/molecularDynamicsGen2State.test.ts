@@ -120,7 +120,7 @@ const gen2 = mdState as unknown as {
     ) => mdState.MolecularDynamicsForm;
     buildMolecularDynamicsLaunchIntent: (input: {
         form: mdState.MolecularDynamicsForm;
-        source: { source_ref: { kind: 'managed_fixture'; id: string }; identity: { sha256: string } };
+        source: Pick<mdState.MolecularDynamicsStartingStructureInspection, 'source_ref' | 'identity'>;
         profile: mdState.MolecularDynamicsChemistryProfile;
         catalogDigest: string;
         launchContextId?: string | null;
@@ -240,7 +240,7 @@ describe('Molecular Dynamics Gen 2 typed state', () => {
             form: fixed,
             source: {
                 source_ref: { kind: 'managed_fixture', id: '1aki-admitted-v1' },
-                identity: { sha256: sha('b') },
+                identity: inspection().identity,
             },
             profile: profile(),
             catalogDigest: sha('c'),
@@ -250,6 +250,8 @@ describe('Molecular Dynamics Gen 2 typed state', () => {
             'catalog_digest',
             'chemistry_profile_id',
             'chemistry_profile_sha256',
+            'execution_policy',
+            'execution_target_id',
             'expected_source_sha256',
             'launch_context_id',
             'name',
@@ -320,6 +322,9 @@ describe('Molecular Dynamics Gen 2 typed state', () => {
         );
         const preview = {
             schema_version: 'bms.md.launch-preview.v1',
+            execution_target_id: null,
+            execution_policy: { remote_result_policy: 'manual' },
+            execution_plan: null,
             source: { source_ref: sourceInspection.source_ref, ...sourceInspection.identity },
             chemistry: { profile_id: selectedProfile.id, profile_sha256: selectedProfile.profile_sha256, catalog_digest: sha('c'), admitted: true },
             requested_settings: {
@@ -373,6 +378,18 @@ describe('Molecular Dynamics Gen 2 typed state', () => {
             catalogDigest: sha('c'),
         });
         assert.equal(gen2.parseMolecularDynamicsLaunchPreview(preview, expectedIntent), preview);
+        const remotePreview = {
+            ...preview,
+            execution_target_id: 'vast:fixture',
+            execution_plan: {
+                plan_sha256: sha('f'),
+                source_identity: { revision: 'fixture-source', tree: 'fixture-tree' },
+                metadata: { static_components: [{ component_key: 'MD_GROMACS_REPLICA' }], dynamic_templates: [] },
+            },
+        };
+        assert.equal(gen2.parseMolecularDynamicsLaunchPreview(remotePreview, {
+            ...expectedIntent, execution_target_id: 'vast:fixture',
+        }), remotePreview);
         assert.throws(
             () => gen2.parseMolecularDynamicsLaunchPreview({
                 ...preview,

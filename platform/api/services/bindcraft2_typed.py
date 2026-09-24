@@ -69,8 +69,76 @@ def schema() -> dict:
                 else:
                     descriptor["unresolved_reason"] = "No source-backed JSON type"
     data["typed_evidence"] = evidence
-    data["coverage_status"] = "INCOMPLETE: eight system-owned inventory fields remain unresolved; in-memory Array mask has no portable typed request; not an enabled model"
+    data["nested_control_schemas"] = nested_control_schemas(data)
+    from services.bindcraft2_runtime import action_schema
+    data["native_actions"] = action_schema()
+    data["native_action_scope"] = {
+        "score": "Native coordinate scoring of an explicitly named structure within an owned campaign snapshot.",
+        "fetch-weights": "Installation-owned, not a scientific Job operation.",
+        "design": "campaign and resume use native design; presets and sweeps stay settings-owned.",
+    }
+    data["coverage_status"] = "Typed operator inventory with source-backed nested controls; system-owned fields and native in-memory Array masks remain separately identified. Launch availability is registry-owned."
     return data
+
+
+def nested_control_schemas(data: dict) -> dict:
+    """Portable control metadata for existing request semantics, without new defaults.
+
+    Types/defaults come from pinned registry signatures and the source-qualified
+    overlay. Omitted, explicit null, false, zero and empty lists stay distinct.
+    """
+    string = {'type': 'string'}
+    result = {
+        'targets': {'type': 'array', 'items': {'type': 'object', 'required': ['name', 'target_path'],
+            'properties': {key: {'type': 'number' if key == 'weight' else 'string',
+                'control': 'source' if key == 'target_path' else 'chains' if key == 'chains' else
+                           'residues' if key in ('hotspots', 'coldspots') else 'value'}
+                for key in data['target_fields']}, 'additionalProperties': False},
+            'source': 'bindcraft/settings.py:targets; bindcraft/protein_preparation.py'},
+        'aa_bias': {'type': 'object', 'properties': {aa: {'type': 'number'} for aa in 'ACDEFGHIKLMNPQRSTVWY'},
+                    'additionalProperties': False, 'source': 'bindcraft/settings.py; bindcraft/trajectory.py'},
+        'parameter_sweep': {'type': 'object', 'additionalProperties': False,
+            'source': 'bindcraft/parameter_sweep.py:parameter_sweep_arms', 'properties': {
+                'axes': {'type': 'array', 'items': string},
+                'levels': {'type': 'array', 'items': {'type': 'number'}},
+                'multiplier': {'type': 'number'}, 'max_arms': {'type': 'integer'},
+                'block_trajectories': {'type': 'integer'}}},
+    }
+    for name, items in {
+        'binder_lengths': {'type': 'integer'}, 'binder_shapes': {'type': 'array', 'items': string},
+        'validation_models': {'type': ['integer', 'string']}, 'multitarget_rounds_per_target': string,
+        'crop_fasta_sequence': {'type': 'integer'}, 'paratope_conformations': {'type': 'string', 'enum': data['paratope_conformations']},
+        **{name: {'type': 'string', 'enum': list(data['presets'][name])} for name in ('core', 'modality', 'target')},
+    }.items():
+        field = data['fields'][name]
+        result[name] = {'type': field['observed_types'], 'items': items,
+                        'source': field.get('source_evidence', 'pinned native settings/presets')}
+    for group in ('filters', 'losses'):
+        metrics = {}
+        for metric, registered in data['registered_metrics'][group].items():
+            params = {}
+            for name, descriptor in registered['params'].items():
+                prop = {'type': descriptor.get('request_types', []),
+                        'source': descriptor.get('source_evidence', registered.get('source', 'pinned registry signature'))}
+                if 'resolved_default' in descriptor:
+                    prop['default'] = descriptor['resolved_default']
+                elif descriptor['default_literal'] is not None:
+                    prop['default'] = descriptor['default_literal']
+                if 'native_default_encoding' in descriptor:
+                    prop['native_default_encoding'] = descriptor['native_default_encoding']
+                if 'unresolved_reason' in descriptor:
+                    prop['unresolved_reason'] = descriptor['unresolved_reason']
+                params[name] = prop
+            properties = {key: {'type': 'boolean' if key in ('higher', 'mandatory') else
+                                'number' if key == 'threshold' else 'string'}
+                          for key in data['nested_surfaces'][group][metric]['entry_keys'] if key != 'params'}
+            properties['params'] = {'type': 'object', 'properties': params, 'additionalProperties': False}
+            metrics[metric] = {'type': 'object', 'properties': properties, 'additionalProperties': False}
+            if group == 'filters':
+                metrics[metric]['required'] = ['threshold']
+        result[group] = {'type': 'object', 'properties': metrics, 'additionalProperties': False,
+                         'source': f'bindcraft/{"filters" if group == "filters" else "loss"}.py:registered metrics'}
+    return result
 
 
 def _kind(value: object) -> str:
@@ -221,9 +289,9 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
     return request
 
 
-def compile_typed(request: dict, project_folder: Path, resolve=None, sweep_arms=None) -> dict:
+def compile_typed(request: dict, project_folder: Path, resolve=None, sweep_arms=None, *, resume=False) -> dict:
     validated = validate_request(request)
-    compiled = compile_for_native(validated, project_folder, resolve, sweep_arms)
+    compiled = compile_for_native(validated, project_folder, resolve, sweep_arms, resume=resume)
     compiled["requested_settings"] = validated
     compiled["request_sha256"] = hashlib.sha256(_canonical(validated)).hexdigest()
     return compiled

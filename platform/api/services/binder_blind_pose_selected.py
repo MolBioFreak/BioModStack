@@ -46,7 +46,8 @@ def _source(path: str) -> tuple[Path, bytes]:
 
 def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: str,
                      binder_chains: dict[str, list[str]], target_chains: list[str],
-                     directory: Path) -> dict:
+                     directory: Path, source_identities: dict | None = None,
+                     target_context: dict | None = None) -> dict:
     """Snapshot an exact subset, independent target and v1 leaf manifest.
 
     `target_pdb` is a server-resolved target-state path, not a client path.
@@ -74,6 +75,9 @@ def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: 
         ) or set(chains) & set(target_chains):
             raise BlindPoseError('explicit distinct binder chains may not overlap target chains')
         path, content = _source(design.pdb_path)
+        artifact_digest = ((source_identities or {}).get(design.id) or {}).get('artifact_sha256')
+        if artifact_digest and hashlib.sha256(content).hexdigest() != artifact_digest:
+            raise BlindPoseError('Selected document bytes differ from its registered artifact')
         key = f'candidate-{index:04d}'
         filename = key + path.suffix.lower()
         selected.append({'candidate_key': key, 'source_pdb': filename, 'binder_chains': chains})
@@ -100,11 +104,15 @@ def prepare_selected(source_job: Job, designs: Sequence[Design], *, target_pdb: 
         (directory / target_name).write_bytes(target_bytes)
         manifest = {'schema_version': 1, 'target_chains': target_chains, 'candidates': selected}
         (directory / 'selection.json').write_text(json.dumps(manifest, sort_keys=True) + '\n')
+        from services.binder_diagnostic_selection import root_id
         binding = {'schema': SCHEMA, 'source_job_id': source_job.id,
+                   'lineage_root_job_id': root_id(source_job),
+                   'target_context': target_context or {},
                    'target_source_sha256': hashlib.sha256(target_bytes).hexdigest(),
                    'target_source_name': target_path.name, 'target_snapshot_name': target_name,
                    'candidates': [{'candidate_key': row['candidate_key'], 'design_id': design_id,
-                                   'source_sha256': digest, 'source_pdb': row['source_pdb'], 'binder_chains': row['binder_chains']}
+                                   'source_sha256': digest, 'source_pdb': row['source_pdb'], 'binder_chains': row['binder_chains'],
+                                   'source_identity': (source_identities or {}).get(design_id, {})}
                                   for row, (_, _, design_id, digest) in zip(selected, snapshots)],
                    'target_chains': target_chains,
                    'component_sha256': {row['candidate_key']: hashlib.sha256(
@@ -286,4 +294,8 @@ async def read_selected(job: Job, session) -> dict:
         if (a.attempt, a.storage_path, a.sha256, a.bytes) != (receipt['attempt'], str(Path(job.output_dir).absolute() / name), entry['sha256'], entry['bytes']):
             raise BlindPoseError('blind pose artifact registry disagrees')
     return {'publication': receipt, 'native': native,
-            'records': [{**row, 'design_id': next(c['design_id'] for c in receipt['binding']['candidates'] if c['candidate_key'] == row['candidate_key'])} for row in native['records']]}
+            'source_job_id': receipt['binding']['source_job_id'],
+            'lineage_root_job_id': receipt['binding'].get('lineage_root_job_id'),
+            'target_context': receipt['binding'].get('target_context'),
+            'records': [{**row, **{key: value for key, value in next(c for c in receipt['binding']['candidates'] if c['candidate_key'] == row['candidate_key']).items()
+                                    if key in ('design_id', 'source_identity')}} for row in native['records']]}

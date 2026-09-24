@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Literal
 
 from services.bindcraft2_native_results import native_result_page
-from services.bindcraft2_publication import read_published_native_results
+from services.bindcraft2_publication import read_published_native_results, native_workbench_page
 
 
 async def read_bindcraft2_result_page(
@@ -22,4 +22,7 @@ async def read_bindcraft2_result_page(
     # only for display; the returned page states its actual arm identity.
     if arm is None and publication.arms and all(item.name is not None for item in publication.arms):
         arm = publication.arms[0].name
-    return native_result_page(publication, arm=arm, stage=stage, offset=offset, limit=limit)
+    return native_workbench_page(
+        native_result_page(publication, arm=arm, stage=stage, offset=offset, limit=limit),
+        _receipt,
+    )

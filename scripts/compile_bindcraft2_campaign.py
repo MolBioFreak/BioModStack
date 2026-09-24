@@ -31,7 +31,8 @@ def main() -> None:
     from bindcraft.settings import load_settings
     from bindcraft.parameter_sweep import parameter_sweep_arms
     request = json.load(sys.stdin)
-    compiled = compile_typed(request, Path(sys.argv[1]), load_settings, parameter_sweep_arms)
+    compiled = compile_typed(request, Path(sys.argv[1]), load_settings, parameter_sweep_arms,
+                             resume='--resume' in sys.argv[2:])
     print(json.dumps(receipt_json(compiled), sort_keys=True, allow_nan=False))
 
 

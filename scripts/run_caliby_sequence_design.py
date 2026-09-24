@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--self-consistency-num-models", type=int, default=5)
     parser.add_argument("--self-consistency-num-recycles", type=int, default=3)
     parser.add_argument("--self-consistency-use-multimer", type=parse_bool, default=False)
+    parser.add_argument("--source-identity-json", default="")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
@@ -92,9 +93,29 @@ def main() -> None:
         prefix="caliby",
         source="caliby",
         stage_mode="sequence_design",
-        extra_metadata={"caliby_model": args.model_name},
+        extra_metadata={"caliby_model": args.model_name, "validation_status": "unvalidated",
+                        "terminal_producer": "caliby",
+                        "effective_settings": {key: value for key, value in vars(args).items()
+                                               if key not in {"input_dir", "output_dir"}}},
         self_consistency=self_consistency,
     )
+
+    if args.source_identity_json:
+        sources = json.loads(Path(args.source_identity_json).read_text())
+        by_native_key = {Path(row["staged_name"]).stem: row for row in sources}
+        # Native Caliby sets example_id = Path(input_pdb).stem at its dataset
+        # producer. Cleaning preserves that key (existing constraint owner).
+        for item in manifest:
+            metadata_path = Path(item["metadata_path"])
+            record = json.loads(metadata_path.read_text())
+            source = by_native_key.get(str(item["example_id"]))
+            record["selected_source"] = source
+            if source:
+                source_meta = source.get("source_meta") or {}
+                record["source_document_id"] = source_meta.get("id")
+                record["source_meta"] = source_meta
+            metadata_path.write_text(json.dumps(record, indent=2))
+        Path("caliby_selection.json").write_text(json.dumps(sources, indent=2))
 
     (output_dir / "caliby_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     jsonl_path = output_dir / "caliby_metadata.jsonl"

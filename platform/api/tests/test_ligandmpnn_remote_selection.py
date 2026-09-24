@@ -12,7 +12,8 @@ from services.remote_execution.bundle import (_stage_ligandmpnn_selection, _rewr
 from test_ligandmpnn_interface_leaf import fixture, stager
 
 
-def test_remote_selected_documents_and_command_are_relocated(tmp_path, monkeypatch):
+@pytest.mark.parametrize('original_format', [None, '.cif', '.pdb'])
+def test_remote_selected_documents_and_command_are_relocated(tmp_path, monkeypatch, original_format):
     source, _, native = fixture(tmp_path)
     monkeypatch.setattr(publication, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     chosen = InterfaceContextSelection.model_validate({
@@ -21,7 +22,14 @@ def test_remote_selected_documents_and_command_are_relocated(tmp_path, monkeypat
         'settings': {'binder_chain': 'B', 'target_chain': 'A',
                      'target_patch': native['target_patch'], 'seed': 7,
                      'samples': 1, 'temperature': 0.1}})
-    binding = publication.materialize(chosen, {native['candidate_id']: source.read_bytes()})
+    candidate_id = native['candidate_id']
+    original_bytes = b'data_original_transport_fixture\n#\n' if original_format == '.cif' else source.read_bytes()
+    identity = {'owner_job_id': 'source', 'format': original_format,
+                'sha256': hashlib.sha256(original_bytes).hexdigest(),
+                'artifact_id': 'producer-artifact', 'target_state': 'on-target'}
+    binding = publication.materialize(chosen, {candidate_id: source.read_bytes()},
+        source_identities={candidate_id: identity} if original_format else None,
+        original_sources={candidate_id: original_bytes} if original_format else None)
     original_manifest = Path(binding['manifest']).read_bytes()
     original_request = Path(binding['sources'][native['candidate_id']]['request']).read_bytes()
     remote = tmp_path / 'worker' / 'bundle' / 'inputs' / 'ligand-selection'
@@ -31,6 +39,11 @@ def test_remote_selected_documents_and_command_are_relocated(tmp_path, monkeypat
     # The worker path is simulated by transferring precisely the inventoried tree.
     from shutil import copytree
     copytree(staged, remote)
+    if original_format:
+        original = Path(binding['sources'][candidate_id]['original']['snapshot_path'])
+        relative = original.relative_to(Path(binding['manifest']).parent)
+        assert (remote / relative).read_bytes() == original_bytes
+        assert original.read_bytes() == original_bytes
     roster, = json.loads((remote / 'selected.json').read_text())
     request = json.loads(Path(roster['request_path']).read_text())
     assert request['structure_path'] == roster['source_path']

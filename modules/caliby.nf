@@ -80,26 +80,60 @@ process RunCaliby {
     """
 }
 
+def calibyBinderSamplingOverrides(params) {
+    def raw = params.get('caliby_sampling_overrides_json')
+    def values = raw ? new groovy.json.JsonSlurper().parseText(raw.toString()) : [:]
+    def nativeKeys = [
+        caliby_verbose: ['verbose'],
+        caliby_gaussian_n_conformers: ['gaussian_conformers_cfg', 'n_conformers'],
+        caliby_gaussian_noise_std: ['gaussian_conformers_cfg', 'noise_std'],
+        caliby_potts_regularization: ['potts_sampling_cfg', 'regularization'],
+        caliby_potts_sweeps: ['potts_sampling_cfg', 'potts_sweeps'],
+        caliby_potts_proposal: ['potts_sampling_cfg', 'potts_proposal'],
+        caliby_potts_rejection_step: ['potts_sampling_cfg', 'rejection_step'],
+        caliby_potts_only_cond: ['potts_sampling_cfg', 'potts_only_cond'],
+        caliby_scn_num_steps: ['scn_packing_cfg', 'num_steps'],
+        caliby_scn_step_scale: ['scn_packing_cfg', 'step_scale']
+    ]
+    nativeKeys.each { key, path ->
+        if (params.get(key) != null) {
+            if (path.size() == 1) values[path[0]] = params[key]
+            else {
+                if (!(values[path[0]] instanceof Map)) values[path[0]] = [:]
+                values[path[0]][path[1]] = params[key]
+            }
+        }
+    }
+    return groovy.json.JsonOutput.toJson(values)
+}
+
 process RunCalibyBinder {
     label 'Caliby'
     label 'gpu'
 
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_metadata.jsonl"
+    publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_constraints.csv"
+    publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_selection.json"
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
-    path(pdb_files)
+    tuple path(pdb_files), path(source_identity)
 
     output:
     path("results/*.pdb"), emit: pdbs
     path("results/generator_*.json"), emit: jsons
     path("caliby_metadata.jsonl"), emit: metadata
+    path("caliby_constraints.csv"), emit: constraints
+    path("caliby_selection.json"), emit: selection, optional: true
     path("caliby_binder.log"), emit: log
 
     script:
     // Parent must resolve exact roles from the selected structure/document. Never
     // infer binder A or target B from chain order or a generating model name.
+    def samplingOverrides = calibyBinderSamplingOverrides(params)
+    def sourceArg = source_identity ? "--source-identity-json '${source_identity}'" : ""
     def binderChains = params.get('binder_chains')
     def targetChains = params.get('target_chains')
     if (!binderChains || !targetChains) {
@@ -113,7 +147,10 @@ process RunCalibyBinder {
         --out-csv caliby_constraints.csv \\
         --binder-chains "${binderChains}" \\
         --target-chains "${targetChains}" \\
-        --design-positions "${params.get('caliby_design_positions') ?: ''}"
+        --design-positions "${params.get('caliby_design_positions') ?: ''}" \\
+        --fixed-pos-override-seq "${params.get('caliby_fixed_pos_override_seq') ?: ''}" \\
+        --pos-restrict-aatype "${params.get('caliby_pos_restrict_aatype') ?: ''}" \\
+        --symmetry-pos "${params.get('caliby_symmetry_pos') ?: ''}"
 
     python3 ${params.code_root}/scripts/run_caliby_sequence_design.py \\
         --input-dir ./ \\
@@ -130,7 +167,7 @@ process RunCalibyBinder {
         --self-consistency-num-models ${params.caliby_self_consistency_num_models ?: 5} \\
         --self-consistency-num-recycles ${params.caliby_self_consistency_num_recycles ?: 3} \\
         --self-consistency-use-multimer "${params.caliby_self_consistency_use_multimer ?: false}" \\
-        --sampling-overrides-json '${params.caliby_sampling_overrides_json ?: ''}' \\
+        --sampling-overrides-json '${samplingOverrides}' ${sourceArg} \\
         2>&1 | tee caliby_binder.log
 
     cp results/caliby_metadata.jsonl caliby_metadata.jsonl

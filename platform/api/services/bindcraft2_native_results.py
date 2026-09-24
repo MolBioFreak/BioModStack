@@ -225,6 +225,13 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
                 retained_design = attempt_sha = state = primary = variant = binder = target = None
                 if stage in ("3_Ranked", "accepted", "2_Refolded") and path.suffix.lower() in (".cif", ".mmcif"):
                     stamp = _cif_metadata(path)
+                    # State/chain annotations are useful even when the retained
+                    # association is absent; they alone never create a Design.
+                    state = stamp.get("bms_target_state") or None
+                    primary = stamp.get("bms_primary_target_state") or None
+                    variant = stamp.get("bms_structure_variant") or None
+                    binder = stamp.get("binder_chains") or None
+                    target = stamp.get("target_chains") or None
                     design = stamp.get("design")
                     if design in retained_by_name:
                         row = retained_by_name[design]
@@ -240,18 +247,13 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
                                 raise NativeResultError(f"contradictory retained CIF metadata: {path}")
                             if row.scored_design is not None and row.attempt_sha256 is not None:
                                 retained_design, attempt_sha = design, row.attempt_sha256
-                                state = stamp.get("bms_target_state") or None
-                                primary = stamp.get("bms_primary_target_state") or None
-                                variant = stamp.get("bms_structure_variant") or None
-                                binder = stamp.get("binder_chains") or None
-                                target = stamp.get("target_chains") or None
                                 if (state or primary or variant) and not (state and primary and variant in ("native", "relaxed")):
                                     raise NativeResultError(f"incomplete retained CIF state identity: {path}")
-                                if variant == "relaxed" and stage != "2_Refolded":
+                                if variant == "relaxed" and stage != "2_Refolded" and "relaxed" not in path.relative_to(folder).parts[:-1]:
                                     raise NativeResultError(f"contradictory relaxed CIF location: {path}")
                                 if variant == "native" and stage == "2_Refolded":
                                     raise NativeResultError(f"contradictory native CIF location: {path}")
-                    elif stamp.get("bms_scored_candidate") or stamp.get("bms_attempt_sha256"):
+                    elif stage in ("3_Ranked", "accepted") and retained and (stamp.get("bms_scored_candidate") or stamp.get("bms_attempt_sha256")):
                         raise NativeResultError(f"orphan producer-stamped CIF: {path}")
                 documents.append(NativeDocument(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest(),
                                                 path.suffix.lower().lstrip("."), retained_design, attempt_sha,
@@ -273,7 +275,10 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
 
     trajectories = _rows(table("1_Trajectories", "trajectories.csv", "!_Trajectories.csv"), name, "trajectory")
     draws = _rows(table("2_Refolded", "candidates.csv", "!_Refolded.csv"), name, "draw")
-    retained = _rows(table("3_Ranked", "ranked.csv", "!_Ranked.csv"), name, "retained")
+    retained_path = table("3_Ranked", "ranked.csv", "!_Ranked.csv")
+    if not modern and not retained_path.exists():
+        retained_path = folder / "accepted.csv"
+    retained = _rows(retained_path, name, "retained")
     trajectory_hashes: dict[str, list[str]] = {}
     for row in trajectories:
         if row.recipe_hash:
@@ -332,7 +337,7 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
                 raise NativeResultError(f"contradictory scored/retained producer identity: {row.design}")
             draw = draw_by_name.get(scored)
             source = trajectory_by_name.get(trajectory)
-            if draw is not None and (not draw.trajectory_design or not draw.attempt_sha256):
+            if draw is None or source is None or not draw.trajectory_design or not draw.attempt_sha256:
                 qualified_retained.append(row)
                 continue
             if draw is not None and draw.attempt_sha256 != digest:

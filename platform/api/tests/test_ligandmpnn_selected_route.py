@@ -189,9 +189,12 @@ async def test_generic_bc2_cif_derivative_preserves_original_identity(tmp_path, 
         binding = request.params[publication.KEY]
         publication.verify_binding(binding)
         identity = binding['sources']['chosen']['original']
-        assert identity == {'path': str(native), 'sha256': hashlib.sha256(original).hexdigest(),
-                            'format': '.cif', 'owner_job_id': 'bc2',
-                            'primary_artifact_id': 'native-artifact'}
+        assert {key: identity[key] for key in ('path', 'sha256', 'format', 'owner_job_id', 'primary_artifact_id')} == {
+            'path': str(native), 'sha256': hashlib.sha256(original).hexdigest(),
+            'format': '.cif', 'owner_job_id': 'bc2', 'primary_artifact_id': 'native-artifact'}
+        assert identity['artifact_id'] == 'native-artifact'
+        assert identity['lineage_root_job_id'] == 'bc2'
+        assert Path(identity['snapshot_path']).read_bytes() == original
         assert binding['sources']['chosen']['sha256'] != identity['sha256']
         assert ' B ' in Path(binding['sources']['chosen']['path']).read_text()
         return SimpleNamespace(id='child')

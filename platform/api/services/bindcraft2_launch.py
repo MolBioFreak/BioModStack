@@ -52,7 +52,7 @@ def _identity(sources: list[tuple[str, int | None, Path]]) -> list[dict]:
             for role, index, path in sources]
 
 
-def _native_compile(request: dict, destination: Path, *, image: Path = IMAGE,
+def _native_compile(request: dict, destination: Path, *, resume: bool = False, image: Path = IMAGE,
                     script: Path = SCRIPT) -> dict:
     if not image.is_file():
         raise ValueError('Pinned BC2 image is unavailable')
@@ -71,10 +71,12 @@ def _native_compile(request: dict, destination: Path, *, image: Path = IMAGE,
         for root in get_allowed_roots().values():
             if root.exists() and scaffold.is_relative_to(root.resolve()):
                 binds.add(str(root))
-    command = ['apptainer', 'exec']
+    command = ['apptainer', 'exec', '--no-home', '--env', 'JAX_PLATFORMS=cpu']
     for root in sorted(binds):
         command.extend(['--bind', f'{root}:{root}'])
     command.extend([str(image), 'python3', str(script), str(destination)])
+    if resume:
+        command.append('--resume')
     completed = subprocess.run(command, input=json.dumps(request, allow_nan=False), text=True,
                                capture_output=True, timeout=120, check=False)
     if completed.returncode:
@@ -96,7 +98,9 @@ def _materialized(request: dict, sources: list[tuple[str, int | None, Path]],
                 if staged.read_bytes() != path.read_bytes():
                     raise ValueError('Existing BC2 source snapshot differs')
             else:
-                shutil.copyfile(path, staged)
+                partial = staged.with_name(staged.name + '.partial')
+                shutil.copyfile(path, partial)
+                partial.replace(staged)
         if role == 'target':
             mapped['targets'][index]['target_path'] = str(staged)
         else:
@@ -164,12 +168,79 @@ def materialize_campaign(settings: dict, output_dir: Path, *, preview_digest: st
         raise ValueError('Existing BC2 compilation differs')
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     if not receipt_path.exists():
-        receipt_path.write_bytes(data)
+        partial = receipt_path.with_suffix('.json.partial')
+        partial.write_bytes(data)
+        partial.replace(receipt_path)
     return {'bc2_compilation': str(receipt_path), 'bc2_campaign_dir': str(destination),
             'bindcraft2_settings': settings, 'bc2_effective_sha256': result['effective_sha256'],
             'bc2_effective_settings': result['effective_settings'],
             'bc2_source_identities': result['sources'], 'bc2_request_sha256': result['request_sha256'],
             'bc2_sweep_budget': result['sweep_budget']}
+
+
+def materialize_native_action(source_output_dir: Path, output_dir: Path, *, operation: str,
+                              options: dict | None = None, source_job_id: str | None = None,
+                              compiler: Callable = _native_compile) -> dict:
+    """Snapshot native state into an existing owner-allocated child Job.
+
+    The Jobs owner resolves source_job_id and its output directory. No arbitrary
+    source directory is accepted from a scientific request. Re-entry after restart
+    reads the durable child receipt and never overwrites progressed native state.
+    """
+    from services.bindcraft2_runtime import validate_action_options
+    options = validate_action_options(operation, {} if options is None else options)
+    source = Path(source_output_dir).resolve() / 'bindcraft2'
+    destination = Path(output_dir).resolve() / 'bindcraft2'
+    root = get_results_dir().resolve()
+    if not source.is_relative_to(root) or not destination.is_relative_to(root):
+        raise ValueError('BC2 lifecycle outputs must be inside managed results')
+    if source == destination or destination.is_relative_to(source) or source.is_relative_to(destination):
+        raise ValueError('BC2 child action must not modify the source campaign')
+    action = {'operation': operation, 'options': options, 'source_job_id': source_job_id}
+    receipt_path = destination / 'compilation.json'
+    if receipt_path.exists():
+        compiled = json.loads(receipt_path.read_text())
+        if compiled.get('native_action') != action:
+            raise ValueError('Existing BC2 child operation differs')
+        read_campaign_receipt(output_dir)
+    else:
+        original = json.loads((source / 'compilation.json').read_text())
+        read_campaign_receipt(source_output_dir)
+        # Copy native output/state as a tree, including hidden sweep/dedup state.
+        # The published source is never used as an execution directory.
+        for folder in ('campaign', 'sources'):
+            source_folder = source / folder
+            if source_folder.exists():
+                if not source_folder.resolve().is_relative_to(source):
+                    raise ValueError('BC2 snapshot escapes the source job')
+                for path in source_folder.rglob('*'):
+                    if path.is_symlink() and not path.resolve().is_relative_to(source):
+                        raise ValueError('BC2 snapshot escapes the source job')
+                shutil.copytree(source_folder, destination / folder, dirs_exist_ok=True)
+        mapped = json.loads(json.dumps(original['requested_settings']))
+        native_source_root = Path(original['native_request']['project_folder']).parent
+        for index, row in enumerate(original['native_request'].get('targets', [])):
+            relative = Path(row['target_path']).relative_to(native_source_root)
+            mapped['targets'][index]['target_path'] = str(destination / relative)
+        if original['native_request'].get('binder_scaffold'):
+            relative = Path(original['native_request']['binder_scaffold']).relative_to(native_source_root)
+            mapped['binder_scaffold'] = str(destination / relative)
+        result = _compile(mapped, destination, copy=True,
+                          compiler=lambda request, campaign: compiler(request, campaign, resume=operation == 'resume'))
+        compiled = result['compiled']
+        compiled['requested_settings'] = original['requested_settings']
+        compiled['request_sha256'] = original['request_sha256']
+        compiled['native_action'] = action
+        compiled['source_compilation_sha256'] = hashlib.sha256((source / 'compilation.json').read_bytes()).hexdigest()
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        partial = receipt_path.with_suffix('.json.partial')
+        partial.write_bytes(_canonical(compiled) + b'\n')
+        partial.replace(receipt_path)
+    return {'bc2_compilation': str(receipt_path), 'bc2_campaign_dir': str(destination),
+            'bindcraft2_settings': compiled['requested_settings'],
+            'bc2_effective_settings': compiled['effective_settings'],
+            'bc2_effective_sha256': compiled['effective_sha256'],
+            'bc2_request_sha256': compiled['request_sha256'], 'bc2_sweep_budget': compiled['sweep_budget']}
 
 
 def read_campaign_receipt(output_dir: Path) -> dict:
@@ -180,8 +251,11 @@ def read_campaign_receipt(output_dir: Path) -> dict:
     compiled = json.loads(path.read_text())
     if compiled.get('upstream_commit') != PIN or compiled.get('effective_sha256') != hashlib.sha256(_canonical(compiled['effective_settings'])).hexdigest():
         raise ValueError('BC2 persisted effective settings digest differs')
-    if compiled['native_request'].get('project_folder') != str(path.parent / 'campaign'):
+    if (compiled['native_request'].get('project_folder') != str(path.parent / 'campaign')
+            and compiled.get('placement', {}).get('original_project_folder') != str(path.parent / 'campaign')):
         raise ValueError('BC2 receipt is not bound to this output')
     return {'upstream_commit': PIN, 'requested_settings': compiled['requested_settings'],
             'effective_settings': compiled['effective_settings'], 'effective_sha256': compiled['effective_sha256'],
-            'request_sha256': compiled['request_sha256'], 'sweep_budget': compiled['sweep_budget']}
+            'request_sha256': compiled['request_sha256'], 'sweep_budget': compiled['sweep_budget'],
+            **({'placement': compiled['placement']} if 'placement' in compiled else {}),
+            **({'native_action': compiled['native_action']} if 'native_action' in compiled else {})}

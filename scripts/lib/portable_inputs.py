@@ -128,6 +128,13 @@ def native_reference_fields(document, format):
         closure = inp.get("topology_closure", {})
         for i, item in enumerate(closure.get("files", [])):
             yield ("input", "topology_closure", "files", i, "path"), str(Path(closure["root"]) / item["path"]), "topology-include"
+    elif format == 'bc2-compilation':
+        # Only executable source reads, not requested_settings provenance or
+        # project_folder (a native output destination), belong to input closure.
+        request = document.get('native_request', {})
+        for i, target in enumerate(request.get('targets', [])):
+            yield from field(target, 'target_path', ('native_request', 'targets', i), 'target')
+        yield from field(request, 'binder_scaffold', ('native_request',), 'scaffold')
     elif format == "boltz-authority":
         for source in document.get("input_files", {}):
             yield ("input_files", source), source, "input"
@@ -186,6 +193,8 @@ def bind_native_document(document, format, *, owner=None):
 
 def _format(document, path):
     if isinstance(document, dict):
+        if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
+            return 'bc2-compilation'
         if str(document.get("schema", "")).startswith("bms.md.job."):
             return "md-job"
         if document.get("schema_name") == "cm_request" and "request_sha256" in document:
@@ -299,11 +308,14 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         keys.update({'target_pdb', 'selected_input_dir', 'selected_input_manifest',
                      'rfantibody_input_pdbs', 'fampnn_collected_pdbs',
                      'manual_mutation_fixed_positions_json'})
-    if mode == 'maturation_child' and model_id == 'template_antibody_denovo':
+    if (model_id, mode) in {('template_antibody_denovo', 'maturation_child'),
+                           ('binder_refinement', 'refine'), ('caliby_binder', 'design')}:
         keys.add('source_identity_json')
         for index, path in enumerate(str(params.get('pdb_paths') or '').split(',')):
             if path.strip():
                 visit(path.strip(), None, ('pdb_paths', index))
+    if model_id == 'bindcraft2':
+        keys.add('bc2_compilation')
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
     for key in sorted(keys & params.keys()):

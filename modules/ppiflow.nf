@@ -34,7 +34,12 @@ process IdentifyAnchorResidues {
     def antigenChains = params.antigen_chains ?: ''
     def energyThreshold = paramValueOrDefault(params, 'maturation_anchor_threshold', -5.0)
     def distanceCutoff = paramValueOrDefault(params, 'maturation_anchor_distance_cutoff', 12.0)
-    def enrichmentEnabled = params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true
+    def enrichmentEnabled = params.get('maturation_repack_enabled') != null ? params.maturation_repack_enabled : (params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true)
+    def skipAnchors = params.get('maturation_anchors_enabled') == false ? '--skip_anchor_analysis' : ''
+    // Without a selected flow operation there is no movable backbone region to
+    // exclude from generic anchor analysis. Legacy antibody preparation retains
+    // its original region semantics.
+    def skipRegions = ((params.get('binder_chains') != null && params.get('maturation_flow_enabled') != true) || (params.get('maturation_flow_enabled') == false && params.get('maturation_redesign_enabled') != true && params.get('maturation_anchors_enabled') == false)) ? '--skip_region_resolution' : ''
     def requireAnchors = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
     def rotamerShellDistance = paramValueOrDefault(params, 'ppiflow_rotamer_shell_distance', paramValueOrDefault(params, 'ppiflow_rotamer_shell_cutoff', 20.0))
     def relaxAntibodyBackboneShell = paramValueOrDefault(params, 'ppiflow_relax_antibody_backbone_shell', false)
@@ -80,7 +85,7 @@ JSON
         --output_positions "${meta.id}_ppiflow_positions.txt" \\
         --output_cdr_positions "${meta.id}_cdr_positions.txt" \\
         --output_cdr_positions_by_loop "${meta.id}_cdr_positions_by_loop.json" \\
-        \${enrichmentArgs}
+        \${enrichmentArgs} ${skipAnchors} ${skipRegions}
 
     anchorCount=\$("\${PYTHON_BIN}" - <<'PY'
 import json
@@ -209,7 +214,7 @@ process RunPartialFlow {
         lightChainArg="--light_chain \${lightChain}"
     fi
 
-    nativeCommand=("\${PYTHON_BIN}" "\${ppiflow_script}")
+    nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/ppiflow_sample_identity.py" "\${ppiflow_script}")
     if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
             --producer ppiflow --root /app/ppiflow --reference "${original_complex_pdb}"
@@ -233,36 +238,11 @@ process RunPartialFlow {
         --name "${meta.id}"
 
 "\${PYTHON_BIN}" - <<'PY'
-from pathlib import Path
-import json
-import shutil
-
-pdbs = sorted(Path("ppiflow_out").rglob("*.pdb"))
-if not pdbs:
-    raise SystemExit("No PPIFlow PDB outputs found")
-expected = int("${samplesPerTarget}")
-if len(pdbs) != expected:
-    raise SystemExit(f"[PPIFlow] ERROR: expected {expected} output PDBs but found {len(pdbs)} in ppiflow_out")
-out_dir = Path("ppiflow_backbones")
-out_dir.mkdir(exist_ok=True)
-manifest = []
-for i, pdb in enumerate(pdbs):
-    out_name = f"${meta.id}_ppiflow_sample{i}.pdb"
-    shutil.copy2(pdb, out_dir / out_name)
-    comparison_path = None
-    if "${params.get('core_protein_scientific_contract') ?: ''}" == "1":
-        comparison = Path(str(pdb) + '.comparison.json')
-        if not comparison.is_file():
-            raise ValueError('native comparison publication missing')
-        comparison_path = str((out_dir / (out_name + '.comparison.json')).resolve())
-        shutil.copy2(comparison, comparison_path)
-    manifest.append({
-        "comparison_path": comparison_path,
-        "sample_index": i,
-        "name": out_name,
-        "path": str((out_dir / out_name).resolve()),
-    })
-Path("ppiflow_backbones_manifest.json").write_text(json.dumps(manifest, indent=2))
+import sys
+sys.path.insert(0, "${params.code_root}/scripts")
+from ppiflow_sample_identity import collect
+collect("ppiflow_out", "ppiflow_backbones", "${meta.id}", "ppiflow_backbones_manifest.json",
+        comparison="${params.get('core_protein_scientific_contract') ?: ''}" == "1")
 PY
     """
 }
@@ -351,8 +331,11 @@ process RunMaturationFAMPNN {
 
     script:
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
-    def temperature = paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
-    def numSteps = paramValueOrDefault(params, 'maturation_redesign_steps', paramValueOrDefault(params, 'fampnn_num_steps', 100))
+    def genericBinder = params.get('binder_chains') != null
+    def temperature = genericBinder ? paramValueOrDefault(params, 'fampnn_temperature', 0.1) : paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
+    def numSteps = genericBinder ? paramValueOrDefault(params, 'fampnn_num_steps', 100) : paramValueOrDefault(params, 'maturation_redesign_steps', paramValueOrDefault(params, 'fampnn_num_steps', 100))
+    def batchSize = genericBinder ? paramValueOrDefault(params, 'fampnn_batch_size', 16) : 1
+    def sequenceCount = genericBinder ? paramValueOrDefault(params, 'seqs_per_design', 1) : 1
     def checkpointPreset = (params.fampnn_checkpoint ?: 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path ?: '').toString().trim()
     def checkpointMap = [
@@ -378,11 +361,11 @@ process RunMaturationFAMPNN {
             --producer fampnn --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py)
     fi
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 "\${nativeCommand[@]}" \\
-        batch_size=1 \\
+        batch_size=${batchSize} \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
         fixed_pos_csv=${csv} \\
-        num_seqs_per_pdb=1 \\
+        num_seqs_per_pdb=${sequenceCount} \\
         pdb_dir="./" \\
         presort_by_length=true \\
         psce_threshold=${paramValueOrDefault(params, 'fampnn_psce_threshold', 0.3)} \\

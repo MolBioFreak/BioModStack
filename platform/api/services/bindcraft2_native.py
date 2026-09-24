@@ -32,7 +32,7 @@ def _canonical(value: object) -> bytes:
 
 def compile_for_native(request: dict, project_folder: Path,
                        resolve: Callable[[dict], dict] | None = None,
-                       sweep_arms: Callable[[dict], tuple] | None = None) -> dict:
+                       sweep_arms: Callable[[dict], tuple] | None = None, *, resume: bool = False) -> dict:
     """Resolve with upstream's own settings code and bind a finite job-owned campaign.
 
     The entire supplied native request is passed through unchanged, except system-owned
@@ -50,12 +50,12 @@ def compile_for_native(request: dict, project_folder: Path,
         from importlib import import_module
         resolve = getattr(import_module("bindcraft.settings"), "load_settings")
     project_folder = Path(project_folder).resolve()
-    native = {**request, "project_folder": str(project_folder), "resume": False}
+    native = {**request, "project_folder": str(project_folder), "resume": resume}
     effective = resolve(native)
     if not isinstance(effective, dict):
         raise ValueError("native resolver did not return settings")
     if (effective.get("max_trajectories") != limit or effective.get("project_folder") != str(project_folder)
-            or effective.get("resume") is not False):
+            or effective.get("resume") is not resume):
         raise ValueError("native resolution changed system-bound budget, resume or campaign directory")
     arms = ()
     if effective.get("parameter_sweep"):
@@ -72,6 +72,46 @@ def compile_for_native(request: dict, project_folder: Path,
             "effective_settings": effective, "sweep_budget": {"arms": arm_count, "per_arm": per_arm,
             "aggregate_allowance": allowance},
             "effective_sha256": hashlib.sha256(_canonical(effective)).hexdigest()}
+
+
+def relocate_compilation(compiled: dict, destination: Path) -> dict:
+    """Rebind only declared placement paths; preserve the operator/science receipt.
+
+    Worker transport carries an untouched preparation tree. This pure operation
+    creates its execution receipt at the writable output root; native re-resolution
+    in prepare_campaign still verifies all effective settings and the budget.
+    """
+    destination = Path(destination).resolve()
+    if hashlib.sha256(_canonical(compiled['effective_settings'])).hexdigest() != compiled.get('effective_sha256'):
+        raise ValueError('BC2 effective settings digest differs before relocation')
+    original = compiled['native_request']
+    old_root = Path(original['project_folder']).parent
+    paths = {original['project_folder']: str(destination / 'campaign')}
+    for row in original.get('targets', []):
+        path = Path(row['target_path'])
+        paths[str(path)] = str(destination / path.relative_to(old_root))
+    if original.get('binder_scaffold'):
+        path = Path(original['binder_scaffold'])
+        paths[str(path)] = str(destination / path.relative_to(old_root))
+
+    def mapped(value):
+        if isinstance(value, dict):
+            return {key: mapped(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [mapped(item) for item in value]
+        return paths.get(value, value) if isinstance(value, str) else value
+
+    result = {**compiled, 'native_request': mapped(original),
+              'effective_settings': mapped(compiled['effective_settings'])}
+    result['effective_sha256'] = hashlib.sha256(_canonical(result['effective_settings'])).hexdigest()
+    if original['project_folder'] != str(destination / 'campaign'):
+        # request_sha256 remains the exact operator scientific identity. The
+        # original effective digest records where that request was compiled.
+        result['placement'] = compiled.get('placement') or {
+            'original_project_folder': original['project_folder'],
+            'original_effective_sha256': compiled['effective_sha256'],
+        }
+    return result
 
 
 def write_compilation(compiled: dict, destination: Path) -> None:

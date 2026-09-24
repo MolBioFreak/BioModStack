@@ -299,6 +299,8 @@ def main() -> None:
         help="Allow FastRelax backbone movement for antibody residues in the enrichment shell. Default is side-chain-only enrichment.",
     )
     parser.add_argument("--require_anchors", action="store_true", help="Fail if no non-movable anchors are found")
+    parser.add_argument("--skip_anchor_analysis", action="store_true")
+    parser.add_argument("--skip_region_resolution", action="store_true")
     args = parser.parse_args()
 
     antibody_chains = parse_chain_list(args.antibody_chains)
@@ -325,7 +327,7 @@ def main() -> None:
             raise SystemExit(f"[PPIFlow] Antigen chain role ambiguous: {sorted(candidates)}")
         antigen_chains = sorted(candidates)
 
-    ppiflow_positions, all_cdr_positions, err = build_ppiflow_region_spec(
+    ppiflow_positions, all_cdr_positions, err = ("", "", None) if args.skip_region_resolution else build_ppiflow_region_spec(
         args.pdb,
         antibody_chains,
         region_mode,
@@ -335,11 +337,11 @@ def main() -> None:
     )
     if err:
         print(f"[PPIFlow] {err}", file=sys.stderr)
-    if not ppiflow_positions:
+    if not ppiflow_positions and not args.skip_region_resolution:
         raise SystemExit(f"[PPIFlow] No movable residues resolved for region_mode={region_mode}")
     Path(args.output_positions).write_text(ppiflow_positions + "\n")
     Path(args.output_cdr_positions).write_text((all_cdr_positions or ppiflow_positions) + "\n")
-    loop_residue_map, _ = build_loop_residue_map(
+    loop_residue_map, _ = ({}, None) if args.skip_region_resolution else build_loop_residue_map(
         args.pdb,
         antibody_chains,
         cdr_positions_by_loop_path=args.cdr_positions_by_loop_json,
@@ -357,7 +359,7 @@ def main() -> None:
 
     enriched_pose = rosetta.core.pose.Pose()
     enriched_pose.assign(input_pose)
-    repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance)
+    repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance) if args.rotamer_enrichment else []
     original_coordinates = _pose_atom_coordinates(enriched_pose)
     if args.rotamer_enrichment and repack_shell_residues:
         _run_interface_rotamer_enrichment(
@@ -374,9 +376,14 @@ def main() -> None:
         antigen_chains,
         args.distance_cutoff,
     )
-    enriched_pose.dump_pdb(args.output_enriched_pdb)
+    if args.rotamer_enrichment:
+        enriched_pose.dump_pdb(args.output_enriched_pdb)
+    else:
+        import shutil
+        shutil.copyfile(args.pdb, args.output_enriched_pdb)
 
-    anchor_payload = _build_anchor_payload(
+    anchor_payload = {"anchors": [], "anchor_count": 0, "anchor_candidate_count": 0,
+                      "anchor_selection_method": "not_run", "analysis_status": "not_run"} if args.skip_anchor_analysis else _build_anchor_payload(
         enriched_pose,
         enriched_interface_residues,
         enriched_binder_scores,

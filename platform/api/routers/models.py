@@ -386,15 +386,21 @@ async def preview_bindcraft2_campaign(request: BindCraft2CampaignPreviewRequest)
 async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession = Depends(get_session)):
     """Reopen the exact native effective settings bound to an owned campaign Job."""
     job = await session.get(Job, job_id)
-    if job is None or job.model_id != 'bindcraft2' or job.mode != 'campaign':
+    from services.bindcraft2_runtime import NATIVE_ACTIONS
+    if job is None or job.model_id != 'bindcraft2' or job.mode not in ('campaign', *NATIVE_ACTIONS):
         raise HTTPException(status_code=404, detail='BindCraft2 campaign Job not found')
     from services.bindcraft2_launch import read_campaign_receipt
     try:
         result = read_campaign_receipt(job.output_dir)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=409, detail=f'Campaign receipt unavailable: {exc}') from exc
-    if result['requested_settings'] != job.params.get('bindcraft2_settings'):
+    if job.mode == 'campaign' and result['requested_settings'] != job.params.get('bindcraft2_settings'):
         raise HTTPException(status_code=409, detail='Campaign receipt differs from saved Job request')
+    if job.mode != 'campaign' and result.get('native_action') != {
+        'operation': job.mode, 'options': job.params.get('bc2_action_options', {}),
+        'source_job_id': job.params.get('bc2_source_job_id'),
+    }:
+        raise HTTPException(status_code=409, detail='Native action receipt differs from saved Job request')
     return result
 
 

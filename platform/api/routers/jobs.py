@@ -2713,8 +2713,11 @@ async def _validate_selected_design_owners(
     source_job: Job,
     root_job: Optional[Job],
     designs: List[Design],
+    *,
+    root_resolver=None,
 ) -> None:
     """Refuse a foreign Design before copying or linking any selected input."""
+    resolve_root = root_resolver or _resolve_antibody_root_job
     owner_roots: Dict[str, str] = {}
     for design in designs:
         owner_id = str(getattr(design, "job_id", "") or "").strip()
@@ -2729,20 +2732,23 @@ async def _validate_selected_design_owners(
         owner = await session.get(Job, owner_id)
         if owner is None:
             raise HTTPException(status_code=422, detail="Selected design source job is missing.")
-        if owner.model_id == 'bindcraft2':
-            from services.bindcraft2_publication import read_published_native_results
-            await read_published_native_results(owner, session)
         if owner_id == source_job.id or (root_job is not None and owner_id == root_job.id):
+            if owner.model_id == 'bindcraft2':
+                from services.bindcraft2_publication import read_published_native_results
+                await read_published_native_results(owner, session)
             owner_roots[owner_id] = root_job.id if root_job is not None else source_job.id
             continue
         if root_job is None:
             raise HTTPException(status_code=422, detail="Selected design belongs to another job.")
         try:
-            _, owner_root = await _resolve_antibody_root_job(session, owner_id)
+            _, owner_root = await resolve_root(session, owner_id)
         except HTTPException as exc:
             raise HTTPException(status_code=422, detail="Selected design has no compatible source lineage.") from exc
         if owner_root.id != root_job.id:
             raise HTTPException(status_code=422, detail="Selected design belongs to another lineage root.")
+        if owner.model_id == 'bindcraft2':
+            from services.bindcraft2_publication import read_published_native_results
+            await read_published_native_results(owner, session)
         owner_roots[owner_id] = owner_root.id
 
 
@@ -3077,8 +3083,8 @@ def _cif_selection_pdb(source: Path, destination: Path) -> Path:
     if len(models) != 1:
         raise ValueError('Selected CIF has no single PDB-representable model')
     original = identity(models[0])
-    if not original or any(len(chain) != 1 or not (1 <= residue_id[1] <= 9999)
-                           or residue_id[2] not in {' ', '', '?'}
+    if not original or any(len(chain) != 1 or not (-999 <= residue_id[1] <= 9999)
+                           or len(residue_id[2]) > 1
                            for chain, residue_id, _, _ in original):
         raise ValueError('Selected CIF chain/residue identifiers cannot be represented in PDB')
     io = PDBIO()
@@ -3542,6 +3548,10 @@ def _build_selection_manifest_item(
         "parent_design_id": design.parent_design_id,
         "origin_design_id": design.origin_design_id,
         "origin_backbone_design_id": design.origin_backbone_design_id,
+        "origin_job_id": getattr(design, "origin_job_id", None),
+        "source_design_provenance": getattr(design, "provenance", None),
+        "source_review_role_map": getattr(design, "review_role_map", None),
+        "source_review_artifact_manifest": getattr(design, "review_artifact_manifest", None),
         "source_design_name": design.name,
         "source_pdb_path": str(source_path),
         "selection_pdb_path": str(selection_path),
@@ -4311,8 +4321,10 @@ def _materialize_antibody_selection(
     source_job: Job,
     designs: List[Design],
     action: str,
+    *,
+    namespace: str = "antibody",
 ) -> Path:
-    selection_root = get_inputs_dir() / "design_selections" / "antibody"
+    selection_root = get_inputs_dir() / "design_selections" / namespace
     selection_root.mkdir(parents=True, exist_ok=True)
 
     selection_dir = selection_root / (
@@ -4330,26 +4342,34 @@ def _materialize_antibody_selection(
 
         source_path = _resolve_design_structure_path(design.pdb_path)
         dest_path = selection_dir / f"{idx:03d}_{design.id}.pdb"
+        native_snapshot = None
         if source_path.suffix.lower() in {'.cif', '.mmcif'}:
-            _cif_selection_pdb(source_path, dest_path)
+            native_dir = selection_dir / 'native'
+            native_dir.mkdir(exist_ok=True)
+            native_snapshot = native_dir / f"{idx:03d}_{design.id}{source_path.suffix.lower()}"
+            shutil.copyfile(source_path, native_snapshot)
+            _cif_selection_pdb(native_snapshot, dest_path)
             link_mode = 'converted_verified_copy'
         elif source_path.suffix.lower() != '.pdb':
             raise HTTPException(status_code=422, detail=f"Unsupported selected structure format: {source_path.suffix}")
-        elif root_job.execution_target_id:
-            # Remote preview binds one retained snapshot. Reference-only local
-            # links are not immutable portable inputs and cannot be approved.
+        else:
+            # Local and remote continuations both consume retained snapshots.
+            # Linking a mutable publication would change a queued child's input.
             shutil.copyfile(source_path, dest_path)
             link_mode = "copy"
-        else:
-            link_mode = _link_selection_input(source_path, dest_path)
 
         manifest_items.append(_build_selection_manifest_item(
             design,
             source_path=dest_path if source_path.suffix.lower() in {'.cif', '.mmcif'} else source_path,
             selection_path=dest_path,
             selection_entry_mode=link_mode,
-            extra={"native_source_structure_path": str(source_path), "native_source_format": "mmcif"}
-                  if source_path.suffix.lower() in {'.cif', '.mmcif'} else None,
+            extra={
+                "source_structure_path": str(source_path),
+                "selection_structure_sha256": hashlib.sha256(dest_path.read_bytes()).hexdigest(),
+                **({"native_source_structure_path": str(native_snapshot),
+                    "native_source_structure_sha256": hashlib.sha256(native_snapshot.read_bytes()).hexdigest(),
+                    "native_source_format": "mmcif"} if native_snapshot else {}),
+            },
         ))
 
     _write_selection_manifest(
@@ -4409,13 +4429,14 @@ def _materialize_protein_local_selection(
         dest_path = selection_dir / dest_name
         if dest_path.exists():
             dest_path = selection_dir / f"{idx:03d}_{dest_name}"
-        link_mode = _link_selection_input(source_path, dest_path)
+        shutil.copyfile(source_path, dest_path)
+        link_mode = "copy"
 
         for sidecar in _candidate_sidecar_paths(design, source_path):
             sidecar_dest = selection_dir / sidecar.name
             if sidecar_dest.exists():
                 sidecar_dest = selection_dir / f"{idx:03d}_{sidecar.name}"
-            _link_selection_input(sidecar, sidecar_dest)
+            shutil.copyfile(sidecar, sidecar_dest)
 
         manifest_items.append(_build_selection_manifest_item(
             design,
@@ -5834,12 +5855,26 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id in {'binder_refinement', 'caliby_binder'}:
+        from copy import deepcopy
+        definition = registry.get_internal_model_definition(normalized_model_id)
+        if definition is not None:
+            for field in definition.params:
+                if field.default is not None:
+                    job_data.params.setdefault(field.name, deepcopy(field.default))
     if (normalized_model_id, normalized_mode) == ('bindcraft2', 'campaign'):
         from services.bindcraft2_typed import validate_request
         try:
             validate_request(job_data.params.get('bindcraft2_settings'))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if normalized_model_id == 'bindcraft2' and normalized_mode != 'campaign':
+        from services.bindcraft2_runtime import NATIVE_ACTIONS, validate_action_options
+        if normalized_mode in NATIVE_ACTIONS:
+            try:
+                validate_action_options(normalized_mode, job_data.params.get('bc2_action_options', {}))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
     if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and job_data.params.get('cm_request_path'):
         from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
         native_entrypoint = native_entrypoint or MODEL_MODE_WORKFLOW_ENTRYPOINTS[(normalized_model_id, normalized_mode)]
@@ -5964,6 +5999,40 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     return job_data
+
+
+def _bc2_prepared_action_output(params: Mapping[str, Any], mode: str) -> tuple[str, Path]:
+    """Reopen a controller-allocated native snapshot, never a client output path.
+
+    The existing compilation receipt owns the prepared bytes. No pending Job,
+    process-local token, or separate request store is needed for review/restart.
+    """
+    from services.bindcraft2_launch import read_campaign_receipt
+
+    root = get_results_dir().resolve()
+    path = Path(str(params.get('bc2_compilation') or ''))
+    output = path.parent.parent
+    job_id = output.name
+    if (not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', job_id)
+            or output != root / job_id
+            or path != output / 'bindcraft2' / 'compilation.json'
+            or path.resolve() != path
+            or params.get('bc2_campaign_dir') != str(output / 'bindcraft2')):
+        raise ValueError('BC2 prepared compilation is not a controller-owned action output')
+    receipt = read_campaign_receipt(output)
+    if receipt.get('native_action') != {
+        'operation': mode, 'options': params.get('bc2_action_options', {}),
+        'source_job_id': params.get('bc2_source_job_id'),
+    }:
+        raise ValueError('BC2 prepared native action changed')
+    expected = {'bindcraft2_settings': receipt['requested_settings'],
+                'bc2_effective_settings': receipt['effective_settings'],
+                'bc2_effective_sha256': receipt['effective_sha256'],
+                'bc2_request_sha256': receipt['request_sha256'],
+                'bc2_sweep_budget': receipt['sweep_budget']}
+    if any(params.get(key) != value for key, value in expected.items()):
+        raise ValueError('BC2 prepared native settings changed')
+    return job_id, output
 
 
 class JobExecutionPlanPreview(BaseModel):
@@ -6201,6 +6270,62 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    bc2_action_source = None
+    bc2_action_prepared = False
+    if normalized_model_id == 'bindcraft2':
+        from services.bindcraft2_runtime import NATIVE_ACTIONS
+        if normalized_mode in NATIVE_ACTIONS:
+            # Resolve the source and native options before preparing review bytes.
+            # Scientific lineage does not imply placement inheritance.
+            job_data.params = normalize_job_request(job_data).params
+            source_id = job_data.params.get('bc2_source_job_id')
+            bc2_action_source = await session.get(Job, source_id) if source_id else None
+            if bc2_action_source is None:
+                raise HTTPException(status_code=404, detail='BC2 native action source Job not found')
+            if bc2_action_source.model_id != 'bindcraft2' or not bc2_action_source.output_dir:
+                raise HTTPException(status_code=422, detail='BC2 native actions require a BC2 source Job output')
+            if (job_data.params.get('resume_source_dir') or job_data.params.get('mutagenesis_variants')
+                    or job_data.params.get('num_parallel_jobs', 1) not in (None, 1)):
+                raise HTTPException(status_code=422, detail='BC2 native actions own one new Job output')
+            job_data.params['lineage_root_job_id'] = bc2_action_source.lineage_root_job_id or bc2_action_source.id
+            job_data.params['selection_source_job_id'] = bc2_action_source.id
+            job_data.params['selection_source_type'] = 'native_campaign'
+            if normalized_mode != 'resume':
+                job_data.pinned_gpu = None
+            if job_data.params.get('bc2_compilation'):
+                try:
+                    prepared_id, prepared_output = _bc2_prepared_action_output(job_data.params, normalized_mode)
+                except (OSError, ValueError, KeyError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                if isinstance(_preallocated_job_id, str) and _preallocated_job_id != prepared_id:
+                    raise HTTPException(status_code=409, detail='BC2 prepared Job identity changed')
+                existing_owner = await session.scalar(select(Job.id).where(
+                    (Job.id == prepared_id) | (Job.output_dir == str(prepared_output))).limit(1))
+                if existing_owner is not None:
+                    raise HTTPException(status_code=409, detail='BC2 prepared output already belongs to a Job')
+                _preallocated_job_id = prepared_id
+                bc2_action_prepared = True
+            elif selected_execution_target is not None:
+                # Allocate through the existing controller-only identity seam.
+                # The response contains a receipt reference, not a writable output
+                # override. Approval must bind these exact already-prepared bytes.
+                from services.bindcraft2_launch import materialize_native_action
+                if not isinstance(_preallocated_job_id, str):
+                    _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
+                output = _standard_job_output_dir(job_data.name, '', _preallocated_job_id).resolve()
+                try:
+                    job_data.params.update(await asyncio.to_thread(
+                        materialize_native_action, Path(bc2_action_source.output_dir), output,
+                        operation=normalized_mode, options=job_data.params.get('bc2_action_options', {}),
+                        source_job_id=bc2_action_source.id))
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                job_data.execution_plan_approval = None
+                _require_prepared_remote_review(job_data, {'source_job_id': bc2_action_source.id})
+            elif not isinstance(_preallocated_job_id, str):
+                # Same-name local actions must not share a timestamp output.
+                _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
+
     if selected_execution_target is not None:
         approval_request.execution_target_id = job_data.execution_target_id
         if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
@@ -6643,6 +6768,9 @@ async def _create_job(
         vram_estimate = 0
         job_data.pinned_gpu = None
         logger.info(f"[QUEUE] Orchestrator parent job '{job_data.name}': CPU-only launcher, vram_estimate=0")
+    if bc2_action_source is not None and normalized_mode != 'resume':
+        vram_estimate = 0
+        job_data.pinned_gpu = None
     if job_data.model_id == "molecular_dynamics" and job_data.mode in {"simulate", "analyze"}:
         vram_estimate = 0
         job_data.pinned_gpu = None
@@ -6776,6 +6904,17 @@ async def _create_job(
                         preview_digest=job_params['bc2_preview_digest'],
                     ),
                 }
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if bc2_action_source is not None and not bc2_action_prepared:
+            from services.bindcraft2_launch import materialize_native_action
+            try:
+                job_params = {**job_params, **await asyncio.to_thread(
+                    materialize_native_action, Path(bc2_action_source.output_dir), Path(output_dir),
+                    operation=normalized_mode, options=job_params.get('bc2_action_options', {}),
+                    source_job_id=bc2_action_source.id,
+                )}
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -7223,6 +7362,7 @@ class TypedMdProjectLaunch:
     preview_digest: str
     md_job_spec: Mapping[str, Any]
     source_token: str
+    source_params: Mapping[str, Any] | None = None
 
 
 def _canonical_typed_md_document(value: Any) -> str:
@@ -7263,6 +7403,7 @@ async def _validated_typed_md_project_params(
     intent = deepcopy(dict(adapter.intent))
     preview = deepcopy(dict(adapter.preview))
     md_job_spec = deepcopy(dict(adapter.md_job_spec))
+    source_params = deepcopy(dict(adapter.source_params or {}))
     supplied_params = dict(job_data.params or {})
     if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {
             "name", "launch_context_id", "execution_target_id", "execution_policy"}:
@@ -7277,9 +7418,8 @@ async def _validated_typed_md_project_params(
     if (
         intent.get("schema_version") != "bms.md.launch-intent.v1"
         or intent.get("launch_context_id") != context.launch_context_id
-        or set(supplied_params) != {"md_job_spec"}
-        or _canonical_typed_md_document(supplied_params["md_job_spec"])
-        != _canonical_typed_md_document(md_job_spec)
+        or _canonical_typed_md_document(supplied_params)
+        != _canonical_typed_md_document({**source_params, "md_job_spec": md_job_spec})
     ):
         raise _typed_md_adapter_error(
             "Typed MD request contains caller-owned or divergent server fields."
@@ -7488,7 +7628,7 @@ async def _validated_typed_md_project_params(
         params=deepcopy(expected_params),
         pinned_gpu=job_data.pinned_gpu,
     )
-    return {**canonical_params, "md_job_spec": md_job_spec}
+    return {**canonical_params, **source_params, "md_job_spec": md_job_spec}
 
 
 def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:

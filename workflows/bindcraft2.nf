@@ -2,6 +2,7 @@
 // global typed schema, publication and bridge closure are integrated.
 nextflow.enable.dsl=2
 include { RunBindCraft2 } from '../modules/bindcraft2.nf'
+include { PostprocessBindCraft2 } from '../modules/bindcraft2.nf'
 
 workflow {
     def receipt = params.get('bc2_compilation')
@@ -12,5 +13,12 @@ workflow {
     if (!new File(destination.toString()).isAbsolute()) {
         error 'BindCraft2 campaign directory must be absolute and job-owned'
     }
-    RunBindCraft2(Channel.value(file(receipt, checkIfExists: true)), Channel.value(destination.toString()))
+    def compilationFile = file(receipt, checkIfExists: true)
+    def compiled = new groovy.json.JsonSlurper().parseText(compilationFile.text)
+    def operation = compiled.native_action?.operation ?: 'campaign'
+    if (operation in ['campaign', 'resume']) {
+        RunBindCraft2(Channel.value(compilationFile), Channel.value(destination.toString()))
+    } else {
+        PostprocessBindCraft2(Channel.value(compilationFile), Channel.value(destination.toString()))
+    }
 }

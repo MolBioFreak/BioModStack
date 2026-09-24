@@ -502,8 +502,13 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "dual_docking": "workflows/docking.nf",
 }
 
+from services.bindcraft2_runtime import NATIVE_ACTIONS as BC2_NATIVE_ACTIONS
+
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
-    ('bindcraft2', 'campaign'): 'workflows/bindcraft2.nf',
+    **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
+       for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
+    ('binder_refinement', 'refine'): 'workflows/binder_refinement.nf',
+    ('caliby_binder', 'design'): 'workflows/caliby_binder.nf',
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
     # Selected post-round diagnostic only; not a sequence-design mode. The
     # enabled LigandMPNN YAML must not advertise it before the parent submits
@@ -4181,6 +4186,9 @@ def compile_workflow_provision_request(request):
     params['remote_result_policy'] = typed.execution_policy.remote_result_policy
     request_id = digest(typed.model_dump(mode='json'))
     output = get_results_dir() / '.provision-preview' / request_id
+    if typed.model_id == 'bindcraft2' and typed.mode != 'campaign' and params.get('bc2_compilation'):
+        from routers.jobs import _bc2_prepared_action_output
+        _, output = _bc2_prepared_action_output(params, typed.mode)
     snapshot = SimpleNamespace(
         id='provision-' + request_id[:32], model_id=typed.model_id, mode=typed.mode,
         params=params, provenance=provenance, pinned_gpu=typed.pinned_gpu,
@@ -5180,6 +5188,15 @@ def compile_nextflow_invocation(
 
     is_generic_sequence_command = (model_id, mode) in PUBLIC_SEQUENCE_MODES
     definition = None
+    if model_id in {'binder_refinement', 'caliby_binder'}:
+        from model_registry import get_registry
+        definition = get_registry().get_internal_model_definition(model_id)
+        if definition is not None:
+            # Selected wrappers must not inherit the legacy parent profile's
+            # active stages or defaults. Use their one model-owned definition.
+            for field in definition.params:
+                if field.default is not None:
+                    params.setdefault(field.name, deepcopy(field.default))
     if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
         raise ValueError('Unsupported public sequence-design model/mode')
     if is_generic_sequence_command:
@@ -5265,7 +5282,10 @@ def compile_nextflow_invocation(
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
         ('molecular_dynamics', 'replica'): 'molecular_dynamics',
         ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
-        ('bindcraft2', 'campaign'): 'bindcraft2',
+        **{('bindcraft2', native_mode): 'bindcraft2'
+           for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
+        ('binder_refinement', 'refine'): 'maturation_child',
+        ('caliby_binder', 'design'): 'protein_sequence_design',
         ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
         ('esmfold2', 'blind_pose'): 'esmfold2',
         ('esmfold2', 'predict'): 'esmfold2',
@@ -5476,14 +5496,14 @@ def compile_nextflow_invocation(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if is_generic_sequence_command:
+    if is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder'}:
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
     if (not is_fastq_only_ont_command and not is_generic_sequence_command
-            and (model_id, mode) not in {('bindcraft2', 'campaign'),
-                                         ('ligandmpnn', 'interface_context'),
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder'}
+            and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
                                          ('esmfold2', 'blind_pose')}):
         explicit_path_defaults.update({
             "msa_local_db": explicit_msa_db,
@@ -5494,18 +5514,20 @@ def compile_nextflow_invocation(
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
 
-    if (model_id, mode) == ('bindcraft2', 'campaign'):
+    if model_id == 'bindcraft2':
         from services.bindcraft2_launch import read_campaign_receipt
+        from services.bindcraft2_runtime import validate_action_options
         from services.bindcraft2_typed import validate_request
         settings = params.get('bindcraft2_settings')
-        if not isinstance(settings, dict):
-            raise ValueError('BC2 campaign requires typed scientific settings')
-        validate_request(settings)
-        preview_digest = params.get('bc2_preview_digest')
-        if (not isinstance(preview_digest, str) or
-                len(preview_digest) != 64 or
-                any(char not in '0123456789abcdef' for char in preview_digest)):
-            raise ValueError('BC2 campaign requires its native preview digest')
+        if mode == 'campaign':
+            validate_request(settings)
+            preview_digest = params.get('bc2_preview_digest')
+            if (not isinstance(preview_digest, str) or
+                    len(preview_digest) != 64 or
+                    any(char not in '0123456789abcdef' for char in preview_digest)):
+                raise ValueError('BC2 campaign requires its native preview digest')
+        else:
+            validate_action_options(mode, params.get('bc2_action_options', {}))
         campaign = Path(output_dir).resolve() / 'bindcraft2'
         expected = {'bc2_compilation': str(campaign / 'compilation.json'),
                     'bc2_campaign_dir': str(campaign)}
@@ -5517,6 +5539,11 @@ def compile_nextflow_invocation(
                     receipt['effective_sha256'] != params.get('bc2_effective_sha256') or
                     receipt['effective_settings'] != params.get('bc2_effective_settings')):
                 raise ValueError('BC2 compiled effective settings differ from saved Job')
+            if mode != 'campaign' and receipt.get('native_action') != {
+                'operation': mode, 'options': params.get('bc2_action_options', {}),
+                'source_job_id': params.get('bc2_source_job_id'),
+            }:
+                raise ValueError('BC2 native action differs from saved Job')
         for key, value in expected.items():
             cmd.extend([f'--{key}', value])
             native_parameters[key] = value
@@ -6419,7 +6446,13 @@ def compile_nextflow_invocation(
             if key in ('sequence_name', 'job_name', 'name'):
                 value = sanitize_filename(str(value))
             
-            if isinstance(value, bool):
+            if ((model_id, mode) == ('binder_refinement', 'refine')
+                    and key in {'cdr_positions_by_loop', 'manual_cdr_definitions'}):
+                # The selected wrapper decodes these existing native mask
+                # settings; comma-joining objects or dropping maps loses science.
+                cmd.extend([f"--{nf_key}", json.dumps(value, separators=(',', ':'))])
+                native_parameters[nf_key] = value
+            elif isinstance(value, bool):
                 cmd.extend([f"--{nf_key}", str(value).lower()])
                 native_parameters[nf_key] = value
             elif isinstance(value, list):

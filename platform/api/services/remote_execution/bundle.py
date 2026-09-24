@@ -528,6 +528,10 @@ def _input_assets(
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
                     "runtime_image_store", *(flag for flag, _ in IMAGE_SELECTORS.values())}
+    if native_invocation.model_id == 'bindcraft2':
+        # The prepared tree is one native input. Its campaign destination is
+        # writable output, never the read-only transported compilation folder.
+        destinations.add('bc2_campaign_dir')
     runtime_fields = {"laproteina_checkpoint_dir", "laproteina_data_path",
                       "disco_checkpoint_path", "disco_cutlass_path"}
     for key in runtime_fields:
@@ -538,15 +542,19 @@ def _input_assets(
             continue
         if str(Path(value).resolve()) not in (runtime_references or {}):
             raise RemoteBundleError(f"Native runtime field has no selected dependency binding: {key}")
+    selected_pdb_list = (native_invocation.model_id, native_invocation.mode) in {
+        ('template_antibody_denovo', 'maturation_child'),
+        ('binder_refinement', 'refine'), ('caliby_binder', 'design')}
     candidates = list(_flatten_strings({key: value for key, value in params.items()
                                    if key not in destinations and key not in runtime_fields
                                    and not (key == 'ligandmpnn_interface_selection'
                                             and native_invocation.model_id == 'ligandmpnn'
                                             and native_invocation.mode == 'interface_context')
-                                   and not (key == 'pdb_paths' and native_invocation.model_id == 'template_antibody_denovo'
-                                            and native_invocation.mode == 'maturation_child')}))
-    if (native_invocation.model_id == 'template_antibody_denovo'
-            and native_invocation.mode == 'maturation_child' and params.get('pdb_paths')):
+                                   and not (key == 'blind_pose_selected'
+                                            and (native_invocation.model_id, native_invocation.mode)
+                                            == ('esmfold2', 'blind_pose'))
+                                   and not (key == 'pdb_paths' and selected_pdb_list)}))
+    if selected_pdb_list and params.get('pdb_paths'):
         # Native child syntax is a comma-separated list, not one filesystem path.
         candidates.extend(part.strip() for part in str(params['pdb_paths']).split(',') if part.strip())
     for raw in candidates:
@@ -692,6 +700,12 @@ def _input_assets(
                 reference['source_path'] = str(replacement)
                 reference['sha256'] = _sha256_file(replacement)
                 reference['size_bytes'] = replacement.stat().st_size
+    if native_invocation.model_id == 'bindcraft2' and params.get('bc2_compilation'):
+        # Compiler/runtime own this exact layout, including copied resume state.
+        # Inventory it once with the normal no-follow input owner; neither scan
+        # arbitrary historical campaigns nor rewrite sealed compilation bytes.
+        root = Path(params['bc2_compilation']).parent
+        selected[root] = 'bindcraft2'
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
@@ -706,6 +720,9 @@ def _stage_ligandmpnn_selection(binding: dict, staging: Path, remote_dir: str) -
     expected = {Path(binding['manifest'])}
     for row in binding['sources'].values():
         expected.update((Path(row['path']), Path(row['request'])))
+        original_snapshot = (row.get('original') or {}).get('snapshot_path')
+        if original_snapshot:
+            expected.add(Path(original_snapshot))
     if {path for path in root.rglob('*') if not path.is_dir()} != expected or any(
         path.is_symlink() for path in root.rglob('*')):
         raise RemoteBundleError('Selected interface-context directory changed')
@@ -1368,7 +1385,12 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
-    if job.mode == 'maturation_child' and '--pdb_paths' in command:
+    if job.model_id == 'bindcraft2' and '--bc2_campaign_dir' in command:
+        # The same local prefix names both prepared inputs and native output.
+        # Only the compilation argument follows the transported input mapping.
+        position = command.index('--bc2_campaign_dir') + 1
+        translated_command[position] = f'{remote_results}/bindcraft2'
+    if (job.mode == 'maturation_child' or job.model_id in {'binder_refinement', 'caliby_binder'}) and '--pdb_paths' in command:
         position = command.index('--pdb_paths') + 1
         translated_command[position] = _rewrite_maturation_pdb_paths(
             str(command[position]), path_map)

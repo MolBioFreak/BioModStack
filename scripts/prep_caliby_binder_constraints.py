@@ -21,7 +21,8 @@ def _chains(value: str) -> list[str]:
     return chains
 
 
-def build_constraints(input_dir: Path, binder_chains: str, target_chains: str, design_positions: str = "") -> list[dict[str, str]]:
+def build_constraints(input_dir: Path, binder_chains: str, target_chains: str, design_positions: str = "", *, fixed_pos_override_seq: str = "",
+                      pos_restrict_aatype: str = "", symmetry_pos: str = "") -> list[dict[str, str]]:
     binders = _chains(binder_chains)
     targets = _chains(target_chains)
     if set(binders) & set(targets):
@@ -75,9 +76,9 @@ def build_constraints(input_dir: Path, binder_chains: str, target_chains: str, d
             "pdb_key": pdb.stem,
             "fixed_pos_seq": ",".join(fixed),
             "fixed_pos_scn": ",".join(fixed),
-            "fixed_pos_override_seq": "",
-            "pos_restrict_aatype": "",
-            "symmetry_pos": "",
+            "fixed_pos_override_seq": fixed_pos_override_seq,
+            "pos_restrict_aatype": pos_restrict_aatype,
+            "symmetry_pos": symmetry_pos,
         })
     return rows
 
@@ -89,8 +90,13 @@ def main() -> None:
     parser.add_argument("--binder-chains", required=True)
     parser.add_argument("--target-chains", required=True)
     parser.add_argument("--design-positions", default="")
+    parser.add_argument("--fixed-pos-override-seq", default="")
+    parser.add_argument("--pos-restrict-aatype", default="")
+    parser.add_argument("--symmetry-pos", default="")
     args = parser.parse_args()
-    rows = build_constraints(Path(args.input_dir), args.binder_chains, args.target_chains, args.design_positions)
+    rows = build_constraints(Path(args.input_dir), args.binder_chains, args.target_chains, args.design_positions,
+                             fixed_pos_override_seq=args.fixed_pos_override_seq,
+                             pos_restrict_aatype=args.pos_restrict_aatype, symmetry_pos=args.symmetry_pos)
     with Path(args.out_csv).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()

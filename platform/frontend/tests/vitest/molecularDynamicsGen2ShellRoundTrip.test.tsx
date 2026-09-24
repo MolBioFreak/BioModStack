@@ -215,40 +215,22 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
         expect(cards?.textContent).not.toContain('ConforNets Experimental');
     });
 
-    it('proves the ResultsViewer Design in the supplied completed prediction Job before exact inspection', async () => {
+    it.each(['generic binder', 'BindCraft2'])('inspects the exact %s Design without a prediction-producer whitelist or pagination', async (producer) => {
         const jobId = '66666666-6666-4666-8666-666666666666';
         const designId = '77777777-7777-4777-8777-777777777777';
         const exactInspection = {
             schema_version: 'bms.md.starting-structure-inspection.v1',
             source_ref: { kind: 'design', id: designId },
-            identity: { label: 'ResultsViewer selected Design', format: 'pdb', size_bytes: 100, sha256: hash('b'), pdb_id: null, producer_job_id: jobId, design_id: designId },
-            viewer: { url: `/api/molecular-dynamics/starting-structures/design/${designId}/content?expected_sha256=${hash('b')}`, format: 'pdb', sha256: hash('b') },
+            identity: { label: `${producer} selected Design`, format: 'pdb', size_bytes: 100, sha256: hash('d'), pdb_id: null, producer_job_id: jobId, design_id: designId },
+            viewer: { url: `/api/molecular-dynamics/starting-structures/design/${designId}/content?expected_sha256=${hash('d')}`, format: 'pdb', sha256: hash('d') },
             inspection: { model_count: 1, chains: ['A'], atom_count: 10, hetero_components: [], parser: { name: 'biopython', version: '1.85' } },
             admission: { state: 'profile_required', profile_id: null, code: 'MD_CHEMISTRY_PROFILE_REQUIRED', message: 'Select chemistry for the exact Design.' },
         };
-        const inspectRequest = deferred<ReturnType<typeof response>>();
-        apiMocks.get.mockImplementation(async (url: string) => {
-            if (url === '/api/molecular-dynamics/chemistry-profiles') {
-                return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
-            }
-            if (url === `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`) {
-                return response({
-                    schema_version: 'bms.md.prediction-source-candidates.v1',
-                    job: { id: jobId, name: 'ResultsViewer prediction Job', status: 'completed', model_id: 'boltz2', mode: 'predict', created_at: null, started_at: null, completed_at: null, failure: null },
-                    candidates: [{ source_ref: { kind: 'design', id: designId }, name: 'selected-design', format: 'pdb', eligible: true, blocker_code: null, metrics: { plddt: 90, ptm: 0.8, iptm: null, confidence: 0.9 }, created_at: null }],
-                    next_cursor: null,
-                });
-            }
-            throw new Error(`unexpected GET ${url}`);
-        });
         apiMocks.post.mockImplementation(async (url: string, body: Record<string, unknown>) => {
-            if (url === '/api/molecular-dynamics/starting-structures/inspect') {
-                expect(body).toEqual({ source_ref: { kind: 'design', id: designId }, chemistry_profile_id: null });
-                return inspectRequest.promise;
-            }
-            throw new Error(`unexpected POST ${url}`);
+            expect(url).toBe('/api/molecular-dynamics/starting-structures/inspect');
+            expect(body).toEqual({ source_ref: { kind: 'design', id: designId }, chemistry_profile_id: null });
+            return response(exactInspection);
         });
-
         await act(async () => {
             root.render(
                 <QueryClientProvider client={client}>
@@ -258,82 +240,25 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
                 </QueryClientProvider>,
             );
         });
-        await act(async () => {
-            await vi.waitFor(() => expect(apiMocks.post.mock.calls, JSON.stringify(apiMocks.post.mock.calls)).toContainEqual([
-                '/api/molecular-dynamics/starting-structures/inspect',
-                { source_ref: { kind: 'design', id: designId }, chemistry_profile_id: null },
-            ]));
-        });
-        await act(async () => inspectRequest.resolve(response(exactInspection)));
-        await act(async () => {
-            await vi.waitFor(() => expect(container.textContent, JSON.stringify(apiMocks.post.mock.calls)).toContain('ResultsViewer selected Design'));
-        });
-
-        expect(apiMocks.post).toHaveBeenCalledWith(
-            '/api/molecular-dynamics/starting-structures/inspect',
-            { source_ref: { kind: 'design', id: designId }, chemistry_profile_id: null },
-        );
-        expect(apiMocks.get.mock.calls).toContainEqual([
-            `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`,
-            { params: { limit: 24 } },
-        ]);
-        expect(container.textContent).toContain('selected-design');
-        expect([...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')]
-            .find((button) => button.textContent?.includes('selected-design'))?.getAttribute('aria-pressed')).toBe('true');
+        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(`${producer} selected Design`)); });
+        expect(apiMocks.get.mock.calls.some(([url]) => String(url).includes('source-candidates'))).toBe(false);
+        expect(apiMocks.post).toHaveBeenCalledTimes(1);
     });
 
-    it('fails closed when the supplied Design is absent from the supplied prediction Job', async () => {
-        const jobId = '66666666-6666-4666-8666-666666666666';
-        const routedDesignId = '77777777-7777-4777-8777-777777777777';
-        const foreignDesignId = '88888888-8888-4888-8888-888888888888';
-        apiMocks.get.mockImplementation(async (url: string) => {
-            if (url === '/api/molecular-dynamics/chemistry-profiles') {
-                return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
-            }
-            if (url === `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`) {
-                return response({
-                    schema_version: 'bms.md.prediction-source-candidates.v1',
-                    job: { id: jobId, name: 'Supplied prediction Job', status: 'completed', model_id: 'boltz2', mode: 'predict', created_at: null, started_at: null, completed_at: null, failure: null },
-                    candidates: [{ source_ref: { kind: 'design', id: foreignDesignId }, name: 'must-not-select', format: 'pdb', eligible: true, blocker_code: null, metrics: { plddt: 80, ptm: 0.7, iptm: null, confidence: 0.8 }, created_at: null }],
-                    next_cursor: null,
-                });
-            }
-            throw new Error(`unexpected GET ${url}`);
-        });
-
-        await act(async () => {
-            root.render(
-                <QueryClientProvider client={client}>
-                    <MemoryRouter initialEntries={[buildResultsViewerMolecularDynamicsRoute(jobId, routedDesignId)]}>
-                        <JobSubmission />
-                    </MemoryRouter>
-                </QueryClientProvider>,
-            );
-        });
-        await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull()); });
-        expect(container.querySelector('[role="alert"]')?.textContent).toContain('does not belong to the supplied prediction Job');
-        expect(container.textContent).not.toContain('must-not-select');
-        expect(apiMocks.post.mock.calls.some(([url]) => url === '/api/molecular-dynamics/starting-structures/inspect')).toBe(false);
-    });
-
-    it('fails closed when the supplied Job projection names an unsupported producer', async () => {
+    it.each(['unavailable', 'wrong owner'])('retains exact Design source errors: %s', async (failure) => {
         const jobId = '66666666-6666-4666-8666-666666666666';
         const designId = '77777777-7777-4777-8777-777777777777';
-        apiMocks.get.mockImplementation(async (url: string) => {
-            if (url === '/api/molecular-dynamics/chemistry-profiles') {
-                return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
-            }
-            if (url === `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`) {
-                return response({
-                    schema_version: 'bms.md.prediction-source-candidates.v1',
-                    job: { id: jobId, name: 'Unsupported producer Job', status: 'completed', model_id: 'molecular_dynamics', mode: 'simulate', created_at: null, started_at: null, completed_at: null, failure: null },
-                    candidates: [{ source_ref: { kind: 'design', id: designId }, name: 'must-not-inspect', format: 'pdb', eligible: true, blocker_code: null, metrics: { plddt: null, ptm: null, iptm: null, confidence: null }, created_at: null }],
-                    next_cursor: null,
-                });
-            }
-            throw new Error(`unexpected GET ${url}`);
+        apiMocks.post.mockImplementation(async () => {
+            if (failure === 'unavailable') throw new Error('The completed Design is unavailable.');
+            return response({
+                schema_version: 'bms.md.starting-structure-inspection.v1',
+                source_ref: { kind: 'design', id: designId },
+                identity: { label: 'Foreign source', format: 'pdb', size_bytes: 100, sha256: hash('d'), pdb_id: null, producer_job_id: '88888888-8888-4888-8888-888888888888', design_id: designId },
+                viewer: { url: `/api/molecular-dynamics/starting-structures/design/${designId}/content?expected_sha256=${hash('d')}`, format: 'pdb', sha256: hash('d') },
+                inspection: { model_count: 1, chains: ['A'], atom_count: 10, hetero_components: [], parser: { name: 'biopython', version: '1.85' } },
+                admission: { state: 'profile_required', profile_id: null, code: 'MD_CHEMISTRY_PROFILE_REQUIRED', message: 'Select chemistry.' },
+            });
         });
-
         await act(async () => {
             root.render(
                 <QueryClientProvider client={client}>
@@ -344,67 +269,11 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
             );
         });
         await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull()); });
-        expect(container.querySelector('[role="alert"]')?.textContent).toContain('accepted Structure Prediction producer');
-        expect(apiMocks.post.mock.calls.some(([url]) => url === '/api/molecular-dynamics/starting-structures/inspect')).toBe(false);
-    });
-
-    it('uses bounded cursor pagination to prove and inspect the exact later-page Design', async () => {
-        const jobId = '66666666-6666-4666-8666-666666666666';
-        const firstDesignId = '77777777-7777-4777-8777-777777777771';
-        const routedDesignId = '77777777-7777-4777-8777-777777777772';
-        const job = { id: jobId, name: 'Paged prediction Job', status: 'completed', model_id: 'protenix', mode: 'predict', created_at: null, started_at: null, completed_at: null, failure: null };
-        apiMocks.get.mockImplementation(async (url: string, config?: { params?: { cursor?: string } }) => {
-            if (url === '/api/molecular-dynamics/chemistry-profiles') {
-                return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
-            }
-            if (url === `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`) {
-                if (config?.params?.cursor === 'cursor-page-2') {
-                    return response({
-                        schema_version: 'bms.md.prediction-source-candidates.v1', job,
-                        candidates: [{ source_ref: { kind: 'design', id: routedDesignId }, name: 'exact-later-page-design', format: 'pdb', eligible: true, blocker_code: null, metrics: { plddt: 92, ptm: 0.85, iptm: null, confidence: 0.91 }, created_at: null }],
-                        next_cursor: null,
-                    });
-                }
-                return response({
-                    schema_version: 'bms.md.prediction-source-candidates.v1', job,
-                    candidates: [{ source_ref: { kind: 'design', id: firstDesignId }, name: 'first-page-design', format: 'pdb', eligible: true, blocker_code: null, metrics: { plddt: 80, ptm: 0.7, iptm: null, confidence: 0.8 }, created_at: null }],
-                    next_cursor: 'cursor-page-2',
-                });
-            }
-            throw new Error(`unexpected GET ${url}`);
-        });
-        apiMocks.post.mockImplementation(async (url: string, body: Record<string, unknown>) => {
-            if (url === '/api/molecular-dynamics/starting-structures/inspect') {
-                expect(body).toEqual({ source_ref: { kind: 'design', id: routedDesignId }, chemistry_profile_id: null });
-                return response({
-                    schema_version: 'bms.md.starting-structure-inspection.v1',
-                    source_ref: { kind: 'design', id: routedDesignId },
-                    identity: { label: 'Exact later-page Design bytes', format: 'pdb', size_bytes: 100, sha256: hash('b'), pdb_id: null, producer_job_id: jobId, design_id: routedDesignId },
-                    viewer: { url: `/api/molecular-dynamics/starting-structures/design/${routedDesignId}/content?expected_sha256=${hash('b')}`, format: 'pdb', sha256: hash('b') },
-                    inspection: { model_count: 1, chains: ['A'], atom_count: 10, hetero_components: [], parser: { name: 'biopython', version: '1.85' } },
-                    admission: { state: 'profile_required', profile_id: null, code: 'MD_CHEMISTRY_PROFILE_REQUIRED', message: 'Select chemistry for the exact later-page Design.' },
-                });
-            }
-            throw new Error(`unexpected POST ${url}`);
-        });
-
-        await act(async () => {
-            root.render(
-                <QueryClientProvider client={client}>
-                    <MemoryRouter initialEntries={[buildResultsViewerMolecularDynamicsRoute(jobId, routedDesignId)]}>
-                        <JobSubmission />
-                    </MemoryRouter>
-                </QueryClientProvider>,
-            );
-        });
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Exact later-page Design bytes')); });
-        expect(apiMocks.get.mock.calls).toContainEqual([
-            `/api/molecular-dynamics/prediction-jobs/${jobId}/source-candidates`,
-            { params: { limit: 24, cursor: 'cursor-page-2' } },
-        ]);
-        expect(container.textContent).toContain('exact-later-page-design');
-        expect(container.textContent).not.toContain('first-page-design');
-        expect(apiMocks.post).toHaveBeenCalledTimes(1);
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+            failure === 'unavailable' ? 'completed Design is unavailable' : 'does not belong to the supplied source Job',
+        );
+        expect(container.textContent).not.toContain('Foreign source');
+        expect(apiMocks.get.mock.calls.some(([url]) => String(url).includes('source-candidates'))).toBe(false);
     });
 
     it('rejects an ambiguous duplicated ResultsViewer Design identity before inspection', async () => {

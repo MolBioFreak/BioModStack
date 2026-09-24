@@ -21,11 +21,18 @@ def regular_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def materialize(selection, sources: dict[str, bytes], *, source_identities: dict | None = None):
+def materialize(selection, sources: dict[str, bytes], *, source_identities: dict | None = None,
+                original_sources: dict[str, bytes] | None = None, lineage_root_job_id: str | None = None):
     """Private immutable-by-digest snapshots under managed inputs; no source edits."""
     from services.ligandmpnn_interface_selection import compile_selected_manifest
     directory = get_inputs_dir() / 'ligandmpnn_interface_context' / uuid.uuid4().hex
     generated, manifest = compile_selected_manifest(selection, sources, directory)
+    if original_sources and source_identities:
+        source_identities = {key: dict(value) for key, value in source_identities.items()}
+        for index, candidate in enumerate(selection.candidate_ids):
+            relative = f'inputs/ligandmpnn_interface_context/{index:03d}/original{source_identities[candidate]["format"]}'
+            generated.append((relative, original_sources[candidate]))
+            source_identities[candidate]['snapshot_path'] = str(directory / relative)
     directory.mkdir(parents=True, exist_ok=False)
     for relative, content in generated:
         path = directory / relative
@@ -34,6 +41,7 @@ def materialize(selection, sources: dict[str, bytes], *, source_identities: dict
         path.chmod(0o400)
     return {'schema': 'bms.ligandmpnn.interface-context.selection.v1',
             'source_job_id': selection.source_job_id, 'round_id': selection.round_id,
+            'lineage_root_job_id': lineage_root_job_id or selection.source_job_id,
             'candidate_ids': selection.candidate_ids, 'settings': selection.settings.model_dump(),
             'manifest': manifest, 'manifest_sha256': hashlib.sha256(regular_bytes(Path(manifest))).hexdigest(),
             'sources': {candidate: {'path': str(directory / f'inputs/ligandmpnn_interface_context/{index:03d}/source.pdb'),
@@ -64,6 +72,9 @@ def verify_binding(binding: dict):
                 or original['format'] not in {'.pdb', '.cif', '.mmcif'}
                 or len(original['sha256']) != 64):
             raise ValueError('original selected structure identity changed')
+        if original and original.get('snapshot_path'):
+            if hashlib.sha256(regular_bytes(Path(original['snapshot_path']))).hexdigest() != original['sha256']:
+                raise ValueError('original selected structure snapshot changed')
         request = json.loads(regular_bytes(Path(source['request'])))
         if (request['candidate_id'] != candidate or request['round_id'] != binding['round_id'] or
             request['source_sha256'] != source['sha256'] or request['structure_path'] != source['path'] or
@@ -96,6 +107,7 @@ async def read_selected(job, session):
         receipts.append(receipt)
     return {'schema': 'bms.ligandmpnn.interface-context.publication.v1',
             'job_id': job.id, 'source_job_id': binding['source_job_id'],
+            'lineage_root_job_id': binding.get('lineage_root_job_id'),
             'round_id': binding['round_id'], 'settings': binding['settings'],
             'source_identities': {candidate: binding['sources'][candidate].get('original')
                                   for candidate in binding['candidate_ids']}, 'records': receipts}
@@ -139,6 +151,7 @@ async def publish_selected(job, root: Path, session):
     # numerical samples. Do not duplicate native metrics in the Job JSON.
     publication = {'schema': 'bms.ligandmpnn.interface-context.publication.v1',
                    'job_id': job.id, 'source_job_id': binding['source_job_id'],
+                   **({'lineage_root_job_id': binding['lineage_root_job_id']} if 'lineage_root_job_id' in binding else {}),
                    'round_id': binding['round_id'], 'settings': binding['settings'],
                    'source_identities': {candidate: binding['sources'][candidate].get('original')
                                          for candidate in binding['candidate_ids']},

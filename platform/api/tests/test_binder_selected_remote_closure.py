@@ -8,12 +8,12 @@ from services.remote_execution import bundle
 from scripts.lib.portable_inputs import discover_native_input_references
 
 
-def test_disabled_bc2_declares_only_native_image_and_external_af2_params():
-    metadata = selected_execution_metadata('bindcraft2', 'design', {}, 'workflows/bindcraft2.nf')
+def test_bc2_campaign_declares_only_native_image_and_external_af2_params():
+    metadata = selected_execution_metadata('bindcraft2', 'campaign', {}, 'workflows/bindcraft2.nf')
     assert {row.logical_id for row in metadata.dependencies if row.kind in {'image', 'weights'}} == {
         'image:bindcraft2.sif', 'weights:alphafold/params'}
     assert [row.component_key for row in metadata.static_components] == ['RunBindCraft2']
-    assert any(row.field == 'availability' for row in metadata.blockers)
+    assert not any(row.field == 'availability' for row in metadata.blockers)
 
 
 def test_maturation_selected_redesign_dependencies():

@@ -525,7 +525,7 @@ async def test_hydrate_review_job_is_read_only_and_uses_child_root(monkeypatch: 
     assert job.awaiting_input is True
 
 
-def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
+def test_dedupe_review_structures_preserves_same_stem_documents() -> None:
     files = [
         ("candidate", Path("/tmp/demo_design.cif")),
         ("candidate", Path("/tmp/demo_design.pdb")),
@@ -538,8 +538,10 @@ def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
 
     assert deduped == [
         ("candidate", Path("/tmp/demo_design.pdb")),
+        ("candidate", Path("/tmp/demo_design.cif")),
         ("candidate", Path("/tmp/other_design.cif")),
         ("filtered", Path("/tmp/demo_design.pdb")),
+        ("filtered", Path("/tmp/demo_design.cif")),
     ]
 
 
@@ -577,7 +579,10 @@ def test_discover_collected_ppiflow_structures_includes_generator_outputs(tmp_pa
 
     discovered = _discover_collected_ppiflow_structures(tmp_path)
 
-    assert discovered == [("ppiflow_generator_filtered", filtered_dir / "seedA_ppiflow_sample0.pdb")]
+    assert discovered == [
+        ("ppiflow_generator_filtered", filtered_dir / "seedA_ppiflow_sample0.pdb"),
+        ("ppiflow_generator_raw", raw_dir / "seedA_ppiflow_sample0.pdb"),
+    ]
 
 
 def test_parse_ppiflow_sample_index_supports_redesign_names() -> None:
@@ -727,6 +732,7 @@ def test_inherit_source_design_metrics_copies_geometry_and_cdr_lengths(tmp_path:
         rog=None,
     )
     source_design = SimpleNamespace(
+        pdb_path=str(pdb_path),
         binder_length=159,
         antibody_type="vhh",
         humanness_score=0.81,

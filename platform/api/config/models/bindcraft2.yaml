@@ -1,12 +1,11 @@
-# Runtime asset declaration only. The native inventory is not yet a complete
-# typed operator/browser contract; no public job or agent route is enabled.
+# Model-owned native campaign and lifecycle routes.
 id: bindcraft2
 name: BindCraft2
 version: "1.0.1+d5bae16e9fee95f4c97fc16bc05dcbde4ccb885f"
 category: generative_design
 description: >
-  Pinned native BindCraft2 campaign runtime. Not launchable until the global
-  typed settings, artifact publication and local/remote bridge are integrated.
+  Pinned native BindCraft2 campaigns and explicit native lifecycle operations,
+  with typed settings, immutable source snapshots and native result publication.
 container: bindcraft2.sif
 inputs:
   - cif
@@ -22,7 +21,43 @@ modes:
     name: Native campaign
     description: Pinned typed scientific request; requires model-owned native compilation.
     params: [bindcraft2_settings, bc2_preview_digest]
+  - id: resume
+    name: Resume native campaign
+    description: Continue a job-owned snapshot of native state; never rewrite the source publication.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: rank
+    name: Native rank
+    description: Rank an owned campaign snapshot with pinned native metric semantics.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: filter
+    name: Native filter
+    description: Explicit native postprocessing only; does not impose a BMS continuation verdict.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: campaign_output
+    name: Native campaign summary
+    description: Regenerate native campaign tables and summary on an owned snapshot.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: archive
+    name: Archive native trajectories
+    description: Pack trajectory folders on an owned snapshot using the native archive operation.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: unarchive
+    name: Restore native trajectories
+    description: Unpack native trajectory archives on an owned snapshot.
+    params: [bc2_source_job_id, bc2_action_options]
+  - id: score
+    name: Native structure score
+    description: Score a named structure within an owned campaign snapshot using the pinned native coordinate metrics.
+    params: [bc2_source_job_id, bc2_action_options]
 params:
+  - name: bc2_source_job_id
+    type: string
+    required: true
+    description: Source BindCraft2 Job resolved by the existing Job owner.
+  - name: bc2_action_options
+    type: object
+    default: {}
+    description: Native operation options typed by the model-owned native-settings discovery contract.
   - name: bindcraft2_settings
     type: object
     required: true
@@ -32,6 +67,6 @@ params:
     required: true
     pattern: '^[0-9a-f]{64}$'
     description: Digest of the pinned native preview for this exact request and governed source bytes.
-enabled: false
+enabled: true
 experimental: true
-public_launch: false
+public_launch: true

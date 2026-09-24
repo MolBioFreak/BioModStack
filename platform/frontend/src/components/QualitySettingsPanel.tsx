@@ -201,6 +201,7 @@ interface QualitySettingsPanelProps {
     showStructureValidationSettings?: boolean;
     showFampnnSettings?: boolean;
     showCalibySettings?: boolean;
+    showThermoMPNN?: boolean;
     showPreValidationFiltering?: boolean;
     showPostValidationFiltering?: boolean;
 }
@@ -984,6 +985,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     showStructureValidationSettings = true,
     showFampnnSettings = true,
     showCalibySettings = false,
+    showThermoMPNN = true,
     showPreValidationFiltering = true,
     showPostValidationFiltering = true,
 }) => {
@@ -2391,6 +2393,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     )}
 
                     {/* ThermoMPNN Stability Scoring */}
+                    {showThermoMPNN && (
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
@@ -2451,6 +2454,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         )}
                     </div>
+
+                    )}
 
                     {/* AF2 Backprop CDR Refinement */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">

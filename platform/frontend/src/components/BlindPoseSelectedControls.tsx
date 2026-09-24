@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import BinderDiagnosticRawResults from './BinderDiagnosticRawResults';
+import { fetchDiagnosticSelectionContext, type CandidateDocuments, type DiagnosticSelectionContext } from '../lib/binderDiagnosticSelection';
 import { isAxiosError } from 'axios';
 import {
     fetchBlindPoseSelectedResult, fetchLigandInterfaceContextResult,
@@ -26,14 +28,22 @@ interface Props {
     sourceModelId: string;
     sourceParams: Record<string, unknown>;
     selectedDesignIds: string[];
+    candidateDocuments?: CandidateDocuments;
     resultJob?: { id: string; model_id: string; mode: string; status: string; error_message?: string | null };
     onOpenJob: (id: string) => void;
 }
 
 /** Independent exploratory actions; source ownership and chain validity are resolved by the API. */
-export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, sourceParams, selectedDesignIds, resultJob, onOpenJob }: Props) {
+export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, sourceParams, selectedDesignIds, candidateDocuments, resultJob, onOpenJob }: Props) {
     const [blindSettings, setBlindSettings] = useState(initialBlindSettings);
     const [targetName, setTargetName] = useState('');
+    const [context, setContext] = useState<DiagnosticSelectionContext | null>(null);
+    const [documents, setDocuments] = useState<CandidateDocuments>({});
+    useEffect(() => { setContext(null); setDocuments({}); setTargetName(''); setBinderChains({}); }, [sourceJobId]);
+    const selectedDocuments = Object.fromEntries(selectedDesignIds.flatMap(id => {
+        const choice = candidateDocuments?.[id] ?? documents[id];
+        return choice ? [[id, choice]] : [];
+    }));
     const [binderChains, setBinderChains] = useState<Record<string, string>>({});
     const [targetChains, setTargetChains] = useState('');
     const [interfaceSettings, setInterfaceSettings] = useState(initialInterfaceSettings);
@@ -70,7 +80,8 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
             if (kind === 'blind') {
                 const response = await submitBlindPoseSelected({
                     source_job_id: sourceJobId,
-                    ...(sourceModelId === 'bindcraft2' && targetName ? { target_name: targetName } : {}),
+                    ...(targetName ? { target_name: targetName } : {}),
+                    ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}),
                     design_ids: [...selectedDesignIds],
                     binder_chains: Object.fromEntries(selectedDesignIds.map(id => [id, binderChains[id]?.split(',').map(x => x.trim()).filter(Boolean) ?? []])),
                     target_chains: targetChains.split(',').map(x => x.trim()).filter(Boolean),
@@ -78,7 +89,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
                 });
                 jobId = response.id;
             } else {
-                const response = await submitLigandInterfaceContext(selection!);
+                const response = await submitLigandInterfaceContext({ ...selection!, ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}) });
                 jobId = response.job.id;
             }
             setSubmittedJobId(jobId);
@@ -95,22 +106,24 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
         {resultJob.error_message && <p role="alert">{resultJob.error_message}</p>}
         {reading && <p>Reading native result…</p>}
         {error && <p role="alert">Result readback failed: {error}</p>}
-        {native && <div aria-label="Native selected records">
-            {native.records.map((record, index) => <details key={index} className="mt-2 rounded border border-slate-700 p-2">
-                <summary>{String(record.design_id ?? record.candidate_id ?? record.sample_id ?? `Record ${index + 1}`)} · {String(record.status ?? record.classification ?? 'unclassified')}</summary>
-                <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(record, null, 2)}</pre>
-            </details>)}
-            <details className="mt-2"><summary>Native receipt and settings</summary><pre className="overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(native, null, 2)}</pre></details>
-        </div>}
+        {native && <BinderDiagnosticRawResults native={native} jobId={resultJob.id} />}
     </section>;
 
-    const targets = sourceModelId === 'bindcraft2'
-        ? (sourceParams.bindcraft2_settings as { targets?: Array<{ name?: string }> } | undefined)?.targets ?? [] : [];
+    const targets = (context?.source_job_id === sourceJobId ? context.targets : undefined) ?? ((sourceParams.bindcraft2_settings as { targets?: Array<{ name?: string }> } | undefined)?.targets ?? []);
     return <section aria-label="Selected experimental actions" className="mb-4 rounded-lg border border-slate-700 p-3 text-sm">
         <p className="text-slate-300">Selected Design subset: {selectedDesignIds.length}. Independent exploratory actions; neither produces a binding verdict.</p>
+        <button type="button" onClick={() => { void fetchDiagnosticSelectionContext(sourceJobId).then(setContext).catch(reason => setError(message(reason))); }}>Load candidate documents and declared targets</button>
+        {context && <p>Source {context.source_job_id}; scientific root {context.lineage_root_job_id}</p>}
+        {selectedDesignIds.map(id => (context?.candidate_documents[id]?.length ?? 0) > 0 && <label className="block" key={id}>Document/state for {id}
+            <select aria-label={`Document/state for ${id}`} value={selectedDocuments[id]?.artifact_id ?? ''} disabled={Boolean(candidateDocuments?.[id])}
+                onChange={event => { const artifact = context!.candidate_documents[id].find(row => row.artifact_id === event.target.value); setDocuments(current => {
+                    const next = { ...current }; if (artifact) next[id] = { artifact_id: artifact.artifact_id, target_state: artifact.target_state }; else delete next[id]; return next;
+                }); }}>
+                <option value="">Design primary document</option>{context!.candidate_documents[id].map(row => <option key={row.artifact_id} value={row.artifact_id}>{row.target_state ?? 'Unspecified state'} · {row.logical_path ?? row.artifact_id}</option>)}
+            </select></label>)}
         <details><summary className="cursor-pointer font-semibold">Blind pose (experimental)</summary>
             <div className="mt-3 flex flex-wrap gap-3">
-                {sourceModelId === 'bindcraft2' && <label>Declared target <select aria-label="Declared target" value={targetName} onChange={e => setTargetName(e.target.value)}>
+                {(sourceModelId === 'bindcraft2' || targets.some(target => target.name)) && <label>Declared target <select aria-label="Declared target" value={targetName} onChange={e => setTargetName(e.target.value)}>
                     <option value="">Select target</option>{targets.map(target => target.name && <option key={target.name} value={target.name}>{target.name}</option>)}
                 </select></label>}
                 <label>Target chains (comma-separated) <input aria-label="Blind pose target chains" value={targetChains} onChange={e => setTargetChains(e.target.value)} placeholder="A" /></label>

@@ -44,6 +44,8 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { hydrateInitialStageSelection, resolveExistingDeNovoGenerator, type ExistingDeNovoGenerator } from './deNovoGeneratorSelection';
 import { DeNovoModalityNotice } from './DeNovoModalityNotice';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request } from './BindCraft2Settings';
+import { BinderGeneratorChooser, type BinderNativeRoute } from './BinderGeneratorChooser';
+import { previewBindCraft2Campaign, type BC2CampaignPreview } from '../lib/bindcraft2AuthoringApi';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { createLatestAsyncResourceController } from '../lib/latestAsyncResource';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -61,6 +63,7 @@ import {
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, UntypedApiValue>;
+    onOpenNativeRoute?: (route: BinderNativeRoute) => void;
 }
 
 type DesignMode = 'cdr_only' | 'cdr_selective' | 'framework_allowed' | 'full_design';
@@ -226,7 +229,7 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 const hydrateDeNovoStageSelection = hydrateInitialStageSelection;
 
-export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
+export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues, onOpenNativeRoute }) => {
     const location = useLocation();
     const { gpuOptions } = useLiveGpuCatalog();
     const refinementQueryEnabled = useMemo(
@@ -293,6 +296,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [bc2LaunchAvailable, setBc2LaunchAvailable] = useState<boolean | undefined>(undefined);
     const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
     const [bc2SubmitError, setBc2SubmitError] = useState<string | null>(null);
+    const [bc2Preview, setBc2Preview] = useState<{ identity: string; revision: number; data: BC2CampaignPreview } | null>(null);
+    const [bc2PreviewBusy, setBc2PreviewBusy] = useState(false);
+    const bc2RequestIdentity = JSON.stringify(bc2Settings);
+    const currentBc2Request = useRef({ identity: bc2RequestIdentity, revision: 0 });
+    if (currentBc2Request.current.identity !== bc2RequestIdentity) {
+        currentBc2Request.current = { identity: bc2RequestIdentity, revision: currentBc2Request.current.revision + 1 };
+    }
+    const activeBc2Preview = bc2Preview?.identity === bc2RequestIdentity && bc2Preview.revision === currentBc2Request.current.revision ? bc2Preview.data : null;
     useEffect(() => {
         if (deNovoGenerator !== 'bindcraft2') return;
         const controller = new AbortController();
@@ -520,6 +531,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [manualCDRDefinitions, setManualCDRDefinitions] = useState<CDRDefinition[]>([]);
     const [showCDREditor, setShowCDREditor] = useState(false);
 
+    // Visibility only: preserve explicit historical flags, including false.
+    const hasLegacyThermoMPNN = (params?: Record<string, UntypedApiValue>) =>
+        [params, params?.quality_settings, params?.qualitySettings].some(values =>
+            values && ['run_thermompnn', 'run_stability_scoring'].some(key => Object.hasOwn(values, key)));
+    const [legacyThermoMPNNVisible, setLegacyThermoMPNNVisible] = useState(() => hasLegacyThermoMPNN(initialValues));
+
     // Quality settings
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => mergeQualitySettingsFromParams(initialValues));
     const hydratePhysicsSettings = (params: UntypedApiValue): PhysicsRefinementSettings => ({
@@ -538,6 +555,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         platform: params?.openmm_platform ?? PHYSICS_DEFAULTS.platform,
     });
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(() => hydratePhysicsSettings(initialValues));
+    const [legacyPhysicsVisible, setLegacyPhysicsVisible] = useState(() => Object.keys(initialValues ?? {}).some(key => key.startsWith('openmm_')));
     const resolvedFampnnCheckpoint = qualitySettings.fampnn_checkpoint.trim() || PRESETS.balanced.fampnn_checkpoint;
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
@@ -1351,6 +1369,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             console.log('[ANTIBODY_DENOVO] Initializing from values:', initialValues);
             setQualitySettings(mergeQualitySettingsFromParams(initialValues));
             setPhysicsSettings(hydratePhysicsSettings(initialValues));
+            setLegacyPhysicsVisible(Object.keys(initialValues).some(key => key.startsWith('openmm_')));
+            setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(initialValues));
 
             // Basic params
             if (initialValues.job_name) setJobName(initialValues.job_name);
@@ -2330,53 +2350,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 <div className="text-sm font-medium text-[var(--text-primary)]">Binder modality and generation engine</div>
                 <DeNovoModalityNotice generator={deNovoGenerator} />
             </div>
-            <div className="grid gap-3 md:grid-cols-3">
-                <button
-                    type="button"
-                    onClick={() => {
-                        setDeNovoGenerator('rfantibody');
-                        setShowBoltzgenFrameworkBrowser(false);
-                        setInteractiveGateStage('post_rfantibody');
-                    }}
-                    className="rounded-xl border p-4 text-left transition-colors"
-                    style={deNovoGenerator === 'rfantibody' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
-                >
-                    <div className="text-sm font-medium text-[var(--text-primary)]">RFantibody Stack</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                        Diffusion backbones, screening, and review-first nanobody generation in the original workflow structure.
-                    </p>
-                </button>
-                <button
-                    type="button"
-                    onClick={() => {
-                        setDeNovoGenerator('boltzgen');
-                        setShowBoltzgenFrameworkBrowser(false);
-                        setInteractiveGateStage('post_boltzgen');
-                    }}
-                    className="rounded-xl border p-4 text-left transition-colors"
-                    style={deNovoGenerator === 'boltzgen' ? themedSelectedStyle('#f59e0b') : themedInsetStyle}
-                >
-                    <div className="text-sm font-medium text-[var(--text-primary)]">BoltzGen Nanobody</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                        All-atom nanobody generation with the same target-selection workflow, then Antibody Refinement for downstream redesign.
-                    </p>
-                </button>
-                <button
-                    type="button"
-                    onClick={() => {
-                        setDeNovoGenerator('ppiflow');
-                        setShowBoltzgenFrameworkBrowser(false);
-                        setInteractiveGateStage('post_ppiflow_generator');
-                    }}
-                    className="rounded-xl border p-4 text-left transition-colors"
-                    style={deNovoGenerator === 'ppiflow' ? themedSelectedStyle('var(--accent-secondary)') : themedInsetStyle}
-                >
-                    <div className="text-sm font-medium text-[var(--text-primary)]">PPIFlow Seeded</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                        Seeded partial-flow backbone generation from antibody-target complexes, then Antibody Refinement for downstream redesign.
-                    </p>
-                </button>
-            </div>
+            <BinderGeneratorChooser generator={deNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} onSelect={engine => {
+                setDeNovoGenerator(engine);
+                setShowBoltzgenFrameworkBrowser(false);
+                if (engine !== 'bindcraft2') setInteractiveGateStage(engine === 'boltzgen' ? 'post_boltzgen' : engine === 'ppiflow' ? 'post_ppiflow_generator' : 'post_rfantibody');
+            }} />
 
             <div className="rounded-xl border p-4" style={themedInsetStyle}>
                 <div className="flex items-center justify-between gap-3">
@@ -2394,10 +2372,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-4">
                     {([
-                        ['sequence_design', 'Sequence Design', 'FAMPNN / AntiFold / ProteinMPNN'],
+                        ['sequence_design', 'Sequence Design', 'FAMPNN / Caliby / ProteinMPNN'],
                         ['ppiflow', 'PPIFlow', 'Backbone refine or maturation'],
                         ['validation', 'Validation', 'Boltz2 / Protenix / ESMFold2'],
-                        ['qc', 'QC + Physics', 'ThermoMPNN / OpenMM / Frustra'],
+                        ['qc', 'Analysis', 'FrustraMPNN / antibody annotation'],
                     ] as Array<[DeNovoOrchestrationStage, string, string]>).map(([stageKey, label, detail]) => {
                         // Saved selections remain visible and removable; this standalone route
                         // refuses to launch with them rather than silently dropping them.
@@ -2434,11 +2412,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </p>
                 )}
             </div>
-            <button type="button" onClick={() => setDeNovoGenerator('bindcraft2')}
-                className="mt-3 rounded-xl border p-4 text-left" style={themedInsetStyle}>
-                <span className="font-medium">BindCraft2 campaign (draft only)</span>
-                <p className="text-xs">Native campaign settings; not an antibody refinement preset. Execution is not available here.</p>
-            </button>
+            <p className="text-sm text-[var(--text-secondary)]">Optional selected-candidate physics: use “Use as MD starting structure” in candidate results, then select GROMACS in the existing MD launcher. Native BC2 relaxation is separate.</p>
         </div>
     ) : null;
 
@@ -2450,37 +2424,57 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     );
 
     if (!isRefinementMode && deNovoGenerator === 'bindcraft2') return (
-        <section aria-label="BindCraft2 campaign draft" className="rounded-xl border p-6 space-y-4" style={themedPanelStyle}>
+        <section aria-label="BindCraft2 campaign" className="rounded-xl border p-6 space-y-4" style={themedPanelStyle}>
             <button type="button" onClick={onBack}>Back to workflows</button>
             <h2 className="text-xl font-semibold">De Novo Binder Design · BindCraft2</h2>
-            <p>{bc2LaunchAvailable === true ? 'Native BindCraft2 campaign. Candidate review and compatible downstream operations remain separate from generation.' : 'Native campaign draft. No BindCraft2 job is submitted by this launcher. Candidate review and compatible downstream operations remain separate from the native campaign.'}</p>
-            <button type="button" onClick={() => setDeNovoGenerator('rfantibody')}>Choose RFantibody</button>{' · '}
-            <button type="button" onClick={() => setDeNovoGenerator('boltzgen')}>Choose BoltzGen VHH</button>{' · '}
-            <button type="button" onClick={() => setDeNovoGenerator('ppiflow')}>Choose seeded PPIFlow</button>
+            <p>Native campaign generation. Review candidates before choosing optional selected operations; BC2-native relaxation remains part of this model.</p>
+            <BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} />
             <label className="block">Draft name <input aria-label="Draft name" value={jobName} onChange={event => setJobName(event.target.value)} /></label>
             {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} />
                 : <p role="status">{bc2DiscoveryError ?? 'Loading model-owned settings inventory…'}</p>}
+            <button type="button" disabled={bc2PreviewBusy} onClick={async () => {
+                setBc2SubmitError(null);
+                setBc2PreviewBusy(true);
+                const { identity, revision } = currentBc2Request.current;
+                try {
+                    const data = await previewBindCraft2Campaign(bc2Settings);
+                    if (currentBc2Request.current.revision === revision) setBc2Preview({ identity, revision, data });
+                } catch (error) {
+                    const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
+                    const detail = failed.response?.data?.detail;
+                    setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign preview failed');
+                } finally { setBc2PreviewBusy(false); }
+            }}>{bc2PreviewBusy ? 'Compiling native preview…' : 'Preview native campaign'}</button>
             {bc2LaunchAvailable === true && <>
                 <ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />
-                <button type="button" disabled={submitMutation.isPending} onClick={async () => {
+                <button type="button" disabled={submitMutation.isPending || !activeBc2Preview} onClick={async () => {
+                    if (!activeBc2Preview) return;
                     setBc2SubmitError(null);
-                    try { await submitMutation.mutateAsync(bc2CampaignRequest); }
+                    try { await submitMutation.mutateAsync({ ...bc2CampaignRequest,
+                        params: { ...bc2CampaignRequest.params, bc2_preview_digest: activeBc2Preview.preview_digest } }); }
                     catch (error) {
                         const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
                         const detail = failed.response?.data?.detail;
                         setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign submission failed');
                     }
                 }}>Launch BindCraft2 campaign</button>
-                {bc2SubmitError && <p role="alert">{bc2SubmitError}</p>}
             </>}
-            <details><summary>{bc2LaunchAvailable === true ? 'Native request preview' : 'Saved native request preview (not executable)'}</summary>
-                <pre>{JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', params: { bindcraft2_settings: bc2Settings } }, null, 2)}</pre>
+            {bc2SubmitError && <p role="alert">{bc2SubmitError}</p>}
+            {!activeBc2Preview && <p role="status">Preview the current native settings before launch. Scientific edits invalidate the previous preview.</p>}
+            {activeBc2Preview && <section aria-label="Compiled native campaign preview" className="space-y-2 break-words">
+                <p>Preview digest: <code>{activeBc2Preview.preview_digest}</code></p>
+                {activeBc2Preview.note && <p>{activeBc2Preview.note}</p>}
+                {(['warnings', 'blockers'] as const).map(kind => activeBc2Preview[kind]?.map((message, index) => <p key={`${kind}-${index}`}>{kind}: {typeof message === 'string' ? message : JSON.stringify(message)}</p>))}
+                <details open><summary>Effective native settings</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap">{JSON.stringify(activeBc2Preview.effective_settings, null, 2)}</pre></details>
+            </section>}
+            <details><summary>Requested native settings</summary>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap">{JSON.stringify(bc2CampaignRequest, null, 2)}</pre>
             </details>
             <button type="button" onClick={() => setShowTemplateManager(true)}>Save campaign draft</button>
             <TemplateManagerModal isOpen={showTemplateManager} onClose={() => setShowTemplateManager(false)}
                 onSelect={template => {
                     const params = template.params || {};
-                    if (resolveExistingDeNovoGenerator(params) !== 'bindcraft2') return;
+                    if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') return;
                     setJobName(params.job_name ?? template.name);
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
@@ -2505,7 +2499,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <div>
                         <div className="flex items-center gap-2">
                             <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-                                {isRefinementMode ? 'Antibody Refinement' : 'De Novo Nanobody Toolkit'}
+                                {isRefinementMode ? 'Antibody Refinement' : 'De Novo Binder Design'}
                             </h2>
                             <span
                                 className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em]"
@@ -2750,7 +2744,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             >
                                 <option value="fampnn">FAMPNN</option>
                                 <option value="caliby">Caliby</option>
-                                <option value="antifold">AntiFold</option>
+                                {(seqDesigner === 'antifold' || initialValues?.seq_design_antifold === true) && <option value="antifold">AntiFold (saved antibody operation)</option>}
                                 <option value="proteinmpnn">ProteinMPNN</option>
                             </select>
                         </label>
@@ -4934,13 +4928,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         showStructureValidationSettings={showStructureValidationQualitySettings}
                         showFampnnSettings={showFampnnQualitySettings}
                         showCalibySettings={showCalibyQualitySettings}
+                        showThermoMPNN={legacyThermoMPNNVisible}
                         showPreValidationFiltering={effectiveSeqDesigner === 'fampnn' && effectiveRunStructureValidation}
                         showPostValidationFiltering={effectiveRunStructureValidation && structureValidator !== 'esmfold2'}
                     />
                     )}
 
                     {/* Physics Refinement Panel (OpenMM) */}
-                    {showQcPanels && (
+                    {showQcPanels && legacyPhysicsVisible && (
                     <PhysicsRefinementPanel
                         settings={physicsSettings}
                         onSettingsChange={setPhysicsSettings}
@@ -5710,6 +5705,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             (Object.keys(PRESETS.balanced) as Array<keyof QualitySettings>).some((key) => p[key] !== undefined)
                         );
                         setPhysicsSettings(hydratePhysicsSettings(p));
+                        setLegacyPhysicsVisible(Object.keys(p).some(key => key.startsWith('openmm_')));
+                        setLegacyThermoMPNNVisible(hasLegacyThermoMPNN(p));
                         if (hasQualityOverrides) {
                             setQualitySettings(mergeQualitySettingsFromParams(p));
                             loaded.push('quality_settings');

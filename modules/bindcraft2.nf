@@ -20,3 +20,23 @@ process RunBindCraft2 {
     python3 -c 'import json; from pathlib import Path; Path("bc2_complete.json").write_text(json.dumps({"campaign_root": "${campaign_dir}/campaign", "compilation": "${campaign_dir}/compilation.json"}) + "\\n")'
     """
 }
+
+// Postprocessing uses existing structures/tables, not AF2 or a reserved GPU.
+process PostprocessBindCraft2 {
+    label 'cpu'
+    container { System.getenv('BMS_SELECTED_IMAGE_BINDCRAFT2_SIF') ?: "${params.container_dir}/bindcraft2.sif" }
+    containerOptions '--env JAX_PLATFORMS=cpu'
+
+    input:
+    path compilation
+    val campaign_dir
+
+    output:
+    path 'bc2_complete.json', emit: completion
+
+    script:
+    """
+    python3 '${params.code_root}/scripts/run_bindcraft2_campaign.py' '${compilation}' '${campaign_dir}' --native-source /opt/bindcraft --execute
+    python3 -c 'import json; from pathlib import Path; Path("bc2_complete.json").write_text(json.dumps({"campaign_root": "${campaign_dir}/campaign", "compilation": "${campaign_dir}/compilation.json"}) + "\\n")'
+    """
+}

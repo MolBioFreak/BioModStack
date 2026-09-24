@@ -188,7 +188,14 @@ async def test_returned_tree_has_same_scientific_readback(tmp_path):
                     local_publication, local_receipt = await read_published_native_results(job, session)
                 else:
                     remote_publication, remote_receipt = await read_published_native_results(job, session)
-            assert pages['local'] == pages['remote']
+            # Existing file URLs and Design handles are placement/Job scoped;
+            # native observations, identity, states and metrics must be identical.
+            def scientific_page(page):
+                return {**{key: value for key, value in page.items() if key != 'artifacts'},
+                        'rows': [{key: value for key, value in row.items()
+                                  if key not in ('design_id', 'structures', 'download_url')}
+                                 for row in page['rows']]}
+            assert scientific_page(pages['local']) == scientific_page(pages['remote'])
             assert local_publication == remote_publication
             assert local_receipt['arms'] == remote_receipt['arms']
             assert local_receipt['files'] == remote_receipt['files']

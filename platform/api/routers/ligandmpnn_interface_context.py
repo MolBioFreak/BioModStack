@@ -1,5 +1,7 @@
 """Typed selected-only LigandMPNN interface-context route."""
 from pathlib import Path
+import os
+from services.binder_diagnostic_selection import root_id, selected_document
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -25,7 +27,6 @@ async def submit_selected(selection: InterfaceContextSelection, background_tasks
     if source is None:
         raise HTTPException(404, 'Source Job not found')
     # This diagnostic consumes exact owned Designs, not the antibody refinement lineage.
-    root = source
     designs = list((await session.scalars(select(Design).where(Design.id.in_(selection.candidate_ids)))).all())
     by_id = {design.id: design for design in designs}
     if len(by_id) != len(selection.candidate_ids):
@@ -37,36 +38,41 @@ async def submit_selected(selection: InterfaceContextSelection, background_tasks
         await read_published_native_results(source, session)
     if selection.round_id != source.id:
         raise HTTPException(422, 'Round ID must identify the requested source Job')
-    sources = {}
+    if set(selection.candidate_documents) - set(selection.candidate_ids):
+        raise HTTPException(422, "Document selectors must belong to selected Designs")
+    sources, originals = {}, {}
     try:
         allowed = tuple(root.resolve() for root in get_allowed_roots().values())
         identities = {}
         for candidate in selection.candidate_ids:
             design = by_id[candidate]
-            path = resolve_runtime_data_path(Path(design.pdb_path))
+            document, metadata = await selected_document(source, design, selection.candidate_documents.get(candidate), session)
+            path = resolve_runtime_data_path(document)
             if path.suffix.lower() not in {'.pdb', '.cif', '.mmcif'} or not any(path.is_relative_to(r) for r in allowed):
                 raise ValueError('selected structure must be a managed PDB or CIF')
             original = regular_bytes(path)
             import hashlib
+            if metadata.get('artifact_sha256') and hashlib.sha256(original).hexdigest() != metadata['artifact_sha256']:
+                raise ValueError('Selected document bytes differ from its registered artifact')
             identities[candidate] = {'path': str(path), 'sha256': hashlib.sha256(original).hexdigest(),
-                                     'format': path.suffix.lower(), 'owner_job_id': source.id}
-            if source.model_id == 'bindcraft2':
-                identities[candidate]['primary_artifact_id'] = (design.provenance or {})['primary_artifact_id']
+                                     'format': path.suffix.lower(), **metadata}
+            originals[candidate] = original
             if path.suffix.lower() in {'.cif', '.mmcif'}:
                 from routers.jobs import _cif_selection_pdb
                 import tempfile
-                with tempfile.TemporaryDirectory() as scratch:
+                with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as scratch:
                     converted = Path(scratch) / 'selected.pdb'
                     _cif_selection_pdb(path, converted)
                     sources[candidate] = regular_bytes(converted)
             else:
                 sources[candidate] = original
-        binding = materialize(selection, sources, source_identities=identities)
+        binding = materialize(selection, sources, source_identities=identities, original_sources=originals,
+                              lineage_root_job_id=root_id(source))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
     params = {KEY: binding, 'interface_context_manifest': binding['manifest'],
               'selection_source_job_id': source.id,
-              'lineage_root_job_id': getattr(source, 'lineage_root_job_id', None) or root.id,
+              'lineage_root_job_id': root_id(source),
               'result_integrity_requires_designs': False}
     params.update(selection.settings.model_dump())
     request = JobCreate(name=f'interface-context-{source.id[:8]}', model_id='ligandmpnn',

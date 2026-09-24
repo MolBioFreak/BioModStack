@@ -46,7 +46,7 @@ PROCESS_CONTRACTS = {
     'modules/boltzgen.nf:CollectBoltzGenOutputs': (('process_low',), ('path child_outputs_json',), ('path "collected/*.pdb", emit: pdbs, optional: true', 'path "collected/*.{json,npz,csv}", emit: jsons, optional: true', 'path "collection_manifest.json", emit: manifest'), ('scripts/child_job_utils.py',), ()),
     'modules/boltzgen.nf:AggregateBoltzGenResults': (('process_low',), ('val parent_job_id', 'path collected_pdbs', 'path collected_jsons', 'path manifest'), ('path "aggregation_report.json", emit: report',), (), ()),
     'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
-    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('path(pdb_files)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_binder.log"), emit: log'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(source_identity)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_constraints.csv"), emit: constraints', 'path("caliby_selection.json"), emit: selection, optional: true', 'path("caliby_binder.log"), emit: log'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
     'modules/caliby.nf:FilterCaliby': (('Caliby',), ('tuple path(pdb_files), path(json_files)',), ('path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path("filtered_output/generator_*.json"), emit: jsons, optional: true', 'path("filter_caliby_${task.index}.log"), emit: logs'), ('scripts/filter_caliby.py',), ()),
     'modules/combine_metadata.nf:CombineMetadata': (('pyrosetta_tools',), ('path metadata_fold', 'path metadata_fold_seq'), ('path ("combined_metadata.csv"), emit: csv', 'path "combined_metadata.log"'), (), ()),
     'modules/compress.nf:Compress': (('pyrosetta_tools',), ('val program', 'path files'), ('path "*.tar.gz"',), (), ()),
@@ -239,6 +239,29 @@ PROCESS_CONTRACTS = {
 }
 
 
+# Binder selected leaves reuse these exact native process declarations.
+PROCESS_CONTRACTS.update({
+    'modules/bindcraft2.nf:PostprocessBindCraft2': (
+        ('cpu',), ('path compilation', 'val campaign_dir'),
+        ("path 'bc2_complete.json', emit: completion",),
+        ('scripts/run_bindcraft2_campaign.py',), ('container "${params.container_dir}/bindcraft2.sif"',)),
+    'workflows/binder_refinement.nf:PrepareBinderRefinementRegions': (
+        ('CPU',), ('tuple val(meta), path(pdb)',),
+        ('tuple val(meta), path(pdb), path("${meta.id}_seed.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: regions',),
+        ('scripts/prepare_maturation_regions.py',), ()),
+    'workflows/binder_refinement.nf:PrepareBinderRedesign': (
+        ('pyrosetta_tools',), ('tuple val(meta), path(pdb), path(anchors)',),
+        ("tuple val(meta), path('fampnn_input/*.pdb'), path('fampnn.csv'), path('transport'), emit: prep",),
+        ('scripts/prep_fampnn_designs.py', 'scripts/prep_binder_fampnn_constraints.py'), ()),
+    'workflows/binder_refinement.nf:PublishBinderRefinement': (
+        ('CPU',), ('tuple val(meta), path(pdb)',),
+        ("tuple val(meta), path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: metadata"),
+        ('scripts/publish_binder_refinement.py',), ()),
+    'workflows/maturation_child_core.nf:PublishMaturationSampleIdentity': (
+        ('process_low',), ('tuple val(meta), path(sample_pdb)',),
+        ("path '*_sample_identity.json', emit: sidecar",), ('scripts/maturation_identity.py',), ()),
+})
+
 # Images are the existing nextflow.config labels, not top-level model guesses.
 LABEL_ASSETS = {
     'AF2': ('af2.sif', None, 'alphafold', 'af2_models'),
@@ -253,6 +276,7 @@ LABEL_ASSETS = {
     'MolecularDynamicsOpenMM': ('openmm-md-8.5.2.sif', 'md_openmm_container', None, None),
     'MolecularDynamicsCpu': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
     'ESMFold2': ('esmfold2.sif', 'esmf_container_path', 'esmfold2', None),
+    'Caliby': ('caliby.sif', None, None, None),
     'FAMPNN': ('fampnn.sif', None, None, None),
     'MPNN': ('dl_binder_design.sif', None, None, None),
     'pyrosetta_tools': ('pyrosetta_tools.sif', None, None, None),
@@ -824,8 +848,11 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         return True
 
     if workflow == 'bindcraft2' and model_id == 'bindcraft2':
+        if mode in {'rank', 'filter', 'campaign_output', 'archive', 'unarchive', 'score'}:
+            a.stage('PostprocessBindCraft2')
+            return True
         # The installed image ships MPNN weights; only AF2 params are external.
-        # Keep the disabled model's availability distinct from this source closure.
+        # Model launch availability remains separate from selected asset closure.
         weights = a.asset('weights', 'alphafold/params',
             'modules/bindcraft2.nf:RunBindCraft2:BINDCRAFT_AF2_PARAMS')
         a.stage('RunBindCraft2', extra=(weights,))
@@ -930,6 +957,37 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 expansion={'authority': entrypoint + ':OpenInteractiveGate', 'grouping': 'selected stage artifacts',
                            'candidate_identity': 'checkpoint + selected artifact digest', 'join': 'explicit operator decision only'})
             a.callback('OpenInteractiveGate', 'scripts/open_stage_gate.py')
+        return True
+
+    if workflow == 'caliby_binder' and (model_id, mode) == ('caliby_binder', 'design'):
+        from pathlib import Path
+        from scripts.caliby_runtime import resolve_expected_caliby_checkpoint
+        root = Path('/weights/caliby/model_params')
+        selected = resolve_expected_caliby_checkpoint(p.get('caliby_model_name') or 'soluble_caliby_v1', root)
+        weights = [a.asset('weights', 'caliby/model_params/' + selected.relative_to(root).as_posix(),
+                           'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint')]
+        if yes('caliby_run_self_consistency_eval'):
+            weights.append(a.asset('weights', 'caliby/model_params/af2',
+                'caliby.self_consistency_eval; MODEL_PARAMS_DIR/af2'))
+        a.stage('RunCalibyBinder', extra=tuple(weights))
+        return True
+
+    if workflow == 'binder_refinement' and (model_id, mode) == ('binder_refinement', 'refine'):
+        repack, anchors, flow, redesign = (yes(key) for key in (
+            'maturation_repack_enabled', 'maturation_anchors_enabled',
+            'maturation_flow_enabled', 'maturation_redesign_enabled'))
+        prepared = ()
+        if repack or anchors:
+            prepared = a.chain(['IdentifyAnchorResidues'])
+        elif flow or redesign:
+            prepared = a.chain(['PrepareBinderRefinementRegions'])
+        after = prepared if repack else ()
+        if flow:
+            after = a.chain(['RunPartialFlow'], prepared)
+        if redesign:
+            after = a.chain(['PrepareBinderRedesign', 'RunMaturationFAMPNN'],
+                            tuple(dict.fromkeys((*after, *prepared))))
+        a.stage('PublishBinderRefinement', after)
         return True
 
     if workflow in {'ppiflow_generator_design', 'maturation_child'}:

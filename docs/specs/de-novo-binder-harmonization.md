@@ -1,6 +1,8 @@
 # Binder workflow harmonization specification
 
-Status: review-ready corrective specification. This is not a declaration that the upgrade works or authorization to run campaigns, rent workers, deploy, or change scientific behavior.
+Status: reviewed corrective specification; implementation authorized by Christian on 23 September 2026. This is not a declaration that the upgrade works or authorization to run campaigns, rent workers, or change scientific behavior.
+
+Implementation scope clarification: Christian's subsequent instruction supersedes the proposed new classification/policy machinery in H09 and the corresponding crosswalk entries. Retain raw, independent diagnostics; do not add cutoff-policy CRUD, automatic pass/fail, new admission layers or restart-time proof requirements. Existing ownership, input-integrity and model-native checks remain. Native/local/remote runs not performed are evidence limits, not new execution restrictions.
 
 Reviewed source: `6e01a27da607e41c972f034f0b15744a619837dd`, 23 September 2026. Review checkout: `/home/dalab/biomodstack/wt-binder-agnostic-integration`. The canonical Development checkout and live API build reported the same revision. The live launcher was inspected through its DOM without submitting a job.
 

@@ -201,7 +201,8 @@ def test_compiler_selected_mode_preserves_manifest_and_all_sampling(source, tmp_
     job, designs, inputs, target = source
     destination = inputs / 'compiler-selected'
     binding = selected.prepare_selected(job, designs, target_pdb=str(target),
-        binder_chains={d.id: ['B'] for d in designs}, target_chains=['T'], directory=destination)
+        binder_chains={d.id: ['B'] for d in designs}, target_chains=['T'], directory=destination,
+        target_context={'path': str(target), 'source_job_id': job.id})
     params = selected.launch_params(destination, variant='full', model_id_or_path='',
         num_loops=4, num_sampling_steps=83, num_diffusion_samples=2, seed=17)
     from services.nextflow import compile_nextflow_invocation
@@ -234,6 +235,7 @@ def test_compiler_selected_mode_preserves_manifest_and_all_sampling(source, tmp_
         assets = bundle._input_assets(normalized.params, native_invocation=invocation,
             repo_root=get_code_root(), runtime_paths=set(), output_dir=tmp_path / 'out')
     assert (destination.resolve(), next(relative for path, relative in assets if path == destination.resolve())) in assets
+    assert [path for path, _ in assets] == [destination.resolve()]
     assert all(path != destination / 'selection.json' for path, _ in assets)
     remote = '/worker/inputs/selected'
     relocated = bundle._rewrite_maturation_pdb_paths(','.join(params['blind_pose_candidate_pdbs']),

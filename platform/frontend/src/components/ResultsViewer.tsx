@@ -63,6 +63,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
+import { BindCraft2JobResults } from './BindCraft2JobResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
@@ -74,6 +75,8 @@ import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import BlindPoseSelectedControls from './BlindPoseSelectedControls';
+import BinderSelectedControls from './BinderSelectedControls';
+import { readBinderSelection, writeBinderSelection } from '../lib/binderContinuation';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import {
     parseFrustraMpnnExperimentContext,
@@ -1697,7 +1700,15 @@ export function ResultsViewer() {
         params.set('design_id', id);
         navigate(`${location.pathname}?${params}`, { replace: true });
     }, [location.pathname, location.search, navigate]);
-    const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
+    const [designSelection, setDesignSelection] = useState(() => ({ jobId: selectedJobId, ids: readBinderSelection(selectedJobId) }));
+    const selectedDesignIds = designSelection.jobId === selectedJobId ? designSelection.ids : readBinderSelection(selectedJobId);
+    const setSelectedDesignIds = useCallback((value: string[] | ((current: string[]) => string[])) => {
+        setDesignSelection(current => {
+            const previous = current.jobId === selectedJobId ? current.ids : readBinderSelection(selectedJobId);
+            return { jobId: selectedJobId, ids: typeof value === 'function' ? value(previous) : value };
+        });
+    }, [selectedJobId]);
+    useEffect(() => { writeBinderSelection(designSelection.jobId, designSelection.ids); }, [designSelection]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
@@ -3255,10 +3266,10 @@ export function ResultsViewer() {
     }, [someVisibleSelected]);
 
     useEffect(() => {
-        setSelectedDesignIds([]);
+        setSelectedDesignIds(readBinderSelection(selectedJobId));
         setIterationMessage(null);
         setSavedFilterSetName('');
-    }, [selectedJobId]);
+    }, [selectedJobId, setSelectedDesignIds]);
 
     useEffect(() => {
         setShowOverviewAnalysisMenu(false);
@@ -5117,9 +5128,11 @@ export function ResultsViewer() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
-    const selectedFrustraMpnnDesigns = selectedDesignIds
-        .map((designId) => orderedDesigns.find((design) => design.id === designId))
-        .filter((design): design is Design => Boolean(design));
+    const { data: selectedFrustraMpnnDesigns = [], error: selectedRowsError } = useQuery({
+        queryKey: ['selected-design-details', selectedJobId, selectedDesignIds],
+        queryFn: () => Promise.all(selectedDesignIds.map(id => fetchDesignById(id, selectedJobId).then(response => response.data))),
+        enabled: selectedDesignIds.length > 0,
+    });
     const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
         <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
             {resultModelHierarchy.map((item) => <button
@@ -5355,6 +5368,9 @@ export function ResultsViewer() {
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
+                {activeJob?.model_id === 'bindcraft2' && (
+                    <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} />
+                )}
                 {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
                     || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
                     <BlindPoseSelectedControls key={activeJob.id} sourceJobId={activeJob.id}
@@ -5527,6 +5543,11 @@ export function ResultsViewer() {
                             </div>
                         )}
 
+                        {activeJob && <BinderSelectedControls key={`binder-${activeJob.id}`}
+                            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
+                            onOpenJob={handleSelectJob}
+                            onStartMD={designId => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, designId))} />}
+                        {selectedRowsError && <p role="alert">Selected Design details could not be loaded. The selected IDs have been retained.</p>}
                         {activeJob && selectedFrustraMpnnDesigns.length > 0 && (
                             <FrustraMpnnAnalysisControls
                                 parentJobId={activeJob.id}

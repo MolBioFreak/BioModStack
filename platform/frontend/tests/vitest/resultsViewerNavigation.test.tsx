@@ -5,6 +5,7 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import StructureViewerPane from '../../src/components/StructureViewerPane';
+import { DesignComparePane } from '../../src/components/DesignComparePane';
 // GPU canvas is outside this routing test; actual StructureViewerPane remains mounted.
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-test-gpu-canvas /> }));
 import { ResultsViewer } from '../../src/components/ResultsViewer';
@@ -36,6 +37,41 @@ test('ResultsViewer mounts both optional selected actions without a selection', 
     const row = renderer!.root.findAllByType('tr').find(candidate => text(candidate).includes('a-0'))!;
     await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
     expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['a-0']);
+});
+
+test('BC2 native records supplement the mounted Design selection and comparison workbench', async () => {
+    const paths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        paths.push(url);
+        if (url.endsWith('/settings')) return { ok: true, json: async () => ({ requested_settings: {}, effective_settings: {} }) };
+        if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected native request ${url}`);
+        return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: 'arm-A',
+            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 1,
+            arms: [{ name: 'arm-A', accounting: {} }], accounting: {}, metadata: null,
+            rows: [{ design: 'native-evidence', native_score: 0 }],
+        }) };
+    }));
+    try {
+        await setup('/designs/parent', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
+        expect(text(renderer!.root)).toContain('native-evidence');
+        expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
+        await act(async () => renderer!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'retained' } }));
+        await flush();
+        expect(paths.some(path => path.includes('stage=retained'))).toBe(true);
+        const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node).includes(label))!;
+        await act(async () => button('Data Table').props.onClick()); await flush();
+        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('bc2-1'))!;
+        await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
+        expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
+        expect(button('Compare Designs')).toBeDefined();
+        expect(button('Compare Jobs')).toBeDefined();
+        await act(async () => button('Compare Designs').props.onClick()); await flush();
+        expect(renderer!.root.findByType(DesignComparePane).props.designs.map((row: { id: string }) => row.id)).toEqual(['bc2-1', 'bc2-2']);
+        expect(text(renderer!.root)).toContain('native-evidence');
+        await act(async () => button('Data Table').props.onClick()); await flush();
+        expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
+        expect(calls.some(call => call.url === '/api/designs' && call.params.job_id === 'parent')).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
 });
 
 test('mounted selected actions submit exact independent subsets and read native result', async () => {

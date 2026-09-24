@@ -300,9 +300,11 @@ export function JobSubmission() {
         : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
 
+    const pendingTemplateRoute = useRef<string | null | undefined>(undefined);
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
         const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
+        pendingTemplateRoute.current = canonicalId;
         setSelectedTemplateIdInternal(canonicalId);
         const next = new URLSearchParams(searchParams);
         if (canonicalId) {
@@ -462,7 +464,7 @@ export function JobSubmission() {
                 if (data.model_id === 'bindcraft2') {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
-                    setClonedValues({ ...data.params, name: data.name, denovo_generator: 'bindcraft2', mode: data.mode });
+                    setClonedValues({ ...data.params, name: data.name, job_name: data.name, model_id: data.model_id, denovo_generator: 'bindcraft2', mode: data.mode });
                 }
                 else if (data.model_id === 'antibody_denovo' || data.model_id === 'template_antibody_denovo' || data.mode === 'antibody_denovo' || isAntibodyPipelineMode(data.mode) || data.params?.antibody_pipeline_steps) {
                     setWizardMode('templates');
@@ -506,7 +508,7 @@ export function JobSubmission() {
                         source_job_id: data.source_job_id,
                     });
                 }
-                else if (data.model_id === 'boltzgen') {
+                else if (data.model_id === 'boltzgen' && data.mode === 'nanobody_binder') {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
                     setClonedValues({ ...data.params, name: data.name, denovo_generator: 'boltzgen' });
@@ -566,6 +568,7 @@ export function JobSubmission() {
                 // 7. Manual Mode
                 else {
                     setWizardMode('manual');
+                    setSelectedTemplateId(null);
                     setSelectedModelId(data.model_id);
                     setSelectedModeId(data.mode);
                     setClonedValues(data.params);
@@ -601,7 +604,6 @@ export function JobSubmission() {
     const dedicatedTemplateByModelId: Record<string, string> = {
         template_antibody_denovo: 'antibody_denovo',
         bindcraft2: 'antibody_denovo',
-        boltzgen: 'antibody_denovo',
 
         protein_modification_experimental: 'protein_modification_experimental',
         protein_local_redesign: 'protein_modification_experimental',
@@ -625,6 +627,12 @@ export function JobSubmission() {
     );
 
     useEffect(() => {
+        // Router transitions can lag local state by a render. Do not reopen the
+        // previous template while an explicit native-model handoff clears its URL.
+        if (pendingTemplateRoute.current !== undefined) {
+            if (routeTemplateId !== pendingTemplateRoute.current) return;
+            pendingTemplateRoute.current = undefined;
+        }
         if (!routeTemplateId || routeTemplateId === selectedTemplateId) return;
         if (routeTemplateId === 'boltz_cp_experimental') {
             setSelectedTemplateIdInternal('structure_prediction');
@@ -639,6 +647,18 @@ export function JobSubmission() {
     }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
+        // Historical generic BoltzGen templates can carry the old antibody card
+        // identity. The explicit native model/mode remains the scientific owner.
+        if (template.model_id === 'boltzgen' && template.mode && template.mode !== 'nanobody_binder') {
+            setWizardMode('manual');
+            setSelectedTemplateId(null);
+            setSelectedModelId(template.model_id);
+            setSelectedModeId(template.mode);
+            setClonedValues(template.params || {});
+            setParams(template.params || {});
+            setJobName(template.params?.job_name || template.params?.name || template.name || '');
+            return;
+        }
         const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
         const apiTemplateId = rawApiTemplateId === 'confornets_experimental'
             ? 'conformational_mapping'
@@ -670,7 +690,7 @@ export function JobSubmission() {
 
         const dedicatedTemplateId =
             (isDedicatedLauncherTemplate(apiTemplateId) && apiTemplateId) ||
-            (template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
+            (template.model_id === 'boltzgen' && template.mode === 'nanobody_binder' ? 'antibody_denovo' : template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
@@ -1494,6 +1514,19 @@ export function JobSubmission() {
                                 <AntibodyDenovoTemplate
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
+                                    onOpenNativeRoute={route => {
+                                        setClonedValues(undefined);
+                                        setParams({});
+                                        if ('templateId' in route) {
+                                            setWizardMode('experimental');
+                                            setSelectedTemplateId(route.templateId);
+                                        } else {
+                                            setWizardMode('manual');
+                                            setSelectedTemplateId(null);
+                                            setSelectedModelId(route.modelId);
+                                            setSelectedModeId(route.mode);
+                                        }
+                                    }}
                                 />
                             ) : selectedTemplateId === 'structure_prediction' ? (
                                 <StructurePredictionTemplate

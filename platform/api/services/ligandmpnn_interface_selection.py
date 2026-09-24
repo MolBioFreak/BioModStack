@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from services.ligandmpnn_interface_context import read_context_result
+from services.binder_diagnostic_selection import CandidateDocument
 
 # Shared jobs admission consults this only for the selected interface-context
 # mode; a client-supplied manifest or binding is never submission authority.
@@ -49,6 +50,7 @@ class InterfaceContextSelection(BaseModel):
     round_id: str = Field(min_length=1)
     candidate_ids: list[str] = Field(min_length=1, max_length=128)
     settings: InterfaceContextSettings
+    candidate_documents: dict[str, CandidateDocument] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def unique_candidates(self):

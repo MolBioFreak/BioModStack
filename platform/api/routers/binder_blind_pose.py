@@ -1,5 +1,6 @@
 """Independent selected-candidate blind pose API (mount in main.py)."""
-from pathlib import Path
+from types import SimpleNamespace
+from services.binder_diagnostic_selection import CandidateDocument, declared_targets, documents, root_id, selected_document
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -32,6 +33,7 @@ class SelectedBlindPoseRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_job_id: str
     target_name: str | None = None
+    candidate_documents: dict[str, CandidateDocument] = Field(default_factory=dict)
     design_ids: list[str] = Field(min_length=1)
     binder_chains: dict[str, list[str]]
     target_chains: list[str] = Field(min_length=1)
@@ -50,18 +52,12 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
     source = await session.get(Job, request.source_job_id)
     if source is None:
         raise HTTPException(404, 'Source job not found')
-    target = (source.params or {}).get('target_pdb')
-    if getattr(source, 'model_id', None) == 'bindcraft2':
-        targets = ((source.params or {}).get('bindcraft2_settings') or {}).get('targets')
-        if not isinstance(targets, list):
-            raise HTTPException(422, 'BC2 source has no independently declared targets')
-        matches = [t for t in targets if isinstance(t, dict) and
-                   (request.target_name is None or t.get('name') == request.target_name)]
-        if len(matches) != 1:
-            raise HTTPException(422, 'Select one independently declared BC2 target_name')
-        target = matches[0].get('target_path')
-    elif request.target_name is not None:
-        raise HTTPException(422, 'target_name applies only to BC2 sources')
+    targets = await declared_targets(source, session)
+    matches = [t for t in targets if request.target_name is None or t.get('name') == request.target_name]
+    if len(matches) != 1:
+        raise HTTPException(422, 'Select one independently declared target_name')
+    target_context = matches[0]
+    target = target_context.get('target_path')
     if not isinstance(target, str) or not target:
         raise HTTPException(422, 'Source job has no independently declared target structure')
     designs = (await session.scalars(select(Design).where(Design.id.in_(request.design_ids)))).all()
@@ -70,11 +66,19 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
         raise HTTPException(404, 'Selected Design not found')
     if any(d.job_id != source.id for d in designs):
         raise HTTPException(422, 'Selected Design belongs to a different job')
+    if set(request.candidate_documents) - set(request.design_ids):
+        raise HTTPException(422, 'Document selectors must belong to selected Designs')
     directory = get_inputs_dir() / 'blind_pose_selected' / uuid.uuid4().hex
     try:
-        binding = prepare_selected(source, [by_id[i] for i in request.design_ids],
+        resolved, identities = [], {}
+        for identity in request.design_ids:
+            path, metadata = await selected_document(source, by_id[identity], request.candidate_documents.get(identity), session)
+            resolved.append(SimpleNamespace(id=identity, job_id=source.id, pdb_path=str(path)))
+            identities[identity] = metadata
+        binding = prepare_selected(source, resolved,
                                    target_pdb=target, binder_chains=request.binder_chains,
-                                   target_chains=request.target_chains, directory=directory)
+                                   target_chains=request.target_chains, directory=directory,
+                                   source_identities=identities, target_context=target_context)
         params = launch_params(directory, variant=request.settings.model_variant,
                                model_id_or_path=request.settings.model_id_or_path,
                                num_loops=request.settings.num_loops,
@@ -85,12 +89,24 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
         raise HTTPException(422, str(exc)) from exc
     params[KEY] = binding
     params['selection_source_job_id'] = source.id
-    params['lineage_root_job_id'] = source.lineage_root_job_id or source.id
+    params['lineage_root_job_id'] = root_id(source)
     from routers.jobs import create_job
     job = JobCreate(name=f'blind-pose-{source.id[:8]}', model_id='esmfold2', mode='blind_pose', params=params)
     from services.binder_blind_pose_trust import selected_submission
     with selected_submission():
         return await create_job(job, background_tasks, session)
+
+
+@router.get('/{job_id}/selection-context')
+async def selection_context(job_id: str, session: AsyncSession = Depends(get_session)):
+    source = await session.get(Job, job_id)
+    if source is None:
+        raise HTTPException(404, 'Source job not found')
+    targets = await declared_targets(source, session)
+    designs = (await session.scalars(select(Design).where(Design.job_id == source.id))).all()
+    return {'source_job_id': source.id, 'lineage_root_job_id': root_id(source),
+            'targets': [{key: row[key] for key in ('name', 'owner_job_id')} for row in targets],
+            'candidate_documents': {design.id: documents(source, design) for design in designs}}
 
 
 @router.get('/{job_id}/result')

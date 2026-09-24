@@ -1,0 +1,185 @@
+id: caliby_binder
+name: Caliby selected binder design
+version: 1.0.0
+category: sequence_design
+description: Native Caliby sequence design on explicitly selected binder-target complexes.
+  No inferred interface or implicit validation.
+container: caliby.sif
+inputs:
+- pdb
+outputs:
+- pdb
+- json
+modes:
+- id: design
+  name: Caliby selected binder design
+  description: Native Caliby sequence design on explicitly selected binder-target
+    complexes. No inferred interface or implicit validation.
+  params:
+  - pdb_paths
+  - source_identity_json
+  - binder_chains
+  - target_chains
+  - caliby_design_positions
+  - caliby_num_seqs_per_pdb
+  - caliby_model_name
+  - caliby_temperature
+  - caliby_batch_size
+  - caliby_num_workers
+  - caliby_clean_num_workers
+  - caliby_omit_aas
+  - caliby_run_self_consistency_eval
+  - caliby_self_consistency_num_models
+  - caliby_self_consistency_num_recycles
+  - caliby_self_consistency_use_multimer
+  - caliby_fixed_pos_override_seq
+  - caliby_pos_restrict_aatype
+  - caliby_symmetry_pos
+  - caliby_verbose
+  - caliby_gaussian_n_conformers
+  - caliby_gaussian_noise_std
+  - caliby_potts_regularization
+  - caliby_potts_sweeps
+  - caliby_potts_proposal
+  - caliby_potts_rejection_step
+  - caliby_potts_only_cond
+  - caliby_scn_num_steps
+  - caliby_scn_step_scale
+params:
+- name: pdb_paths
+  type: string
+  description: Immutable selected PDB snapshots supplied by selection owner.
+  required: true
+- name: source_identity_json
+  type: file
+  description: Selected source identity document supplied by selection owner.
+  required: false
+- name: binder_chains
+  type: string
+  description: Exact comma-separated binder PDB chain IDs.
+  required: true
+- name: target_chains
+  type: string
+  description: Exact comma-separated target PDB chain IDs.
+  required: true
+- name: caliby_design_positions
+  type: string
+  description: Explicit binder design positions; omitted means all selected binder
+    residues.
+- name: caliby_num_seqs_per_pdb
+  type: integer
+  description: Native number of sequences per selected input.
+  minimum: 1
+  default: 4
+- name: caliby_model_name
+  type: string
+  description: Caliby experimental checkpoint name
+  default: soluble_caliby_v1
+  enum:
+  - caliby
+  - soluble_caliby
+  - soluble_caliby_v1
+- name: caliby_temperature
+  type: number
+  description: Caliby sampling temperature
+  default: 0.1
+  minimum: 0.001
+  maximum: 1.0
+  step: 0.01
+- name: caliby_batch_size
+  type: integer
+  description: Caliby inference batch size
+  default: 4
+  minimum: 1
+  maximum: 64
+- name: caliby_num_workers
+  type: integer
+  description: Caliby dataloader worker count
+  default: 8
+  minimum: 1
+  maximum: 64
+- name: caliby_clean_num_workers
+  type: integer
+  description: Workers used to clean structures before Caliby design
+  default: 2
+  minimum: 1
+  maximum: 32
+- name: caliby_omit_aas
+  type: string
+  description: Comma-separated amino acids excluded from Caliby design
+  default: C
+- name: caliby_run_self_consistency_eval
+  type: boolean
+  description: Run AF2 self-consistency on Caliby designs before downstream validation
+  default: false
+- name: caliby_self_consistency_num_models
+  type: integer
+  description: Number of AF2 models used for Caliby self-consistency
+  default: 5
+  minimum: 1
+  maximum: 5
+- name: caliby_self_consistency_num_recycles
+  type: integer
+  description: AF2 recycle count during Caliby self-consistency
+  default: 3
+  minimum: 1
+  maximum: 12
+- name: caliby_self_consistency_use_multimer
+  type: boolean
+  description: Use AF2-Multimer for Caliby self-consistency
+  default: false
+- name: caliby_fixed_pos_override_seq
+  type: string
+  description: Optional Caliby fixed_pos_override_seq spec (e.g. "H52:A,H53:G")
+  required: false
+- name: caliby_pos_restrict_aatype
+  type: string
+  description: Optional Caliby pos_restrict_aatype spec (e.g. "H52:AVG,H53:VG")
+  required: false
+- name: caliby_symmetry_pos
+  type: string
+  description: Optional Caliby symmetry_pos spec for tied sampling groups
+  required: false
+- name: caliby_verbose
+  type: boolean
+  description: Native constraint logging.
+  default: true
+- name: caliby_gaussian_n_conformers
+  type: integer
+  description: Native Gaussian conformer count; zero disables.
+  default: 0
+- name: caliby_gaussian_noise_std
+  type: number
+  description: Native Gaussian conformer noise standard deviation.
+  default: 0.0
+- name: caliby_potts_regularization
+  type: string
+  description: Native Potts regularization.
+  default: LCP
+- name: caliby_potts_sweeps
+  type: integer
+  description: Native Potts sweeps.
+  default: 500
+- name: caliby_potts_proposal
+  type: string
+  description: Native Potts proposal method.
+  default: dlmc
+- name: caliby_potts_rejection_step
+  type: boolean
+  description: Native Potts rejection step.
+  default: false
+- name: caliby_potts_only_cond
+  type: boolean
+  description: Restrict conditioning to the Potts model.
+  default: false
+- name: caliby_scn_num_steps
+  type: integer
+  description: Native sidechain diffusion steps.
+  default: 50
+- name: caliby_scn_step_scale
+  type: number
+  description: Native sidechain diffusion step scale.
+  default: 1.5
+enabled: true
+experimental: true
+public_launch: true

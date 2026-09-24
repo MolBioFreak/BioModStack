@@ -373,7 +373,7 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
             raise RuntimeError(f"result tree contains a symlink: {path.relative_to(output_root)}")
         if not path.is_file():
             continue
-        if path.name == RESULT_MANIFEST_FILE:
+        if path == output_root / RESULT_MANIFEST_FILE:
             continue
         relative = path.relative_to(output_root).as_posix()
         artifacts.append(

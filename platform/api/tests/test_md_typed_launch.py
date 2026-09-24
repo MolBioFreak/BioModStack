@@ -244,7 +244,7 @@ def test_preview_digest_excludes_labels_context_and_viewer_transport() -> None:
     assert first.source.label != second.source.label
 
 
-def test_preview_blocks_same_reference_with_different_exact_bytes(tmp_path: Path) -> None:
+def test_preview_accepts_selected_bytes_not_profile_fixture(tmp_path: Path) -> None:
     starting_structures = importlib.import_module("services.md.starting_structures")
     changed = tmp_path / "changed.pdb"
     changed.write_bytes(
@@ -269,10 +269,15 @@ def test_preview_blocks_same_reference_with_different_exact_bytes(tmp_path: Path
         profile=_profile(),
         current_catalog_digest=CATALOG_DIGEST,
     )
-    assert preview.chemistry.admitted is False
-    assert [blocker.code for blocker in preview.blockers] == [
-        "MD_STARTING_STRUCTURE_NOT_ADMITTED"
-    ]
+    assert preview.chemistry.admitted is True
+    assert preview.blockers == []
+    assert preview.source.sha256 == intent.expected_source_sha256
+    assert preview.source.sha256 != _profile()["launch_constraints"]["structure_sha256"]
+    with pytest.raises(starting_structures.StartingStructureError, match="bytes changed"):
+        starting_structures.compile_launch_preview(
+            intent=intent.model_copy(update={"expected_source_sha256": ONE_AKI_SHA256}),
+            resolved=resolved, profile=_profile(), current_catalog_digest=CATALOG_DIGEST,
+        )
 
 
 class _CatalogView:
@@ -1521,6 +1526,42 @@ async def test_typed_launch_preserves_optional_launch_context_wrapper_session(
     assert adapter.preview_digest == preview.preview_digest
 
 
+def test_actual_md_preview_wire_is_readable_by_browser_parser(project_context_preview_store):
+    """Real API serialization to real TypeScript parser; no Job or simulation."""
+    import shutil
+    import subprocess
+
+    frontend = API_ROOT.parent / "frontend"
+    node = shutil.which("node")
+    if node is None or not (frontend / "node_modules/tsx").is_dir():
+        pytest.skip("browser wire test requires the installed locked frontend dependencies")
+    store = project_context_preview_store
+    intent = {
+        **_intent_payload(),
+        "source_ref": {"kind": "design", "id": store["expected_design_id"]},
+        "launch_context_id": store["ids"]["context"],
+    }
+    response = store["client"].post("/api/molecular-dynamics/launch-preview", json={
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": intent,
+    })
+    assert response.status_code == 200, response.text
+    wire = response.json()
+    assert "execution_plan" in wire and wire["execution_plan"] is None
+    script = """
+import fs from 'node:fs';
+import { parseMolecularDynamicsLaunchPreview } from './src/components/molecularDynamicsUiState.ts';
+const value = JSON.parse(fs.readFileSync(0, 'utf8'));
+const parsed = parseMolecularDynamicsLaunchPreview(value.preview, value.intent);
+if (parsed.execution_plan !== null) throw new Error('local plan was changed');
+process.stdout.write(parsed.preview_digest);
+"""
+    completed = subprocess.run([node, "--import", "tsx", "--input-type=module", "-e", script],
+        cwd=frontend, input=json.dumps({"preview": wire, "intent": intent}),
+        capture_output=True, text=True, timeout=20)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout == wire["preview_digest"]
+
+
 def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
     project_context_preview_store,
     monkeypatch: pytest.MonkeyPatch,
@@ -1625,6 +1666,9 @@ def test_project_v2_typed_md_launch_reaches_canonical_job_and_consumes_context(
     assert created is not None
     assert created.queue_status == "queued"
     assert created.provenance["launch_context_id"] == ids["context"]
+    assert created.parent_job_id is None
+    assert created.params["source_design_id"] == store["expected_design_id"]
+    assert created.params["md_source_provenance"]["source_sha256"] == intent["expected_source_sha256"]
     assert context.state == "consumed"
     assert context.canonical_job_id == store["scheduler_job_id"]
     assert context.binding_receipt_json
@@ -1831,3 +1875,110 @@ def test_ordinary_no_context_jobs_endpoint_remains_canonical(
             return await session.scalar(select(func.count(Job.id)))
 
     assert asyncio.run(job_count()) == 2
+
+
+@pytest.mark.parametrize("producer", ["binder_refinement", "bindcraft2"])
+def test_design_typed_launch_persists_scientific_lineage_and_exact_snapshot(
+    project_context_preview_store, monkeypatch, producer,
+):
+    from database import Design, Job, MdRun
+    from routers import jobs, molecular_dynamics
+    from services import gpu_orchestrator
+    from services.md import launch_contract
+    from test_md_job_v2_contract import _catalog
+
+    store = project_context_preview_store
+    design_id = store["expected_design_id"]
+    catalog = _catalog()
+    view = catalog.view()
+    profile = view.get_profile("gmx_amber99sb_ildn_tip3p_smoke_v1")
+
+    async def prepare_source():
+        async with store["core_sessions"]() as session:
+            design = await session.get(Design, design_id)
+            owner = await session.get(Job, design.job_id)
+            owner.model_id = producer
+            owner.mode = "campaign" if producer == "bindcraft2" else "refine"
+            owner.lineage_root_job_id = "scientific-root"
+            owner.parent_job_id = "producer-coordinator"
+            design.lineage_root_job_id = "scientific-root"
+            design.parent_design_id = "previous-round-design"
+            design.origin_design_id = "original-design"
+            design.origin_job_id = "original-job"
+            design.origin_backbone_design_id = "original-backbone"
+            design.provenance = ({"primary_artifact_id": "bc2-artifact", "primary_target_state": "bound"}
+                                 if producer == "bindcraft2" else {})
+            source = Path(design.pdb_path)
+            # Real non-example coordinate text, not a digest-only stand-in.
+            source.write_text(
+                "ATOM      1  N   ALA A   1      11.104  13.207   9.447  1.00 20.00           N  \n"
+                "ATOM      2  CA  ALA A   1      12.560  13.207   9.447  1.00 20.00           C  \n"
+                "ATOM      3  C   ALA A   1      13.100  14.600   9.447  1.00 20.00           C  \n"
+                "ATOM      4  O   ALA A   1      12.500  15.600   9.447  1.00 20.00           O  \n"
+                "ATOM      5  CB  ALA A   1      13.100  12.400  10.600  1.00 20.00           C  \nTER\nEND\n"
+            )
+            await session.commit()
+            return owner.id, source, source.read_bytes()
+
+    owner_id, source, selected_bytes = asyncio.run(prepare_source())
+    digest = hashlib.sha256(selected_bytes).hexdigest()
+    assert digest != profile["launch_constraints"]["structure_sha256"]
+    monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: catalog)
+    monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: catalog)
+    monkeypatch.setattr(jobs, "require_molecular_dynamics_feature", lambda _: None)
+    monkeypatch.setattr(jobs, "_raise_if_workflow_launches_disabled", lambda _: None)
+    monkeypatch.setattr(jobs, "get_registry", lambda: _AcceptingRegistry())
+    monkeypatch.setattr(jobs, "get_results_dir", lambda: store["results_root"])
+    monkeypatch.setattr(gpu_orchestrator, "estimate_vram", lambda *_args, **_kwargs: 0)
+    intent = {**_intent_payload(), "name": "Design-MD-launch", "source_ref": {"kind": "design", "id": design_id},
+              "expected_source_sha256": digest, "chemistry_profile_id": profile["id"],
+              "chemistry_profile_sha256": profile["profile_sha256"], "catalog_digest": view.catalog_digest}
+    preview = store["client"].post("/api/molecular-dynamics/launch-preview", json={
+        "schema_version": "bms.md.launch-preview-request.v1", "intent": intent})
+    assert preview.status_code == 200, preview.text
+    response = store["client"].post("/api/molecular-dynamics/launch", json={
+        "schema_version": "bms.md.launch-request.v1", "intent": intent,
+        "preview_digest": preview.json()["preview_digest"]})
+    assert response.status_code == 201, response.text
+
+    async def read_back():
+        async with store["core_sessions"]() as session:
+            created = await session.get(Job, response.json()["id"])
+            run = await session.get(MdRun, created.id)
+            return created, run
+
+    created, run = asyncio.run(read_back())
+    assert created.parent_job_id is None
+    assert created.lineage_root_job_id == "scientific-root"
+    assert created.selection_source_job_id == created.source_stage_job_id == owner_id
+    assert created.source_selection_count == 1
+    assert created.params["source_design_id"] == design_id
+    retained = created.params["md_source_provenance"]
+    assert retained["source_design_id"] == design_id
+    assert retained["source_job_id"] == owner_id
+    assert retained["source_parent_job_id"] == "producer-coordinator"
+    assert retained["parent_design_id"] == "previous-round-design"
+    assert retained["origin_design_id"] == "original-design"
+    assert retained["origin_job_id"] == "original-job"
+    assert retained["origin_backbone_design_id"] == "original-backbone"
+    assert retained["source_sha256"] == digest
+    if producer == "bindcraft2":
+        assert retained["primary_artifact_id"] == "bc2-artifact"
+        assert retained["primary_target_state"] == "bound"
+    else:
+        assert "primary_artifact_id" not in retained
+    requested = created.provenance["core_protein_requested_params"]["md_source_provenance"]
+    assert requested == {key: value for key, value in retained.items() if key != "snapshot"}
+    snapshot = retained["snapshot"]
+    assert snapshot == run.normalized_request["input"]
+    assert snapshot["structure_sha256"] == digest
+    assert run.normalized_request["engine"] == "gromacs"
+    path = Path(snapshot["structure"])
+    assert path.read_bytes() == selected_bytes
+    assert path.stat().st_mode & 0o222 == 0
+    source.write_bytes(selected_bytes + b"REMARK source changed after launch\n")
+    assert path.read_bytes() == selected_bytes
+    stale = store["client"].post("/api/molecular-dynamics/launch", json={
+        "schema_version": "bms.md.launch-request.v1", "intent": intent,
+        "preview_digest": preview.json()["preview_digest"]})
+    assert stale.status_code == 409, stale.text

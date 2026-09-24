@@ -729,9 +729,9 @@ async def finalize_successful_job(
         except Exception as exc:
             session.info.setdefault('component_projection_verified', {}).pop(job_id, None)
             session.info.setdefault('protein_design_primary_prevalidated', set()).discard(job_id)
-            if manual_remote_pull:
-                await session.rollback()
-                raise
+            # Manual return has the same primary publication boundary as local
+            # completion. The savepoint already removed the invalid attachment;
+            # retain verified primary rows with the explicit partial failure.
             await session.refresh(job)
             message = str(exc) or exc.__class__.__name__
             count = await _authoritative_result_count(session, job)

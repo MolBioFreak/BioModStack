@@ -78,7 +78,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                             </span>
                         </div>
                         <div className="flex items-center gap-2">
-                            {!isBindCraft2 && <Link
+                            {(!isBindCraft2 || (job.design_count ?? 0) > 0) && <Link
                                 to={`/designs/${job.id}`}
                                 className="px-3 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded text-xs font-medium transition-colors"
                             >
@@ -112,7 +112,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
 
                     {!isBindCraft2 && <CandidateAccountingStatus job={job} />}
                     {['esmfold2', 'esmfold2_experimental', 'antibody_denovo', 'antibody_child'].includes(job.model_id) && <ExecutionSettingsPanel jobId={job.id} />}
-                    {isBindCraft2 && ['completed', 'failed'].includes(job.status) && <BindCraft2JobResults jobId={job.id} />}
+                    {isBindCraft2 && <BindCraft2JobResults key={job.id} jobId={job.id} resultsAvailable={['completed', 'failed', 'cancelled'].includes(job.status)} />}
                     {/* Results Summary */}
                     {!isBindCraft2 && job.status === 'completed' && (
                         <div className="flex flex-wrap gap-2">

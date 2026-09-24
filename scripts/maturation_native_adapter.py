@@ -66,7 +66,7 @@ def instrument_source(producer, relative_path, data):
         text = prefix + 'class AntibodyPartialDataset(Dataset):' + text
     elif (producer, relative_path) == ('ppiflow', 'models/flow_module_antibody_partial.py'):
         text = _replace(text, 'final_pos, pdb_path, no_indexing=True,', 'final_pos, pdb_path, bms_features={**{k: origin_batch[k][i] for k in ("bms_identity", "bms_offset")}, "bms_defer": True}, no_indexing=True,')
-        text = _replace(text, '                print(f"Attempt {attempt}: Break={total_breaks}, Clash={clash}")', '                print(f"Attempt {attempt}: Break={total_breaks}, Clash={clash}")\n        _bms.flush_partial(pdb_path)')
+        text = _replace(text, '                print(f"Attempt {attempt}: Break={total_breaks}, Clash={clash}")', '                print(f"Attempt {attempt}: Break={total_breaks}, Clash={clash}")\n        _bms.flush_partial(pdb_path)\n        _bms.publish_sample_identity(pdb_path, batch_idx)')
     elif (producer, relative_path) == ('ppiflow', 'analysis/utils.py'):
         text = _replace(text, '    binder=False,\n):', '    binder=False,\n    bms_features=None,\n):')
         text = _replace(text, '    if overwrite:', '    if bms_features is not None and (binder or prot_pos.ndim != 3):\n        raise ValueError("unsupported native export transform")\n    if overwrite:')
@@ -142,6 +142,11 @@ def publish_partial(path, prot, features, chain_ids):
         _PENDING_PARTIAL.set(pending)
         return None
     return _publish(path, records, 'ppiflow', _AUTHORITY.get())
+
+
+def publish_sample_identity(path, sample_index):
+    from ppiflow_sample_identity import publish_sample
+    publish_sample(path, sample_index)
 
 
 def flush_partial(path):

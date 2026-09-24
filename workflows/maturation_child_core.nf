@@ -115,6 +115,22 @@ def resolveMaturationRankingScore(parsed, boolean strict) {
          (parsed.delta_interface_score ?: 0.0))
 }
 
+process PublishIgGMMaturedCandidates {
+    label 'CPU'
+    publishDir "${params.out_dir}/collected/iggm_maturation", mode: 'copy'
+    input:
+    tuple val(meta), path(pdb)
+    output:
+    tuple val(meta), path('published/*.pdb'), emit: candidates
+    path('published/*.json'), emit: metadata
+    script:
+    def encoded = groovy.json.JsonOutput.toJson(meta).bytes.encodeBase64().toString()
+    """
+    python3 '${params.code_root}/scripts/publish_binder_refinement.py' \\
+        --pdb '${pdb}' --meta-base64 '${encoded}' --output-dir published
+    """
+}
+
 process PublishMaturationSampleIdentity {
     label 'process_low'
     publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_sample_identity.json'

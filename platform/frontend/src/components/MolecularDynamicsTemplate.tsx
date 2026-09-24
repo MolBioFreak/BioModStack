@@ -78,17 +78,6 @@ const labelClass = 'block text-xs font-semibold uppercase tracking-[0.12em] text
 
 type SourceMode = 'fixture' | 'rcsb' | 'upload' | 'prediction' | 'design' | 'prior_md_input' | 'server_file';
 
-const ACCEPTED_PREDICTION_PRODUCERS = new Set([
-    'esmfold2:predict',
-    'boltz2:predict',
-    'boltz2:complex',
-    'rf3:predict',
-    'rf3:complex',
-    'protenix:predict',
-    'protenix:complex',
-]);
-const MAX_PREDICTION_CANDIDATE_PAGES = 64;
-
 const displayError = (error: unknown, fallback: string): string => {
     if (error && typeof error === 'object') {
         const response = (error as { response?: { data?: { detail?: unknown } } }).response;
@@ -374,6 +363,7 @@ export function MolecularDynamicsTemplate({
     const inspectSource = async (
         sourceRef: MolecularDynamicsStartingStructureRef,
         chemistryProfile: MolecularDynamicsChemistryProfile | undefined = selectedProfile,
+        sourceJobId?: string,
     ) => {
         const requestGeneration = ++inspectionRequestGenerationRef.current;
         const previousInspection = inspection;
@@ -398,6 +388,9 @@ export function MolecularDynamicsTemplate({
             );
             if (requestGeneration !== inspectionRequestGenerationRef.current) return;
             const parsed = parseMolecularDynamicsStartingStructureInspection(result.data, sourceRef, chemistryProfile?.id);
+            if (sourceJobId && parsed.identity.producer_job_id !== sourceJobId) {
+                throw new Error('The supplied Design does not belong to the supplied source Job.');
+            }
             if (previousInspection && previousInspection.identity.sha256 !== parsed.identity.sha256) {
                 setViewerState('loading');
                 setViewerLoadedSha256(null);
@@ -487,61 +480,19 @@ export function MolecularDynamicsTemplate({
         }
     };
 
-    const loadPredictionCandidates = async (targetDesignId?: string) => {
+    const loadPredictionCandidates = async () => {
         const normalizedJobId = predictionJobId.trim();
         setSourceBusy(true);
         setSourceError('');
         setPredictionPage(null);
         setSelectedPredictionCandidate(null);
         try {
-            let cursor: string | null = null;
-            let expectedJobProjection: string | null = null;
-            const seenCursors = new Set<string>();
-            for (let pageNumber = 0; pageNumber < MAX_PREDICTION_CANDIDATE_PAGES; pageNumber += 1) {
-                const cursorKey = cursor ?? '__first_page__';
-                if (seenCursors.has(cursorKey)) {
-                    throw new Error('Prediction candidate pagination repeated a cursor; the ResultsViewer handoff is blocked.');
-                }
-                seenCursors.add(cursorKey);
-                const result = await api.get<unknown>(
-                    `/api/molecular-dynamics/prediction-jobs/${normalizedJobId}/source-candidates`,
-                    { params: cursor ? { limit: 24, cursor } : { limit: 24 } },
-                );
-                const page = parseMolecularDynamicsPredictionSourceCandidates(result.data, normalizedJobId);
-                if (!targetDesignId) {
-                    setPredictionPage(page);
-                    return;
-                }
-                if (page.job.status !== 'completed') {
-                    throw new Error('The supplied Structure Prediction Job is not completed; the ResultsViewer Design handoff is blocked.');
-                }
-                if (!ACCEPTED_PREDICTION_PRODUCERS.has(`${page.job.model_id}:${page.job.mode}`)) {
-                    throw new Error('The supplied Job is not an accepted Structure Prediction producer.');
-                }
-                const jobProjection = JSON.stringify(page.job);
-                if (expectedJobProjection !== null && jobProjection !== expectedJobProjection) {
-                    throw new Error('The prediction Job projection changed during candidate pagination.');
-                }
-                expectedJobProjection = jobProjection;
-                const exactCandidate = page.candidates.find((candidate) => candidate.source_ref.id === targetDesignId);
-                if (exactCandidate) {
-                    if (!exactCandidate.eligible) {
-                        throw new Error('The supplied Design is not eligible as a Molecular Dynamics starting structure.');
-                    }
-                    setPredictionPage({ ...page, candidates: [exactCandidate], next_cursor: null });
-                    setSelectedPredictionCandidate(exactCandidate);
-                    await inspectSource(exactCandidate.source_ref);
-                    return;
-                }
-                if (!page.next_cursor) {
-                    throw new Error('The supplied Design does not belong to the supplied prediction Job.');
-                }
-                cursor = page.next_cursor;
-            }
-            throw new Error('Prediction candidate pagination exceeded the bounded ResultsViewer handoff limit.');
+            const result = await api.get<unknown>(
+                `/api/molecular-dynamics/prediction-jobs/${normalizedJobId}/source-candidates`,
+                { params: { limit: 24 } },
+            );
+            setPredictionPage(parseMolecularDynamicsPredictionSourceCandidates(result.data, normalizedJobId));
         } catch (error) {
-            setPredictionPage(null);
-            setSelectedPredictionCandidate(null);
             setSourceError(displayError(error, 'Prediction candidates could not be loaded.'));
         } finally {
             setSourceBusy(false);
@@ -553,8 +504,16 @@ export function MolecularDynamicsTemplate({
         const routeGeneration = `${returnedPredictionJobId}:${routedDesignId}`;
         if (loadedReturnedPredictionRef.current === routeGeneration) return;
         loadedReturnedPredictionRef.current = routeGeneration;
-        setSourceMode('prediction');
-        void loadPredictionCandidates(routedDesignId || undefined);
+        if (routedDesignId) {
+            // An exact ResultsViewer Design may come from any producer. The
+            // existing Design resolver owns its bytes and source Job identity.
+            setSourceMode('design');
+            setDesignId(routedDesignId);
+            void inspectSource({ kind: 'design', id: routedDesignId }, undefined, returnedPredictionJobId);
+        } else {
+            setSourceMode('prediction');
+            void loadPredictionCandidates();
+        }
         // The returned Job and optional exact Design IDs are immutable for this mounted route generation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [returnedPredictionJobId, routedDesignId]);
@@ -752,7 +711,7 @@ export function MolecularDynamicsTemplate({
                 <div>
                     <button type="button" onClick={onBack} className="mb-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">← Back to workflows</button>
                     <div className="flex items-center gap-3"><h1 className="text-2xl font-bold text-slate-100">Molecular Dynamics</h1><span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-300">Experimental alpha</span></div>
-                    <p className="mt-2 max-w-3xl text-sm text-slate-400">Choose immutable starting coordinates first, prove exact-byte profile admission, then preview the server-compiled GROMACS request. A static prediction is a starting hypothesis—not molecular dynamics.</p>
+                    <p className="mt-2 max-w-3xl text-sm text-slate-400">Choose immutable starting coordinates first, select a chemistry profile, then preview the server-compiled GROMACS request. A static prediction is a starting hypothesis—not molecular dynamics.</p>
                 </div>
                 <ModelDocumentationLinks topics={['gromacs', 'openmm']} title="MD references" compact summary="Product scope, engine references, and chemistry limits remain visible before launch." />
             </header>

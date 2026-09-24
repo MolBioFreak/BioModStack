@@ -509,18 +509,26 @@ def test_smoke_scope_rejects_unauthorized_protocol_and_ionic_values(
     assert expected_fragment in str(error.value)
 
 
-def test_smoke_scope_rejects_wrong_structure_hash(tmp_path: Path) -> None:
+def test_smoke_scope_materializes_non_example_structure(tmp_path: Path) -> None:
     catalog = _catalog()
     profile = catalog.get_profile("gmx_amber99sb_ildn_tip3p_smoke_v1")
     assert profile is not None
-    wrong_structure = tmp_path / "not-1aki.pdb"
-    wrong_structure.write_text("ATOM\n", encoding="utf-8")
-
-    with pytest.raises(ChemistryProfileSelectionError) as error:
-        _materialize_structure(tmp_path, _spec(profile), catalog=catalog, runtime_structure=wrong_structure)
-
-    assert error.value.code == "MD_CHEMISTRY_SCOPE_VIOLATION"
-    assert "structure_sha256" in str(error.value)
+    selected = tmp_path / "selected.pdb"
+    # A parseable independent single-residue source, not modified 1AKI bytes.
+    selected.write_text(
+        "ATOM      1  N   ALA A   1      11.104  13.207   9.447  1.00 20.00           N  \n"
+        "ATOM      2  CA  ALA A   1      12.560  13.207   9.447  1.00 20.00           C  \n"
+        "ATOM      3  C   ALA A   1      13.100  14.600   9.447  1.00 20.00           C  \n"
+        "ATOM      4  O   ALA A   1      12.500  15.600   9.447  1.00 20.00           O  \n"
+        "ATOM      5  CB  ALA A   1      13.100  12.400  10.600  1.00 20.00           C  \nTER\nEND\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(selected.read_bytes()).hexdigest()
+    assert digest != profile["launch_constraints"]["structure_sha256"]
+    result = _materialize_structure(tmp_path, _spec(profile), catalog=catalog, runtime_structure=selected)
+    snapshot = result["md_job_spec"]["input"]
+    assert snapshot["structure_sha256"] == digest
+    assert Path(snapshot["structure"]).read_bytes() == selected.read_bytes()
 
 
 def test_smoke_structure_hashing_is_bounded_to_100_mib(tmp_path: Path) -> None:
@@ -735,7 +743,7 @@ def test_source_replaced_between_preview_and_materialization_is_rejected_without
 
     with pytest.raises(ChemistryProfileSelectionError):
         materialize_md_job_spec(
-            params={"md_job_spec": preview},
+            params={"md_job_spec": preview, "md_source_provenance": {"source_sha256": ONE_AKI_SHA256}},
             job_id="final-job",
             output_dir=tmp_path / "race-out",
             resolve_runtime_path=lambda value: str(source),
