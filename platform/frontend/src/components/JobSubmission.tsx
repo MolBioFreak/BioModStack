@@ -9,7 +9,7 @@ import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRe
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchModelById, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -820,10 +820,18 @@ export function JobSubmission() {
     });
 
     const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
-    const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
-    const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
+    const listedSelectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '')
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
+    // The default model list omits experimental entries. Explicit binder
+    // handoffs resolve their own public definition, not a different model.
+    const selectedNativeModelQuery = useQuery({
+        queryKey: ['native-binder-model', selectedModelId],
+        queryFn: () => fetchModelById(selectedModelId!),
+        enabled: isNativeBinderGeneration && !listedSelectedModel,
+    });
+    const selectedModel = listedSelectedModel ?? (isNativeBinderGeneration ? selectedNativeModelQuery.data?.data : undefined);
+    const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
     const nativeGenerationQuery = useQuery({
         queryKey: ['native-generation-settings', selectedModelId, selectedModeId],
         queryFn: () => fetchNativeGenerationInventory(selectedModelId as NativeBinderModel, selectedModeId!),

@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ authoring: null as any, project: null as any, saveDraft: vi.fn(), submit: vi.fn(async () => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: mocks.submit,
+    fetchModelById: vi.fn(async () => ({ data: null })),
     fetchModels: vi.fn(async () => ({ data: [{ id: 'boltzgen', name: 'BoltzGen', category: 'generative_design', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] }] })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchInputPresets: vi.fn(async () => ({ data: [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
@@ -102,6 +103,26 @@ it('an unadvertised PPIFlow initial mode cannot fall through to a legacy request
     expect(launch.disabled).toBe(true);
     expect(launch.title).toContain('not advertised');
     await act(async () => launch.click());
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('explicit PPIFlow %s resolves its public definition when the default catalog omits experimental models', async mode => {
+    const { fetchModelById, fetchModels } = await import('../../src/lib/api');
+    vi.mocked(fetchModelById).mockResolvedValueOnce({ data: {
+        id: 'ppiflow', name: 'PPIFlow initial binder generation', enabled: true,
+        experimental: true, public_launch: true, category: 'generative_design',
+        params: [], modes: [{ id: mode, name: `Native ${mode}`, params: [] }],
+    } } as any);
+    await mount();
+    await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'ppiflow', mode, initialDraft: { job_name: 'explicit PPIFlow draft' } }));
+    await vi.waitFor(async () => {
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+        expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')?.value).toBe('explicit PPIFlow draft');
+    });
+    expect(fetchModelById).toHaveBeenCalledWith('ppiflow');
+    expect(fetchModels).toHaveBeenCalledWith();
+    expect(document.body.textContent).toContain(`Native ${mode}`);
+    expect(document.body.textContent).toContain('PPIFlow initial generation');
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 
