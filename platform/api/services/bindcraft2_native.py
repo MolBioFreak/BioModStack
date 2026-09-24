@@ -58,7 +58,7 @@ def compile_for_native(request: dict, project_folder: Path,
             or effective.get("resume") is not resume):
         raise ValueError("native resolution changed system-bound budget, resume or campaign directory")
     arms = ()
-    if effective.get("parameter_sweep"):
+    if isinstance(effective.get("parameter_sweep"), dict) or effective.get("parameter_sweep"):
         if sweep_arms is None:
             from importlib import import_module
             sweep_arms = getattr(import_module("bindcraft.parameter_sweep"), "parameter_sweep_arms")

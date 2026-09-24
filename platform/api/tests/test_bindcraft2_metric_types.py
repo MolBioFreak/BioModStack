@@ -16,16 +16,16 @@ def test_all_fourteen_nonliteral_metric_defaults_are_accounted_for():
             for parameter, descriptor in entry['params'].items():
                 if descriptor['default_literal'] is None:
                     (resolved if descriptor.get('request_types') else unresolved).append((group, metric, parameter))
-    assert len(resolved) == 13
-    assert unresolved == [('losses', 'induced_fit_interface', 'interface_mask')]
+    assert len(resolved) == 14
+    assert unresolved == []
     assert data['registered_metrics']['filters']['Binder_RMSD']['params']['reference_state']['resolved_default'] == 'binder_alone'
     assert data['registered_metrics']['filters']['Epitope_Residues_Contacted']['params']['epitope_cutoff']['resolved_default'] == 10.0
     assert data['registered_metrics']['losses']['binder_contacts']['params']['contact_residue_count']['native_default_encoding'] == '+Infinity'
-    assert 'in-memory Array masks' in data['coverage_status']
+    assert 'portable numeric interface masks' in data['coverage_status']
     assert 'registry-owned' in data['coverage_status']
 
 
-def test_metric_request_accepts_source_typed_overrides_not_unportable_mask():
+def test_metric_request_accepts_source_typed_overrides():
     base = {'max_trajectories': 2}
     for additional in (
         {'filters': {'Binder_RMSD': {'threshold': 1.0, 'params': {'reference_state': 'binder_alone'}}}},
@@ -36,7 +36,6 @@ def test_metric_request_accepts_source_typed_overrides_not_unportable_mask():
     ):
         assert validate_request({**base, **additional}) == {**base, **additional}
     for additional in (
-        {'losses': {'induced_fit_interface': {'params': {'interface_mask': None}}}},
         {'losses': {'binder_contacts': {'params': {'contact_residue_count': float('inf')}}}},
         {'filters': {'Binder_RMSD': {'params': {'reference_state': 7}}}},
         {'filters': {'Epitope_Residues_Contacted': {'params': {'epitope_cutoff': '10'}}}},

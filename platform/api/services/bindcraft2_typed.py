@@ -43,6 +43,12 @@ def schema() -> dict:
             field["fallback_authority"] = "bindcraft.protein.default_relax_parameters"
         if "choices" in descriptor:
             field["choices"] = descriptor["choices"]
+    for key, descriptor in evidence.get("top_level_request_types", {}).items():
+        field = data["fields"][key]
+        field["observed_types"] = descriptor["request_types"]
+        field["source_evidence"] = descriptor["source"]
+        if "items" in descriptor:
+            field["items"] = descriptor["items"]
     data["unresolved_fields"] = sorted(k for k, v in data["fields"].items() if v["status"] != "typed")
     for group, metrics in data["registered_metrics"].items():
         for metric, entry in metrics.items():
@@ -52,7 +58,14 @@ def schema() -> dict:
                     descriptor["request_types"] = [_kind(descriptor["default_literal"])]
                     continue
                 path = f"{group}.{metric}.{name}"
-                if path in evidence["metric_exception"]:
+                if path in evidence.get("metric_parameter_types", {}):
+                    source = evidence["metric_parameter_types"][path]
+                    descriptor["request_types"] = source["types"]
+                    descriptor["source_evidence"] = source["source"]
+                    descriptor["resolved_default"] = source["default"]
+                    for key in ("items", "control", "description"):
+                        descriptor[key] = source[key]
+                elif path in evidence["metric_exception"]:
                     descriptor["unresolved_reason"] = evidence["metric_exception"][path]
                 elif expression in evidence["metric_expression_types"]:
                     source = evidence["metric_expression_types"][expression]
@@ -77,7 +90,7 @@ def schema() -> dict:
         "fetch-weights": "Installation-owned, not a scientific Job operation.",
         "design": "campaign and resume use native design; presets and sweeps stay settings-owned.",
     }
-    data["coverage_status"] = "Typed operator inventory with source-backed nested controls; system-owned fields and native in-memory Array masks remain separately identified. Launch availability is registry-owned."
+    data["coverage_status"] = "Typed operator inventory with source-backed nested controls and portable numeric interface masks; system-owned fields remain separately identified. Launch availability is registry-owned."
     return data
 
 
@@ -97,7 +110,7 @@ def nested_control_schemas(data: dict) -> dict:
             'source': 'bindcraft/settings.py:targets; bindcraft/protein_preparation.py'},
         'aa_bias': {'type': 'object', 'properties': {aa: {'type': 'number'} for aa in 'ACDEFGHIKLMNPQRSTVWY'},
                     'additionalProperties': False, 'source': 'bindcraft/settings.py; bindcraft/trajectory.py'},
-        'parameter_sweep': {'type': 'object', 'additionalProperties': False,
+        'parameter_sweep': {'type': data['fields']['parameter_sweep']['observed_types'], 'additionalProperties': False,
             'source': 'bindcraft/parameter_sweep.py:parameter_sweep_arms', 'properties': {
                 'axes': {'type': 'array', 'items': string},
                 'levels': {'type': 'array', 'items': {'type': 'number'}},
@@ -106,6 +119,7 @@ def nested_control_schemas(data: dict) -> dict:
     }
     for name, items in {
         'binder_lengths': {'type': 'integer'}, 'binder_shapes': {'type': 'array', 'items': string},
+        'design_models': {'type': ['integer', 'string']},
         'validation_models': {'type': ['integer', 'string']}, 'multitarget_rounds_per_target': string,
         'crop_fasta_sequence': {'type': 'integer'}, 'paratope_conformations': {'type': 'string', 'enum': data['paratope_conformations']},
         **{name: {'type': 'string', 'enum': list(data['presets'][name])} for name in ('core', 'modality', 'target')},
@@ -128,9 +142,12 @@ def nested_control_schemas(data: dict) -> dict:
                     prop['native_default_encoding'] = descriptor['native_default_encoding']
                 if 'unresolved_reason' in descriptor:
                     prop['unresolved_reason'] = descriptor['unresolved_reason']
+                for key in ('items', 'control', 'description'):
+                    if key in descriptor:
+                        prop[key] = descriptor[key]
                 params[name] = prop
             properties = {key: {'type': 'boolean' if key in ('higher', 'mandatory') else
-                                'number' if key == 'threshold' else 'string'}
+                                data['typed_evidence']['filter_threshold_types']['types'] if key == 'threshold' else 'string'}
                           for key in data['nested_surfaces'][group][metric]['entry_keys'] if key != 'params'}
             properties['params'] = {'type': 'object', 'properties': params, 'additionalProperties': False}
             metrics[metric] = {'type': 'object', 'properties': properties, 'additionalProperties': False}
@@ -174,8 +191,10 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
         if field is None:
             raise ValueError(f"{name}: unknown BC2 setting")
         if name == "parameter_sweep":
+            if isinstance(value, bool):
+                continue
             if not isinstance(value, dict):
-                raise ValueError("parameter_sweep: expected object")
+                raise ValueError("parameter_sweep: expected object or boolean")
             allowed = set(data["nested_surfaces"]["parameter_sweep"]["fields"])
             for key, item in value.items():
                 if key not in allowed:
@@ -230,10 +249,14 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                                 if not types:
                                     raise ValueError(f"{name}.{metric}.params.{parameter}: type unresolved")
                                 _check(param_value, types, f"{name}.{metric}.params.{parameter}")
+                                if isinstance(param_value, list) and 'items' in source:
+                                    for index, item in enumerate(param_value):
+                                        _check(item, [source['items']['type']],
+                                               f"{name}.{metric}.params.{parameter}[{index}]")
                         elif key in ("higher", "mandatory"):
                             _check(entry_value, ["boolean"], f"{name}.{metric}.{key}")
                         elif key == "threshold":
-                            _check(entry_value, ["number"], f"{name}.{metric}.{key}")
+                            _check(entry_value, data['typed_evidence']['filter_threshold_types']['types'], f"{name}.{metric}.{key}")
                         else:
                             _check(entry_value, ["string"], f"{name}.{metric}.{key}")
             else:
@@ -247,11 +270,11 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
         if name == "binder_shapes":
             if not isinstance(value, list) or any(not isinstance(group, list) or any(not isinstance(state, str) for state in group) for group in value):
                 raise ValueError("binder_shapes: groups of named states required")
-        if name == "validation_models":
+        if name in ("design_models", "validation_models"):
             if isinstance(value, list):
                 if any(type(model) not in (int, str) for model in value):
-                    raise ValueError("validation_models: model names or indices required")
-            elif type(value) is not int or value < 1:
+                    raise ValueError(f"{name}: model names or indices required")
+            elif name == "validation_models" and (type(value) is not int or value < 1):
                 raise ValueError("validation_models: positive count or model list required")
         if name == "multitarget_rounds_per_target":
             if not isinstance(value, list) or any(not isinstance(stage, str) for stage in value):
@@ -276,7 +299,7 @@ def validate_request(request: dict, data: dict | None = None) -> dict:
                     _check(item, ["number"] if key == "weight" else ["string"], f"targets[{index}].{key}")
                 if not all(target.get(key) for key in ("name", "target_path")):
                     raise ValueError(f"targets[{index}]: name and target_path required")
-        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations", "binder_shapes", "validation_models", "multitarget_rounds_per_target", "crop_fasta_sequence"):
+        if isinstance(value, list) and name not in ("modality", "core", "target", "targets", "binder_lengths", "paratope_conformations", "binder_shapes", "design_models", "validation_models", "multitarget_rounds_per_target", "crop_fasta_sequence"):
             raise ValueError(f"{name}: element schema not yet qualified")
         if name in ("modality", "core", "target"):
             names = value if isinstance(value, list) else [value]

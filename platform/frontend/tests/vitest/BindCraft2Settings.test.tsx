@@ -45,13 +45,13 @@ describe('BC2 model-owned operator adapter', () => {
     expect(html).toContain('Native runtime fallback when omitted: &quot;direction&quot;')
     expect(html).toContain('aria-label="cyclic_offset_mode"')
     expect(html).toContain('aria-label="filters.i_pTM.threshold"')
-    expect(html).toContain('Unsupported typed control / unresolved source type')
+    expect(html).toContain('Native type metadata is unavailable for this setting. Existing saved values are retained.')
     expect(html).not.toContain('aria-label="gpu_ids"')
-    expect(html).toContain('Launch availability is determined by the launcher.')
-    const unavailable = renderToStaticMarkup(createElement(BindCraft2Settings, { inventory, value: {}, onChange: () => {}, launchAvailable: false }))
-    expect(unavailable).toContain('Model execution is not enabled.')
-    const available = renderToStaticMarkup(createElement(BindCraft2Settings, { inventory, value: {}, onChange: () => {}, launchAvailable: true }))
-    expect(available).toContain('Launcher reports execution available.')
+    // Launch ownership stays in the parent; settings introduce no execution gates.
+    expect(html).not.toContain('Unresolved settings prevent');
+    const unavailable = renderToStaticMarkup(createElement(BindCraft2Settings, { inventory, value: {}, onChange: () => {}, launchAvailable: false }));
+    expect(unavailable).toContain('aria-label="max_trajectories"');
+    expect(unavailable).not.toContain('Model execution is not enabled.');
   })
 
   it('edits native sweep controls without inventing an arm budget', async () => {
@@ -61,7 +61,7 @@ describe('BC2 model-owned operator adapter', () => {
       inventory, value: { max_trajectories: 7, parameter_sweep: { axes: [], max_arms: 5 } },
       onChange: next => changes.push(next),
     })) })
-    await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.axes' }).props.onChange({ currentTarget: { selectedOptions: [{ value: 'weights_interface_contacts' }] } }) })
+    await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.axes' }).props.onChange({ currentTarget: { value: 'weights_interface_contacts' } }) })
     expect(changes[0].parameter_sweep).toEqual({ axes: ['weights_interface_contacts'], max_arms: 5 })
     await act(async () => { tree!.root.findByProps({ 'aria-label': 'parameter_sweep.max_arms' }).props.onChange({ currentTarget: { value: '3' } }) })
     expect(changes[1].parameter_sweep).toEqual({ axes: [], max_arms: 3 })
@@ -131,7 +131,7 @@ it('mounts every optional native relaxation numeric control without filling omit
       expect(input).not.toBeNull()
       expect(input.type).toBe('number')
       expect(input.value).toBe('')
-      const label = input.closest('label')!.textContent!
+      const label = input.closest('[data-bc2-field]')!.textContent!
       expect(label).toContain('Applies when relax_accepted_designs is enabled')
       expect(label).toContain('Native relaxation fallback when omitted')
     }

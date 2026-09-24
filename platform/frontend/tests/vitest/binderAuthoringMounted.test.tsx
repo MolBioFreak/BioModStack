@@ -133,7 +133,9 @@ it('grouped native controls keep advanced relaxation reachable and distinguish o
     let latest: any;
     function Form() { const [value, setValue] = React.useState({ max_trajectories: 2, relax_steps: 0, trajectory_only: false }); latest = value; return <BindCraft2Settings inventory={inventory} value={value} onChange={next => setValue(next as typeof value)} />; }
     await mount(<Form />);
-    expect([...document.querySelectorAll('summary')].map(node => node.textContent)).toContain('Native relaxation');
+    const relaxation = [...document.querySelectorAll('summary')].find(node => node.textContent?.startsWith('Native relaxation'));
+    expect(relaxation).toBeTruthy();
+    await act(async () => relaxation!.click());
     expect((document.querySelector('[aria-label="relax_steps"]') as HTMLInputElement).value).toBe('0');
     const reset = document.querySelector<HTMLButtonElement>('[aria-label="Reset relax_steps"]')!;
     await act(async () => reset.click());
@@ -151,11 +153,10 @@ it('every source-typed top-level scientific inventory field has a mounted contro
     const internal = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length']);
     await mount(<BindCraft2Settings inventory={native} value={{}} onChange={() => {}} />);
     const fields = Object.entries(native.fields).filter(([key, descriptor]: [string, any]) => !internal.has(key) && descriptor.status === 'typed');
-    const summaries = [...document.querySelectorAll('summary')].map(node => node.textContent);
-    expect(summaries).toHaveLength(8);
-    const cards = [...document.querySelectorAll('section[aria-label="BindCraft2 settings"] details > div > div')];
+    const cards = [...document.querySelectorAll('section[aria-label="BindCraft2 settings"] [data-bc2-field]')];
+    expect(cards.map(node => node.getAttribute('data-bc2-field')).sort()).toEqual(fields.map(([key]) => key).sort());
     for (const [key] of fields) {
-        const card = cards.find(node => node.textContent?.includes(`${key} · `));
+        const card = cards.find(node => node.getAttribute('data-bc2-field') === key);
         expect(card, key).toBeTruthy();
         expect(card!.querySelector('input, select, button'), key).not.toBeNull();
         expect(card!.textContent, key).not.toContain('Unsupported typed control');
@@ -167,7 +168,12 @@ it('registered list parameters and entry prediction state have typed controls', 
     let latest: any;
     function Form() { const [value, setValue] = React.useState({}); latest = value; return <BindCraft2Settings inventory={full} value={value} onChange={setValue} />; }
     await mount(<Form />);
-    await click('Add losses.binder_pae.params.domain_ids entry');
+    const configure = [...document.querySelectorAll('[data-bc2-field="losses"] summary')].find(node => node.textContent?.startsWith('Configure '));
+    expect(configure).toBeTruthy();
+    await act(async () => (configure as HTMLElement).click());
+    const add = document.querySelector<HTMLButtonElement>('[role="group"][aria-label="losses.binder_pae.params.domain_ids"] button');
+    expect(add).not.toBeNull();
+    await act(async () => add!.click());
     await edit('losses.binder_pae.params.domain_ids.0', 'A');
     await edit('losses.binder_pae.prediction_state', 'complex');
     expect(latest.losses.binder_pae).toEqual({ prediction_state: 'complex', params: { domain_ids: ['A'] } });

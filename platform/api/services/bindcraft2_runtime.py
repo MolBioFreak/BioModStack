@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -206,9 +207,14 @@ def prepare_campaign(compiled: dict, destination: Path,
 
 def run_campaign(prepared: dict, *, executable: str = "bindcraft") -> int:
     """Invoke the native CLI exactly once; never synthesize acceptance or outputs."""
+    # Scoped Python startup adapter survives the native CLI's fresh interpreter
+    # and its subprocess design workers. Settings/receipts remain portable JSON.
+    adapter = Path(__file__).resolve().parents[3] / 'scripts/bindcraft2_native_adapter'
+    environment = {**os.environ, 'PYTHONPATH': os.pathsep.join(
+        part for part in (str(adapter), os.environ.get('PYTHONPATH', '')) if part)}
     command = [executable, *prepared.get("command", ["bindcraft", "design", prepared["settings_path"]])[1:]]
     if command[1] == 'score':
-        completed = subprocess.run(command, check=False, text=True, capture_output=True)
+        completed = subprocess.run(command, check=False, text=True, capture_output=True, env=environment)
         # The native CLI emits JSON plus explanatory lines, not a pure JSON file.
         (Path(prepared['campaign_root']) / 'native_score.txt').write_text(completed.stdout)
         print(completed.stdout, end='', flush=True)
@@ -216,4 +222,4 @@ def run_campaign(prepared: dict, *, executable: str = "bindcraft") -> int:
             import sys
             print(completed.stderr, end='', file=sys.stderr, flush=True)
         return completed.returncode
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, check=False, env=environment).returncode

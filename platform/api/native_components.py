@@ -35,7 +35,7 @@ PROCESS_CONTRACTS = {
     'modules/boltz.nf:AlignBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path designs', 'val design_type'), ('tuple path("aligned/*.pdb"), path("aligned/*.json"), emit: pdbs_jsons', 'path "alignment_*.log"', 'path ("boltz_metadata_*.jsonl"), topic: metadata_ch_fold_seq'), (), ()),
     'modules/boltz.nf:FilterBoltz': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_boltz_${task.index}.log"), emit: log', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
     'modules/boltz_cp_experimental.nf:RunBoltzCPExperimental': (('BoltzCP', 'gpu'), ('path input_config',), ("path 'cp_results', emit: results_dir, optional: true", "path 'cp_results/processed', emit: processed_dir, optional: true", "path '*.log'"), (), ()),
-    'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py',), ('container "${params.container_dir}/bindcraft2.sif"',)),
+    'modules/bindcraft2.nf:RunBindCraft2': (('gpu',), ('path compilation', 'val campaign_dir'), ("path 'bc2_complete.json', emit: completion",), ('scripts/run_bindcraft2_campaign.py', 'scripts/bindcraft2_native_adapter/sitecustomize.py'), ('container "${params.container_dir}/bindcraft2.sif"',)),
     'modules/binder_blind_pose.nf:BinderBlindPoseESMFold2': (('ESMFold2', 'gpu'), ('path selection_manifest', 'path candidate_pdbs', 'path target_pdb'), ("path 'blind_pose_results', emit: results",), ('scripts/run_binder_blind_pose.py',), ('container "${params.container_dir}/esmfold2.sif"',)),
     'modules/boltz_cp_experimental.nf:FinalizeBoltzCPExperimental': (('process_low',), ('path results_dir',), ("path 'published/*.pdb', emit: pdbs, optional: true", "path 'published/*.cif', emit: cifs, optional: true", "path 'published/*.json', emit: jsons, optional: true", "path 'published/*.npz', emit: npzs, optional: true"), (), ()),
     'modules/boltzgen.nf:PrepBoltzGenInput': (('pyrosetta_tools',), ('val ligand_smiles', 'val ntp_type', 'val scaffold_length', 'val num_designs', 'val binding_site_residues', 'val catalytic_site', 'val protein_sequence', 'val dna_template_seq', 'val dna_primer_seq', 'val secondary_structure', 'val protocol', 'val covalent_bonds', 'val nanobody_framework', 'val cdr_h1_length', 'val cdr_h2_length', 'val cdr_h3_length', 'path input_pdb', 'path ligand_pdb', 'path dna_structure', 'path target_pdb'), ('path "boltzgen_prepared", emit: yaml',), ('scripts/prep_boltzgen.py', 'scripts/lib/boltzgen_inputs.py'), ()),
@@ -244,7 +244,7 @@ PROCESS_CONTRACTS.update({
     'modules/bindcraft2.nf:PostprocessBindCraft2': (
         ('cpu',), ('path compilation', 'val campaign_dir'),
         ("path 'bc2_complete.json', emit: completion",),
-        ('scripts/run_bindcraft2_campaign.py',), ('container "${params.container_dir}/bindcraft2.sif"',)),
+        ('scripts/run_bindcraft2_campaign.py', 'scripts/bindcraft2_native_adapter/sitecustomize.py'), ('container "${params.container_dir}/bindcraft2.sif"',)),
     'workflows/binder_refinement.nf:PrepareBinderRefinementRegions': (
         ('CPU',), ('tuple val(meta), path(pdb)',),
         ('tuple val(meta), path(pdb), path("${meta.id}_seed.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: regions',),

@@ -43,7 +43,10 @@ import {
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { hydrateInitialStageSelection, resolveExistingDeNovoGenerator, type ExistingDeNovoGenerator } from './deNovoGeneratorSelection';
 import { DeNovoModalityNotice } from './DeNovoModalityNotice';
-import { BindCraft2Settings, type BC2Inventory, type BC2Request } from './BindCraft2Settings';
+import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
+import { BindCraft2Campaign } from './BindCraft2Campaign';
+import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
+import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
 import { BinderGeneratorChooser, type BinderNativeRoute } from './BinderGeneratorChooser';
 import { previewBindCraft2Campaign, type BC2CampaignPreview } from '../lib/bindcraft2AuthoringApi';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
@@ -293,6 +296,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         initialValues?.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)
             ? initialValues.bindcraft2_settings as BC2Request : {});
     const [bc2Inventory, setBc2Inventory] = useState<BC2Inventory | null>(null);
+    const [bc2Section, setBc2Section] = useState<BC2Section>('sources');
     const [bc2LaunchAvailable, setBc2LaunchAvailable] = useState<boolean | undefined>(undefined);
     const [bc2DiscoveryError, setBc2DiscoveryError] = useState<string | null>(null);
     const [bc2SubmitError, setBc2SubmitError] = useState<string | null>(null);
@@ -2423,16 +2427,43 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         />
     );
 
+    const bc2InitialSources = useMemo<BC2InitialSources>(() => {
+        const sourcePath = targetSource?.path || (uploadedFileRef.current === targetPdb ? uploadedPath : undefined);
+        const hasTarget = Boolean(targetPdb || sourcePath || targetSource?.url);
+        const selectedScaffold = frameworkType === 'sabdab' ? sabdabFramework : null;
+        const scaffoldPath = selectedScaffold?.filePath || (frameworkType === 'custom' || selectedScaffold ? customFrameworkPath : undefined);
+        const scaffoldFile = frameworkType === 'custom' ? customFrameworkFile : null;
+        return {
+            ...(hasTarget ? { target: {
+                file: targetPdb ?? undefined,
+                path: sourcePath || undefined,
+                url: targetSource?.url,
+                name: targetPdb?.name || targetSource?.name || 'Selected target',
+                chains: selectedChain || undefined,
+                hotspots: selectedResidues.size ? [...selectedResidues].join(',') : undefined,
+                modelPdb: availableTargetModels.length > 1 ? activeTargetModel?.content : undefined,
+            } } : {}),
+            ...(scaffoldPath || scaffoldFile || selectedScaffold?.pdbContent ? { scaffold: {
+                path: scaffoldPath || undefined,
+                file: scaffoldFile ?? undefined,
+                url: frameworkPdbUrl || undefined,
+                pdbContent: selectedScaffold?.pdbContent || undefined,
+                name: selectedScaffold?.name || scaffoldFile?.name || 'Selected scaffold',
+            } } : {}),
+        };
+    }, [targetSource, targetPdb, uploadedPath, frameworkType, sabdabFramework, customFrameworkPath,
+        customFrameworkFile, selectedChain, selectedResidues, availableTargetModels.length,
+        activeTargetModel, frameworkPdbUrl]);
+
     if (!isRefinementMode && deNovoGenerator === 'bindcraft2') return (
-        <section aria-label="BindCraft2 campaign" className="rounded-xl border p-6 space-y-4" style={themedPanelStyle}>
-            <button type="button" onClick={onBack}>Back to workflows</button>
-            <h2 className="text-xl font-semibold">De Novo Binder Design · BindCraft2</h2>
-            <p>Native campaign generation. Review candidates before choosing optional selected operations; BC2-native relaxation remains part of this model.</p>
-            <BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} />
-            <label className="block">Draft name <input aria-label="Draft name" value={jobName} onChange={event => setJobName(event.target.value)} /></label>
-            {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} />
-                : <p role="status">{bc2DiscoveryError ?? 'Loading model-owned settings inventory…'}</p>}
-            <button type="button" disabled={bc2PreviewBusy} onClick={async () => {
+        <BindCraft2Campaign
+            name={jobName} onNameChange={setJobName} onBack={onBack}
+            generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={onOpenNativeRoute} />}
+            requestedSettings={bc2Settings} preview={activeBc2Preview}
+            section={bc2Section} onSectionChange={setBc2Section}
+            previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
+            launchAvailable={bc2LaunchAvailable} error={bc2SubmitError}
+            onPreview={async () => {
                 setBc2SubmitError(null);
                 setBc2PreviewBusy(true);
                 const { identity, revision } = currentBc2Request.current;
@@ -2444,34 +2475,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     const detail = failed.response?.data?.detail;
                     setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign preview failed');
                 } finally { setBc2PreviewBusy(false); }
-            }}>{bc2PreviewBusy ? 'Compiling native preview…' : 'Preview native campaign'}</button>
-            {bc2LaunchAvailable === true && <>
-                <ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />
-                <button type="button" disabled={submitMutation.isPending || !activeBc2Preview} onClick={async () => {
-                    if (!activeBc2Preview) return;
-                    setBc2SubmitError(null);
-                    try { await submitMutation.mutateAsync({ ...bc2CampaignRequest,
-                        params: { ...bc2CampaignRequest.params, bc2_preview_digest: activeBc2Preview.preview_digest } }); }
-                    catch (error) {
-                        const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
-                        const detail = failed.response?.data?.detail;
-                        setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign submission failed');
-                    }
-                }}>Launch BindCraft2 campaign</button>
-            </>}
-            {bc2SubmitError && <p role="alert">{bc2SubmitError}</p>}
-            {!activeBc2Preview && <p role="status">Preview the current native settings before launch. Scientific edits invalidate the previous preview.</p>}
-            {activeBc2Preview && <section aria-label="Compiled native campaign preview" className="space-y-2 break-words">
-                <p>Preview digest: <code>{activeBc2Preview.preview_digest}</code></p>
-                {activeBc2Preview.note && <p>{activeBc2Preview.note}</p>}
-                {(['warnings', 'blockers'] as const).map(kind => activeBc2Preview[kind]?.map((message, index) => <p key={`${kind}-${index}`}>{kind}: {typeof message === 'string' ? message : JSON.stringify(message)}</p>))}
-                <details open><summary>Effective native settings</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap">{JSON.stringify(activeBc2Preview.effective_settings, null, 2)}</pre></details>
-            </section>}
-            <details><summary>Requested native settings</summary>
-                <pre className="max-h-96 overflow-auto whitespace-pre-wrap">{JSON.stringify(bc2CampaignRequest, null, 2)}</pre>
-            </details>
-            <button type="button" onClick={() => setShowTemplateManager(true)}>Save campaign draft</button>
-            <TemplateManagerModal isOpen={showTemplateManager} onClose={() => setShowTemplateManager(false)}
+            }}
+            onLaunch={async () => {
+                if (!activeBc2Preview) return;
+                setBc2SubmitError(null);
+                try { await submitMutation.mutateAsync({ ...bc2CampaignRequest,
+                    params: { ...bc2CampaignRequest.params, bc2_preview_digest: activeBc2Preview.preview_digest } }); }
+                catch (error) {
+                    const failed = error as { response?: { data?: { detail?: unknown } }; message?: string };
+                    const detail = failed.response?.data?.detail;
+                    setBc2SubmitError(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : failed.message ?? 'Campaign submission failed');
+                }
+            }}
+            onOpenLibrary={() => setShowTemplateManager(true)}
+            executionTarget={<ExecutionTargetPicker workflowRequest={bc2CampaignRequest} />}
+            library={<TemplateManagerModal isOpen={showTemplateManager} onClose={() => setShowTemplateManager(false)}
                 onSelect={template => {
                     const params = template.params || {};
                     if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') return;
@@ -2480,8 +2498,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ? params.bindcraft2_settings : {});
                 }}
                 currentParams={{ job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: bc2Settings }}
-                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />
-        </section>
+                currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" />}
+        >
+            {bc2Inventory ? <BindCraft2Settings inventory={bc2Inventory} value={bc2Settings} onChange={setBc2Settings} launchAvailable={bc2LaunchAvailable} section={bc2Section}
+                structureInputs={<BindCraft2StructureInputs value={bc2Settings} onChange={setBc2Settings} inventory={bc2Inventory} initialSources={bc2InitialSources} />} />
+                : <div className="rounded-xl border p-6" style={themedPanelStyle}><p role={bc2DiscoveryError ? 'alert' : 'status'}>{bc2DiscoveryError ?? 'Loading BindCraft2 settings…'}</p></div>}
+        </BindCraft2Campaign>
     );
 
     return (

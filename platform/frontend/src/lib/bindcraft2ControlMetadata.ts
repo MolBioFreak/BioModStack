@@ -1,0 +1,390 @@
+/** Display copy transcribed from pinned BC2 d5bae16 docs/reference.md.
+ * Presentation only: defaults and types remain inventory-owned. */
+export const BC2_HELP: Record<string, string> = {
+  "target": "Reuse a prepared target without repeating its structure and selections.",
+  "targets": "Supply your own proteins, receptor assemblies or off-targets. Each row below prefixed targets[] goes inside one object.",
+  "binder_lengths": "[80,80] fixes 80 residues; [60,100] allows the inclusive range; [60,80,100] allows only those choices. Length is per copy for an oligomer.",
+  "binder_scaffold": "From that JSON file's directory.",
+  "mutate_positions": "Select scaffold residues to redesign, resize or mark as binding/non-binding.",
+  "aa_bias": "Amino-acid propensities: 1 neutral, 2 favoured, 0.4 disfavoured, 0 excluded. Applies to design and redesign.",
+  "copies": "Number of binder copies in an assembly.",
+  "oligomer_tie": "Tie copy identities and sequence redesign. none leaves copies independent; it does not enforce an identical-sequence oligomer.",
+  "crop_fasta_sequence": "Length of a sampled sequence-target window; false uses the full sequence.",
+  "idr_crop_count": "Number of sequence windows treated as separate target states.",
+  "validation_crop_flank": "Restore up to this many target residues on each side of a sampled window during validation, to avoid designs dependent on artificial cut ends. 0 keeps the design window alone.",
+  "target_chain": "Change the internal prefix used to address prepared target chains in custom objectives. Input chain selection still uses targets[].chains.",
+  "binder_chain": "Choose which prepared binder chain custom objectives address. Usually automatic.",
+  "screen_steps": "Explore sequences and docking.",
+  "refine_steps": "Concentrate amino-acid probabilities.",
+  "anneal_steps": "Progress toward discrete sequences.",
+  "harden_steps": "Optimise a discrete sequence.",
+  "mutate_steps": "Try substitutions that improve the result.",
+  "number_of_final_designs": "How many accepted sequences you want.",
+  "max_trajectories": "Optional attempt limit. Leave unset to keep working toward the requested count.",
+  "campaign_seed": "Choose a new set of random trajectories or reproduce the same draws.",
+  "resume": "Continue the same experiment in its existing folder; false refuses a non-empty folder instead.",
+  "trajectory_only": "Explore gradient designs without ProteinMPNN acceptance; specify an attempt limit.",
+  "min_plddt_screen": "Require binder confidence at each stage.",
+  "min_plddt_refine": "Require binder confidence at each stage.",
+  "min_plddt_anneal": "Require binder confidence at each stage.",
+  "min_plddt_harden": "Require binder confidence at each stage.",
+  "min_plddt_mutate": "Require binder confidence at each stage.",
+  "min_plddt_final": "Require binder confidence at each stage.",
+  "min_iptm_screen": "Require interface confidence for binding targets.",
+  "min_iptm_refine": "Require interface confidence for binding targets.",
+  "min_iptm_anneal": "Require interface confidence for binding targets.",
+  "min_iptm_harden": "Require interface confidence for binding targets.",
+  "min_iptm_mutate": "Require interface confidence for binding targets.",
+  "min_iptm_final": "i_pTM — require interface confidence.",
+  "max_detarget_iptm_screen": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_iptm_refine": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_iptm_anneal": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_iptm_harden": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_iptm_mutate": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_iptm_final": "Reject attempts that retain too much confidence on an off-target.",
+  "max_detarget_interface_residues_final": "Reject an accepted design that still holds an off-target, counted in binder residues touching it. Interface confidence alone does not decide this: a peptide can read 0.27 i_pTM with its whole face on the off-target.",
+  "betasheet_reopt_trigger": "Sheet fraction at screen that activates extra optimisation below.",
+  "betasheet_reopt_extra_refine_steps": "Give sheet-rich designs extra updates.",
+  "betasheet_reopt_extra_anneal_steps": "Give sheet-rich designs extra updates.",
+  "betasheet_reopt_recycles": "Increase recycling for those designs.",
+  "validation_model": "Select the validation model family appropriate to the format.",
+  "design_models": "A count or exact model-name list; more models broaden optimisation.",
+  "validation_models": "A count or exact list; more models provide a broader confidence check. Design and validation models must not overlap.",
+  "design_recycles": "More recycling can improve convergence at extra cost.",
+  "validation_recycles": "More recycling can improve convergence at extra cost.",
+  "design_dropout": "Enable stochasticity during gradient design. Validation disables it.",
+  "sequence_candidates": "Maximum distinct ProteinMPNN sequences tried per trajectory.",
+  "enough_passing_sequences": "Stop drawing after this many candidates pass; raise to evaluate more alternatives.",
+  "kept_sequences": "Retain the best passing candidates by i_pDAE.",
+  "redesign_interface": "Allow ProteinMPNN to change interface residues instead of holding the designed interface fixed.",
+  "mpnn_model": "Select the checkpoint filename stem in the chosen weight family.",
+  "mpnn_variant": "Surface-charge preference: neutral, negative or positive.",
+  "mpnn_fix_linker": "Preserve linker residues identified by a multidomain design during redesign.",
+  "domain_linker_fix_cut": "Membership threshold used to decide which linker residues are held.",
+  "multitarget_steps": "Updates per target slot in a rotation.",
+  "multitarget_swap_threshold": "Interface-confidence goal and maximum wait before leaving a binding target.",
+  "multitarget_swap_patience": "Interface-confidence goal and maximum wait before leaving a binding target.",
+  "multitarget_warmup_patience": "Use a separate patience limit during the first visit to a target.",
+  "max_detarget_iptm": "Stop a detarget visit once its interface confidence falls this low. This is not an acceptance filter.",
+  "detarget_check_interval": "How often to revisit off-targets, and the maximum updates spent on one check.",
+  "max_detarget_rounds": "How often to revisit off-targets, and the maximum updates spent on one check.",
+  "multitarget_best_round": "Pass onward the last round that cleared every state's stage checks, rather than simply the last round.",
+  "multitarget_cumulative_filter": "Use each target's best round when evaluating the stage.",
+  "multitarget_filter_models": "Models used for the final multitarget stage prediction.",
+  "multitarget_rounds_per_target": "List stages, e.g. [\"screen\",\"refine\"], whose update budget should apply to each target.",
+  "multitarget_merged_gradients": "During anneal, combine gradients from the prepared targets before updating the shared sequence.",
+  "multitarget_merged_gradient_budget": "Keep anneal sequence updates even though each costs several predictions; model_calls divides the updates to conserve prediction calls.",
+  "multitarget_tied_redesign": "Redesign against all targets together. False rotates candidates between target structures.",
+  "binder_shapes": "Define explicit conformation groups.",
+  "induced_fit_delta": "Desired interface RMSD and distance defining the interface.",
+  "induced_fit_interface_cutoff": "Desired interface RMSD and distance defining the interface.",
+  "induced_fit_tm_target": "Desired ceiling on similarity between whole folds.",
+  "induced_fit_monomer_steps": "Maximum unbound-binder optimisation steps in each induced-fit block.",
+  "induced_fit_monomer_chunk": "Steps between confidence checks in that block.",
+  "induced_fit_monomer_plddt": "Confidence goal for adaptive stopping.",
+  "induced_fit_monomer_adaptive": "Stop the block early when its confidence goal is met.",
+  "induced_fit_steps": "Updates in an induced-fit slot mixed with target rotation.",
+  "induced_fit_mpnn_threshold": "Identify moving residues and neighbouring positions to hold during redesign.",
+  "induced_fit_mpnn_shell": "Identify moving residues and neighbouring positions to hold during redesign.",
+  "induced_fit_mpnn_designed_share": "Minimum fraction still available for redesign when much of the binder moves.",
+  "paratope_conformations": "List extended, folded_back or both to sample exposed versus framework-packed paratope loops.",
+  "initial_guess": "Start the re-prediction of each redesigned candidate from the pose the trajectory folded. The gradient stages are untouched, and a binder folded from nothing reaches it the same way a scaffold does, because ProteinMPNN decodes onto the predicted backbone. Measured on 17 matched candidates it raised binder pLDDT on every one and left interface pTM and pAE.",
+  "bigbang": "Property flag that sets bigbang_initialization.",
+  "bigbang_initialization": "Also start the gradient stages from the coordinates on hand, so the target begins folded in its own frame while a binder folded from nothing still springs from the origin. Measured to cost a campaign: 20 of 20 trajectories died at screen at a binder pLDDT of 0.56 to 0.59 where flexibility alone put 5 of 6 past screen at 0.81, and seeding a VHH.",
+  "target_flexibility": "Fraction of templated target residues whose sequence and sidechain information are withheld, while retaining their backbone. Increase only when target-side flexibility is part of the experiment.",
+  "peptide": "Judge a peptide in the bound complex without the default free-fold confidence gate; selected by peptide presets.",
+  "cyclize_peptide": "Enable head-to-tail cyclic residue offsets; implies peptide behaviour.",
+  "cyclic_offset_mode": "distance wraps separation; direction also preserves ring direction; neighbours distinguishes only nearby and distant pairs beyond two residues.",
+  "n_domains": "Requested domain count and permitted domain sizes.",
+  "min_domain_size": "Requested domain count and permitted domain sizes.",
+  "max_domain_size": "Requested domain count and permitted domain sizes.",
+  "max_domains": "Requested domain count and permitted domain sizes.",
+  "domain_rg_weight": "Encourage compact individual domains and separation between them.",
+  "domain_sep_weight": "Encourage compact individual domains and separation between them.",
+  "domain_contact_cutoff": "Define interdomain contact and error margins.",
+  "domain_pae_margin": "Define interdomain contact and error margins.",
+  "domain_linker_gap": "Control linker membership inferred from domain confidence.",
+  "domain_linker_sharpness": "Control linker membership inferred from domain confidence.",
+  "domain_linker_helix_weight": "Encourage helical character in the linker.",
+  "interface_contact_distance": "Distogram contact distances for attraction and off-target avoidance.",
+  "non_contact_distance": "Distogram contact distances for attraction and off-target avoidance.",
+  "termini_distance_threshold": "Distance below which the termini objective stops pulling.",
+  "disulfide_distance": "Preferred Cβ separation and smooth width for cysteine pairing.",
+  "disulfide_sigma": "Preferred Cβ separation and smooth width for cysteine pairing.",
+  "disulfide_sequence_separation": "Minimum sequence separation and softness of pairing choices. Each cysteine is paired with one partner, so a crowd of cysteines cannot satisfy itself.",
+  "disulfide_temperature": "Minimum sequence separation and softness of pairing choices. Each cysteine is paired with one partner, so a crowd of cysteines cannot satisfy itself.",
+  "humanization_species": "Sequence-preference panel.",
+  "humanization_mhc2_weight": "Relative contributions of MHC-II anchors, sequence coupling and hydrophobicity.",
+  "humanization_coupling_weight": "Relative contributions of MHC-II anchors, sequence coupling and hydrophobicity.",
+  "humanization_hydro_weight": "Relative contributions of MHC-II anchors, sequence coupling and hydrophobicity.",
+  "exposed_loops_measure": "Loop proxy: plddt, geometry or both.",
+  "exposed_loops_distinguish_sheets": "Treat extended strand geometry separately from loops.",
+  "weights_plddt_loss": "Confidence of the binder fold.",
+  "weights_target_plddt": "Confidence of marked target binding residues, or the whole target when none are marked.",
+  "weights_experimentally_resolved": "AlphaFold’s estimate of residue resolvability; a prediction, not an experimental observation.",
+  "weights_sequence_entropy": "Keep amino-acid probabilities diverse during early optimisation.",
+  "weights_humanization": "Sequence preferences and MHC anchor-score proxy.",
+  "weights_protease_sites": "Cleavage-site propensity.",
+  "weights_exposed_loops": "Exposed-loop susceptibility using a soft confidence/geometry proxy.",
+  "weights_exposed_termini": "Exposure of the ends of each binder chain.",
+  "weights_binder_pae": "Confidence in relative positions within the binder.",
+  "weights_interface_pae": "Confidence in the binder–target pose.",
+  "weights_compactness": "Binder radius of gyration relative to a globular protein of its length.",
+  "weights_iptm_loss": "Interface confidence for binding targets.",
+  "weights_ptm_loss": "Confidence in the entire complex as one structure.",
+  "weights_target_rmsd": "Keep the target close to the supplied coordinates.",
+  "weights_target_rigidity": "Keep a receptor assembly’s chains in their supplied arrangement.",
+  "weights_distogram_cce": "Agreement between predicted distances and the structural template.",
+  "weights_com_distance": "Bring target and binder centres together, relative to binder size.",
+  "weights_binder_coldspot": "Keep target contact off the marked non-binding framework.",
+  "weights_binder_intra_coldspot": "Keep paratope loops off the binder’s non-binding face.",
+  "weights_binder_intra_hotspot": "Pack paratope loops against that face.",
+  "weights_coldspot_repel": "Keep the binder away from target coldspots.",
+  "weights_interface_contacts": "Promote binder–target contacts.",
+  "weights_non_contact": "Discourage contacts with off-targets.",
+  "weights_binder_contacts": "Promote contacts within the binder.",
+  "weights_binder_helicity": "Binder helicity; negative favours helix.",
+  "weights_target_helicity": "Target helicity; negative favours helix.",
+  "weights_non_helical": "Discourage helical binder structure.",
+  "weights_termini_distance": "Bring the binder’s chain ends together.",
+  "weights_termini_angle": "Direct both ends away from the target.",
+  "weights_n_terminus_away": "Direct the N terminus away from the target.",
+  "weights_c_terminus_away": "Direct the C terminus away from the target.",
+  "weights_disulfide": "Charge for every cysteine left without a partner. The loss reads in free cysteines, so a weight of 1.0 prices one unpaired cysteine at 1.0.",
+  "weights_induced_fit_global": "Whole-fold difference between free and bound structures.",
+  "weights_induced_fit_interface": "Movement of the binding surface relative to the binder core.",
+  "weights_fold_switching": "Difference between explicit conformation groups.",
+  "weights_collective_softness": "Favour a shared collective hinge motion over local floppiness.",
+  "weights_multidomain": "Separate, compact domains connected by a linker.",
+  "autotune": "Adjust screen/refine length to observed progress; false keeps a fixed schedule.",
+  "autotune_loss_weights": "Also explore objective-weight multipliers.",
+  "desperation": "Climb the desperation ladder once the campaign has accepted nothing for long enough. A separate flag from autotune; false keeps the campaign at its own settings.",
+  "desperation_trajectories": "Trajectories since the last accepted design before the first rung of that ladder is taken.",
+  "parameter_sweep": "Compare controlled variants of selected settings; true uses default axes, or supply the object below.",
+  "axes": "Settings to compare one at a time against the baseline.",
+  "levels": "Multipliers applied to each axis.",
+  "multiplier": "Use one multiplier instead of levels.",
+  "max_arms": "Total arms including the unchanged baseline.",
+  "block_trajectories": "Advance arms in equal blocks, useful when a job ends early.",
+  "campaign_name": "Give files meaningful experiment and binder labels.",
+  "binder_name": "Give files meaningful experiment and binder labels.",
+  "project_folder": "From the directory where the command runs, unless an absolute path is given. Running from BC2 with \"project_folder\": \"results/pdl1\" writes to BC2/results/pdl1/.",
+  "hash_design_names": "False uses a shorter per-campaign counter; hashes remain recorded.",
+  "save_design_frames": "Keep one structure per recorded update/state.",
+  "save_design_trajectory": "Keep only the fold the trajectory ended on, before redesign: one file per target state, plus the unbound binder where the trajectory predicted one.",
+  "save_design_animations": "Keep interactive trajectory viewers; also enables frames.",
+  "save_loss_plots": "Keep metric plots; also enables frames.",
+  "save_failed_trajectories": "Keep structures from attempts that produced no accepted sequence. False retains metric records.",
+  "save_failed_refolds": "Keep predicted structures for rejected ProteinMPNN candidates. Rows remain recorded if false.",
+  "save_binder_monomers": "Keep a free-binder structure when that state was predicted.",
+  "archive_trajectories": "Zip each completed trajectory folder.",
+  "sparse_output": "Disable optional structures, viewers, plots and the sequence archive unless individually requested; useful for transfers.",
+  "relax_accepted_designs": "Save an additional restrained, clash-minimised complex. This does not replace the prediction.",
+  "relax_steps": "Duration and step size of optional relaxation.",
+  "relax_learning_rate": "Duration and step size of optional relaxation.",
+  "relax_restraint_backbone": "Restrain coordinates toward their starting positions.",
+  "relax_restraint_sidechain": "Restrain coordinates toward their starting positions.",
+  "relax_weight_bond": "Relative penalties for distorted bonds and clashes.",
+  "relax_weight_clash": "Relative penalties for distorted bonds and clashes.",
+  "relax_overlap_tol": "How far two atoms may approach below contact, and the separation no pair is pushed under.",
+  "relax_min_sep": "How far two atoms may approach below contact, and the separation no pair is pushed under.",
+  "length_bucket_size": "Pad lengths to reuse compiled calculations; 1 disables padding.",
+  "compile_next_length": "Prepare the next length while the current trajectory runs.",
+  "subbatch_size": "Split large calculations to reduce memory; an integer fixes the chunk size, null disables chunking.",
+  "attention_backend": "Choose attention implementation; leave automatic unless diagnosing performance.",
+  "use_cueq": "Enable optional cuEquivariance kernels when installed.",
+  "auto_multi_gpu": "Use the visible GPU allocation automatically; false keeps a single process.",
+  "workers_per_gpu": "Set or cap concurrent design workers per card.",
+  "max_workers_per_gpu": "Set or cap concurrent design workers per card.",
+  "design_workers": "Cap total workers across the allocation.",
+  "gpu_ids": "Select a subset of visible GPUs.",
+  "worker_launch_stagger": "Space worker starts to reduce startup pressure.",
+  "humanize": "Favour human-like sequence features and reduce an MHC-II anchor-score proxy.",
+  "protease_stable": "Penalise cleavage propensity and exposed loops/termini.",
+  "disulfide_staple": "Allow cysteine and require a geometrically compatible cysteine pair.",
+  "mixed_topology": "Encourage non-helical structure; by default accept at most 50% helix and at least 20% beta-sheet.",
+  "termini_together": "Bring the chain ends together; default final distance ceiling 10 Å.",
+  "termini_accessible": "Orient both ends away from the target.",
+  "forced_targeting": "Focus contact on a declared structured epitope; default hotspot coverage floor 0.5.",
+  "min_monomer_plddt_final": "Unbound_Binder_pLDDT — require a confident free binder fold.",
+  "min_ptm_final": "pTM — require overall complex confidence.",
+  "max_ipae_final": "i_pAE — limit normalized interface error.",
+  "min_target_plddt_final": "Target_pLDDT — require a confident target structure.",
+  "max_binder_chain_breaks_final": "Binder_Chain_Breaks — limit discontinuities in the backbone.",
+  "max_binder_free_cysteines_final": "Binder_Free_Cysteines — limit estimated unpaired cysteines.",
+  "min_binder_disulfides_final": "Binder_Disulfides — require distance-compatible cysteine pairs, counted as a pairing.",
+  "max_coldspot_contact_final": "Coldspot_Contact_Fraction — keep selected target residues free.",
+  "max_cyclic_closure_distance_final": "Cyclic_Closure_Distance — require close cyclic chain ends.",
+  "max_exposed_loop_fraction_final": "Exposed_Loop_Fraction — limit exposure among loop residues.",
+  "max_helix_fraction_final": "Binder_Helix_Fraction — limit helical content.",
+  "max_induced_fit_tm_final": "Induced_Fit_TM — require a whole-fold change.",
+  "max_interdomain_contact_final": "Interdomain_Contact_Fraction — keep domains from collapsing together.",
+  "max_mhc_anchor_score_final": "MHC_Anchor_Score — limit the humanization proxy.",
+  "max_off_epitope_contact_final": "Off_Epitope_Contact_Fraction — focus contact within the protected epitope.",
+  "max_oligomer_symmetry_rmsd_final": "Oligomer_Symmetry_RMSD — require approximate cyclic symmetry.",
+  "max_protease_site_score_final": "Protease_Site_Score — limit predicted cleavage propensity.",
+  "max_scaffold_framework_rmsd_final": "Scaffold_Framework_RMSD — retain the starting framework geometry.",
+  "max_surface_hydrophobicity_final": "Surface_Hydrophobicity — limit exposed hydrophobic residues.",
+  "max_termini_distance_final": "Termini_Distance — bring chain ends together.",
+  "max_terminus_exposure_final": "Terminus_Exposure — limit solvent exposure of terminal residues.",
+  "min_domain_separation_ratio_final": "Domain_Separation_Ratio — require spatially separate domains.",
+  "min_epitope_residues_contacted_final": "Epitope_Residues_Contacted — require contact across an epitope.",
+  "min_framework_packing_final": "Framework_Packing_Fraction — require loops to cover the non-binding face.",
+  "min_hotspot_contact_final": "Hotspot_Contact_Fraction — require coverage of named hotspots.",
+  "min_induced_fit_interface_rmsd_final": "Induced_Fit_Interface_RMSD — require movement of the binding surface.",
+  "min_interface_buried_area_final": "Interface_BuriedArea — require a minimum binder-side buried area.",
+  "min_receptor_chains_contacted_final": "Receptor_Chains_Contacted — require engagement of several receptor chains.",
+  "min_scaffold_sequence_retained_final": "Scaffold_Sequence_Retained_Fraction — retain held scaffold sequence.",
+  "min_target_crop_length_final": "Target_Crop_Length — require sufficient sequence-target coverage.",
+  "min_termini_away_cosine_final": "Termini_Away_Cosine — direct both ends away from the target.",
+  "min_n_terminus_away_cosine_final": "N_Terminus_Away_Cosine — direct the N terminus away.",
+  "min_c_terminus_away_cosine_final": "C_Terminus_Away_Cosine — direct the C terminus away.",
+  "core": "Optional profile below modality and target presets. Benchmark fixes the native seed and turns off adaptive tuning/escalation; explicit campaign settings still win.",
+  "modality": "Binder format and conformational objective. Combined modalities apply in the displayed order.",
+  "filters": "Native acceptance measurements; configure one metric at a time.",
+  "losses": "State-specific design objectives. Parameters do not activate a loss whose weight is off.",
+  "forced_targeting_shell": "Protected neighbourhood around structured-target hotspots during early forced targeting.",
+  "max_off_paratope_contact_final": "Limit the fraction of contacting binder residues outside the designated paratope.",
+  "save_design_sequences": "Save per-stage mixed/hardened sequence weights as sequences.npz; this is not just a final sequence export."
+};
+
+export const BC2_SYSTEM_FIELDS = new Set(['project_folder', 'resume', 'gpu_ids', 'auto_multi_gpu', 'design_workers', 'workers_per_gpu', 'max_workers_per_gpu', 'worker_launch_stagger', 'compile_next_length']);
+export const BC2_PRIMARY = [
+  { title: 'Format & profiles', help: 'Compose native presets in order. Explicit campaign edits take precedence.', keys: ['modality', 'core'] },
+  { title: 'Binder design', help: 'Choose size, scaffold edits and biological properties.', keys: ['binder_name', 'binder_lengths', 'binder_scaffold', 'mutate_positions', 'copies', 'oligomer_tie', 'paratope_conformations', 'humanize', 'protease_stable', 'disulfide_staple', 'mixed_topology', 'termini_together', 'termini_accessible', 'cyclize_peptide'] },
+  { title: 'Campaign budget', help: 'Accepted sequences and attempted trajectories are different budgets.', keys: ['campaign_name', 'number_of_final_designs', 'max_trajectories', 'campaign_seed', 'trajectory_only'] },
+  { title: 'Design schedule', help: 'Native stage update counts; changes affect the optimisation schedule.', keys: ['screen_steps', 'refine_steps', 'anneal_steps', 'harden_steps', 'mutate_steps'] },
+  { title: 'Prediction & sequence design', help: 'Control model evaluation and how many redesigned sequences are tried and retained.', keys: ['validation_model', 'design_models', 'validation_models', 'design_recycles', 'validation_recycles', 'design_dropout', 'mpnn_model', 'mpnn_variant', 'sequence_candidates', 'enough_passing_sequences', 'kept_sequences', 'redesign_interface'] },
+];
+export const BC2_EXPERT_GROUPS = [
+  'Target rotation & sequence windows', 'Conformational design', 'Scaffold & binder roles',
+  'Peptides & oligomers', 'Multi-domain binders', 'Humanization & protease objectives', 'Termini & disulfides',
+  'Target contact objectives', 'Stage checks & acceptance', 'Objective weights', 'Sequence propensities',
+  'Adaptive search & sweeps', 'Native relaxation', 'Prediction performance', 'Output & reproducibility', 'Other native controls',
+];
+export function bc2ExpertGroup(key: string): string {
+  if (/^(target|crop_fasta|idr_|multitarget|detarget_check|max_detarget_rounds)/.test(key) || key === 'max_detarget_iptm') return 'Target rotation & sequence windows';
+  if (/^(induced_fit|binder_shapes|paratope)/.test(key)) return 'Conformational design';
+  if ((/^(min_|max_)/.test(key) && key.endsWith('_final')) || /^(min_plddt|min_iptm|max_detarget_iptm)_/.test(key)) return 'Stage checks & acceptance';
+  if (key.startsWith('weights_')) return 'Objective weights';
+  if (key === 'aa_bias' || /^(mpnn|omit|sequence)/.test(key)) return 'Sequence propensities';
+  if (/^(autotune|desperation|parameter_sweep|betasheet|adaptive)/.test(key)) return 'Adaptive search & sweeps';
+  if (key.startsWith('relax')) return 'Native relaxation';
+  if (/^(attention|subbatch|length_bucket|use_cueq|validation|design_|initial_guess|bigbang)/.test(key)) return 'Prediction performance';
+  if (/^(save_|archive|sparse|hash_)/.test(key)) return 'Output & reproducibility';
+  if (/^(domain|n_domains|min_domain|max_domain)/.test(key)) return 'Multi-domain binders';
+  if (/^(humaniz|protease|exposed)/.test(key)) return 'Humanization & protease objectives';
+  if (/^(disulfide|termini)/.test(key)) return 'Termini & disulfides';
+  if (/^(cyclic|cyclize|peptide|copies|oligomer)/.test(key)) return 'Peptides & oligomers';
+  if (/^(forced|interface_contact|non_contact)/.test(key)) return 'Target contact objectives';
+  if (/^(binder|mutate_positions)/.test(key)) return 'Scaffold & binder roles';
+  return 'Other native controls';
+}
+/** Context hints do not hide or discard native overrides outside a preset. */
+export const BC2_GROUP_CONTEXT: Record<string, string> = {
+  'Conformational design': 'For induced_fit, fold_switch or explicitly grouped conformations. Changing the modality does not discard these overrides.',
+  'Scaffold & binder roles': 'Prepared chain identities and scaffold conventions; input-chain selection stays with structures.',
+  'Peptides & oligomers': 'Peptide/cyclic behavior and copy tying for the selected format.',
+  'Multi-domain binders': 'Domain partitioning and linker objectives; relevant when using multidomain losses.',
+  'Humanization & protease objectives': 'Sequence and geometric proxies, not measured immunogenicity or serum half-life.',
+  'Termini & disulfides': 'Parameters for the corresponding terminal-orientation and cysteine-pair objectives.',
+  'Target contact objectives': 'Binding, avoidance and protected hotspot-shell parameters.',
+  'Native relaxation': 'Applied only on the optional accepted-design relaxation path; values are retained when relaxation is off.',
+};
+const LABELS: Record<string, string> = {
+  core: 'Core profile', modality: 'Design modality', target: 'Native target preset',
+  binder_lengths: 'Binder length', mutate_positions: 'Scaffold redesign regions', copies: 'Binder copies',
+  number_of_final_designs: 'Accepted sequences', max_trajectories: 'Attempt limit', campaign_seed: 'Random seed',
+  sequence_candidates: 'Sequences to try per trajectory', enough_passing_sequences: 'Stop after passing', kept_sequences: 'Sequences to retain',
+  mpnn_model: 'ProteinMPNN checkpoint', mpnn_variant: 'ProteinMPNN charge preference', aa_bias: 'Amino-acid propensities',
+  trajectory_only: 'Gradient trajectories only', desperation: 'Native escalation ladder', autotune: 'Adaptive tuning',
+  losses: 'Design objectives', filters: 'Acceptance metrics', i_pTM: 'Interface pTM', i_pAE: 'Interface PAE (normalized)', i_pDAE: 'Interface pDAE', pTM: 'Complex pTM',
+};
+export const bc2Label = (key: string) => LABELS[key] ?? key.replaceAll('_', ' ').replace(/plddt/gi, 'pLDDT').replace(/iptm/gi, 'ipTM').replace(/mpnn/gi, 'MPNN').replace(/rmsd/gi, 'RMSD').replace(/^./, letter => letter.toUpperCase());
+export function bc2Help(key: string): string | undefined {
+  if (key.startsWith('weights_')) return `${BC2_HELP[key] ?? `Relative contribution of ${bc2Label(key.slice(8))} to the native design loss.`} Zero, negative and precise weights remain explicit.`;
+  return BC2_HELP[key];
+}
+/** Reference § Fractions, counts and distances; § Starting conformations.
+ * 0–1 sliders express fraction/confidence scales, NOT new validation limits. */
+export function bc2Range(key: string): readonly [number, number] | undefined {
+  if (/^(min_plddt|min_iptm|max_detarget_iptm)_/.test(key) || ['target_flexibility', 'betasheet_reopt_trigger', 'induced_fit_monomer_plddt', 'induced_fit_mpnn_designed_share', 'multitarget_swap_threshold'].includes(key)) return [0, 1];
+  return undefined;
+}
+export function bc2Unit(key: string): string | undefined {
+  if (key.endsWith('_steps')) return 'updates';
+  if (key.endsWith('_recycles')) return 'recycles';
+  if (['binder_lengths','min_domain_size','max_domain_size','validation_crop_flank'].includes(key)) return 'residues';
+  if (bc2Range(key)) return '0–1 scale';
+  if (['disulfide_distance','disulfide_sigma','domain_contact_cutoff','forced_targeting_shell','induced_fit_delta','induced_fit_interface_cutoff','induced_fit_mpnn_threshold','interface_contact_distance','non_contact_distance','termini_distance_threshold'].includes(key)) return 'Å';
+  return undefined;
+}
+
+/** Measurement definitions: pinned docs/outputs.md §§ Measurements. */
+export const BC2_METRIC_HELP: Record<string, string> = {
+  "Unbound_Binder_pLDDT": "Confidence of the binder predicted alone, 0–1. Peptides need not have a confident free fold.",
+  "SS_pLDDT": "Binder confidence over helix/sheet residues, 0–1; excludes loops.",
+  "pTM": "Predicted confidence in the entire complex geometry, 0–1; higher is better.",
+  "i_pTM": "Interface confidence, 0–1; higher is better for a binding target.",
+  "i_pAE": "Mean interface PAE divided by 31 Å; lower is better. A value of 0.35 is about 10.85 Å of mean interface PAE.",
+  "i_pDAE": "Distance-masked interface TM confidence, 0–1; higher is better. Uses contacts within 8 Å by default and is BC2's standard ranking score.",
+  "i_pTM_detarget": "The corresponding measurements on an explicitly selected off-target. Interpret the desired direction as avoidance rather than binding.",
+  "i_pAE_detarget": "The corresponding measurements on an explicitly selected off-target. Interpret the desired direction as avoidance rather than binding.",
+  "Interface_Residues": "Binder residues with any atom within 4 Å of the target; an interface-size count.",
+  "Interface_Residues_detarget": "The same count for a selected off-target.",
+  "Interface_BuriedArea": "Binder-side loss of solvent-accessible area upon complex formation, Å²; not the sum of both partners' buried areas.",
+  "Surface_Hydrophobicity": "Fraction of solvent-exposed residues of the free binder that are hydrophobic (A,C,V,I,L,M,F,W,Y). Exposure uses relative SASA ≥0.2.",
+  "Backbone_Clashes": "Interchain CA atom pairs within 2.5 Å. It is not an all-backbone or all-atom clash count.",
+  "All_Atom_Clashes": "Interchain atom pairs within 2.5 Å. Intrachain clashes are not included.",
+  "Binder_Chain_Breaks": "Consecutive CA distances outside 3.3–4.3 Å within binder chains.",
+  "Binder_Helix_Fraction": "Fractions of binder residues assigned helix, sheet or other by secondary-structure analysis; 0–1.",
+  "Binder_BetaSheet_Fraction": "Fractions of binder residues assigned helix, sheet or other by secondary-structure analysis; 0–1.",
+  "Binder_Loop_Fraction": "Fractions of binder residues assigned helix, sheet or other by secondary-structure analysis; 0–1.",
+  "Binder_Extinction": "Estimated molar extinction coefficient at 280 nm, M⁻¹ cm⁻¹, including the geometric cystine estimate.",
+  "Binder_Disulfides": "Cysteine pairs with Cβ separation 3.8±1 Å and sequence separation ≥3, counted as a pairing: each cysteine bonds to its closest compatible partner and to nothing else, so three mutually close cysteines are one pair and not three. This geometric count does not establish an S–S bond.",
+  "Binder_Free_Cysteines": "max(0, cysteines − 2 × paired cysteine count); inspect actual pairings and sulphur geometry.",
+  "Hotspot_Contact_Fraction": "Fraction of named target hotspots contacted by the binder, 0–1.",
+  "Coldspot_Contact_Fraction": "Fraction of named coldspots contacted, 0–1; lower is better for avoidance.",
+  "Off_Paratope_Contact_Fraction": "Fraction of contacting binder residues outside the designated paratope, 0–1.",
+  "Off_Epitope_Contact_Fraction": "Fraction of contacted target residues outside the protected hotspot neighbourhood, 0–1.",
+  "Epitope_Residues_Contacted": "Count of contacted residues in that neighbourhood.",
+  "Receptor_Chains_Contacted": "Number of input receptor chains engaged by the binder.",
+  "Target_Crop_Length": "Number of target residues in the predicted state, including validation flanks when present.",
+  "Cyclic_Closure_Distance": "Distance from C-terminal C to N-terminal N, Å. Inspect orientation as well as distance; a close pair alone does not establish cyclisation.",
+  "Scaffold_Sequence_Retained_Fraction": "Fraction of held framework residues retaining the scaffold sequence.",
+  "Scaffold_Framework_RMSD": "Aligned framework displacement from the supplied scaffold, Å.",
+  "Framework_Packing_Fraction": "Coverage of the non-binding framework by paratope loops; use according to the requested extended/folded-back conformation.",
+  "Interdomain_Contact_Fraction": "Contacts between separate domains; lower supports domain separation.",
+  "Domain_Separation_Ratio": "Domain-centre separation relative to domain radii; larger supports spatially distinct domains.",
+  "Oligomer_Symmetry_RMSD": "Deviation under cyclic permutation of binder copies, Å; smaller is more symmetric.",
+  "Binder_RMSD": "Aligned free-to-bound binder displacement, Å. Desired direction depends on whether the binder should retain or change its fold.",
+  "Induced_Fit_RMSD": "Aligned free-to-bound binder displacement, Å. Desired direction depends on whether the binder should retain or change its fold.",
+  "Induced_Fit_Interface_RMSD": "Movement of the binding surface after aligning the core, Å; larger supports the requested induced fit.",
+  "Induced_Fit_TM": "Free-to-bound whole-fold similarity, 0–1; 1 is unchanged. A switching design asks for a ceiling.",
+  "Termini_Distance": "N-to-C terminal CA distance of the addressed binder chain, Å.",
+  "MHC_Anchor_Score": "Combined sequence-based MHC anchor proxy; lower is the humanization objective, not a measured immune response.",
+  "Protease_Site_Score": "Cleavage propensity of the discrete sequence under the configured protease panel; not a measured half-life.",
+  "Exposed_Loop_Fraction": "Fraction of loop residues that are solvent-exposed (relative SASA ≥0.2); the denominator is loop residues, not all binder residues.",
+  "Terminus_Exposure": "Mean relative SASA of terminal residues, by default three at each end of every binder chain."
+};
+export function bc2MetricUnit(metric: string): string | undefined {
+  if (metric === 'Interface_BuriedArea') return 'Å²';
+  if (/RMSD|Distance/.test(metric)) return 'Å';
+  if (/Fraction/.test(metric) || ['pLDDT', 'Unbound_Binder_pLDDT', 'Target_pLDDT', 'SS_pLDDT', 'pTM', 'i_pTM', 'i_pDAE', 'Induced_Fit_TM'].includes(metric)) return '0–1';
+  if (metric === 'i_pAE' || metric === 'i_pAE_detarget') return 'PAE / 31 Å';
+  if (/Cosine/.test(metric)) return '−1…1';
+  return undefined;
+}
+export function bc2ParamUnit(param: string): string | undefined {
+  if (['cutoff', 'epitope_cutoff', 'distance', 'tolerance', 'sigma', 'threshold_distance', 'interface_rmsd_target', 'contact_decay', 'minimum_bond', 'maximum_bond', 'domain_contact_cutoff'].includes(param)) return 'Å';
+  if (['sequence_separation', 'terminus_length', 'min_domain_size', 'max_domain_size'].includes(param)) return 'residues';
+  if (param === 'contacts_per_residue') return 'contacts/residue';
+  return undefined;
+}
+
+// Source: reference.md model/sequence and multitarget tables. Unknown saved
+// values stay offered by the renderer; inventory choices take precedence.
+export const BC2_CHOICES: Record<string, string[]> = {
+  validation_model: ['monomer', 'multimer'], mpnn_variant: ['neutral', 'negative', 'positive'],
+  multitarget_merged_gradient_budget: ['sequence_updates', 'model_calls'],
+};

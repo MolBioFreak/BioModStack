@@ -1,6 +1,31 @@
 {
-  "metric_exception": {
-    "losses.induced_fit_interface.interface_mask": "Array | None is an in-memory JAX mask, not a portable JSON request; no source-backed serialization contract"
+  "metric_exception": {},
+  "top_level_request_types": {
+    "design_models": {
+      "observed_types": ["integer"],
+      "request_types": ["integer", "array"],
+      "items": {"type": ["integer", "string"]},
+      "source": "bindcraft/settings.py:534-556,570-586 (counts or ordered exact names/indices; native pool resolution remains authoritative)"
+    },
+    "parameter_sweep": {
+      "observed_types": ["object"],
+      "request_types": ["object", "boolean"],
+      "source": "bindcraft/parameter_sweep.py:38-42,84-91 (false disables; true and object enable native options, including empty object)"
+    }
+  },
+  "filter_threshold_types": {
+    "types": ["number", "null"],
+    "source": "bindcraft/filters.py:35-43 (explicit null skips the filter; number binds its threshold)"
+  },
+  "metric_parameter_types": {
+    "losses.induced_fit_interface.interface_mask": {
+      "types": ["array", "null"],
+      "items": {"type": "number"},
+      "default": null,
+      "control": "native-numeric-vector",
+      "source": "bindcraft/loss.py:751-768; _bound_metric:33-37; freeze_induced_fit_interface/frozen_interface_arguments:692-709",
+      "description": "Optional numeric vector in the selected native chain's coordinate-row order (chain defaults to binder; complex versus binder_alone). Omitted/null retains native automatic inference. Not target hotspots, author residue numbers, or a binary-only selection. Native freeze may override the call-time mask and pads its frozen mask; the adapter only converts JSON vectors to arrays at use."
+    }
   },
   "metric_expression_types": {
     "BINDER_ALONE": {
