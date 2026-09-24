@@ -165,11 +165,11 @@ export function BindCraft2Settings({ inventory, value, onChange, launchAvailable
     }
     return <span>Typed nested editor pending; this setting cannot be submitted from this form.</span>
   }
-  return <section aria-label="BindCraft2 settings"><p>{launchAvailable === true ? 'Launcher reports execution available.' : launchAvailable === false ? 'Model execution is not enabled.' : 'Launch availability is determined by the launcher.'} Unresolved settings prevent a full parity claim.</p>
+  return <section aria-label="BindCraft2 settings" className="[overflow-wrap:anywhere]"><p>{launchAvailable === true ? 'Launcher reports execution available.' : launchAvailable === false ? 'Model execution is not enabled.' : 'Launch availability is determined by the launcher.'} Unresolved settings prevent a full parity claim.</p>
     <p className="text-sm">Controls show native defaults without adding omitted values to your request. Use “Use native default” to remove an override; explicit false, zero and empty lists remain explicit. Preview shows profile-resolved effective settings.</p>
     {sections.map((section, sectionIndex) => <details key={section} open={sectionIndex < 3} className="rounded-lg border border-[var(--border-color)] p-4">
       <summary className="cursor-pointer font-medium">{section}</summary>
-      <div className="mt-4 grid min-w-0 gap-5 xl:grid-cols-2 [&_input:not([type=checkbox])]:w-full [&_input]:min-w-0 [&_select]:w-full [&_select]:min-w-0 [&_label]:block [&_small]:block [&_fieldset]:space-y-2 [&_input]:rounded [&_input]:border [&_input]:p-2 [&_select]:rounded [&_select]:border [&_select]:p-2 [&_button]:rounded [&_button]:border [&_button]:px-2 [&_button]:py-1">
+      <div className="mt-4 grid min-w-0 gap-5 xl:grid-cols-2 [&_input:not([type=checkbox])]:w-full [&_input]:min-w-0 [&_select]:w-full [&_select]:min-w-0 [&_label]:block [&_small]:block [&_fieldset]:space-y-2 [&_fieldset]:min-w-0 [&_input]:rounded [&_input]:border [&_input]:p-2 [&_select]:rounded [&_select]:border [&_select]:p-2 [&_button]:rounded [&_button]:border [&_button]:px-2 [&_button]:py-1 [&_button]:max-w-full">
       {Object.entries(inventory.fields).filter(([key]) => !internal.has(key) && sectionFor(key) === section).map(([key, field]) => {
         const supported = field.status === 'typed' && (selectors.has(key) || key === 'max_trajectories' ||
           ['boolean', 'number', 'integer', 'string'].includes(field.observed_types[0]) || ['filters', 'losses', 'targets', 'aa_bias', 'binder_lengths', 'paratope_conformations', 'parameter_sweep', 'binder_shapes', 'validation_models', 'crop_fasta_sequence', 'multitarget_rounds_per_target'].includes(key))

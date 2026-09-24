@@ -36,6 +36,10 @@ describe('BC2 model-owned operator adapter', () => {
       inventory, value: { max_trajectories: 3, filters: { i_pTM: { threshold: 0.8, higher: true } } }, onChange: () => {},
     }))
     expect(html).toContain('aria-label="max_trajectories"')
+    // Native-key labels and fieldsets must shrink in the narrow served form.
+    expect(html).toContain('[overflow-wrap:anywhere]')
+    expect(html).toContain('[&amp;_fieldset]:min-w-0')
+    expect(html).toContain('[&amp;_button]:max-w-full')
     expect(html).toContain('aria-label="trajectory_only"')
     expect(html).toContain('Native default: false')
     expect(html).toContain('Native runtime fallback when omitted: &quot;direction&quot;')
