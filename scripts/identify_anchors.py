@@ -103,8 +103,16 @@ def parse_antibody_residue_numbers(pdb_path, antibody_chains):
             if key in seen[chain_id]:
                 continue
             seen[chain_id].add(key)
-            chains[chain_id].append(resnum)
+            chains[chain_id].append(key)
     return {chain_id: sorted(set(values)) for chain_id, values in chains.items() if values}
+
+
+def parse_residue_identity(token):
+    """Read one native author identity, preserving chain and insertion case."""
+    match = re.fullmatch(r"([A-Za-z0-9])(-?\d+)([A-Za-z]?)", str(token))
+    if match:
+        return match.group(1), int(match.group(2)), match.group(3)
+    return None
 
 
 def normalize_loop_residue_map(raw_map):
@@ -117,16 +125,16 @@ def normalize_loop_residue_map(raw_map):
             continue
         values = []
         for residue in residues or []:
-            token = str(residue).strip().upper()
+            token = str(residue).strip()
             if not token:
                 continue
-            if token[0].isalpha():
-                token = token[1:]
-            match = re.match(r"^-?\d+", token)
-            if match:
-                values.append(int(match.group(0)))
+            if re.fullmatch(r"-?\d+", token):
+                # Integer-only entries retain their blank-insertion meaning.
+                values.append(int(token))
+            elif parse_residue_identity(token):
+                values.append(token)
         if values:
-            normalized[loop_id] = sorted(set(values))
+            normalized[loop_id] = sorted(set(values), key=lambda value: (isinstance(value, str), value))
     return normalized
 
 
@@ -174,11 +182,11 @@ def build_default_loop_map(antibody_chains, residue_numbers_by_chain):
         if not chain_id:
             continue
         residues = [
-            residue for residue in residue_numbers_by_chain.get(chain_id, [])
-            if start <= residue <= end
+            resnum for resnum, icode in residue_numbers_by_chain.get(chain_id, [])
+            if start <= resnum <= end
         ]
         if residues:
-            loop_map[loop_id] = residues
+            loop_map[loop_id] = sorted(set(residues))
     return loop_map
 
 
@@ -223,7 +231,11 @@ def loop_map_to_chain_map(loop_map, antibody_chains, selected_loops=None):
         chain_id = heavy_chain if loop_id.startswith("H") else light_chain
         if not chain_id or not residues:
             continue
-        by_chain.setdefault(chain_id, set()).update(int(value) for value in residues)
+        for value in residues:
+            identity = (chain_id, value, "") if isinstance(value, int) else parse_residue_identity(value)
+            if identity is not None:
+                author_chain, resnum, icode = identity
+                by_chain.setdefault(author_chain, set()).add((resnum, icode))
     return by_chain
 
 
@@ -231,11 +243,16 @@ def chain_map_to_spec(chain_map, chain_order):
     tokens = []
     for chain_id in chain_order:
         residues = sorted(set(chain_map.get(chain_id, set())))
-        for start, end in get_ranges(residues):
+        numbers = [resnum for resnum, icode in residues if not icode]
+        # Native expand_ranges only expands positive alphabetic-chain ranges.
+        compressible = {number for number in numbers if number >= 0 and chain_id.isalpha()}
+        for start, end in get_ranges(compressible):
             if start == end:
                 tokens.append(f"{chain_id}{start}")
             else:
                 tokens.append(f"{chain_id}{start}-{end}")
+        tokens.extend(f"{chain_id}{number}" for number in numbers if number not in compressible)
+        tokens.extend(f"{chain_id}{resnum}{icode}" for resnum, icode in residues if icode)
     return ",".join(tokens)
 
 
@@ -315,7 +332,7 @@ def compute_interface_score(pose, interface_residues):
 
 def build_cdr_positions_from_hlt(pdb_path, antibody_chains, selected_loops=None):
     try:
-        from prep_antibody_constraints import parse_hlt_cdr_labels, get_ranges
+        from prep_antibody_constraints import parse_hlt_cdr_labels
     except Exception as exc:  # pragma: no cover - import guard
         return None, f"Failed to import HLT parser: {exc}"
 
@@ -325,37 +342,10 @@ def build_cdr_positions_from_hlt(pdb_path, antibody_chains, selected_loops=None)
     if not has_labels:
         return None, None
 
-    heavy_chain = antibody_chains[0] if antibody_chains else "H"
-    light_chain = antibody_chains[1] if len(antibody_chains) > 1 else None
-
-    ranges_by_chain = {}
-    for loop in ("H1", "H2", "H3"):
-        if selected and loop not in selected:
-            continue
-        residues = cdr_dict.get(loop, [])
-        for start, end in get_ranges(residues):
-            ranges_by_chain.setdefault(heavy_chain, []).append((start, end))
-
-    if light_chain:
-        for loop in ("L1", "L2", "L3"):
-            if selected and loop not in selected:
-                continue
-            residues = cdr_dict.get(loop, [])
-            for start, end in get_ranges(residues):
-                ranges_by_chain.setdefault(light_chain, []).append((start, end))
-
-    if not ranges_by_chain:
-        return None, None
-
-    cdr_ranges = []
-    for chain_id, ranges in ranges_by_chain.items():
-        for start, end in ranges:
-            if start == end:
-                cdr_ranges.append(f"{chain_id}{start}")
-            else:
-                cdr_ranges.append(f"{chain_id}{start}-{end}")
-
-    return ",".join(cdr_ranges), None
+    by_chain = loop_map_to_chain_map(
+        normalize_loop_residue_map(cdr_dict), antibody_chains, selected_loops=selected
+    )
+    return chain_map_to_spec(by_chain, antibody_chains) or None, None
 
 
 def build_default_cdr_positions(antibody_chains, selected_loops=None):
@@ -368,7 +358,10 @@ def build_default_cdr_positions(antibody_chains, selected_loops=None):
         if selected and chain_id.upper() not in selected_chains:
             continue
         for start, end in default_ranges:
-            cdr_ranges.append(f"{chain_id}{start}-{end}")
+            if chain_id.isalpha():
+                cdr_ranges.append(f"{chain_id}{start}-{end}")
+            else:
+                cdr_ranges.extend(f"{chain_id}{number}" for number in range(start, end + 1))
     return ",".join(cdr_ranges)
 
 

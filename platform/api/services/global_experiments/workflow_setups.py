@@ -19,8 +19,6 @@ from experiment_models import (
     ExperimentIdempotencyClaim,
     ExperimentResource,
     ExperimentRevision,
-    ExperimentValidation,
-    ExperimentWorkflowPreparation,
     ExperimentWorkflowSetupContext,
 )
 from experiment_services import (
@@ -32,7 +30,6 @@ from experiment_services import (
     create_domain_experiment,
     create_global_experiment,
     create_workflow,
-    new_id,
     sha256_text,
 )
 from services.global_experiments.launch_contexts import create_prepared_launch_context
@@ -82,14 +79,18 @@ async def _detailed_document(
 ) -> dict[str, Any]:
     project = await session.get(ExperimentAggregateHead, row.project_id)
     experiment = await session.get(ExperimentAggregateHead, row.global_experiment_id)
-    capability = json.loads(row.capability_contract_json)["capability"]
+    contract = json.loads(row.capability_contract_json)
+    capability = contract["capability"]
+    draft = json.loads(row.draft_json)
+    if contract["parameter_schema"].get("x-bms-native-editor-draft"):
+        draft = {**draft.get("editor_state", {}), **({"native_job_request": draft["native_job_request"]} if "native_job_request" in draft else {})}
     return {
         **_document(row),
         "schema": "bms.project-workflow-setup.detail.v1",
         "project_label": project.display_name if project is not None else row.project_id,
         "experiment_label": experiment.display_name if experiment is not None else row.global_experiment_id,
         "workflow_label": capability["label"],
-        "draft": json.loads(row.draft_json),
+        "draft": draft,
         "field_errors": {},
         "diagnostics": {
             "workflow_id": row.workflow_id,
@@ -219,6 +220,20 @@ def _domain_payload(
 def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tuple[dict[str, Any], str]:
     if not isinstance(supplied, dict):
         raise ValidationFailure("workflow setup draft must be an object")
+    if schema.get("x-bms-native-editor-draft"):
+        # UI/source metadata is durable editor state, never native parameters.
+        if "editor_state" not in supplied:
+            editor = {key: value for key, value in supplied.items() if key != "native_job_request"}
+            if not supplied:
+                editor = copy.deepcopy(schema["properties"]["editor_state"].get("default", {}))
+            supplied = {"editor_state": editor,
+                        **({"native_job_request": supplied["native_job_request"]} if "native_job_request" in supplied else {})}
+        if "native_job_request" in supplied:
+            from schemas import JobCreate
+            try:
+                JobCreate.model_validate(supplied["native_job_request"])
+            except ValueError as exc:
+                raise ValidationFailure(str(exc)) from exc
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         raise ValidationFailure("workflow setup parameter schema is unavailable")
@@ -455,109 +470,51 @@ async def prepare_workflow_setup_launch(
     workflow = await session.get(ExperimentAggregateHead, row.workflow_id)
     if workflow is None or workflow.workspace_id != project_id or workflow.parent_id != row.domain_experiment_id:
         raise ValidationFailure("workflow setup ownership authority is invalid")
-    timestamp = _now()
-    revision_id = new_id("revision")
-    payload = {
-        "schema": "bms.workflow.project-setup.v1",
-        "capability_id": row.capability_id,
-        "adapter_id": json.loads(row.capability_contract_json)["capability"]["project_setup_adapter_id"],
-        "native_request": json.loads(row.draft_json),
-        "setup_context_id": row.setup_context_id,
-    }
-    payload_json = canonical_json(payload)
-    session.add(
-        ExperimentResource(
-            id=revision_id, kind="revision", workspace_id=project_id,
-            lifecycle_owner_id=row.workflow_id, created_at=timestamp,
-        )
+    from experiment_services import (
+        initial_workflow_plan_payload, persist_workflow_plan_authority,
+        prepare_workflow, protein_setup_launch_authority,
+        save_workflow_draft, save_workflow_revision,
     )
-    await session.flush()
-    session.add(
-        ExperimentRevision(
-            resource_id=revision_id,
-            subject_id=row.workflow_id,
-            revision_number=workflow.head_generation + 1,
-            parent_revision_id=workflow.current_revision_id,
-            schema_name=payload["schema"],
-            schema_version="1",
-            canonical_payload=payload_json,
-            payload_sha256=sha256_text(payload_json),
-            dependency_graph_sha256=sha256_text("[]"),
-            provenance_json=canonical_json({"setup_context_id": row.setup_context_id}),
-            created_at=timestamp,
-        )
+    from experiment_models import ExperimentWorkflowDraft
+
+    domain = await session.get(ExperimentAggregateHead, row.domain_experiment_id)
+    stored_draft = json.loads(row.draft_json)
+    native = json.loads(row.capability_contract_json)["parameter_schema"].get("x-bms-native-editor-draft")
+    native_request = stored_draft.get("native_job_request") if native else None
+    authority, plan_contract = await persist_workflow_plan_authority(
+        session, workflow_id=row.workflow_id, workspace_id=project_id,
+        domain_experiment_id=row.domain_experiment_id,
+        expected_domain_revision_id=domain.current_revision_id,
+        capability_id=row.capability_id,
+        **({"normalized_job_request": native_request} if native else {}),
     )
-    workflow.current_revision_id = revision_id
-    workflow.head_generation += 1
-    workflow.lifecycle_state = "active"
-    workflow.updated_at = timestamp
-    await session.flush()
-    capability = json.loads(row.capability_contract_json)["capability"]
-    model_modes = capability.get("allowed_model_modes")
-    if not isinstance(model_modes, list) or len(model_modes) != 1:
-        raise ValidationFailure("workflow setup capability has no exact native model and mode")
-    model_mode = model_modes[0]
-    if not isinstance(model_mode, dict) or not isinstance(model_mode.get("model_id"), str) or not isinstance(model_mode.get("mode"), str):
-        raise ValidationFailure("workflow setup native model and mode authority is malformed")
-    scheduler_payload = {
-        "name": workflow.display_name,
-        "model_id": model_mode["model_id"],
-        "mode": model_mode["mode"],
-        "params": json.loads(row.draft_json),
-    }
-    scheduler_json = canonical_json(scheduler_payload)
-    preparation_id = new_id("preparation")
-    validation_id = new_id("validation")
-    for resource_id, kind, owner in (
-        (preparation_id, "workflow_preparation", row.workflow_id),
-        (validation_id, "validation", preparation_id),
-    ):
-        session.add(
-            ExperimentResource(
-                id=resource_id, kind=kind, workspace_id=project_id,
-                lifecycle_owner_id=owner, created_at=timestamp,
-            )
-        )
-    await session.flush()
-    validation_receipt = {
-        "schema": "bms.project-workflow-setup-validation.v1",
-        "setup_context_id": row.setup_context_id,
-        "capability_contract_sha256": row.capability_contract_sha256,
-        "draft_sha256": row.draft_sha256,
-        "outcome": "valid",
-    }
-    validation_json = canonical_json(validation_receipt)
-    validation_sha256 = sha256_text(validation_json)
-    session.add_all(
-        [
-            ExperimentValidation(
-                resource_id=validation_id,
-                subject_resource_id=preparation_id,
-                validator_name="project_workflow_setup_adapter",
-                validator_version="1",
-                outcome="valid",
-                input_graph_sha256=row.draft_sha256,
-                receipt_json=validation_json,
-                receipt_sha256=validation_sha256,
-                created_at=timestamp,
-            ),
-            ExperimentWorkflowPreparation(
-                resource_id=preparation_id,
-                workspace_id=project_id,
-                workflow_revision_id=revision_id,
-                normalized_request_json=row.draft_json,
-                normalized_request_sha256=row.draft_sha256,
-                scheduler_payload_json=scheduler_json,
-                validation_status="valid",
-                validation_receipt_json=validation_json,
-                validation_resource_id=validation_id,
-                expected_cardinality=1,
-                created_at=timestamp,
-                prepared_at=timestamp,
-            ),
-        ]
+    domain_revision = await session.get(ExperimentRevision, authority.expected_domain_revision_id)
+    payload = initial_workflow_plan_payload(
+        plan_name=workflow.display_name, capability_contract=plan_contract,
+        domain_payload=json.loads(domain_revision.canonical_payload),
     )
-    await session.flush()
+    payload["parameters"] = (dict(plan_contract["capability"]["normalized_job_request"]["params"])
+                             if native else stored_draft)
+    if native:
+        payload["scheduler"]["name"] = plan_contract["capability"]["normalized_job_request"]["name"]
+    payload["scheduler"]["params"] = {
+        **payload["parameters"], "workflow_adapter": payload["adapter_id"],
+    }
+    draft = await session.scalar(select(ExperimentWorkflowDraft).where(
+        ExperimentWorkflowDraft.workflow_id == row.workflow_id))
+    await save_workflow_draft(session, row.workflow_id, payload, expected_generation=draft.generation)
+    revision = await save_workflow_revision(
+        session, row.workflow_id, expected_head_generation=workflow.head_generation,
+        change_summary="Prepared native workflow setup",
+    )
+    preparation = await prepare_workflow(session, revision.resource_id, {
+        "input_dataset_revision_ids": [],
+        "launch_authority": await protein_setup_launch_authority(session, authority),
+    }, normalize_native_job=True)
+    if preparation.validation_status != "valid":
+        raise ValidationFailure(preparation.validation_receipt_json)
+    preparation_id = preparation.resource_id
+    capability = plan_contract["capability"]
     response = {
         **await _detailed_document(session, row),
         "preparation_id": preparation_id,

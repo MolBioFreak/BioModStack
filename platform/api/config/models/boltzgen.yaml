@@ -63,10 +63,32 @@ modes:
       - num_designs
       - batch_size
 
+  - id: protein_binder
+    name: Protein Binder Design
+    description: Native protein binder generation with distinct target context and optional scaffold or sequence template
+    params:
+      - target_pdb
+      - target_chains
+      - target_binding_positions
+      - binder_sequence
+      - scaffold_path
+      - scaffold_chain
+      - scaffold_design_ranges
+      - num_designs
+      - batch_size
+      - scaffold_length
+      - binding_site_residues
+
   - id: nanobody_binder
     name: VHH Nanobody Design
-    description: Design VHH single-domain antibody binders
+    description: Design VHH single-domain antibody binders using the existing framework/scaffold mapping
     params:
+      - target_chains
+      - target_binding_positions
+      - nanobody_framework
+      - cdr_h1_length
+      - cdr_h2_length
+      - cdr_h3_length
       - target_pdb
       - num_designs
       - batch_size
@@ -75,8 +97,14 @@ modes:
 
   - id: peptide_binder
     name: Peptide Binder Design
-    description: Design short peptide binders
+    description: Design short peptide binders using native protein entities and peptide-anything protocol
     params:
+      - target_chains
+      - target_binding_positions
+      - binder_sequence
+      - scaffold_path
+      - scaffold_chain
+      - scaffold_design_ranges
       - target_pdb
       - num_designs
       - batch_size
@@ -87,6 +115,52 @@ modes:
   # Use Boltz-2 with DNA/RNA complex components instead
 
 params:
+  - name: target_pdb
+    type: file
+    description: Target structure; native generic generation retains file coordinates and context (PDB/mmCIF)
+    required: false
+    file_type: pdb
+  - name: target_chains
+    type: string
+    description: Comma-separated exact native chain IDs; generic generation includes all chains when omitted
+    required: false
+  - name: target_binding_positions
+    type: string
+    description: Native 1-indexed chain-local target binding positions, e.g. A:2-5,b:8; supports mmCIF and does not imply author/IMGT numbering
+    required: false
+  - name: binder_sequence
+    type: string
+    description: Native protein sequence/length template; peptide also uses a protein entity, not VHH CDR numbering
+    required: false
+  - name: scaffold_path
+    type: file
+    description: Optional generic binder structural scaffold PDB/mmCIF, separate from target
+    required: false
+    file_type: pdb
+  - name: scaffold_chain
+    type: string
+    description: Exact native scaffold chain ID (case-sensitive)
+    required: false
+  - name: scaffold_design_ranges
+    type: string
+    description: Native 1-indexed chain-local scaffold design positions, such as 2..5,9; not author/IMGT numbering
+    required: false
+  - name: nanobody_framework
+    type: string
+    description: Existing VHH sequence template with X-marked CDRs; nanobody mode only
+    required: false
+  - name: cdr_h1_length
+    type: string
+    description: Requested CDR-H1 length range
+    default: "5-8"
+  - name: cdr_h2_length
+    type: string
+    description: Requested CDR-H2 length range
+    default: "6-10"
+  - name: cdr_h3_length
+    type: string
+    description: Requested CDR-H3 length range
+    default: "12-18"
   - name: ligand_smiles
     type: string
     description: SMILES string of target ligand
@@ -213,6 +287,7 @@ params:
     description: "BoltzGen protocol to use"
     default: "protein-anything"
     enum:
+      - auto
       - protein-anything
       - peptide-anything
       - protein-small_molecule
@@ -264,3 +339,552 @@ ntp_templates:
 
 enabled: true
 experimental: false
+
+# Model-owned public generation contract. Legacy params/defaults above are unchanged.
+# Consumers must use parameter_contract(mode), not expand the historical params list.
+native_generation:
+  schema_version: boltzgen-generation/1
+  source_revision: 617e549edf70787d899f47bc39e3746d8f10ffff
+  parameters:
+  - name: boltzgen_target_pdb_path
+    type: file
+    description: Target structure; native generic generation retains file coordinates
+      and context (PDB/mmCIF)
+    required: false
+    file_type: pdb
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_target_chains
+    type: string
+    description: Comma-separated exact native chain IDs; generic generation includes
+      all chains when omitted
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_target_binding_positions
+    type: string
+    description: Native 1-indexed chain-local target binding positions, e.g. A:2-5,b:8;
+      supports mmCIF and does not imply author/IMGT numbering
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_num_designs
+    type: integer
+    description: Number of designs to generate
+    required: false
+    default: 10
+    minimum: 1
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    group: run
+  - name: boltzgen_scaffold_length
+    type: string
+    description: Target length range for designed protein (e.g., '80-120' residues)
+    required: false
+    default: 80-120
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    group: source
+  - name: boltzgen_binding_site_residues
+    type: string
+    description: Binding pocket specification (e.g., 'A:45-52,A:78-85' for residue ranges)
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_batch_size
+    type: integer
+    description: Batch size for parallel generation (designs per GPU pass)
+    default: 1
+    minimum: 1
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
+    nullable: false
+    group: run
+  - name: boltzgen_budget
+    type: integer
+    description: Final number of designs to keep after diversity selection
+    required: false
+    minimum: 1
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
+    default: null
+    nullable: true
+    group: selection
+  - name: boltzgen_alpha
+    type: number
+    description: 'Quality/diversity tradeoff: 0.0=quality only, 1.0=diversity only'
+    default: 0.01
+    minimum: 0
+    maximum: 1
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
+    nullable: false
+    group: selection
+  - name: boltzgen_max_rmsd
+    type: number
+    description: Maximum refolding RMSD threshold (lower is better)
+    required: false
+    minimum: 0
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
+    default: null
+    nullable: true
+    group: selection
+  - name: boltzgen_min_plddt
+    type: number
+    description: Unavailable on native CSV/NPZ producer path; null disables. Explicit
+      non-null historical thresholds remain incompatible.
+    default: null
+    minimum: 0
+    maximum: 100
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
+    nullable: true
+    group: selection
+  - name: boltzgen_secondary_structure
+    type: string
+    description: Secondary structure constraints (e.g., 'helix:1-20,sheet:25-35,loop:40-45')
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_protocol
+    type: string
+    description: BoltzGen protocol to use
+    default: protein-anything
+    enum:
+    - auto
+    - protein-anything
+    - peptide-anything
+    - protein-small_molecule
+    - nanobody-anything
+    - antibody-anything
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    default_by_mode:
+      protein_binder: protein-anything
+      peptide_binder: peptide-anything
+      nanobody_binder: nanobody-anything
+    group: run
+  - name: boltzgen_binder_sequence
+    type: string
+    description: Native protein sequence/length template; peptide also uses a protein
+      entity, not VHH CDR numbering
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_scaffold_path
+    type: file
+    description: Optional generic binder structural scaffold PDB/mmCIF, separate from
+      target
+    required: false
+    file_type: pdb
+    modes:
+    - protein_binder
+    - peptide_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_scaffold_chain
+    type: string
+    description: Exact native scaffold chain ID (case-sensitive)
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_scaffold_design_ranges
+    type: string
+    description: Native 1-indexed chain-local scaffold design positions, such as 2..5,9;
+      not author/IMGT numbering
+    required: false
+    modes:
+    - protein_binder
+    - peptide_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_nanobody_framework
+    type: string
+    description: Existing VHH sequence template with X-marked CDRs; nanobody mode only
+    required: false
+    modes:
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    default: null
+    nullable: true
+    group: source
+  - name: boltzgen_cdr_h1_length
+    type: string
+    description: Requested CDR-H1 length range
+    default: 5-8
+    modes:
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    group: source
+  - name: boltzgen_cdr_h2_length
+    type: string
+    description: Requested CDR-H2 length range
+    default: 6-10
+    modes:
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    group: source
+  - name: boltzgen_cdr_h3_length
+    type: string
+    description: Requested CDR-H3 length range
+    default: 12-18
+    modes:
+    - nanobody_binder
+    source: scripts/prep_boltzgen.py:preparation_parser
+    nullable: false
+    group: source
+  - name: boltzgen_diffusion_batch_size
+    type: integer
+    default: null
+    nullable: true
+    description: Native diffusion batch size; when unset, use batch_size. Explicit native
+      value takes precedence.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    minimum: 1
+  - name: boltzgen_step_scale
+    type: number
+    default: null
+    nullable: true
+    description: Optional fixed step_scale; null leaves the native protocol default
+      unchanged.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_noise_scale
+    type: number
+    default: null
+    nullable: true
+    description: Optional fixed noise_scale; null leaves the native protocol default
+      unchanged.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_checkpoint_mode
+    type: string
+    default: both
+    nullable: false
+    description: Native diverse/adherence checkpoint selection, in native order.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    enum:
+    - both
+    - diverse
+    - adherence
+  - name: boltzgen_inverse_fold_avoid
+    type: string
+    default: null
+    nullable: true
+    description: Native inverse folding amino-acid avoidance expression; null leaves
+      native default.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_inverse_fold_num_sequences
+    type: integer
+    default: null
+    nullable: true
+    description: Native inverse-fold sequence count; null leaves native default.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    minimum: 1
+  - name: boltzgen_skip_inverse_folding
+    type: boolean
+    default: false
+    nullable: false
+    description: Native --skip_inverse_folding switch.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_reuse
+    type: boolean
+    default: false
+    nullable: false
+    description: Native --reuse switch.
+    source: scripts/run_boltzgen_wrapper.py:main; modules/boltzgen.nf:RunBoltzGen
+    group: run
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_min_conf_score
+    type: number
+    default: null
+    nullable: true
+    description: Historical conf_score threshold maps to native affinity_probability,
+      not pLDDT.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_refolding_rmsd_threshold
+    type: number
+    default: null
+    nullable: true
+    description: Historical RMSD threshold; non-null takes precedence over max_rmsd.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    minimum: 0
+  - name: boltzgen_filter_biased
+    type: boolean
+    default: true
+    nullable: false
+    description: Existing native selection biased-composition filtering.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_metrics_override
+    type: string
+    default: null
+    nullable: true
+    description: Historical native metric=weight overrides; typed weights must agree
+      if both explicitly supplied.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_additional_filters
+    type: string
+    default: null
+    nullable: true
+    description: Existing native metric comparison expressions; pLDDT is unavailable.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_size_buckets
+    type: string
+    default: null
+    nullable: true
+    description: Existing native size bucket selection expression.
+    source: scripts/filter_boltzgen.py; modules/boltzgen.nf:FilterBoltzGen
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_rank_design_ptm_weight
+    type: number
+    default: 1.0
+    nullable: true
+    description: Native design_ptm rank weight; null disables this metric. Not a universal
+      confidence score.
+    source: services/boltzgen_request_compatibility.py:BoltzGenRankWeights
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    exclusiveMinimum: 0
+  - name: boltzgen_rank_affinity_probability_weight
+    type: number
+    default: 1.0
+    nullable: true
+    description: Native affinity_probability rank weight; null disables this metric.
+      Not a universal confidence score.
+    source: services/boltzgen_request_compatibility.py:BoltzGenRankWeights
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    exclusiveMinimum: 0
+  - name: boltzgen_rank_filter_rmsd_weight
+    type: number
+    default: 1.0
+    nullable: true
+    description: Native filter_rmsd rank weight; null disables this metric. Not a universal
+      confidence score.
+    source: services/boltzgen_request_compatibility.py:BoltzGenRankWeights
+    group: selection
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+    exclusiveMinimum: 0
+  - name: boltzgen_covalent_bonds
+    type: string
+    default: null
+    nullable: true
+    description: Existing JSON array of native covalent bond constraints.
+    source: scripts/prep_boltzgen.py:build_design_config
+    group: source
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_yaml_config
+    type: file
+    default: null
+    nullable: true
+    description: Existing owned prepared native YAML/tree; retain its exact entity document
+      and structural inputs.
+    source: scripts/lib/boltzgen_inputs.py:snapshot
+    group: source
+    modes:
+    - protein_binder
+    - peptide_binder
+    - nanobody_binder
+  - name: boltzgen_use_framework_template
+    type: boolean
+    default: false
+    nullable: false
+    description: Enable the existing VHH structural framework resolver.
+    source: services/boltzgen_scaffolding.py:resolve_nanobody_scaffold_specs
+    group: source
+    modes:
+    - nanobody_binder
+  - name: boltzgen_scaffold_source
+    type: string
+    default: sequence_template
+    nullable: false
+    description: Existing VHH framework source; no ensemble is silently selected.
+    source: services/boltzgen_scaffolding.py:resolve_nanobody_scaffold_specs
+    group: source
+    modes:
+    - nanobody_binder
+    enum:
+    - sequence_template
+    - default_ensemble
+    - selected_scaffold
+  - name: custom_framework_path
+    type: file
+    default: null
+    nullable: true
+    description: Selected VHH framework structural file.
+    source: services/boltzgen_scaffolding.py:resolve_nanobody_scaffold_specs
+    group: source
+    modes:
+    - nanobody_binder
+  - name: sabdab_framework
+    type: object
+    default: null
+    nullable: true
+    description: Existing selected SAbDab framework identity; filePath takes precedence
+      over custom_framework_path.
+    source: services/boltzgen_scaffolding.py:resolve_nanobody_scaffold_specs
+    group: source
+    modes:
+    - nanobody_binder
+  - name: boltzgen_nanobody_scaffold_specs
+    type: string
+    accepted_types: [string, array]
+    default: null
+    nullable: true
+    description: Existing serialized native scaffold-spec list; kept unchanged for saved
+      requests.
+    source: services/boltzgen_scaffolding.py:resolve_nanobody_scaffold_specs
+    group: source
+    modes:
+    - nanobody_binder

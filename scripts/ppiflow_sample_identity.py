@@ -56,7 +56,8 @@ class SampleLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         exec(instrument(Path(self.filename).read_text(), self.filename), module.__dict__)
 
 
-def collect(root, destination, prefix, manifest_path, comparison=False):
+def collect(root, destination, prefix, manifest_path, comparison=False,
+            requested_count=None, accounting_path=None):
     """Copy producer-associated samples; zero samples is a real empty result."""
     import shutil
     root, destination = Path(root), Path(destination)
@@ -79,6 +80,20 @@ def collect(root, destination, prefix, manifest_path, comparison=False):
         records.append(dict(sample_index=index, name=name, path=str(output.resolve()),
                             comparison_path=comparison_path, producer=sample['producer']))
     Path(manifest_path).write_text(json.dumps(records, indent=2))
+    if accounting_path is not None:
+        # This is transport accounting, never a retention or success threshold.
+        # Native partial preprocessing emits one row per requested sample and
+        # test_step records its batch_idx. Unassociated PDBs are not candidates.
+        emitted = {row['sample_index'] for row in records}
+        missing = (sorted(set(range(int(requested_count))) - emitted)
+                   if requested_count is not None else None)
+        Path(accounting_path).write_text(json.dumps({
+            'producer': 'ppiflow', 'source_id': prefix,
+            'requested_count': requested_count, 'emitted_count': len(records),
+            'emitted_sample_indices': sorted(emitted),
+            'missing_count': len(missing) if missing is not None else None,
+            'missing_sample_indices': missing,
+        }, indent=2))
     return records
 
 

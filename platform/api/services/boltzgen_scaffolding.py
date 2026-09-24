@@ -260,6 +260,10 @@ async def prepare_boltzgen_params_for_launch(params: dict[str, Any]) -> tuple[di
     )
     if not uses_boltzgen:
         return normalized, notes
+    # Generic generation consumes its own explicit scaffold/sequence input.
+    # Do not perform antibody annotation/downloads just because BoltzGen is used.
+    if normalized.get("boltzgen_mode") in {"protein_binder", "peptide_binder"}:
+        return normalized, notes
 
     scaffold_specs, scaffold_notes = await resolve_nanobody_scaffold_specs(normalized)
     notes.extend(scaffold_notes)
@@ -268,3 +272,34 @@ async def prepare_boltzgen_params_for_launch(params: dict[str, Any]) -> tuple[di
         normalized["boltzgen_scaffold_source_resolved"] = _coerce_nonempty_text(normalized.get("boltzgen_scaffold_source")) or "selected_scaffold"
 
     return normalized, notes
+
+
+async def prepare_boltzgen_generation_input(params: dict[str, Any], output: Path, *,
+                                            allowed_input_roots, retain_prepared: bool = False) -> dict[str, Any]:
+    """Use the existing source owner once; reuse reviewed trees at dispatch."""
+    import asyncio
+    from scripts.lib.boltzgen_inputs import materialize_generation_input, snapshot, identity_digest, input_identity
+    from scripts.lib.portable_inputs import _contained
+
+    result = deepcopy(params)
+    roots = [Path(root).resolve() for root in allowed_input_roots]
+    if result.get('boltzgen_yaml_config'):
+        prepared = _contained(str(result['boltzgen_yaml_config']), roots)
+        identity = await asyncio.to_thread(input_identity, prepared)
+        expected = result.get('boltzgen_prepared_sha256')
+        if expected is not None and expected != identity_digest(identity):
+            raise ValueError('Prepared BoltzGen inputs changed before launch')
+        prepared_root = prepared if prepared.is_dir() else prepared.parent
+        if retain_prepared or prepared_root.resolve() == output.resolve():
+            # The existing remote approval binds this exact directory and bytes.
+            result['boltzgen_yaml_config'] = str(prepared)
+        else:
+            config = prepared / 'boltzgen_input.yaml' if prepared.is_dir() else prepared
+            identity = await asyncio.to_thread(snapshot, config, output)
+            result['boltzgen_yaml_config'] = str(output)
+        result['boltzgen_prepared_sha256'] = identity_digest(identity)
+    else:
+        result, _notes = await prepare_boltzgen_params_for_launch(result)
+        result.update(await asyncio.to_thread(materialize_generation_input, result, output,
+            allowed_input_roots=roots))
+    return result

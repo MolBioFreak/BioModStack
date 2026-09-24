@@ -47,23 +47,59 @@ async def resolve_selection(session: AsyncSession, source_job_id: str, design_id
     return source, root, designs
 
 
-def snapshot_selection(source: Job, root: Job, designs: list[Design]) -> Path:
+async def resolve_candidate_documents(session, designs, candidate_documents):
+    """Use each persisted producer, including same-root sibling owners."""
+    from services.binder_diagnostic_selection import selected_document
+    if set(candidate_documents) - {design.id for design in designs}:
+        raise ValueError('Candidate documents must be keyed by selected Design IDs')
+    resolved = {}
+    for design in designs:
+        selector = candidate_documents.get(design.id)
+        if selector and (selector.artifact_id is not None or selector.target_state is not None):
+            owner = await session.get(Job, design.job_id)
+            resolved[design.id] = await selected_document(owner, design, selector, session)
+    return resolved
+
+
+def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
+                       candidate_documents: dict | None = None) -> Path:
     from routers.jobs import _materialize_antibody_selection
-    directory = _materialize_antibody_selection(root, source, designs, 'selected', namespace='binder')
+    from types import SimpleNamespace
+    import hashlib
+    import shutil
+    resolved = candidate_documents or {}
+    # Detached values only: never assign a selected alternate onto an ORM Design.
+    inputs = [SimpleNamespace(**{column.key: getattr(design, column.key)
+                                for column in Design.__table__.columns})
+              if design.id in resolved else design for design in designs]
+    for design in inputs:
+        if design.id in resolved:
+            design.pdb_path = str(resolved[design.id][0])
+    directory = _materialize_antibody_selection(root, source, inputs, 'selected', namespace='binder')
     manifest = json.loads((directory / 'selection_manifest.json').read_text())
     rows = []
     for item in manifest['designs']:
+        if item['design_id'] in resolved:
+            _, identity = resolved[item['design_id']]
+            retained = Path(item.get('native_source_structure_path') or item['selection_pdb_path'])
+            if hashlib.sha256(retained.read_bytes()).hexdigest() != identity['artifact_sha256']:
+                shutil.rmtree(directory)
+                raise ValueError('Selected document snapshot differs from its owned artifact')
+            item['selected_document'] = identity
         provenance = item.get('source_design_provenance') or {}
         rows.append({'staged_name': Path(item['selection_pdb_path']).name,
                      'source_path': item['selection_pdb_path'],
                      'source_meta': {**provenance, **item,
                                      'id': item['design_id'],
-                                     'structure_state': (provenance.get('structure_state')
-                                                         or provenance.get('target_state')
-                                                         or provenance.get('primary_target_state')),
+                                     'structure_state': (item['selected_document'].get('target_state')
+                                                         if 'selected_document' in item else
+                                                         (provenance.get('structure_state')
+                                                          or provenance.get('target_state')
+                                                          or provenance.get('primary_target_state'))),
                                      'parent_design_id': item['design_id'],
                                      'source_job_id': item['design_job_id'],
                                      'lineage_root_job_id': root.id}})
+    (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
     (directory / 'source_identity.json').write_text(json.dumps(rows, indent=2, sort_keys=True))
     return directory
 

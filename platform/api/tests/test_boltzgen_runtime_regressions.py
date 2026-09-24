@@ -404,3 +404,33 @@ def test_filter_boltzgen_metrics_override_changes_selection(tmp_path: Path) -> N
 
     assert default_kept == ["alpha"]
     assert override_kept == ["beta"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode,protocol', [('protein_binder', 'protein-anything'), ('peptide_binder', 'peptide-anything')])
+async def test_typed_optional_preview_runs_the_actual_preparation(tmp_path, monkeypatch, mode, protocol):
+    from routers import boltzgen
+    target = tmp_path / 'target.pdb'
+    _write_pdb(target, 'a', [10, 11, 13])
+    monkeypatch.setattr(boltzgen, 'get_code_root', lambda: REPO_ROOT)
+    monkeypatch.setattr(boltzgen, 'get_container_path', lambda name: tmp_path / name)
+    result = await boltzgen.preview_design_spec(boltzgen.BoltzGenPreviewRequest(
+        mode=mode, params={'target_pdb': str(target), 'target_chains': 'a', 'binder_sequence': '8..12'}, validate=False))
+    assert result.check_ok is False
+    assert result.resolved_params['boltzgen_protocol'] == protocol
+    entities = yaml.safe_load(result.yaml_text)['entities']
+    assert entities[0]['file'] == {'path': str(target), 'include': [{'chain': {'id': 'a'}}]}
+    assert entities[1] == {'protein': {'id': 'B', 'sequence': '8..12'}}
+
+
+def test_wrapper_quotes_native_paths_without_changing_argv(tmp_path, monkeypatch):
+    module = _load_run_boltzgen_wrapper_module()
+    config = tmp_path / "source with ' quote.yaml"
+    config.write_text('entities: []\n')
+    commands = []
+    monkeypatch.setattr(module, 'report_stage', lambda *a, **k: None)
+    monkeypatch.setattr(module.os, 'system', lambda command: commands.append(shlex.split(command)) or 0)
+    monkeypatch.setattr(sys, 'argv', ['wrapper', '--config', str(config), '--out_dir', str(tmp_path / 'out with spaces')])
+    module.main()
+    assert commands[0][2] == str(config)
+    assert commands[0][commands[0].index('--output') + 1].startswith(str(tmp_path / 'out with spaces'))

@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Set, Tuple
 
-ResidueKey = Tuple[str, int]
+ResidueKey = Tuple[str, int, str]
 
 
 def parse_position_spec(value: str | None) -> Set[ResidueKey]:
@@ -22,7 +22,13 @@ def parse_position_spec(value: str | None) -> Set[ResidueKey]:
         token = token.strip()
         if not token:
             continue
-        match = re.match(r"^([A-Za-z])(-?\d+)(?:[A-Za-z]?)(?:-(-?\d+)(?:[A-Za-z]?)?)?$", token)
+        # Native get_indices_from_spec compares the full author identity,
+        # including case and insertion code. H100 and H100A are not overlaps.
+        single = re.fullmatch(r"([A-Za-z0-9])(-?\d+)([A-Za-z]?)", token)
+        if single:
+            residues.add((single.group(1), int(single.group(2)), single.group(3)))
+            continue
+        match = re.fullmatch(r"([A-Za-z])(-?\d+)-(-?\d+)", token)
         if not match:
             continue
         chain, start_text, end_text = match.groups()
@@ -30,12 +36,12 @@ def parse_position_spec(value: str | None) -> Set[ResidueKey]:
         end = int(end_text) if end_text is not None else start
         lo, hi = sorted((start, end))
         for resnum in range(lo, hi + 1):
-            residues.add((chain, resnum))
+            residues.add((chain, resnum, ""))
     return residues
 
 
 def format_position_spec(residues: Iterable[ResidueKey]) -> list[str]:
-    return [f"{chain}{resnum}" for chain, resnum in sorted(set(residues), key=lambda item: (item[0], item[1]))]
+    return [f"{chain}{resnum}{icode}" for chain, resnum, icode in sorted(set(residues))]
 
 
 def validate_masks(fixed_positions: str | None, movable_positions: str | None) -> dict[str, object]:

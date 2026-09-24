@@ -19,6 +19,8 @@ import tempfile
 from typing import Iterator
 
 from database import Job, get_session
+from experiment_database import get_experiment_session
+from services.binder_source_materialization import StructureSourceRequest
 from schemas import DirectoryListing, DirectoryEntry
 from paths import (
     get_allowed_roots,
@@ -353,6 +355,72 @@ async def browse_directory(
         ))
     
     return DirectoryListing(path=path, entries=entries)
+
+
+@router.get("/structure-sources")
+async def structure_sources(
+    project_id: str | None = None, dataset_id: str | None = None,
+    revision_id: str | None = None, receipt_id: str | None = None,
+    design_id: str | None = None, collection: str = "resources",
+    offset: int = 0, limit: int = 50,
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    session: AsyncSession = Depends(get_session),
+):
+    from services.global_experiments.project_datasets import browse_structure_sources
+    from experiment_services import ExperimentServiceError, NotFound
+    from services.global_experiments.adapters import AdapterError
+    if offset < 0 or not 1 <= limit <= 100 or collection not in {"resources", "datasets"}:
+        raise HTTPException(422, "Invalid source page")
+    try:
+        return await browse_structure_sources(experiment_session, session, project_id=project_id,
+            dataset_id=dataset_id, revision_id=revision_id, receipt_id=receipt_id,
+            design_id=design_id, collection=collection, offset=offset, limit=limit)
+    except NotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ExperimentServiceError, AdapterError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/materialize-structure")
+async def materialize_structure(
+    payload: StructureSourceRequest,
+    session: AsyncSession = Depends(get_session),
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
+    from services.binder_source_materialization import resolve_structure_source, materialize_source_bytes
+    directory = None
+    try:
+        source, identity = await resolve_structure_source(payload, session)
+        if not is_path_allowed(source) or _under_persisted_ngs_root(source, governed_roots):
+            raise HTTPException(403, "Access denied to this structure")
+        _reject_governed_ngs_artifact(source)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError("Source is not a regular structure file")
+            raw = handle.read(IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES + 1)
+        if len(raw) > IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES:
+            raise HTTPException(413, "Structure exceeds 64 MiB")
+        digest = hashlib.sha256(raw).hexdigest()
+        expected = identity.get("artifact_sha256") or payload.expected_sha256
+        if expected is not None and digest != expected:
+            raise ValueError("Selected source bytes differ from the exact document digest")
+        if payload.expected_sha256 is not None and digest != payload.expected_sha256:
+            raise ValueError("Selected source bytes changed")
+        parent = resolve_allowed_path("inputs")
+        parent.mkdir(parents=True, exist_ok=True)
+        directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
+        result = materialize_source_bytes(raw, source.suffix, directory,
+            output_format=payload.output_format, model_number=payload.model_number)
+        return {**result, "source_identity": identity, "source_path": to_allowed_relative(source)}
+    except HTTPException:
+        if directory is not None:
+            shutil.rmtree(directory)
+        raise
+    except (ValueError, OSError, KeyError) as exc:
+        if directory is not None:
+            shutil.rmtree(directory)
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/upload")

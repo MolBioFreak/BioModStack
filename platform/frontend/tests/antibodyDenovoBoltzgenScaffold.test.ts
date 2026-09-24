@@ -42,3 +42,21 @@ test('treats missing saved preview preference as disabled by default', () => {
     assert.equal(resolveBoltzgenReferencePreviewEnabled({}), false);
     assert.equal(resolveBoltzgenReferencePreviewEnabled({ boltzgen_view_reference_structure: true }), true);
 });
+
+
+test('binder launcher lists four initial generators and leaves RFD3 in its separate product', async () => {
+    const { launcherWorkflowTemplates, launcherExperimentalTemplates } = await import('../src/lib/launcherCatalog.js');
+    const binder = launcherWorkflowTemplates.find(template => template.id === 'antibody_denovo')!;
+    assert.equal(binder.stages[0].tool, 'BindCraft2 / BoltzGen / PPIFlow / RFantibody');
+    assert.doesNotMatch(binder.description, /seeded-only|seeded PPIFlow/);
+    assert.match(launcherExperimentalTemplates.find(template => template.id === 'protein_modification_experimental')!.description, /RFD3/);
+});
+
+
+test('initial native PPIFlow modes cannot be silently submitted as legacy partial flow', async () => {
+    const { resolveExistingDeNovoGenerator } = await import('../src/components/deNovoGeneratorSelection.js');
+    for (const mode of ['protein_binder', 'antibody_binder', 'nanobody_binder']) {
+        assert.equal(resolveExistingDeNovoGenerator({ model_id: 'ppiflow', mode, denovo_generator: 'ppiflow' }), null);
+    }
+    assert.equal(resolveExistingDeNovoGenerator({ mode: 'generator_backbone_refine', denovo_generator: 'ppiflow' }), 'ppiflow');
+});

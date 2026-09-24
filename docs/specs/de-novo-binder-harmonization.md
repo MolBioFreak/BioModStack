@@ -1,424 +1,339 @@
-# Binder workflow harmonization specification
+# Binder workflow completion specification
 
-Status: reviewed corrective specification; implementation authorized by Christian on 23 September 2026. This is not a declaration that the upgrade works or authorization to run campaigns, rent workers, or change scientific behavior.
+Status: final V2 scope and implementation specification, 24 September 2026. This is the controlling completion packet, not a claim that implementation, native acceptance or deployment is finished. Christian's direction is fixed. Remaining delivery includes model/request adapters, Python and scripts, Nextflow and data processing, UI refactoring, Project integration, efficiency and local/remote verification. This revision replaces the stale harmonization backlog and historical dispatch assumptions.
 
-Implementation scope clarification: Christian's subsequent instruction supersedes the proposed new classification/policy machinery in H09 and the corresponding crosswalk entries. Retain raw, independent diagnostics; do not add cutoff-policy CRUD, automatic pass/fail, new admission layers or restart-time proof requirements. Existing ownership, input-integrity and model-native checks remain. Native/local/remote runs not performed are evidence limits, not new execution restrictions.
+Companions form one packet:
 
-Reviewed source: `6e01a27da607e41c972f034f0b15744a619837dd`, 23 September 2026. Review checkout: `/home/dalab/biomodstack/wt-binder-agnostic-integration`. The canonical Development checkout and live API build reported the same revision. The live launcher was inspected through its DOM without submitting a job.
+- [Product outcome](de-novo-binder-upgrade-outline.md).
+- [Complete scope and acceptance](de-novo-binder-design-upgrade.md): native denominator and A01–A14/C01–C14 definitions.
+- [Implementation packet](de-novo-binder-concurrent-implementation-plan.md): interfaces, sole-writer boundaries, work order and focused verification.
+- [Model configuration/operator/agent parity policy](../Model_Configuration_Operator_Control_and_Agent_Parity.md).
 
-## 1. Finding and scope
+“V2”/“generation 2” is a development label, not a new product namespace, job family or schema suffix. The product remains **De Novo Binder Design**.
 
-The delivered work is a collection of substantive adapters, repairs and selected-action integrations. It is not the promised agnostic binder workflow. Renaming the workflow card did not generalize the form or its continuation contract. A built BC2 image and native parser did not make BC2 launchable. Separate post-selection diagnostic actions did not deliver generation through repeated refinement and review.
+## 1. Fixed outcome and boundaries
 
-This document supplements, rather than replaces or reduces, these controlling documents:
+The binder starting-generator lineup is **BC2, BoltzGen, PPIFlow and RFantibody**. Each has model-correct inputs, controls, native execution, results and compatible continuation. RFD3's currently integrated unconditional monomer generation and local redesign remain in separate De Novo Design; remove their presentation as a fifth binder-generator option without removing those products. Compatible imported structures may use appropriate selected operations without implying that they are binders.
 
-- `de-novo-binder-upgrade-outline.md`: agreed product outcome and three concurrent phases.
-- `de-novo-binder-design-upgrade.md`: acceptance A01–A14 and correction ledger C01–C14.
-- `de-novo-binder-concurrent-implementation-plan.md`: phases P1.1–P1.6, P2.1–P2.4, P3.1–P3.4, cross-phase X.1–X.6, original lanes A–H.
-- `../Model_Configuration_Operator_Control_and_Agent_Parity.md`: shared model settings and results policy.
+PPIFlow has two independently required deliveries:
 
-The complete scope remains: all existing supported generators plus first-class BC2; modality-aware authoring; generator-only exit; genuinely optional, separable and repeatable selected-candidate refinement; full model-owned settings and results; FrustraMPNN and Caliby; independently selected blind-pose and experimental LigandMPNN context assessments; existing defect repair; local and existing-bridge remote execution; measured warm behavior and reliable lifecycle recovery.
+1. **Agnostic initial-candidate generation**, a peer of BoltzGen/BC2, covering native-supported general protein-binder and antibody/nanobody generation rather than a VHH-only or seeded partial-flow wrapper. It does not require another generator first producing a candidate.
+2. **Retained, upgraded and verified use in our optional refinement loop**, including the actual partial-flow/maturation, source-bound regions/anchors, preparation and output behavior. Its narrower operation/checkpoint constraints stay local to that use case.
 
-Pairwise cross-chain Frustratometer analysis remains deferred by Christian. Do not reintroduce it through stale references in the older lane prompts. FrustraMPNN remains binder-local exploratory evidence, not an interchain energy score. Ordinary LigandMPNN chemistry-context sequence design is a separate obligation and does not substitute for the experimental interface-context operation.
+Neither PPIFlow role closes the other. Independent first-generation product placement does not mean target-free sampling: target-conditioned binder generation and native unconditional monomer generation are different tasks. Preserve real native limits without treating current BMS adapter limitations as the intended scope.
 
-No requirement for recording or proving completion in this document becomes a new runtime refusal, workflow stop, scientific exclusion, or admission gate. Existing ownership, corruption and model-input checks remain. Missing verification means “not verified,” not “the operator cannot proceed.” Any proposed new execution restriction requires Christian's approval of that exact restriction. Acceptance below governs what engineering may claim is finished.
+Every starting generator receives full applicable target/template acquisition and inspection, with BC2's delivered workspace as the interaction reference. Structural frameworks/scaffolds/templates, seed complexes, sequence templates and saved workflow configurations remain distinct. Reuse Project management, model schemas, Jobs, selection, artifacts/results and the bridge. No second workflow engine, candidate database, settings database, Project store, numerical authority or scheduler.
 
-## 2. Evidence baseline and status vocabulary
+Generator-only completion is valid. After a round the operator may select exact compatible candidates/documents, independently choose operations, inspect/compare descendants and repeat. Optional to execute does not mean optional to deliver. Retain full global FrustraMPNN, Caliby, FA-MPNN/ProteinMPNN, supported prediction and the existing GROMACS handoff.
 
-The review baseline is captured in `/home/dalab/audits/binder-harmonization-20260923/review-baseline.json`. Live DOM observations are in `/home/dalab/.hermes/profiles/fresh/cache/browser-use/workspace/20260922_231149_88e4b6cd/binder_harmonization_ui.jsonl`.
+Cutoff-policy CRUD, saved classification/reclassification, automatic dual-pass/fail and diagnostic rejection machinery were superseded and are excluded. Independent raw LigandMPNN interface-context and blind-pose evidence remain in scope. Pairwise Frustratometer remains deferred. No new scientific thresholds, compulsory diagnostic/project, audit receipt, restart proof or extra preview is introduced.
 
-Verified in this review:
+Missing proof limits completion claims; it never authorizes a new runtime refusal. Preserve existing ownership, corruption, native-input and lifecycle checks. Any exact new restriction or consequential scientific method/default change requires Christian's decision. This specification authorizes neither campaigns, paid resources nor deployment.
 
-- Development's live API build and source checkout identify `6e01a27da607e41c972f034f0b15744a619837dd`.
-- `GET /api/models/bindcraft2/native-settings` reports `launch_available: false`.
-- The image `/mnt/BioModStack/apptainer/bindcraft2.sif` exists. Image presence is not native inference evidence.
-- The card says “De Novo Binder Design,” but the opened form says “De Novo Nanobody Toolkit.” It advertises RFantibody, BoltzGen VHH and seeded antibody-target PPIFlow.
-- The live orchestration menu still names `FAMPNN / AntiFold / ProteinMPNN` and `ThermoMPNN / OpenMM / Frustra`.
-- The live BC2 branch says “Native campaign draft. No BindCraft2 job is submitted by this launcher.” The inventory is presented as an ungrouped native-key list, with no collapsible sections in `BindCraft2Settings`.
+## 2. Verified baseline and implementation credit
 
-Use these evidence levels in all subsequent reports:
+Binder source was reviewed at `77c5c5a2c952dfd70dad904352a5c4b7ce52cb13`. At finalization, canonical source and remote `origin/test` agreed on `d956efad063388d72f5a21aaf8ad1612375c6dda`, with canonical source clean. The intervening commits change BioXP transfer submission and its runtime authority/tests only; the reviewed binder, Project and bridge owners are unchanged. Earlier API/build equality at the review revision is recorded in the external baseline, not presented as a new live probe. Old status at `6e01a27da607e41c972f034f0b15744a619837dd` is superseded.
 
-1. **Live and exercised:** the actual supported request produced and reopened its native result on the named released revision and placement.
-2. **Implemented / focused-tested:** an adapter or repair exists and has identified unit, fixture, CPU-native or mounted-UI evidence. State which; these are not interchangeable.
-3. **Missing or disconnected:** the requested path does not exist or its owners do not connect.
-4. **Unverified:** a path exists, but its claimed integrated/native behavior has not been demonstrated.
+This documentation pass ran no model inference, application test suite, job submission, worker start or deployment. Source/test-contract inspection establishes implementation, not a newly observed test pass. Installed PPIFlow files were read with stdlib-only image inspection, without importing models.
 
-A historical test total is not a completion percentage. This review does not claim a new full test run or a native/local/remote campaign. The review changed documentation only; it did not modify application code, submit jobs or rent workers.
+Delivered foundations to preserve:
 
-### What is actually implemented
+- BC2 designed authoring, typed nested settings, target/scaffold acquisition, preview-bound launch, native actions/resume, nested-root publication, native state/accounting and settings readback. Do not repeat draft-only, wrong-root or resume-false claims.
+- Binder-neutral continuation, same-root ownership, immutable snapshots, independent refinement operations and prepared remote review. Do not weaken the legacy antibody route to make it universal.
+- Selected Caliby, full FrustraMPNN, predictors, typed MD source lineage/handoff and independent raw diagnostic routes. Their presence does not certify complete UX or integrated native execution.
+- Producer-bound PPIFlow sample recording, shared source/parent/state repair, native CIF handling and primary-result isolation, including manual return.
+- Shared source, Project, workbench and bridge infrastructure. Connecting each binder path remains real work.
 
-The source contains reusable work, not just placeholders: native BC2 discovery/typed validation and preview/compilation; a native CLI/Nextflow leaf; producer-stamped BC2 accounting, native CIF projection and publication/readback; mounted independent selected blind-pose and LigandMPNN routes and controls; selected-input snapshots/remote staging; corrections to explicit settings, sequence extraction, role checking and predictor sample pairing; production primary-result isolation from optional FrustraMPNN failure; and shared bridge archive/helper reuse improvements. The original history records focused tests for these slices. This review inspected source and test contracts; it did not rerun or certify those historical totals.
+Specific remaining software gaps:
 
-The merged BC2 discovery authority has 231 typed top-level entries out of 239 native-known entries. The remaining eight are classified system-owned, not eight absent scientific UI controls. This count was recomputed from the generated inventory plus its source-qualified overlay. It says nothing by itself about complete nested control, action, saved-request or native execution coverage.
+- BoltzGen still submits nanobody/VHH requests; its generic preparation branch can omit the target.
+- BMS's current PPIFlow “generator” is `antibody_denovo/generator_backbone_refine`, requiring a seed complex and calling partial flow. It is not the requested agnostic native initial-generation integration. Optional light-chain input also conflicts with forced VHH metadata.
+- Source entry points, structural-template controls and full-viewer access are uneven. PPIFlow's consumed seed lacks the equivalent source-bound workspace. BC2's compact hidden-controls Mol* embedding is not proof of full-workbench access.
+- `BinderNativeRoute` transfers route identity but not populated sources. Saved ESMFold2 template selection has a concrete hydration omission.
+- Neutral selected refinement lacks diagnostics' alternate document/state selector.
+- Project setup, launch-context propagation and native zero-Design result adapters are incomplete for binder work.
+- Native local/remote, real candidate handoff, repeated rounds, lifecycle and performance remain separate execution-evidence tasks.
 
-### Comparison with the promised phases
+### Installed PPIFlow source resolves the generation question
 
-- **Phase 1 is incomplete:** the authoring and child-round boundary are still antibody-centric; operation composition, generic Caliby wiring, state/lineage repair and complete local/remote acceptance remain open. Existing FrustraMPNN and MD infrastructure should be reused rather than rebuilt.
-- **Phase 2 is incomplete:** BC2 is disabled in the live launcher; its conditional submit is missing the preview digest; the native output and publisher disagree about their root; native continuation/actions and full result/placement closure remain unfinished.
-- **Phase 3 is partially wired, not complete:** separate diagnostic requests/actions and raw readback are mounted. Saved/versioned optional cutoffs, explicit reclassification and the selected dual-failure review policy are missing; native qualification and integrated local/remote behavior are not proven.
+Packaged source reports `000ce45a4411e7b97c1523a22c0f1bece7ede5fc` and separate native entrypoints:
 
-The principal delivery failure was closing leaf work instead of the promised vertical paths. Several tests explicitly validate narrower boundaries: for example, the iteration-parity test still expects BC2 roots to be refused by the legacy antibody route. Deployment identity and focused leaf tests cannot close the original A/P/X acceptance items.
+- `sample_binder.py` imports `experiments.inference_binder.Experiment` for target-conditioned general binder generation.
+- `sample_antibody_nanobody.py` imports `experiments.inference_antibody.Experiment`, with separate antigen/framework inputs.
+- `sample_antibody_nanobody_partial.py` and `sample_binder_partial.py` import their respective partial-flow inference owners.
+- `sample_monomer.py` is a different monomer/scaffolding task, not the binder-generation deliverable.
 
-## 3. Response to the reported concerns
+The installed guide gives a different antibody partial-flow filename from the actual source; use source-discovered names. Native generation exists independently of the current BMS refinement-shaped wrapper. Source presence does not establish complete checkpoints, typed settings, reproducible packaging, native execution or BMS publication. Finish those connections rather than claiming a native capability is absent.
 
-### H01. BC2 is still a draft, not a first-class generator
+### Project integration fact-check
 
-Retain the useful existing implementation: pinned native inventory, typed-request work, CPU preview and compilation, image/Nextflow work, native accounting/publication and candidate projection. Finish the missing chain rather than replace it with another wrapper.
+The reuse premise is correct for infrastructure, but “mostly connected” or “easy” is unproven. Project hierarchy, setups/drafts/revisions/preparations, run groups/attempts, launch contexts, datasets, attachments and reopening already exist. Concrete gaps are:
 
-Required outcome:
+1. `JobSubmission.tsx` passes Project draft reporting to other native forms, not its mounted `AntibodyDenovoTemplate`.
+2. The Project capability and native-owner registries do not register the complete binder setup/model-mode paths. Catalogue unavailability does not prove a standalone engine is missing.
+3. Jobs have no standalone `project_id` here. Membership uses opaque `JobCreate.launch_context_id` and existing server binding/run-attempt machinery. BC2 `project_folder` is unrelated.
+4. Selected continuation and diagnostic Jobs preserve scientific ancestry but omit destination launch contexts. Lineage is not automatic Project membership. Typed MD already forwards its context.
+5. `TypedCoreJobResultAdapter` joins to Designs and requires a nonempty Design set; its registered models exclude BC2. It cannot unchanged cover valid zero-yield campaigns or zero-Design diagnostics.
+6. Source selectors do not mount Project-resource browsing. Having setup context does not provide a structure picker.
 
-- BC2 is a peer generator in the same product entry point, not a draft below an antibody-only form and not an obligatory stage for other generators.
-- Its own typed request is previewed through its existing model-owned compiler. The browser and agent submit the same scientific request and bind the final launch to the existing preview identity. Request-affecting edits invalidate that preview; merely flipping `enabled` or changing button copy is not the repair.
-- Saved drafts, executable templates, clones, retries and native resume remain distinct operations. Reopening must preserve engine, native mode, complete requested settings and user changes.
-- Public-launch configuration is reconciled with the actual executable route by the owning integrator. Do not add another readiness database or treat unrelated unresolved inventory metadata as a new scientific refusal.
-- Native inference, result return and compatible selection/refinement use an actual provenance-bound BC2 output. A zero-yield run is valid accounting evidence but does not demonstrate candidate handoff.
+Complete the existing adapters and handoffs. Do not add destination hierarchy to scientific params, infer destination from a source, reuse a consumed parent context for fan-out or create another Project system. Infrastructure reuse alone supports no effort estimate.
 
-### H02. The workflow UI must actually become modality-aware
+## 3. Shared authoring, source and draft contract
 
-Replace the antibody-shaped authoring shell with a thin binder workflow composition surface. Reuse model-owned controls, not a second generic settings schema.
+### U01. Presentation shell
 
-The product flow is:
+Extract small `BinderWorkflowWorkspace.tsx` chrome: title/help, collapsed engine chooser, section navigation, editor, concise summary, existing placement/submit controls and saved-configuration action. Slots/callbacks are `title`, `description`, `sections`, `activeSection`, `onSectionChange`, `engineChooser`, `children`, `summary`, `executionControls`, `submitControls`, `library`.
 
-1. Choose binder format/objective and a compatible generator.
-2. Configure the generator's native settings and declared source inputs.
-3. Review the requested operation, effective native settings and selected execution target.
-4. Run generation, then inspect the producer's native results.
-5. Stop, or select explicit candidates and states for optional operations.
-6. Configure those operations independently and launch a child round.
-7. Compare parent and descendants; optionally repeat on another selected subset.
+The shell owns no scientific defaults/schema/compiler or launch decision. Sections are freely navigable, not a gated wizard. Preserve populated source/selection state when switching. No completion badges, validation dashboard or mandatory JSON review dump. Use existing theme tokens, responsive layout and focus/error styling. Advanced groups retain all relevant settings; sliders use real native bounds and precise inputs. Do not impose BC2 preview/digest requirements on other engines.
 
-RFantibody, BoltzGen, seeded PPIFlow, BC2 and applicable existing general/RFD3 capabilities keep their real routes and limits. Do not relabel an antibody mode as generic, feed every engine RFantibody settings, or restore an unrelated retired template to supply a new card. Engine incompatibility and incomplete BMS implementation are different explanations.
+### U02. Full applicable acquisition
 
-A generic binder form does not display required CDR, Fv, IMGT or antibody-framework controls. Such controls belong only to an operation that genuinely consumes them. Initial orchestration and post-round authoring use the same operation definitions and model settings. Existing pause/review and generator-only behavior survive.
+Each Target and structural Template/Framework/Scaffold/Seed role exposes applicable existing mechanisms: upload PDB/CIF/mmCIF, managed files, direct PDB ID, RCSB search/cache, saved Job → Design → exact available document/state, presets/structure libraries and Project resource/dataset members. Antibody library/SAbDab applies where scientifically meaningful. Sequence/FASTA entry applies only where natively supported.
 
-### H03. AntiFold and ThermoMPNN require an explicit disposition
+Reuse `TargetAntigenSelector`, `JobBrowser`, `FrameworkBrowser`, governed file/RCSB/framework APIs and the richer `BindCraft2StructureInputs` mechanisms. Extend source identity at the existing owner: `SelectedTarget` currently has `upload|run|preset|rcsb`, and Your Runs is primary-Design selection rather than arbitrary-artifact selection. Project and exact-document references are real additions, not already delivered tabs.
 
-The visible labels are not evidence of complete integration. Conversely, legacy Nextflow modules exist, so these are not accurately described as nonexistent code. Their advertised settings, model contracts, route, runtime assets and native results must be evaluated together.
+Acquisition support and consumer format support are separate. Preserve original bytes; use checked conversion at a real PDB-only boundary, not renamed CIF. Extract truly shared mechanisms without adopting `BC2Request` or antibody masks as universal types. No mandatory scaffold for unscaffolded modes, fabricated coordinates for sequences, or automatic seed-complex assembly from unrelated structures.
 
-Proposed product disposition for review:
+Required role coverage is explicit: RFantibody target plus structural framework; BoltzGen target/context plus scaffold or sequence template when the native mode consumes one; PPIFlow general-generation target, antibody/nanobody-generation antigen plus framework, and separately the exact selected complex in refinement; BC2 each target/state plus applicable scaffold/template or sequence input. Apply the acquisition mechanisms above to every structural role its native consumer supports, not just the first target field. A saved workflow configuration never substitutes for a missing structural-template selector.
 
-- Do not carry AntiFold and ThermoMPNN forward as automatically advertised/default operations in the new agnostic binder workflow merely because the old form names them.
-- Keep supported, specifically requested antibody functionality and historical jobs interpretable while Christian decides whether either capability should remain an opt-in antibody-specific operation or be retired from the binder product.
-- Do not replace either silently with FA-MPNN, ProteinMPNN, Caliby or FrustraMPNN; they answer different questions.
-- Do not implement a new engine or broaden a model's biological applicability just to make a legacy menu truthful.
+### U03. Full target/template inspection
 
-This is an explicit proposed disposition, not permission to delete a supported branch. A removal decision must name the affected new-request controls, dependency preparation, result readers and historical reopen behavior. After approval, remove stale labels and truly unreferenced executable code rather than retain fake controls, a disabled placeholder or a hidden fallback. Native historical result reading is not a competing active execution route.
+Each structural role has reachable full shared Mol* inspection, directly or through “Open full viewer”, with inline preview retained if useful. Reuse `StructureWorkbench`, `StandardStructureWorkbench` and `StructureViewerHost`; no second viewer runtime. Compact `hideControls` preview alone is insufficient.
 
-### H04. Binder physics must use the existing GROMACS path
+Show source name/type, exact document/model/state and native/derived format. Target and template/seed remain independently inspectable. Synchronize numbered sequence, chain and residue tools with the exact document. Preserve case-sensitive author/label IDs and insertions; model adapters translate only to supported native representation. Do not imply insertion-specific native masks when a grammar groups insertion variants.
 
-The present antibody form's OpenMM controls are separate from the existing molecular-dynamics implementation. An engine working elsewhere in BMS does not establish binder integration. Reuse the already implemented **Use as MD starting structure** action in `ResultsViewer.tsx:5190–5196`, canonical MD preview/authoring and MD Operations instead of introducing another selected-structure handoff. The missing work is coherent binder child-round lineage, settings, execution and result review, not creation of GROMACS from scratch.
+Multiple targets/states stay distinct where supported. Display focus does not change roles or selection. Inspect the consumed seed, not merely a context target. Scaffold inspection does not invent scaffold editing. Sequence-only inputs have a sequence view and no fictitious metrics. Viewer failure is a display error, not a new launch refusal.
 
-Required correction:
+### U04. Faithful handoff and persistence
 
-- Compose the existing molecular-dynamics model/operation with explicit GROMACS selection for the new binder physics action. Reuse its supported request, structure preparation, topology, resource, execution and result contracts. Do not create another MD runner.
-- Keep physics optional and selected-candidate scoped. Preserve exact source structure/state, sequence, chains, topology and operation provenance into its child job and results.
-- Make its actual method and settings visible. Do not translate an OpenMM relaxation setting into an apparently equivalent GROMACS protocol, or choose force field, solvent, restraint, preparation or simulation changes without the existing model contract or Christian's decision.
-- Historical OpenMM jobs remain truthfully identified. A new GROMACS action does not authorize silently rewriting their saved requests or retries.
-- BC2's own native optional relaxation and dependencies are a separate model-native capability. Preserve full BC2 parity; changing the workflow physics engine is not permission to excise BC2-native features.
+Keep per-model/mode drafts in existing authoring/template persistence. Restore the destination's draft first; adopt compatible shared source information only into untouched fields. Preserve explicit false/zero/null/empty versus omission/native defaults. Keep incompatible settings in their original draft, not coerced into another engine.
 
-The implementation must show GROMACS in the binder's actual submitted payload, compiled task, native receipt and reopened result, not just in documentation or the separate MD page.
+Extend `BinderNativeRoute` with optional typed source/draft handoff using existing materialized source references and role selections. Each native editor maps supported fields before default initialization; this is not a new universal scientific API. Persist references, not live File/WebGL objects. Keep `pendingTemplateRoute`, source revision guards and deliberate-clear protection against late asynchronous responses.
 
-## 4. Remaining harmonization requirements
+Use existing UserTemplate and Project setup APIs. Saved configurations, structural templates, retries and native resume remain distinct. Verify real mounted parent routing, actual submitted native request and server save/read normalization; retained React state alone is not evidence.
 
-### H05. Complete and usable model-owned BC2 settings
+## 4. Model-specific workflow and UI changes
 
-The current typed-inventory work is reusable, but a large `Object.entries(inventory.fields)` form is not a finished operator surface.
+### U05. BoltzGen
 
-- Group controls into task-relevant, collapsible sections using the existing design system. Start with source/target, binder/objective, campaign budget and generation controls; keep additional native groups accessible through advanced sections rather than deleting settings.
-- Use meaningful labels, units, help, explicit defaults and applicability. Chain/residue/file/source identities use typed selectors, not server filesystem-path textboxes presented as scientific choices.
-- Use one clear label/control/help layout with predictable spacing, responsive width, keyboard navigation and visible field errors. Do not dump whole default objects into inline help.
-- Initialize native defaults without treating an omitted field, explicit false, zero, null and an empty list as interchangeable. Show scientific requested versus effective settings and preserve profile-fixed values and reasons.
-- Distinguish operator-owned settings from scheduler/runtime-owned fields. Resolve the inventory classification at its owner; eight system-owned unresolved entries are not eight missing scientific UI knobs.
-- Inventory native actions and modalities as well as scalar fields: campaign variants, sweeps, multistate outputs, native postprocessing, adaptive settings and resume semantics. Every relevant native capability must have a mapped UI/API/result path or an explicit, source-supported scope accounting entry. No raw-JSON-only parity claim.
+Sections: **Sources**, **Binder & protocol**, **Generation**, **Native selection**, **Expert**. Label the engine BoltzGen; format/objective/protocol is selected within it. Preserve full target/context and applicable structural/sequence-template experience.
 
-UI verification must use the served build at ordinary desktop and narrow widths, not only isolated component snapshots. Measure clipping/overlap/contrast only where reproduced; do not claim that the original screenshots' exact pixel defects were reproduced from DOM text alone.
+New protein/peptide/antibody generation belongs to the existing `boltzgen` scientific owner, not generic requests disguised as antibody parent jobs. Retain legacy VHH and ligand/nucleotide semantics. Add exact model-mode/schema/compiler/runner/result registration together, never launcher-only modes. The current compiler rejects `boltzgen` and `ppiflow` model IDs before consulting its mode map; replace that blanket internal-engine restriction only for the implemented typed public paths, including normalization/discovery and related boundary tests. The PPIFlow model YAML is currently absent and must be added. Concrete route decisions and sole writers are in I1 of the implementation packet.
 
-### H06. Generic continuation and repeated child rounds
+Factor target inclusion out of the nanobody-only preparation branch. Prepared input must contain the selected target plus distinct binder entities: protocol selection alone cannot supply the missing target. Peptide uses a native protein entity under its protocol, not an invented YAML entity. Antibody modes need the real scaffold/chain/design-mask mapping; a protocol name alone proves no particular antibody assembly format. Preserve source-to-native residue identity.
 
-A BC2 candidate being projected into `Design` is not enough if the iteration route still forces `template_antibody_denovo` and antibody refinement.
+Reuse `prep_boltzgen.py`, scaffold preparation, `boltzgen_inputs.py`, wrapper/module/child workflow and ranking/compatibility owner. Preserve referenced source trees in staging. Existing optional BoltzGen preview stays optional; no new BC2-style digest requirement.
 
-- Introduce or complete the existing binder-neutral continuation boundary at the owning request/selection layer. Preserve the legacy antibody route rather than weakening its modality checks to admit everything.
-- Resolve exact source Job, scientific root, selected Design/artifact/state and per-item parent. Preserve explicitly supported same-root branches without accepting unrelated jobs just because an ID exists globally.
-- Materialize immutable selected input snapshots once. Dispatch model-owned operations using their actual compatible inputs; retain original CIF and checked derivatives rather than renaming CIF as PDB.
-- Represent repeated rounds and siblings through existing Job/Design/artifact lineage. No second candidate database, generic workflow engine or result authority.
-- Generator-only completion, single-operation child jobs, composed requested operations and repeated selection all remain valid. Omitted diagnostics or undefined cutoffs are not new prerequisites to another round.
+### U06. PPIFlow: two complete deliveries
 
-### H07. Separable refinement and defect closure
+Generation sections: **Targets & templates**, **Design**, **Generation**, **Expert**, with common review/placement. General binder mode invokes native initial binder generation on the target; antibody/nanobody generation invokes its separate native generator with antigen/framework inputs. Expose mode-correct settings and checkpoints, not unconditional VHH metadata or copied partial-flow controls.
 
-Finish the C01–C14 correction ledger against the combined tree, not against a collection of leaf commits.
+Deliver the BMS generation route end to end: typed model/mode, browser/agent parity, source preparation, native Python adapter, Nextflow process/entrypoint, selected runtime closure/resources, producer identity, native result publication/viewing, Project and local/remote execution. Reuse the scientific engine, not a second generative implementation. Preserve historical `antibody_denovo/generator_backbone_refine` meaning and results rather than reinterpreting saved jobs.
 
-- Repack, anchor analysis, partial flow, sequence redesign, prediction/validation and physics are distinct selections. A disabled stage does not modify sequence/coordinates, fetch assets or execute.
-- Remove implicit redesign, chain-role substitution, synthetic fallback sequences, unknown-validator fallback and hidden profile overrides where they remain. Preserve explicit user values and actual model limitations.
-- Every native sample pairs with its own structure and metrics; preserve cardinality and zero-output outcomes. No independent “latest glob” pairing or filename-based scientific lineage.
-- A changed sequence or structure is a descendant with fresh validation state. Parent evidence stays attached to the parent; do not silently bless the descendant with old confidence or acceptance.
-- Preserve working established branches, including ancillary producers where supported. Retire only superseded code after reference checks and an explicit scope decision where a supported method is affected.
+Retain, reassess, upgrade and verify our refinement-loop use case separately: exact selected complex, movable/protected regions, independent repack/anchors, native partial flow, explicit sequence redesign if selected, sample accounting and descendant publication. Keep actual refinement role/checkpoint constraints local to refinement. Repair light-chain/VHH metadata mismatch, case-changing chain inputs and unsupported multiple-antigen presentation. No silent checkpoint/geometry/default substitution.
 
-### H08. Existing analyses: complete integration, not new substitutes
+Generation and refinement have separate regression/native acceptance lines. Initial generation starts from target plus applicable template, not a candidate from another generator. Refinement starts from exact selected documents and proves requested region/operation behavior. Agnostic generation does not silently broaden refinement science; refinement limitations do not constrain native generation without source evidence.
 
-Reuse the full global FrustraMPNN implementation, result workbench and mutation landscape with correct chain-local interpretation. Reuse Caliby's native method and settings rather than recreate a simplified binder-only version. Native leaf execution, compatible selected-input handling, parent-workflow invocation, typed controls and result reopen are separate evidence requirements.
+### U07. RFantibody and BC2
 
-Keep FrustraMPNN, Caliby and selected diagnostic outcomes distinct. None is a universal affinity score or permission to discard an otherwise usable generated result. Pairwise cross-chain analysis remains outside this iteration.
+RFantibody sections: **Target**, **Framework & regions**, **Generation**, **Optional operations**, **Expert**. Preserve target/framework discovery, full inspection, CDR/framework editor, masks, native settings, explicit optional operations and generator-only exit. Recompose existing controls/requests; do not generalize its checkpoint by relabeling.
 
-### H09. Independent diagnostic actions and honest classification
+BC2 retains **Sources**, **Binder design**, **Campaign**, **Objectives**, **Expert**, native preview/launch/readback and all modalities/actions/settings defined in the acceptance companion. Extend full-viewer/source/Project handoffs without rebuilding its delivered core. Generated native inventory and source-qualified typed overlay retain their distinct responsibilities.
 
-Keep blind-pose and experimental LigandMPNN interface-context assessment independently selectable for an exact candidate/state subset. Existing mounted routes and CPU/fixture work are useful but do not prove native GPU execution, validated biological interpretation or placement parity.
+Remove the misleading RFD3 binder-chooser entry, preserve separate RFD3 routes and do not activate retired BindCraft or historical `binder_design.yaml` to populate the lineup.
 
-- Maintain separate model-owned requests, native raw results, child job status and result readback.
-- Verify and describe the actual conditioning of each selected model. A supplied-geometry context score is not independent pose recovery. Do not upgrade a cofold into “blind recovery” merely because the UI label says so.
-- Keep native raw evidence accessible without a cutoff. Operator-defined saved/versioned classification is a separate, explicitly selected analysis of retained evidence, not a model-run prerequisite.
-- Preserve selected policy identity and explicit re-evaluation. Mixed evidence stays mixed. Errors, missing outputs, not-run and inconclusive are not scientific failures.
-- The previously agreed dual-failure interpretation applies only to both selected, applicable, classified observations under the chosen policy. It is computational rejection, not proof of nonbinding, and must not become a new automatic continuation refusal.
-- Do not supply invented recovery thresholds, affinity cutoffs, comparator controls or biological validation claims in the implementation spec. Scientific choices not established by the selected model or operator remain labeled decisions.
+## 5. Selected rounds, native results and Project
 
-### H10. Native results, selection and job-detail fidelity
+### U08. Selected-operation workspace and interfaces
 
-Keep the BC2-native reader/publication and result bindings, then finish the shared workbench experience:
+Sections: **Selected sources**, **Operations**, **Settings**, **Review & next round**. Replace generic registry rows and no-op picker callbacks with actual source-bound role/mask controls. Display exact selected Designs/documents/states and source Jobs, including cross-page selections. Inspecting one item does not change the selected set.
 
-- Distinguish attempts, emitted/scored draws, passing and retained outputs, each target state, native ranks/filters and missing associations. Suppressed structures and zero yield are not corruption.
-- Expose requested, compiled and per-attempt/adaptive settings from the actual Job detail and result surfaces.
-- Preserve producer join keys. No filename, sequence or ordinal inference that invents a scored-to-retained association.
-- Reuse global pagination, compatible comparison, structure/sequence selection, native/table exports and supported saved views. Do not leave BC2 confined to a two-column generic record dump or create a separate numerical store.
-- Candidate selection works across pages and after reopen, with exact state/chain identity. Native documents without a reliable structure association remain inspectable evidence rather than an invented selectable structure.
-- Optional analysis failure cannot erase verified primary candidates. Verify the production caller's transaction behavior, retry and readback, not just the ingester in isolation.
+Retain `POST /api/binder-continuation/selected` and its current fields: `source_job_id`, `design_ids`, `operation`, `params?`, `frustrampnn_settings?`, `execution_target_id?`. Operations remain `refine`, `caliby`, `frustrampnn`, `fampnn`, `proteinmpnn`, `predict_boltz2`, `predict_protenix`. MD and diagnostics retain their separate model-owned routes.
 
-### H11. One selected execution plan for local and remote
+Add optional `candidate_documents`, reusing the existing Design-keyed `CandidateDocument` shape (`artifact_id?`, `target_state?`) and producer-owned resolver. Omission keeps current primary-document behavior. Explicit selection resolves the owned artifact/state before snapshotting; no name/stem join. One explicit document per Design per invocation preserves current unique-ID semantics; other states can use separate child requests/fan-out. Record exact document, derivative map and per-item parent in existing manifests. Share the reusable resolver at its owner, not duplicate diagnostic logic.
 
-Finish the selected dependency closure and transport through the existing owners. The same scientific request and model-native result contract must serve both placements.
+Independent repack/anchors/flow/redesign retain separate switches and applicable settings. Off stages produce no work/assets or hidden mutation. Preserve full FrustraMPNN settings/results and scheduler placement; its current rejection of a generic execution-target override is a real integration constraint, not a reason to bypass its owner or quietly exclude remote scope. Caliby, FA-MPNN, ProteinMPNN and prediction remain model-owned. GROMACS uses the existing typed MD source handoff, not translated OpenMM options.
 
-- Bind only selected images, weights, support runtime and prepared inputs; do not prepare every generator or unselected analysis.
-- Relocate nested manifest/request paths and native source files together. Controller absolute paths and a compiled local output directory are not remote execution contracts.
-- Retain scheduler-owned resource assignment, exact image/weight identity and the existing lifecycle/ownership protections.
-- Return native outputs through existing publication/ingestion. Reopen results and selections after the worker is unavailable.
-- Qualify generation, selected child operations, repeated review continuation, result return and re-ingestion through the actual bridge. Successful file staging, `nextflow inspect` and a fixture worker are separate, lesser evidence.
-- No new remote runner, result scanner, remote-specific scientific defaults, per-job bootstrap or license gate invented merely because internal computation uses rented hardware.
+Keep `/api/blind-pose/selected` and `/api/ligandmpnn/interface-context/selected` independent, with exact input conditioning and raw native readers. Supplied geometry is not blind recovery; sequence-only cofolding alone does not prove pose recovery. Ordinary LigandMPNN chemistry-context design is a separate contract. No universal diagnostic request, composite affinity score or automatic verdict.
 
-### H12. Startup, resume and failure behavior
+### U09. Results, identity and lifecycle
 
-Measure cold provisioning, selected missing assets, warm new job, native initialization/compilation, same-job continuation, child round and result return separately. Record measured work and transfer cost, not a universal invented startup target. Remove demonstrated redundant rescans, hashing, rebuilding or extraction at their existing owners without relaxing integrity or live-resource checks.
+Reuse model-native readers/numerical authority and applicable global pagination, structure/sequence selection, comparisons, export, saved views/capture/annotations. Finish native row → exact candidate/document navigation; a generic Job link alone is incomplete. Persist selections through reopen using existing owners.
 
-Keep native same-attempt resume, an explicit fresh attempt, a child refinement round and a saved-template retry distinct. Preserve immutable published parents and sealed outputs. Exercise interrupted staging/return, controller restart, native failure, cancellation and re-ingestion at changed boundaries. Preserve usable primary results when an optional stage fails. A missing test resource is an evidence limit, not a new product refusal rule.
+Keep campaign/attempt/sample/retained candidate/target-state document distinct. Preserve native ranking, intentionally absent outputs, zero yield and unknown associations without fake Designs or scientific joins. Missing associations remain evidence, not a new `eligible=false` policy. Changed bytes/sequences create descendants with fresh validation state; parent evidence stays on the parent.
 
-### H13. Repair the BC2 execution/publication directory contract
+Primary outputs survive optional failure through real finalization/manual return/retry. Native child results remain accessible with zero generic Designs or failed generic Design fetching. Parent/descendant comparison and next-round selection do not overwrite parents or require diagnostic success.
 
-This is a concrete disconnected production path, not merely absent GPU evidence. `bindcraft2_launch.py:121,156–168` creates the compilation beneath `<job-output>/bindcraft2` and compiles the native project folder as `<job-output>/bindcraft2/campaign`. `bindcraft2_runtime.py:28–38,76–83` and `modules/bindcraft2.nf:19–20` agree with that layout. But `result_ingester.py:5012–5017` passes the Job output root to `bindcraft2_publication.py:149–158`, which requires that same root and parses native stage tables directly beneath it. `bindcraft2_native_results.py:362–386` does not descend into `bindcraft2/campaign`.
+BC2 native resume/actions, fresh retry, saved-draft reopen and selected child round remain distinct. Prepared remote review reuses exact snapshots and allocated output, not a new selection/materialization call. Preserve sealed outputs, historical publication inventories and controller-owned reopen after worker loss.
 
-Separate the owned Job root from its declared native campaign root in the existing publisher and receipt. Preserve exact relative artifact paths, containment and replay identity. The publisher must consume the execution layout rather than search arbitrary directories or flatten/copy native files until fixtures pass. Existing publication fixtures write native tables directly into their supplied root and do not cover this mismatch.
+### U10. Existing Project integration
 
-Acceptance: one integrated compilation-layout-to-publication case must use the actual nested layout, including a sweep and a zero-yield case where appropriate, then the same root contract must survive remote relocation and result return. Real native execution remains separately required; a new fixture does not supply it.
+Use existing Project setup/draft/preparation, capability/native-owner registry, launch contexts, run/attempt binding, datasets, attachment and result surfaces.
 
-### H14. Complete BC2 lifecycle/output and runtime reproducibility
+- Project setup opens the same native workspace, saves/reopens exact model/mode/settings/source selections, then prepares/launches through current contexts. Add `onDraftChange`/hydration to the actual binder branch. Project forms do not define a second scientific schema.
+- Register precise supported binder model-mode/setup adapters. Preserve existing hierarchy/ownership/idempotency protections and truthful experimental labels. Complete missing adapters rather than add gates or weaken registry checks wholesale.
+- `JobCreate.launch_context_id` is the native Job membership handoff; server resolves hierarchy. Carry optional destination context through selected/lifecycle endpoints and prepared remote review. Never put destination hierarchy in scientific params or depend on an ambient URL during delayed child submission.
+- A single resulting Job uses its prepared context; fan-out gets distinct existing run-attempt contexts per Job server-side. Never reuse the parent's consumed context. Scientific ancestry remains separate from scheduler parenthood and Project membership.
+- Use the explicit current Project destination when present; standalone remains standalone unless selected otherwise. Importing sources from another Project never moves them or changes the destination silently.
+- Add Project source browsing by resolving current resource/dataset members to existing source identities and revisions.
+- Add native publication-backed adapters for BC2 campaign and zero-Design diagnostic attachment/reopen. Preserve valid zero yield without fake Designs or weakened Design-set checks. Reuse existing dedicated MD/FrustraMPNN adapters.
+- From Project detail/tasks/runs reopen exact native settings/results/candidates, return to Project and launch compatible selected follow-ups. Every actual fan-out Job is associated correctly; internal Nextflow processes do not each become artificial Project steps.
 
-Native same-campaign resume is not merely untested: `bindcraft2_native.py:43–59` forces `resume=False`, and `bindcraft2_runtime.py:36–38` requires it. The model only exposes campaign mode. Finish the original native-action denominator, including supported rank/filter/postprocessing actions, durable campaign continuation and native output/state return. Keep those distinct from a fresh retry or selected refinement child. Do not edit immutable prior publications in place.
+## 6. Holistic code, processing, hardening and efficiency
 
-Audit all native output families, not only the enumerated tables/CIFs in the current publisher. Preserve declared native ancillary and resume state, including state needed by sweep/deduplication behavior, through the existing artifact and remote-return owners. Receipt/source paths currently include controller placement; prove placement rebinding without changing scientific identity or weakening native re-resolution checks. Generic argv rewriting alone is not evidence of this contract.
+W01–W08 are mandatory implementation work, not an optional audit appendix. Review the complete reachable generation/refinement path and fix demonstrated problems. This is not permission for a repository-wide rewrite, scientific changes or a permanent validation/logging product.
 
-The image definition pins BC2 source but still resolves a mutable base tag, apt packages and editable-install dependencies at build time. Preserve and qualify the installed immutable image, reconcile its dependency identity, and use the project's existing reproducible-runtime mechanism for future builds. A pinned source commit or present SIF is not a fully locked recipe; no new installer or runtime gate is requested.
+### W01. Reachability and simplification
 
-Correct stale BC2 lane notes: the merged inventory has progressed beyond the old raw unresolved count, and the Nextflow entrypoint now exists. Keep the generated native snapshot unchanged; reconcile the source-qualified overlay and actual controls rather than maintaining competing capability catalogs.
+Trace UI/agent request → API normalization/Project context → compilation → Nextflow module → Python/script/native invocation → producer records → publication/return → selection/reopen. Include imports, dynamic script dispatch, dependency/runtime manifests and supported historical readers. Record keep/fix/consolidate/retire dispositions with actual consumers. Inventory alone is not substantive review.
 
-## 5. Implementation ownership and order
+Remove replaced code/imports/tests only after reference checks across current runtime, packaging, supported workflows and recovery/history needs. Retain bounded historical reads where necessary, not duplicate active writes. Lack of a run during review does not make a supported operation obsolete.
 
-Retain the original eight lanes; do not start eight divergent applications or replace this work with another rewrite. All writers use the same reconciled baseline and concrete existing request, selected-input, publication and placement contracts. The parent alone edits shared hubs and integrates dependent changes.
+### W02. Python, scripts and request boundaries
 
-- **A, product authoring:** H01 browser flow, H02, H03 approved controls, H04 model composition, H05 UI and request persistence. Reuse global model settings.
-- **B, refinement:** H06 operation dispatch, H07, H09 blind operation and H04 bridge to existing MD at its workflow owner.
-- **C, selection/results:** H06 identity, H07 lineage/publication, H09 classification persistence and H10 shared selection/reopen.
-- **D, existing analyses:** H03 model-capability disposition evidence and H08 FrustraMPNN/Caliby integration. No pairwise method work.
-- **E, BC2 execution:** H01 native preview/launch/lifecycle, H05 native inventory/compiler coverage, H13 runtime-side root agreement and H14 native actions/continuation/runtime identity.
-- **F, BC2 results:** H10 native publication, accounting, state/attempt readback and producer-bound candidate projection; H13 publication-root correction; H14 complete output/state inventory.
-- **G, execution bridge:** H11 and H12, plus H13/H14 portable campaign roots/receipts and durable-state return; selected closure for all phases, not BC2 transport alone.
-- **H, LigandMPNN assessment:** H09 native method/input/output contract and evidence; no replacement with ordinary redesign.
+Review single default authority, explicit-value semantics, nested collection transport, role/source mapping, exact mode dispatch and native outputs. Fix hidden overrides, silent fallback, swallowed errors and false/zero/null loss. Keep native scientific semantics/defaults unless explicitly approved otherwise.
 
-Before dependent edits, agree the smallest concrete contracts with existing owners. In parallel, finish the agnostic UI/continuation, full BC2 request-to-result path, and independent diagnostics. Integrate coherent vertical slices early, including each slice's mounted form, server route, compiled job, native result and reopen. Leaf test success is not parent closure.
+Review argument-safe process calls, shell interpolation, paths/containment, file ownership, bounded parsing, temporary files, atomic output, cancellation and resource cleanup at real boundaries. Reuse current helpers; no duplicate validation framework. Errors identify the failed stage/input instead of empty success or fabricated sequence/results.
 
-Prioritize the visible and structural defects together: real authoring and continuation; BC2 preview-bound launch; GROMACS composition and legacy-control disposition; complete results/analyses; then combined authorized native/local/remote and lifecycle/performance evidence. Native acceptance can proceed when its own path is ready; do not wait for every optional scientific classification policy or impose serial ceremonial reviews.
+### W03. Nextflow graph correctness and overhead
 
-No new code implementation or deployment is performed by this specification pass.
+Review schema/`allOf`, optional parameter access, module I/O, staged basenames, channel tuple arity, fan-out/join keys, empty/zero-yield channels, producer attribution, pause/review and resume. Exact source/sample keys travel through channels; no sorted-glob lineage. Off stages are absent from the actual graph and selected dependencies.
 
-## 6. Acceptance and reporting contract
+Separate PPIFlow native generation from partial-flow contracts. Use narrow native invocation/preparation/publication adapters, not new generation forced through maturation inputs. Reconcile `NativeInvocation`/`SelectedExecutionPlan` descriptors with final processes, not asset totals alone.
 
-A completion report must answer each of these with exact evidence, not a cumulative test count:
+Reduce duplicated processes, staging/conversion and serial bottlenecks when demonstrated and behaviorally verified. Prevent staged-name collisions even for identical original/repacked bytes. Keep scheduler resources and bounded native fan-out; do not accelerate by oversubscription, changing sample semantics or silently changing science.
 
-1. Can the operator actually select and launch each retained generator from the shipped form using its own settings?
-2. Does BC2's submitted request include the existing preview binding and reopen with identical requested/effective semantics?
-3. Do both a non-antibody candidate and a real native BC2 candidate reach compatible selected child operations and another round without antibody coercion?
-4. Are AntiFold/ThermoMPNN controls consistent with the approved disposition, and does binder physics actually invoke the existing GROMACS contract?
-5. Are optional operations independent, off-stages absent from execution/dependency closure, and descendants free of inherited validation claims?
-6. Do native results, settings, selection, exports and lineage reopen through the shared workbench, including zero yield and optional-stage failure?
-7. Do full FrustraMPNN, Caliby and the independent diagnostic operations each have their own truthful native and integrated evidence?
-8. Does the whole selected workflow run and return/reopen through both local placement and the existing remote bridge?
-9. Are cold/warm and lifecycle claims measured on the actual path, with failures/skips disclosed?
-10. Is the verified combined source revision the actual deployed API/frontend and consumed worker artifact revision?
+### W04. Data processing and publication
 
-These are the original completion expectations applied concretely, not new runtime interlocks. Preserve A01–A14, C01–C14, P1.1–P1.6, P2.1–P2.4, P3.1–P3.4 and X.1–X.6 in the accompanying reconciliation ledger. No item is closed by calling it optional, hiding its selector, renaming the workflow or declaring a different model's evidence equivalent.
+Review producer manifests/sidecars, requested/emitted/missing sample counts, document/state maps, sequence extraction, replay identity and native/derived formats. Report zero yield and unresolved identity honestly. Review transactions, async/session boundaries, primary/optional isolation, manual return/retry and historical reopen.
 
-Every subsequent status report separates what is live and exercised, what is implemented/focused-tested, what is missing, and what remains unverified. It names the incomplete full-product paths. Do not claim a percentage without a meaningful, fully reconciled denominator.
+Avoid unbounded materialization, N+1 result queries and repeated directory scans where an authoritative manifest exists. Use bounded/paginated processing and existing result authorities. No fake candidates, rank-as-ID, filename joins or cached summaries becoming another numerical database.
 
-## 7. Decisions reserved for Christian
+### W05. Source/UI efficiency
 
-- AntiFold and ThermoMPNN: approve their disposition in the new binder product; the recommendation is not to perpetuate them as generic/default advertised operations. Preserve any supported legacy behavior until that decision.
-- Any new or changed scientific protocol not already specified by the chosen model-owned contract, including GROMACS preparation/protocol differences and diagnostic classification choices.
-- Any proposed new runtime admission/refusal behavior, automatic rejection-to-continuation restriction or stricter execution prerequisite. Default is no.
-- The exact native campaigns/hardware, paid worker starts and later deployment authorization. This review neither spends on resources nor starts science.
+Review download/materialization reuse, parse work, large results, async cancellation/races, lazy model/viewer loading and section navigation. Do not repeatedly fetch/parse identical bytes just to switch panes, or copy them for every draft. Reuse bounded caches/in-flight requests keyed by actual identity. Avoid eager initialization of every model, global polling and duplicate Mol* instances. Preserve correctness under latency/error.
 
-These decisions are localized. They do not justify postponing unrelated implementation or reducing the agreed scope.
+Test real source selectors and state adapters; mock transport/WebGL internals when necessary, not whole source tools to null. Interaction hierarchy is separate from control counts or no-overflow measurements.
 
-## 8. Source-linked reconciliation
+### W06. Runtime/bridge efficiency and lifecycle
 
-All original requirement identifiers are reconciled below. **None is certified fully accepted by this review.** Source repairs are credited without upgrading test-source inspection to a test pass. Overlapping acceptance/phase identifiers are not independent completed-feature counts. The machine-readable counterpart is `/home/dalab/audits/binder-harmonization-20260923/requirement-crosswalk.json`.
+Review selected images/weights/support assets, portable trees, archive/extraction/hashing, image views, cache identity, native initialization/compilation and result return. No per-job installs, unchanged downloads, unselected preparation or GPU import during discovery. Keep attempt-private writes and compatible persistent caches. Preserve volatile resource, ownership and corruption checks; do not cascade redundant checks over immutable unchanged bytes.
 
-### Original product acceptance
+Reconcile PPIFlow's installed source/checkpoint/config identity with runtime manifests and image recipe; an unpinned clone does not become reproducible through source readback. Use existing provisioning, not workflow-specific installers or all-model bundles. Preserve native resume state and worker-offline native/Project reopening.
 
-- **A01 — missing or disconnected.** Card renamed; real form remains antibody-centric and BC2 is a non-launching draft. Correction: H01, H02, H05. Owner: A + parent.
-  Evidence: `platform/frontend/src/components/AntibodyDenovoTemplate.tsx:2327-2489`; `platform/frontend/src/components/DeNovoModalityNotice.tsx:4-10`.
+### W07. Measured speed and resource use
 
-- **A02 — partial.** Native inventory/compiler exists; typed nested controls, portable mask representation, full native actions and resume are not complete. Correction: H01, H05, H14. Owner: E + A.
-  Evidence: `platform/api/services/bindcraft2_typed.py:17-72`; `platform/api/services/bindcraft2_native.py:43-59`.
+Measure changed owners before/after with equivalent scientific requests, outputs, hardware/runtime and relevant data sizes. Separate source/viewer readiness, API preparation, parsing/materialization, Nextflow dispatch, publication/querying, cold provisioning, selected missing assets, warm launch, native initialization/compilation, continuation and return. Record phase durations and bytes/files/memory/query/process counts where they explain cost.
 
-- **A03 — partial.** Generator identity and saved-request repairs exist; BC2 submit omits required preview identity and UI displays local JSON instead of native preview. Correction: H01, H02, H05, H07. Owner: A + E + parent.
-  Evidence: `platform/frontend/src/components/AntibodyDenovoTemplate.tsx:1030-1033,2463-2477`; `platform/api/config/models/bindcraft2.yaml:24-37`.
+Use existing logs/receipts and bounded development probes, not a telemetry product. Distinguish native compute from orchestration and cold from warm. A speed claim cannot come from fewer samples, omitted selected stages, different science or fixture timing. Remove demonstrated redundant work and prove semantic equivalence. Numeric commitments follow measured baseline and Christian's expectations, not invented universal seconds or permissive after-the-fact budgets. Missing measurements mean unverified performance, not a runtime refusal.
 
-- **A04 — partial.** Explicit native attempt/draw/retained accounting exists; actual execution/publication roots disagree and native acceptance is unverified. Correction: H10, H13, H14. Owner: F + E.
-  Evidence: `platform/api/services/bindcraft2_native_results.py:167-258,283-386`; `platform/api/services/bindcraft2_publication.py:149-158`.
+### W08. Hardening evidence
 
-- **A05 — partial.** Native paginated readback is mounted; settings, state-aware structures and complete applicable comparison/export/review facilities are not integrated. Correction: H10. Owner: C + F + H.
-  Evidence: `platform/frontend/src/components/BindCraft2NativeResults.tsx:24-50`; `platform/frontend/src/components/JobDetailsPanel.tsx:113-115`; `platform/frontend/src/components/BlindPoseSelectedControls.tsx:109-135`.
+Each correction receives the owner regression and affected consumer tests. Use real pinned Nextflow compilation plus explicitly non-science transport fixtures for graph behavior; native execution is separately authorized evidence. Cover relevant malformed/corrupt inputs, explicit empties, multiple samples/states, zero yield, duplicate basenames, partial output, optional failure, interrupted return, replay and worker-offline reopen.
 
-- **A06 — missing or disconnected.** Owned selections improved, but generic roots are rejected, ordinary local references remain mutable and shared review can collapse states. Correction: H06, H10. Owner: C + B + parent.
-  Evidence: `platform/api/routers/jobs.py:2671-2708,3433-3449`; `platform/api/services/stage_review.py:239-249`.
+A review report without required fixes does not close the work. Finding no defect does not justify rewriting correct code. Report retained-correct areas and evidence, not artificial changes. Preserve execution behavior except specified corrections; never harden by adding proof-based interlocks.
 
-- **A07 — missing or disconnected.** Independent selected assessments exist; all-generator repeated refinement and actual BC2 candidate handoff do not. Correction: H06, H07, H08, H11. Owner: B + C + parent.
-  Evidence: `platform/api/tests/test_binder_iteration_api_parity.py:32-42`; `platform/api/routers/jobs.py:4773,7782-7789`.
+## 7. Retained H concern disposition
 
-- **A08 — partial.** Explicit redesign and some freshness repairs exist; anchor/flow composition remains coupled, glob sample attribution and IgGM terminal attribution remain. Correction: H07. Owner: B + C.
-  Evidence: `workflows/maturation_child_core.nf:158-186`; `modules/ppiflow.nf:240-265`; `workflows/antibody_denovo.nf:3341-3381`.
+- **H01:** BC2 launch implemented; finish source/Project/native acceptance. E/A/parent.
+- **H02:** four-generator agnostic authoring and actual wider BoltzGen/PPIFlow adapters remain. A/B/parent.
+- **H03:** no generic AntiFold/ThermoMPNN defaults; retain supported historical semantics. Further retirement needs a decision. A/B/D.
+- **H04:** GROMACS typed handoff exists; finish Project/round integration and acceptance. Parent/C/D.
+- **H05:** designed BC2 typed controls exist; retain full native/source/Project parity. E/A.
+- **H06:** neutral continuation exists; add exact document/destination handoff and real repeated-round evidence. C/A/parent.
+- **H07:** independent refinement/repairs exist; finish hydration, roles/accounting and W01–W08. B/C/A.
+- **H08:** Caliby/full FrustraMPNN adapters exist; finish usable controls, owner-correct placement and native evidence. D/G.
+- **H09:** separate raw diagnostics exist; finish input/execution evidence and Project/round UX. No classifier. H/C/parent.
+- **H10:** native/shared results improved; finish exact navigation, workbench and Project reopen. C/F.
+- **H11:** shared transport exists; complete new generation/selected closure and real remote runs. G/B/E/H.
+- **H12:** warm/lifecycle mechanisms exist; measure and fix actual repeated work/recovery defects. G/parent.
+- **H13:** BC2 nested root mismatch repaired; preserve nested/historical contract and prove native return. F/E/G.
+- **H14:** BC2 actions/resume/state inventory exist; finish native action/runtime evidence, not another lifecycle owner. E/F/G.
 
-- **A09 — partial.** Mounted separate raw diagnostics and substantial FrustraMPNN/Caliby code exist; generic Caliby invocation and saved optional classification/reclassification are missing; native qualification unverified. Correction: H08, H09. Owner: D + H + B + C.
-  Evidence: `modules/caliby.nf:83`; `platform/frontend/src/components/BlindPoseSelectedControls.tsx:51-135`; `platform/api/services/ligandmpnn_interface_context.py:30-34`.
+## 8. Source evidence index
 
-- **A10 — partial.** Primary/FrustraMPNN finalizer isolation exists. Broad optional-stage, manual-pull, retry and remote failure coverage remains unverified. Correction: H07, H10, H12. Owner: C + D + G.
-  Evidence: `platform/api/services/result_state_integrity.py:510-529,718-767`; `platform/api/services/result_ingester.py:4920-4983`.
+Paths are relative to the verified source. These identify implementation/test-contract evidence, not fresh passing tests.
 
-- **A11 — partial.** See every C01-C14 entry below: real repairs, concrete remaining defects and unverified integrated behavior are separated. Correction: H06, H07, H10, H11, H12. Owner: parent.
-  Evidence: `docs/specs/de-novo-binder-design-upgrade.md:249-266`.
+- **E01 Authoring/source:** `platform/frontend/src/components/AntibodyDenovoTemplate.tsx`, `BinderGeneratorChooser.tsx`, `JobSubmission.tsx`, `TargetAntigenSelector.tsx`, `BindCraft2StructureInputs.tsx`, `EpitopeMolstarViewerImpl.tsx`; `platform/frontend/src/lib/bindcraft2StructureInputs.ts`.
+- **E02 BoltzGen:** `scripts/prep_boltzgen.py`, `scripts/lib/boltzgen_inputs.py`, `scripts/lib/boltzgen_native_source.json`; `platform/api/routers/boltzgen.py`; `platform/api/services/boltzgen_request_compatibility.py`; `platform/api/config/models/boltzgen.yaml`; `modules/boltzgen.nf`.
+- **E03 PPIFlow:** `workflows/ppiflow_generator_design.nf`, `modules/ppiflow.nf`, `scripts/validate_ppiflow_roles.py`, `scripts/ppiflow_sample_identity.py`, `scripts/prepare_ppiflow_maturation.py`, `apptainer/ppiflow.def`; installed native entrypoints in section 2.
+- **E04 BC2:** `platform/frontend/src/components/BindCraft2Campaign.tsx`, `BindCraft2Settings.tsx`; `platform/frontend/src/lib/bindcraft2Lifecycle.ts`; `platform/api/services/bindcraft2_launch.py`, `bindcraft2_runtime.py`, `bindcraft2_native.py`; `platform/api/config/models/bindcraft2.yaml`; `apptainer/bindcraft2.def`.
+- **E05 Selection:** `platform/api/routers/binder_continuation.py`; `platform/api/services/binder_continuation.py`, `binder_diagnostic_selection.py`; `platform/frontend/src/lib/binderContinuation.ts`; `platform/frontend/src/components/BinderSelectedControls.tsx`.
+- **E06 Refinement/analysis:** `workflows/binder_refinement.nf`, `workflows/caliby_binder.nf`; `platform/api/config/models/binder_refinement.yaml`, `caliby_binder.yaml`; `platform/api/services/frustrampnn/jobs.py`; `platform/api/routers/molecular_dynamics.py`; `platform/api/services/md/starting_structures.py`; `scripts/publish_binder_refinement.py`.
+- **E07 Results:** `platform/api/services/result_ingester.py`, `stage_review.py`, `result_state_integrity.py`, `bindcraft2_publication.py`, `bindcraft2_result_readback.py`; `platform/frontend/src/components/ResultsViewer.tsx`, `BindCraft2NativeResults.tsx`, `BindCraft2JobResults.tsx`.
+- **E08 Diagnostics:** `platform/api/routers/binder_blind_pose.py`, `ligandmpnn_interface_context.py`; `platform/frontend/src/components/BlindPoseSelectedControls.tsx`, `BinderDiagnosticRawResults.tsx`.
+- **E09 Project:** `platform/api/schemas.py:JobCreate`; `platform/api/services/protein_project_capabilities.py`, `workflow_adapter_registry.py`; `platform/api/services/global_experiments/workflow_setups.py`, `launch_contexts.py`, `project_datasets.py`, `adapters.py`, `result_surfaces.py`; `platform/api/routers/project_manager.py`; `platform/frontend/src/components/project-manager/ProjectWorkflowSetup.tsx`, `ProteinProjectWorkspace.tsx`.
+- **E10 Compiler/bridge:** `platform/api/services/nextflow.py`, `platform/api/native_components.py`, `platform/api/services/remote_execution/bundle.py`, `cache.py`; `scripts/lib/portable_inputs.py`; `platform/api/tools/bms_remote_worker.py`; `nextflow_schema.json`.
 
-- **A12 — unverified.** Common compilation/staging hooks exist; no demonstrated whole-workflow local/remote native parity; BC2 receipt relocation still needs closure. Correction: H11, H13, H14. Owner: G + E + B + H.
-  Evidence: `platform/api/services/remote_execution/bundle.py:660-744`; `platform/api/services/bindcraft2_runtime.py:36-75`.
+Supporting reviews are outside the repository under `/home/dalab/audits/binder-workflow-ui-spec/`: `review-baseline.json`, `authoring-review.md`, `continuation-review.md`, `bc2-remote-review.md`, `source-selection-review.md`, `project-integration-review.md`, `ppiflow-generation-native-review.md`. The PPIFlow native correction and four-generator clarification supersede earlier seeded-only/five-generator recommendations. Reports are evidence, not scope authority.
 
-- **A13 — partial.** Shared archive/helper reuse exists; warm timings and lifecycle acceptance are absent from reviewed evidence; BC2 native resume is unimplemented. Correction: H12, H14. Owner: G + E.
-  Evidence: `platform/api/services/remote_execution/bundle.py:1013-1060`; `platform/api/services/bindcraft2_native.py:43-59`.
+## 9. Reconciled acceptance ledger
 
-- **A14 — partial.** Live API and canonical checkout match reviewed SHA. Focused historical test counts do not close incomplete paths or native execution; no new full suite was run. Correction: H01, H02, H06, H11, H12, H13, H14. Owner: parent.
-  Evidence: `/home/dalab/audits/binder-harmonization-20260923/review-baseline.json`; `docs/specs/de-novo-binder-concurrent-implementation-plan.md:424-439`.
+No native acceptance is certified by this document. “Implemented” credits connected source and existing test contracts; remaining software and execution evidence stay distinct. Owner letters refer to the implementation packet; parent owns shared/Project integration. Overlapping identifiers are not independent completed-feature counts.
 
-### Original correction ledger
+### Product acceptance
 
-- **C01 — partial.** Unknown validator/review choices no longer silently fall back and explicit values use setdefault. Cross-authority/profile/save/native parity remains unverified. Correction: H02, H07. Owner: parent + A.
-  Evidence: `platform/api/routers/jobs.py:1362-1371,1401-1408,1439-1446`.
+- **A01 — Partial.** BC2 workspace exists; wider BoltzGen/PPIFlow, four-generator sources and Project entry remain. E01–E04/E09. Owner A/B/parent. Close actual mounted/model-native requests and correct product placement.
+- **A02 — Foundation implemented; closure unverified.** BC2 typed controls/actions/compiler exist. E04. Owner E. Close native capability/control accounting and representative execution families.
+- **A03 — Partial.** BC2 digest/generic template repairs exist; source handoff, ESMFold2 hydration, new generator and Project drafts remain. E01/E02/E04/E09. Owner A/parent. Close browser/agent and save/reopen/clone/retry fidelity.
+- **A04 — Publisher implemented; native evidence open.** BC2 accounting/joins/nested roots exist. E04/E07. Owner F. Close actual draw/state/adaptive/sweep/zero-yield/action output cases.
+- **A05 — Partial.** Native readers exist; exact navigation, applicable review facilities and native zero-Design Project adapters remain. E07/E09. Owner C/F. Close direct/Project/worker-offline reopen and export/comparison.
+- **A06 — Partial.** Same-root immutable selection exists; alternate-document refinement and destination contexts remain. E05/E07/E09. Owner C/parent. Close exact state/parent identity and cross-project source import.
+- **A07 — Core implemented; whole-path evidence open.** Neutral repeated requests exist; designed UI and real generator/descendant handoffs remain. E05/E06. Owner B/C. Include real BC2 candidate and another selected round, with generator-only exit.
+- **A08 — Partial.** Independent operations/freshness repairs exist; native roles/sample/composition and accounting/UX remain. E03/E06/E07. Owner B. Verify PPIFlow generation and refinement separately.
+- **A09 — Adapters implemented; qualification open.** Full analyses and raw diagnostics exist. E06/E08. Owner D/H. Close native correctness and honest conditioning evidence, not classification machinery.
+- **A10 — Repair implemented; live coverage open.** Primary isolation includes manual return. E07. Owner C/G. Close optional failure/interruption/retry/replay without erased or duplicate results.
+- **A11 — Partial.** Credit C01–C14; residuals and W01–W08 remain mandatory. E01–E10. Owner parent. Close corrections on the combined path, not leaf totals.
+- **A12 — Partly wired; native parity open.** Existing bridge supports current contracts; new generation/Project/selected closure remains. E05/E06/E09/E10. Owner G. Verify actual local/remote paths at each operation owner.
+- **A13 — Mechanisms present; unmeasured.** Cache reuse and lifecycle exist. E04/E10. Owner G/E. Close matched cold/warm and approved recovery evidence.
+- **A14 — Delivery evidence open.** Source baseline verified; this pass neither tests nor deploys software. E01–E10. Owner parent. Close combined tests and authorized native/deployed/worker readback.
 
-- **C02 — source repair unqualified.** Synthetic sequence fallback replaced with explicit extraction/error. PDB chain/residue/insertion handling exists; full format/native use is not proven. Correction: H07, H10. Owner: B.
-  Evidence: `workflows/antibody_denovo.nf:90-101`; `scripts/extract_antibody_pdb_sequence.py:15-60`.
+### Corrections
 
-- **C03 — partial.** Missing/overlapping requested roles now error; omitted single-antigen inference remains and exact native role agreement needs qualification. Correction: H07. Owner: B.
-  Evidence: `scripts/prepare_ppiflow_maturation.py:314-326`.
+- **C01 — Core repaired; authoring partial.** Explicit settings/unknown-choice handling improved. E01/E06/E10. Parent/A: finish save/profile/native fidelity without new defaults authority.
+- **C02 — Prior repair retained.** Synthetic sequence fallback removed. E06/E07. B: verify supported residue/format/native use; no additional parser rewrite justified here.
+- **C03 — Partial.** Selected role checks exist; generator VHH/light metadata, chain case and mode-specific controls remain. E01/E03. B/A: exact generation/refinement role mapping.
+- **C04 — Concrete residual.** Producer pairing fixed; saved-template branch omits ESMFold2 restoration. E01/E07. A/B/C: repair hydration and prove native sample pairing/cardinality.
+- **C05 — Independent execution delivered.** Four-toggle neutral workflow/off defaults exist. E06. B/A: designed controls and native invariance/composition evidence.
+- **C06 — Freshness/terminal repair delivered.** IgGM descendants/terminal attribution fixed; automatic post-IgGM revalidation remains unwired. E06/E07. B/C: retain explicit separate validation, no new gate; verify native ancillary reopen.
+- **C07 — Producer identity fixed; accounting partial.** Sample hooks replace glob ordinals. E03. B/C: duplicate/requested/emitted/missing counts and zero-outcome review without treating valid zero yield as failure.
+- **C08 — Production repair delivered.** Primary isolation includes manual return/retry. E07. C/D/G: actual optional failure/return evidence; no new rollback defect demonstrated here.
+- **C09 — Owned snapshots delivered; document seam open.** Native/derived identity and same-root checks exist. E05. C/parent: exact alternate-document selection and returned-candidate handoff.
+- **C10 — Shared repairs delivered.** Full document paths and explicit parent/origin replace stem/global-name inference. E07. C: native repeated rounds, historical reopen and exact UI links.
+- **C11 — Format repair delivered; coverage open.** Native discovery and checked representable CIF conversion exist. E05/E07. C/B: source/derivative display and real consumer mapping evidence.
+- **C12 — Partial.** BC2/selected paths share model definitions; remaining authoring/new-generation adapters need consolidation. E01–E06. A/parent: remove replaced active writes, retain bounded historical reads.
+- **C13 — Reuse retained; performance open.** Archive/helper reuse and selected transport exist. E10. G: measure/fix W06/W07 costs, not another cache by assumption.
+- **C14 — Substantial continuity delivered; full closure open.** Neutral operations/MD/analyses/diagnostics exist. E01/E05–E09. Parent: retained branches, four-generator/Project/round/reopen acceptance.
 
-- **C04 — source repair unqualified.** Producer-manifest pairing/counts replaced last-glob ESMFold2 selection. Mounted hydration and native sample-to-Design agreement remain unverified end-to-end. Correction: H02, H07, H10. Owner: B + A + C.
-  Evidence: `scripts/normalize_esmfold2_validation.py:22-106`.
+### Phases and cross-phase delivery
 
-- **C05 — missing or disconnected.** Redesign is explicit and actual repacked changes are reported, but the maturation workflow still always identifies anchors and runs flow. Independent compositions remain missing. Correction: H07. Owner: B.
-  Evidence: `workflows/maturation_child_core.nf:158-186,265-300`; `scripts/prepare_ppiflow_maturation.py:414-415`.
+- **P1.1 — Partial:** agnostic four-generator UI, full sources/viewer/Project and real wider BoltzGen/PPIFlow. E01–E03/E09. A/B/parent; close A01/A03.
+- **P1.2 — Core delivered; UX/native work open:** independent repeated refinement, including preserved PPIFlow use case. E03/E05/E06. B; close A07/A08.
+- **P1.3 — Partial:** immutable selection/publication exist; exact document/Project association/reopen remain. E05/E07/E09. C; close A05/A06/A10.
+- **P1.4 — Adapters delivered; native qualification open:** full FrustraMPNN/Caliby, no pairwise requirement. E06. D; close A09.
+- **P1.5 — Bridge foundation delivered; extensions/evidence open:** selected/new-generation closure and measured warm behavior. E10. G; close A12/A13.
+- **P1.6 — Partial:** C01–C14 plus W01–W08, real generic requests and saved/Project fidelity. E01–E10. Parent; close A11/A14.
+- **P2.1 — Foundation delivered; coverage open:** full BC2 field/action/modality/source parity. E04. E; close A02/A03.
+- **P2.2 — Routes/actions delivered; native evidence open:** bounded campaign, sweeps/adaptive settings/resume. E04. E; close A02/A04/A13.
+- **P2.3 — Publisher delivered; native evidence open:** exact joins/states/nested/state inventory. E07. F; close A04/A05.
+- **P2.4 — Partial:** BC2 peer launch exists; real candidate continuation, Project/full-view and native local/remote handoff remain. E01/E04–E07/E09/E10. Parent; close A01/A06/A07/A12.
+- **P3.1 — Adapter exists; native execution open:** selected interface-context operation, not redesign. E08. H; close A09.
+- **P3.2 — Inputs recorded; interpretation unqualified:** actual conditioning/applicability evidence. E08. H/B; close A09 without classifier/threshold work.
+- **P3.3 — Raw persistence exists; Project/round evidence open:** exact diagnostic identity/reopen, no policy CRUD. E05/E08/E09. C/H; close A05/A06/A09.
+- **P3.4 — Partial:** usable typed controls, placement parity and off-stage exclusion. E01/E08/E10. A/G; close A03/A09/A12.
+- **X.1 — Reuse established; consolidation remains:** one scientific/result/lifecycle authority, including Project and W01–W06. E01–E10. Parent; close A03/A05/A11.
+- **X.2 — Not executed here:** combined focused tests with exact skips/baseline failures. E01–E10. Parent; close A14.
+- **X.3 — Not exercised here:** authorized actual native/local/remote and returned readback, including both PPIFlow roles. E03–E10. Parent/G; close A07/A09/A12.
+- **X.4 — Unmeasured:** matched cold/warm/processing evidence, no invented universal threshold. E10. G/parent; close A13.
+- **X.5 — Mechanisms present; recovery evidence open:** stop/interruption/return/replay/continuation at changed boundaries. E04–E10. C/G/E; close A10/A13.
+- **X.6 — Source verified; deployed/worker closure pending:** separate consumed identities and worker-offline native/Project reopen when authorized. E07/E09/E10. Parent/G; close A05/A12/A14.
 
-- **C06 — partial.** Post-validation PPIFlow descendants marked unvalidated. Final IgGM outputs are not represented by terminalStage/terminalMethod; post-IgGM revalidation is unwired. Correction: H07, H10. Owner: B + C.
-  Evidence: `workflows/antibody_denovo.nf:3283-3301,3341-3381`.
+## 10. Completion and delivery
 
-- **C07 — partial.** Selected maturation source/sample work exists, but another PPIFlow producer path still assigns sample indices from sorted recursive PDB globs. Zero-anchor display needs integrated evidence. Correction: H07, H10. Owner: B + C.
-  Evidence: `modules/ppiflow.nf:240-265`; `workflows/maturation_child_core.nf:178-185`.
+Close every original identifier and clarified source/Project/PPIFlow/W01–W08 obligation with actual evidence or an explicit Christian-approved scope change. Keep source implementation, fixtures, native runs, remote runs and scientific qualification distinguishable. Do not invent a completion percentage.
 
-- **C08 — source repair unqualified.** Actual finalizer isolates optional FrustraMPNN attachment using primary publication and a savepoint. Broader optional/manual-pull/remote interruption behavior not certified. Correction: H10, H12. Owner: C + D.
-  Evidence: `platform/api/services/result_state_integrity.py:510-529,718-767`; `platform/api/services/result_ingester.py:4920-4983`.
+Native acceptance uses bounded approved benign inputs and actual model-owned requests. Include both PPIFlow roles, wider BoltzGen, RFantibody and complete BC2 feature-family accounting. A real native BC2 structure-bearing candidate must enter a compatible selected operation and a further descendant round. Zero yield is valid accounting but not candidate-handoff evidence; no fixture candidate or loosened filter substitutes.
 
-- **C09 — partial.** Owner/root checks and diagnostic snapshots are implemented. Ordinary local PDB selections still use symlinks/hardlinks; full state/subset continuation remains open. Correction: H06. Owner: C + parent.
-  Evidence: `platform/api/routers/jobs.py:2711-2746,3433-3449,4309-4363`.
+Existing visual renders are design references only. Their PPIFlow seeded-only layout is superseded by U06; they did not depict complete Project/source/full-view behavior. Capture the implemented sections/roles after asynchronous loading, desktop/narrow and light/dark, with actual controls and emitted requests. Mockup approval is not approval for hidden science changes.
 
-- **C10 — partial.** BC2 producer-bound projection exists. Shared review deduplicates by stem; repeated-round origin Job can advance while origin Design remains ancestral. Correction: H06, H10. Owner: C.
-  Evidence: `platform/api/services/stage_review.py:239-249`; `platform/api/services/result_ingester.py:1480-1488`.
-
-- **C11 — partial.** Native CIF and checked derivative conversion exist. Shared review/state identity, author/label maps and overbroad insertion-code exclusion remain unresolved. Correction: H06, H10. Owner: C + B.
-  Evidence: `platform/api/routers/jobs.py:3067-3097`; `platform/api/services/stage_review.py:230-249`.
-
-- **C12 — partial.** Generator conflict handling improved; multiple active request/default/alias authorities remain. Historical read compatibility must not be mistaken for duplicate active writes. Correction: H02, H03, H05, H07. Owner: A + parent.
-  Evidence: `platform/api/routers/jobs.py:1382-1389`; `platform/frontend/src/components/AntibodyDenovoTemplate.tsx:1030-1033`; `workflows/antibody_denovo.nf:2341`.
-
-- **C13 — source repair unqualified.** Revision archive/helper reuse, staged-copy hashing and extraction outside shared lock are implemented. Real cold/warm cost and reconnect behavior remain unmeasured. Correction: H11, H12. Owner: G.
-  Evidence: `platform/api/services/remote_execution/bundle.py:1013-1060`; `platform/api/services/remote_execution/cache.py:79,531`; `platform/api/tests/test_remote_warm_work.py`.
-
-- **C14 — partial.** Legacy generator and ancillary branches survive, but generic continuation, generic Caliby and complete selected operation delivery remain missing/unverified. Resolve legacy model presentation explicitly. Correction: H02, H03, H04, H06, H07, H08. Owner: parent + A + B + C + D + G.
-  Evidence: `platform/api/routers/jobs.py:2671-2708`; `modules/caliby.nf:83`; `platform/frontend/src/components/ResultsViewer.tsx:5190-5196`.
-
-### Original phase and cross-phase delivery
-
-- **P1.1 — missing or disconnected.** Modality-first authoring and every retained real route remain incomplete. Correction: H01, H02, H05. Owner: A. Related: A01, A03.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P1.2 — missing or disconnected.** Generic repeated/separable refinement is not delivered. Correction: H06, H07. Owner: B. Related: A07, A08.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P1.3 — partial.** Selection and publication improved; mutable inputs, states and lineage remain. Correction: H06, H10. Owner: C. Related: A06, A10.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P1.4 — partial.** Full existing FrustraMPNN is reusable; generic Caliby connection and integrated qualification remain. Correction: H08. Owner: D. Related: A09.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P1.5 — partial.** Bridge hooks and optimizations exist; whole selected workflow and measurements are unverified. Correction: H11, H12. Owner: G. Related: A12, A13.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P1.6 — partial.** C01-C14 are not all closed and generic roots do not pass the intended continuation boundary. Correction: H06, H07, H10. Owner: parent. Related: A06, A11.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P2.1 — partial.** Inventory/control/action/compile/persistence coverage remains incomplete. Correction: H01, H05, H14. Owner: E + A. Related: A02, A03.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P2.2 — partial.** Native bounded leaf exists, but resume/actions are missing and execution families unverified. Correction: H12, H14. Owner: E. Related: A02, A04, A13.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P2.3 — partial.** Native identity/parser implemented; correct execution-root publication and full output closure still needed. Correction: H10, H13, H14. Owner: F. Related: A04, A05.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P2.4 — missing or disconnected.** No first-class launch or real BC2 candidate handoff; job settings and selected placement closure incomplete. Correction: H01, H06, H10, H11, H13. Owner: parent + A + C + G. Related: A01, A06, A07, A12.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P3.1 — partial.** Native leaf and selected route exist, but actual production native diagnostic execution is unverified. Correction: H09, H11. Owner: H. Related: A09.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P3.2 — partial.** Separate input contracts exist; actual conditioning/applicability and native evidence remain unqualified. Correction: H09. Owner: H + B. Related: A09.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P3.3 — missing or disconnected.** Raw results reopen, but saved/versioned cutoffs, explicit reclassification and optional dual policy are missing. Correction: H06, H09, H10. Owner: C + H. Related: A06, A09.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **P3.4 — partial.** Mounted typed controls and selected staging exist; full setting parity, off-stage and native placement evidence remain open. Correction: H05, H09, H11. Owner: G + A. Related: A03, A09, A12.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.1 — partial.** Shared owners are substantially reused; touched duplicate request assembly and result UX still need harmonization. Correction: H02, H05, H10. Owner: parent. Related: A03, A05.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.2 — unverified.** Review did not rerun suites. Reconcile exact combined-tree case results/skips/baseline failures, not historic aggregate counts. Correction: H07, H10, H13. Owner: parent. Related: A14.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.3 — unverified.** No authorized integrated native/local/remote proof closes the paths in this reviewed packet. Correction: H01, H06, H11, H13. Owner: parent + G. Related: A07, A12.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.4 — unverified.** No live workload-qualified cold/warm measurements established. Correction: H12. Owner: G. Related: A13, C13.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.5 — partial.** Existing journals/ownership mechanisms and isolation repairs exist; changed-boundary lifecycle evidence incomplete. Correction: H10, H12, H14. Owner: C + G + E. Related: A10, A13.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-- **X.6 — partial.** Live controller source/build identity verified. Consumed worker artifact parity and worker-offline result reopen remain unverified. Correction: H10, H11, H12. Owner: parent + G. Related: A05, A12, A14.
-  Evidence: `docs/specs/de-novo-binder-concurrent-implementation-plan.md:393-439`.
-
-### Audit provenance and limitations
-
-Three bounded read-only subaudits covered BC2, workflow/models, and results/bridge. Their reports are saved under `/home/dalab/.hermes/profiles/fresh/cache/scratch/binder-harmonization/` as `bc2-audit.md`, `workflow-audit.md` and `results-bridge-audit.md`. The parent directly rechecked consequential output-root, launch-payload, generic-root, resume, state-deduplication, origin-lineage, operation-composition, sample-attribution, IgGM attribution, Caliby invocation and GROMACS handoff findings against the reviewed source. The parent independently checked the live API and launcher.
-
-The shared-review subaudit executed, and the parent independently reproduced, an isolated unchanged-source helper probe: `state-A/shared.cif`, `state-B/shared.cif` and `derived/shared.pdb` within one artifact group collapsed to the PDB. This is a demonstrated helper behavior on synthetic paths, not a claim that every live producer has lost states. No native science was executed. Remote receipt relocation and comprehensive lifecycle/result coverage remain bounded-review gaps rather than claims that no relevant code exists anywhere.
+Implementation closeout provides changes/deletions, the requirement crosswalk, exact tests/skips, native Job/artifact references when authorized, processing/local/remote/lifecycle measurements, separately verified deployment/worker identities and remaining scientific limits. Keep generated outputs/audit data outside source. Execute the bounded owners in the implementation packet; do not reopen the fixed product direction.

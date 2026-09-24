@@ -8,24 +8,45 @@
 import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchInputPresets, fetchDesigns, listCachedRcsbPdbs, type CachedRcsbEntry } from '../lib/api';
-import type { Job } from '../lib/api';
+import type { Job, ProjectStructureQuery, StructureMaterialization } from '../lib/api';
+import { createBC2SourceSession, preparePdbStructureSource } from '../lib/bindcraft2StructureInputs';
 import { JobBrowser } from './JobBrowser';
+import { StructuralSourceFiles, ProjectStructureSources } from './StructuralSourceFiles';
+import { fetchDiagnosticSelectionContext } from '../lib/binderDiagnosticSelection';
+
+/** Producer-bound metadata travels with bytes; never infer identity by basename. */
+export interface SelectedSourceDocument {
+    artifact_id?: string;
+    target_state?: string;
+    logical_path?: string;
+    download_url?: string;
+    sha256?: string;
+    primary?: boolean;
+    format?: string;
+}
 
 export interface SelectedTarget {
-    type: 'upload' | 'run' | 'preset' | 'rcsb';
+    type: 'upload' | 'run' | 'preset' | 'rcsb' | 'project';
     file?: File;
     url?: string;
     path?: string;
     name: string;
     designId?: string;
     pdbId?: string;
+    jobId?: string;
+    document?: SelectedSourceDocument;
+    projectSource?: ProjectStructureQuery;
+    materialization?: StructureMaterialization;
+    modelNumber?: number;
 }
 
 interface TargetAntigenSelectorProps {
     onSelect: (target: SelectedTarget | null) => void;
     selectedTarget?: SelectedTarget | null;
-    initialTab?: 'upload' | 'runs' | 'presets' | 'rcsb';
+    initialTab?: 'upload' | 'runs' | 'presets' | 'rcsb' | 'project';
     label?: string;
+    requiredFormat?: 'native' | 'pdb';
+    onInspect?: (source: SelectedTarget) => void;
 }
 
 interface PdbPreset {
@@ -36,8 +57,41 @@ interface PdbPreset {
     category: string;
 }
 
-export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, label = 'Target Antigen PDB' }: TargetAntigenSelectorProps) {
-    const [activeTab, setActiveTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb'>(initialTab ?? 'upload');
+export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, label = 'Target Antigen PDB', onInspect, requiredFormat = 'native' }: TargetAntigenSelectorProps) {
+    const selectionEpoch = useRef(0);
+    const alive = useRef(true);
+    useEffect(() => { alive.current = true; return () => { alive.current = false; selectionEpoch.current++; }; }, []);
+    useEffect(() => { selectionEpoch.current++; }, [selectedTarget]);
+    const [sourceSession] = useState(createBC2SourceSession);
+    const [preparationError, setPreparationError] = useState('');
+    const [pendingConformation, setPendingConformation] = useState<{ source: SelectedTarget; models: number[] }>();
+    const select = (source: SelectedTarget | null) => {
+        const token = ++selectionEpoch.current; setPreparationError(''); setPendingConformation(undefined);
+        if (!source || requiredFormat === 'native') { onSelect(source); return; }
+        void (async () => {
+            const native = await sourceSession.acquire(source);
+            if (!alive.current || token !== selectionEpoch.current) return;
+            if (native.document.format === 'cif' && native.document.models.length > 1 && source.modelNumber === undefined) {
+                setPendingConformation({ source: { ...source, ...native.document.source, path: native.path }, models: native.document.models.map(model => model.number) });
+                return;
+            }
+            const result = await preparePdbStructureSource(source, sourceSession);
+            if (!alive.current || token !== selectionEpoch.current) return;
+            onSelect({ ...source, ...result.document.source, path: result.path, file: undefined, url: `/api/files/download/${encodeURIComponent(result.path)}` });
+        })().catch(error => {
+            if (!alive.current || token !== selectionEpoch.current) return;
+            setPreparationError(error instanceof Error ? error.message : String(error));
+            onSelect(null); // Never retain an older source as an implicit fallback.
+        });
+    };
+    const [documentDesign, setDocumentDesign] = useState<{ id: string; name: string; jobId: string } | null>(null);
+    const documentsQuery = useQuery({
+        queryKey: ['source-documents', documentDesign?.jobId],
+        queryFn: () => fetchDiagnosticSelectionContext(documentDesign!.jobId),
+        enabled: !!documentDesign,
+    });
+    const documents: SelectedSourceDocument[] = documentDesign ? documentsQuery.data?.candidate_documents[documentDesign.id] ?? [] : [];
+    const [activeTab, setActiveTab] = useState<'upload' | 'runs' | 'presets' | 'rcsb' | 'project'>(initialTab ?? 'upload');
     const [pdbIdInput, setPdbIdInput] = useState('');
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [selectedJob, setSelectedJob] = useState<Job | null>(null);
@@ -56,6 +110,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     // Reset page when job changes
     useEffect(() => {
         setDesignsPage(0);
+        setDocumentDesign(null);
     }, [selectedJob]);
 
     useEffect(() => {
@@ -187,18 +242,19 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
 
     // Mutation to fetch from RCSB
     const fetchRcsbMutation = useMutation({
-        mutationFn: async (pdbId: string) => {
+        mutationFn: async ({ pdbId, epoch }: { pdbId: string; epoch: number }) => {
             const res = await fetch(`/api/rcsb/${pdbId.toUpperCase()}`);
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.detail || 'Fetch failed');
             }
-            return res.json();
+            return { data: await res.json(), epoch };
         },
-        onSuccess: (data) => {
+        onSuccess: ({ data, epoch }) => {
             queryClient.invalidateQueries({ queryKey: ['rcsb-cached'] });
+            if (!alive.current || epoch !== selectionEpoch.current) return;
             setFetchError(null);
-            onSelect({
+            select({
                 type: 'rcsb',
                 url: data.url,
                 path: data.path,
@@ -207,7 +263,8 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
             });
             setPdbIdInput('');
         },
-        onError: (err: Error) => {
+        onError: (err: Error, variables) => {
+            if (!alive.current || variables.epoch !== selectionEpoch.current) return;
             setFetchError(err.message);
         }
     });
@@ -215,7 +272,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0] || null;
         if (file) {
-            onSelect({
+            select({
                 type: 'upload',
                 file,
                 name: file.name
@@ -224,16 +281,17 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     };
 
     const handleDesignSelect = (design: UntypedApiValue) => {
-        onSelect({
+        select({
             type: 'run',
             url: `/api/designs/${design.id}/pdb`,
             name: design.name,
-            designId: design.id
+            designId: design.id,
+            jobId: design.job_id || selectedJob?.id,
         });
     };
 
     const handlePresetSelect = (preset: PdbPreset) => {
-        onSelect({
+        select({
             type: 'preset',
             path: preset.path,
             url: `/api/files/pdb/${preset.path}`,
@@ -242,7 +300,8 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     };
 
     const handleClearSelection = () => {
-        onSelect(null);
+        select(null);
+        setDocumentDesign(null);
     };
 
     const formatCacheTimestamp = (value?: string | null) => {
@@ -260,6 +319,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     const tabs = [
         { id: 'upload', label: 'Upload' },
         { id: 'runs', label: 'Your Runs' },
+        { id: 'project', label: 'Project resources' },
         { id: 'presets', label: 'Presets' },
         { id: 'rcsb', label: 'RCSB' },
     ] as const;
@@ -268,6 +328,14 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
         <div className="space-y-3">
             <label className="block text-sm font-medium text-slate-400">{label}</label>
 
+            {preparationError && <p role="alert">{preparationError}</p>}
+            {pendingConformation && <label className="block text-sm">Select the exact CIF conformation for PDB consumption
+                <select aria-label="Source conformation" value="" onChange={event => select({ ...pendingConformation.source, modelNumber: Number(event.target.value) })}>
+                    <option value="" disabled>Choose source model</option>
+                    {pendingConformation.models.map(number => <option key={number} value={number}>Model {number}</option>)}
+                </select>
+                <button type="button" onClick={() => select(null)}>Clear pending source</button>
+            </label>}
             {/* Selected target indicator */}
             {selectedTarget && (
                 <div className="flex items-center justify-between px-3 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
@@ -279,9 +347,11 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                             {selectedTarget.type === 'preset' && 'Preset: '}
                             {selectedTarget.type === 'rcsb' && 'RCSB: '}
                             {selectedTarget.name}
+                            {selectedTarget.document && <span className="block text-xs">{selectedTarget.document.target_state ?? 'State not recorded'} · {selectedTarget.document.logical_path ?? selectedTarget.document.artifact_id}</span>}
                         </span>
                     </div>
-                    <button
+                    {onInspect && <button type="button" className="text-xs text-accent" onClick={() => onInspect(selectedTarget)}>Inspect source</button>}
+                    <button type="button"
                         onClick={handleClearSelection}
                         className="text-xs text-red-400 hover:text-red-300"
                     >
@@ -293,7 +363,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
             {/* Tabs */}
             <div className="flex gap-1 border-b border-slate-700">
                 {tabs.map(tab => (
-                    <button
+                    <button type="button"
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`px-3 py-2 text-xs font-medium transition-colors ${activeTab === tab.id
@@ -313,14 +383,17 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                     <div className="space-y-2">
                         <input
                             type="file"
-                            accept=".pdb,.cif"
+                            accept=".pdb,.cif,.mmcif"
+                            aria-label={`${label} upload`}
                             onChange={handleFileUpload}
                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer"
                         />
                         <p className="text-xs text-slate-500">Upload a PDB or CIF file from your computer</p>
+                        <StructuralSourceFiles onSelect={source => select({ type: 'upload', ...source, url: `/api/files/download/${encodeURIComponent(source.path)}` })} />
                     </div>
                 )}
 
+                {activeTab === 'project' && <ProjectStructureSources onSelect={select} />}
                 {/* Your Runs Tab */}
                 {activeTab === 'runs' && (
                     <div className="space-y-3">
@@ -333,7 +406,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                             </div>
                         ) : (
                             <div className="space-y-3">
-                                <button
+                                <button type="button"
                                     onClick={() => setSelectedJob(null)}
                                     className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1"
                                 >
@@ -363,7 +436,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                         <option value="conf_score">Sort by Confidence</option>
                                         <option value="created_at">Sort by Date</option>
                                     </select>
-                                    <button
+                                    <button type="button"
                                         onClick={() => setSortDesc(!sortDesc)}
                                         className="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-slate-300 hover:bg-slate-800"
                                     >
@@ -377,7 +450,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                     ) : designs.length === 0 ? (
                                         <div className="text-center py-2 text-slate-500 text-sm space-y-2">
                                             <div>No designs in this job</div>
-                                            <button
+                                            <button type="button"
                                                 onClick={() => selectedJob && triggerReingest(selectedJob.id)}
                                                 className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
                                                 disabled={reingestStatus === 'running'}
@@ -387,8 +460,8 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                         </div>
                                     ) : (
                                         designs.map((design: UntypedApiValue) => (
-                                            <button
-                                                key={design.id}
+                                            <div key={design.id}>
+                                            <button type="button"
                                                 onClick={() => handleDesignSelect(design)}
                                                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${selectedTarget?.designId === design.id
                                                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -402,14 +475,26 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                                     </span>
                                                 )}
                                             </button>
+                                            <button type="button" className="px-3 py-1 text-xs text-blue-400 hover:text-blue-300" onClick={() => setDocumentDesign({ id: design.id, name: design.name, jobId: design.job_id || selectedJob.id })}>Documents / states for {design.name}</button>
+                                            </div>
                                         ))
                                     )}
                                 </div>
 
+                                {documentDesign && <div className="space-y-2 rounded-lg border border-[var(--border-color)] p-3" aria-label="Saved structure documents">
+                                    <div className="flex justify-between gap-2"><span className="text-sm">{documentDesign.name} · exact documents / states</span><button type="button" onClick={() => setDocumentDesign(null)}>Close documents</button></div>
+                                    {documentsQuery.isFetching && <p role="status">Loading documents…</p>}
+                                    {documentsQuery.error && <p role="alert">{documentsQuery.error.message}</p>}
+                                    {!documentsQuery.isFetching && !documentsQuery.error && !documents.length && <p className="text-xs">No alternate documents are recorded. The Design primary source remains available above.</p>}
+                                    {documents.map((document, index) => <div key={document.artifact_id ?? index} className="text-xs">
+                                        {document.download_url ? <button type="button" className="w-full rounded border border-[var(--border-color)] p-2 text-left hover:text-accent" onClick={() => select({ type: 'run', name: `${documentDesign.name} · ${document.target_state ?? 'document'}`, designId: documentDesign.id, jobId: documentDesign.jobId, url: document.download_url, document: { ...document } })}>{document.target_state ?? 'State not recorded'} · {document.logical_path ?? document.artifact_id} {document.primary ? '· primary' : ''}</button> : <span>{document.target_state ?? 'State not recorded'} · {document.logical_path ?? document.artifact_id} · no download supplied</span>}
+                                    </div>)}
+                                </div>}
+
                                 {/* Pagination Controls */}
                                 {selectedJob && totalPages > 1 && (
                                     <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
-                                        <button
+                                        <button type="button"
                                             onClick={() => setDesignsPage(p => Math.max(0, p - 1))}
                                             disabled={designsPage === 0}
                                             className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed"
@@ -419,7 +504,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                         <span className="text-xs text-slate-500">
                                             Page {designsPage + 1} of {totalPages}
                                         </span>
-                                        <button
+                                        <button type="button"
                                             onClick={() => setDesignsPage(p => Math.min(totalPages - 1, p + 1))}
                                             disabled={designsPage >= totalPages - 1}
                                             className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed"
@@ -444,7 +529,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                     <div className="text-xs text-slate-500 uppercase tracking-wider mb-1.5">{category}</div>
                                     <div className="flex flex-wrap gap-1.5">
                                         {items.map(preset => (
-                                            <button
+                                            <button type="button"
                                                 key={preset.id}
                                                 onClick={() => handlePresetSelect(preset)}
                                                 title={preset.description}
@@ -478,8 +563,8 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                     maxLength={4}
                                     className="w-24 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 font-mono"
                                 />
-                                <button
-                                    onClick={() => fetchRcsbMutation.mutate(pdbIdInput)}
+                                <button type="button"
+                                    onClick={() => fetchRcsbMutation.mutate({ pdbId: pdbIdInput, epoch: ++selectionEpoch.current })}
                                     disabled={pdbIdInput.length !== 4 || fetchRcsbMutation.isPending}
                                     className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
@@ -508,9 +593,9 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                             {searchResults.length > 0 && (
                                 <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
                                     {searchResults.map(result => (
-                                        <button
+                                        <button type="button"
                                             key={result.pdb_id}
-                                            onClick={() => fetchRcsbMutation.mutate(result.pdb_id)}
+                                            onClick={() => fetchRcsbMutation.mutate({ pdbId: result.pdb_id, epoch: ++selectionEpoch.current })}
                                             disabled={fetchRcsbMutation.isPending}
                                             className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-900/50 hover:bg-slate-700/50 transition-colors"
                                         >
@@ -559,9 +644,9 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                             ) : (
                                 <div className="space-y-1 max-h-40 overflow-y-auto">
                                     {sortedCachedRcsb.map((entry) => (
-                                        <button
+                                        <button type="button"
                                             key={entry.pdb_id}
-                                            onClick={() => fetchRcsbMutation.mutate(entry.pdb_id)}
+                                            onClick={() => fetchRcsbMutation.mutate({ pdbId: entry.pdb_id, epoch: ++selectionEpoch.current })}
                                             disabled={fetchRcsbMutation.isPending}
                                             className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-900/50 hover:bg-slate-700/50 transition-colors"
                                         >

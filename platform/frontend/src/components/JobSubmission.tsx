@@ -3,10 +3,13 @@ import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLaunch
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ParamField, compactUiCopy } from './ModelParameterField';
+import { NativeBinderGeneration } from './NativeBinderGeneration';
+import { BindCraft2LifecycleDraft } from './BindCraft2Campaign';
+import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -291,7 +294,7 @@ export function JobSubmission() {
             if (returnUri) navigate(returnUri);
         });
     }, [launchContextQuery.data?.recovery_job_id, navigate]);
-    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>('templates');
+    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>(() => searchParams.has('model') ? 'manual' : 'templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
@@ -309,13 +312,14 @@ export function JobSubmission() {
         const next = new URLSearchParams(searchParams);
         if (canonicalId) {
             next.set('template', canonicalId);
+            next.delete('model'); next.delete('mode');
         } else {
             next.delete('template');
         }
         setSearchParams(next, { replace: true });
     }, [searchParams, setSearchParams]);
-    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-    const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
+    const [selectedModelId, setSelectedModelId] = useState<string | null>(() => searchParams.get('model'));
+    const [selectedModeId, setSelectedModeId] = useState<string | null>(() => searchParams.get('mode'));
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
     // Keep user scopes in the canonical cloned/saved request state.
@@ -336,12 +340,35 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
-    const [projectDraftValues, setProjectDraftValues] = useState<Record<string, UntypedApiValue>>({});
+    const binderDraftRef = useRef<Record<string, UntypedApiValue> | undefined>(undefined);
+    const [binderInitialDraft, setBinderInitialDraft] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const binderNativeDrafts = useRef<Record<string, Record<string, UntypedApiValue>>>({});
     useEffect(() => {
-        if (!projectSetup.active || !projectSetup.setup) return;
+        if (clonedValues?.binder_native_drafts && typeof clonedValues.binder_native_drafts === 'object') {
+            binderNativeDrafts.current = { ...clonedValues.binder_native_drafts };
+        }
+    }, [clonedValues]);
+    const [projectDraftValues, setProjectDraftValues] = useState<Record<string, UntypedApiValue>>({});
+    const hydratedProjectSetup = useRef<string | null>(null);
+    const [projectActionError, setProjectActionError] = useState<string | null>(null);
+    const [projectActionBusy, setProjectActionBusy] = useState(false);
+    useEffect(() => {
+        if (!projectSetup.active || !projectSetup.setup) { hydratedProjectSetup.current = null; return; }
+        const identity = `${projectSetup.setup.project_id}:${projectSetup.setup.setup_context_id}`;
+        if (hydratedProjectSetup.current === identity) return;
+        hydratedProjectSetup.current = identity;
+        setBinderInitialDraft(undefined);
+        binderDraftRef.current = undefined;
         setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
         setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
-    }, [projectSetup.active, projectSetup.setup?.generation]);
+        const draft = projectSetup.settings as Record<string, UntypedApiValue>;
+        if (draft.binder_workflow_draft) binderDraftRef.current = draft.binder_workflow_draft;
+        if (['ppiflow', 'boltzgen'].includes(String(draft.model_id)) && typeof draft.mode === 'string') {
+            setWizardMode('manual'); setSelectedTemplateId(null);
+            setSelectedModelId(draft.model_id); setSelectedModeId(draft.mode);
+            setParams(draft); setJobName(typeof draft.job_name === 'string' ? draft.job_name : '');
+        }
+    }, [projectSetup.active, projectSetup.setup?.project_id, projectSetup.setup?.setup_context_id, projectSetup.setup?.generation]);
     const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
         const route = mdHandoff.route;
         if (!route) return undefined;
@@ -421,6 +448,7 @@ export function JobSubmission() {
 
     // Dedicated templates should not retain stale clone params once user navigates away.
     const handleDedicatedTemplateBack = () => {
+        if (selectedTemplateId === 'antibody_denovo') setBinderInitialDraft(binderDraftRef.current);
         setSelectedTemplateId(null);
         setClonedValues(undefined);
     };
@@ -508,7 +536,7 @@ export function JobSubmission() {
                         source_job_id: data.source_job_id,
                     });
                 }
-                else if (data.model_id === 'boltzgen' && data.mode === 'nanobody_binder') {
+                else if (data.model_id === 'boltzgen' && data.mode === 'nanobody_binder' && !data.params?.native_generation_authoring) {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
                     setClonedValues({ ...data.params, name: data.name, denovo_generator: 'boltzgen' });
@@ -690,7 +718,7 @@ export function JobSubmission() {
 
         const dedicatedTemplateId =
             (isDedicatedLauncherTemplate(apiTemplateId) && apiTemplateId) ||
-            (template.model_id === 'boltzgen' && template.mode === 'nanobody_binder' ? 'antibody_denovo' : template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
+            (template.model_id === 'boltzgen' && template.mode === 'nanobody_binder' && !template.params?.native_generation_authoring ? 'antibody_denovo' : template.model_id ? dedicatedTemplateByModelId[template.model_id] : null);
 
         if (dedicatedTemplateId) {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
@@ -715,7 +743,7 @@ export function JobSubmission() {
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
                 ...(isLegacyFoldCp ? { pred_method: 'fold_cp' } : {}),
                 ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
-                ...(templateModelId === 'bindcraft2' ? { denovo_generator: 'bindcraft2' } : {}),
+                ...(templateModelId === 'bindcraft2' ? { denovo_generator: 'bindcraft2', model_id: 'bindcraft2', mode: template.mode ?? template.params?.mode ?? 'campaign' } : {}),
                 structure_launch_variant: template.params?.structure_launch_variant,
             });
             setJobName(loadedJobName);
@@ -749,8 +777,29 @@ export function JobSubmission() {
     });
     const ligandPresets = ligandPresetsData?.data ?? [];
 
+    const submitBinderRequest = async (jobData: Partial<Job>, draft = projectDraftValues) => {
+        if (!projectSetup.active) return submitNativeBinderRequest({ ...jobData, ...(launchContextId ? { launch_context_id: launchContextId } : {}) });
+        setProjectActionError(null);
+        setProjectActionBusy(true);
+        try {
+            // Save the real editor request separately from source/UI provenance.
+            const prepared = await projectSetup.startRun(JSON.parse(JSON.stringify({ ...draft, binder_native_drafts: binderNativeDrafts.current, native_job_request: jobData })) as JsonObject, { stayInEditor: true });
+            const contextId = prepared.launch_context_id;
+            if (!contextId) throw new Error('The native Project workflow did not return a launch context.');
+            const context = await getLaunchContext(contextId);
+            const request = context.pinned_scheduler as Partial<Job> | undefined;
+            // Submit the server-normalized request, not recomputed form defaults.
+            const response = await submitNativeBinderRequest({ ...(request ?? jobData), launch_context_id: contextId });
+            const binding = await api.post<{ return_uri: string }>(`/api/launch-contexts/${encodeURIComponent(contextId)}/bind`, { job_id: response.data.id });
+            return { ...response, data: { ...response.data, return_uri: binding.data.return_uri } };
+        } catch (error) {
+            setProjectActionError(error instanceof Error ? error.message : String(error));
+            throw error;
+        } finally { setProjectActionBusy(false); }
+    };
     const submitMutation = useMutation({
-        mutationFn: (jobData: Partial<Job>) => submitJob(jobData),
+        mutationFn: (jobData: Partial<Job>) => ['ppiflow', 'boltzgen', 'bindcraft2'].includes(jobData.model_id ?? '')
+            ? submitBinderRequest(jobData) : submitJob(jobData),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const returnUri = response.data?.return_uri;
@@ -773,6 +822,14 @@ export function JobSubmission() {
     const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const selectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
+    const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '')
+        && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
+    const nativeGenerationQuery = useQuery({
+        queryKey: ['native-generation-settings', selectedModelId, selectedModeId],
+        queryFn: () => fetchNativeGenerationInventory(selectedModelId as NativeBinderModel, selectedModeId!),
+        enabled: isNativeBinderGeneration && !!selectedMode,
+    });
+    const nativeGenerationInventory = isNativeBinderGeneration ? nativeGenerationQuery.data : undefined;
     const resolvedFrustrampnnWorkflowId = useMemo(() => {
         if (wizardMode === 'manual') {
             return resolveFrustraMpnnWorkflowId(selectedModelId, selectedModeId);
@@ -816,15 +873,19 @@ export function JobSubmission() {
         if (wizardMode === 'manual' && selectedModel) {
             initializedTemplateParams.current = null;
             const defaults: Record<string, UntypedApiValue> = {};
-            (selectedModel.params || []).forEach((p: UntypedApiValue) => {
-                if (p.default !== undefined) defaults[p.name] = p.default;
-            });
+            const definitions = isNativeBinderGeneration ? nativeGenerationInventory?.parameters || [] : selectedModel.params || [];
             const prior = initializedModelParams.current;
             const sameDraft = prior?.id === selectedModelId && prior?.clone === clonedValues;
-            setParams(previous => ({ ...defaults, ...(sameDraft ? previous : clonedValues || {}) }));
+            setParams(previous => {
+                const saved = sameDraft ? previous : clonedValues || {};
+                definitions.forEach((p: UntypedApiValue) => {
+                    if (p.default !== undefined && !(p.aliases || []).some((alias: string) => Object.hasOwn(saved, alias))) defaults[p.name] = p.default;
+                });
+                return { ...defaults, ...saved };
+            });
             initializedModelParams.current = { id: selectedModelId, clone: clonedValues };
         }
-    }, [wizardMode, selectedModel, selectedModelId, clonedValues]);
+    }, [wizardMode, selectedModel, selectedModelId, clonedValues, nativeGenerationInventory, isNativeBinderGeneration]);
 
     // Initialize params when template changes (template mode)
     useEffect(() => {
@@ -856,9 +917,19 @@ export function JobSubmission() {
         }
     }, [selectedTemplateId, visibleApiTemplates]);
 
+    useEffect(() => {
+        if (projectSetup.active && wizardMode === 'manual' && selectedModelId && ['boltzgen', 'ppiflow'].includes(selectedModelId)) {
+            setProjectDraftValues({ ...nativeBinderDraft(params, jobName), model_id: selectedModelId, mode: selectedModeId, native_generation_authoring: true, binder_workflow_draft: binderDraftRef.current, binder_native_drafts: { ...binderNativeDrafts.current, [`${selectedModelId}:${selectedModeId}`]: nativeBinderDraft(params, jobName) } });
+        }
+    }, [projectSetup.active, wizardMode, selectedModelId, selectedModeId, params, jobName]);
+
     // Handle param change
     const updateParam = (key: string, value: UntypedApiValue) => {
-        setParams(prev => ({ ...prev, [key]: value }));
+        setParams(prev => {
+            const next = { ...prev, [key]: value };
+            if (selectedModelId && selectedModeId) binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(next, jobName);
+            return next;
+        });
     };
 
     const getTemplateIconLabel = (template: UntypedApiValue) => {
@@ -997,13 +1068,13 @@ export function JobSubmission() {
     };
 
     // Filter params for current mode
-    const visibleParams = useMemo(() => (selectedModel?.params || []).filter((p: UntypedApiValue) => {
+    const visibleParams = useMemo(() => nativeGenerationInventory?.parameters ?? (selectedModel?.params || []).filter((p: UntypedApiValue) => {
         if (!selectedMode) return false;
         if (selectedMode.params && selectedMode.params.length > 0) {
             return selectedMode.params.includes(p.name);
         }
         return !p.hidden;
-    }) ?? [], [selectedMode, selectedModel?.params]);
+    }) ?? [], [selectedMode, selectedModel?.params, nativeGenerationInventory]);
 
     // Group visible params by ui_group
     const groupedParams = useMemo(() => {
@@ -1094,11 +1165,14 @@ export function JobSubmission() {
         summaryDefault="Declared input protein residues"
         mutationDefault="Declared input protein residues" /> : null;
     const allMissingRequiredTemplateParams = missingRequiredTemplateParams;
-    const isReady = !fampnnError && frustrampnnConfigurationReady && Boolean(
+    const nativeBinderModeMissing = wizardMode === 'manual' && ['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && !selectedMode;
+    const isReady = !nativeBinderModeMissing && !fampnnError && frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
         (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
-    const launchBlockedReason = !frustrampnnConfigurationReady
+    const launchBlockedReason = nativeBinderModeMissing
+        ? 'The selected native mode is not advertised by the current model registry.'
+        : !frustrampnnConfigurationReady
         ? 'FrustraMPNN integration configuration is unavailable. Launch is blocked.'
         : !isReady
         ? (isTemplateMode && selectedTemplateId && allMissingRequiredTemplateParams.length > 0
@@ -1202,15 +1276,16 @@ export function JobSubmission() {
                 params: finalParams,
             };
         } else if (selectedModelId && selectedModeId) {
+            if (nativeBinderModeMissing) return null;
             // Manual mode
 
             // Filter params to only include those defined in the selected mode
             const filteredParams: Record<string, UntypedApiValue> = {};
             if (selectedMode && selectedMode.params) {
-                selectedMode.params.forEach((paramName: string) => {
+                (nativeGenerationInventory?.parameters.flatMap(parameter => [parameter.name, ...(parameter.aliases || [])]) || selectedMode.params).forEach((paramName: string) => {
                     // Empty native sequence settings (e.g. omit_AAs or a
                     // cleared optional target chain) are values, not defaults.
-                    const preserveNativeEmpty = selectedModelId === 'fampnn' || selectedModelId === 'proteinmpnn';
+                    const preserveNativeEmpty = ['fampnn', 'proteinmpnn', 'boltzgen', 'ppiflow'].includes(selectedModelId);
                     if (params[paramName] !== undefined && (params[paramName] !== '' || preserveNativeEmpty)) {
                         filteredParams[paramName] = params[paramName];
                     }
@@ -1398,7 +1473,7 @@ export function JobSubmission() {
     if (isPreparedStructureFamily) {
         return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the prepared Boltz-2/Protenix scheduler authority is incomplete or is not reserved by a Project Run Group.</main></div>;
     }
-    if (projectSetup.active && projectSetup.isLoading) {
+    if (projectSetup.active && (projectSetup.isLoading || (projectSetup.setup && hydratedProjectSetup.current !== `${projectSetup.setup.project_id}:${projectSetup.setup.setup_context_id}`))) {
         return <div className="min-h-screen bg-slate-950 p-6 text-slate-100">Loading Project workflow setup…</div>;
     }
     if (projectSetup.active && (projectSetup.error || !projectSetup.setup)) {
@@ -1407,7 +1482,20 @@ export function JobSubmission() {
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
-            {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft(projectDraftValues as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.startRun(projectDraftValues as JsonObject)}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
+            {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
+                setProjectActionBusy(true); setProjectActionError(null);
+                try { await projectSetup.saveDraft(projectDraftValues as JsonObject); }
+                catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
+                finally { setProjectActionBusy(false); }
+            }}>Save draft</button>{selectedTemplateId === 'antibody_denovo'
+                ? <span className="text-xs text-blue-200">Launch with the native editor below; this Project remains the destination.</span>
+                : <button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" disabled={projectActionBusy || (isNativeBinderGeneration && !isReady)} onClick={async () => {
+                    if (isNativeBinderGeneration) { handleSubmit(); return; }
+                    setProjectActionBusy(true); setProjectActionError(null);
+                    try { await projectSetup.startRun(projectDraftValues as JsonObject); }
+                    catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
+                    finally { setProjectActionBusy(false); }
+                }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
             {!(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
             <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />
             {launchContextId && (
@@ -1510,13 +1598,52 @@ export function JobSubmission() {
                                         }
                                     }}
                                 />
+                            ) : selectedTemplateId === 'antibody_denovo' && clonedValues?.model_id === 'bindcraft2' && clonedValues.mode && clonedValues.mode !== 'campaign' ? (
+                                <BindCraft2LifecycleDraft key={`bc2-action:${dedicatedTemplateVersion}:${clonedValues.mode}`}
+                                    initialValues={clonedValues} onBack={handleDedicatedTemplateBack}
+                                    onDraftChange={draft => { binderDraftRef.current = draft; if (projectSetup.active) setProjectDraftValues(draft); }}
+                                    onSubmitRequest={submitBinderRequest} />
                             ) : selectedTemplateId === 'antibody_denovo' ? (
                                 <AntibodyDenovoTemplate
+                                    key={`antibody_denovo:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
+                                    initialDraft={binderInitialDraft}
+                                    onSubmitRequest={submitBinderRequest}
+                                    onDraftChange={draft => {
+                                        binderDraftRef.current = draft;
+                                        if (projectSetup.active) setProjectDraftValues({ ...draft, binder_native_drafts: binderNativeDrafts.current });
+                                    }}
                                     onOpenNativeRoute={route => {
-                                        setClonedValues(undefined);
-                                        setParams({});
+                                        setBinderInitialDraft(binderDraftRef.current);
+                                        const destinationKey = 'templateId' in route ? route.templateId : `${route.modelId}:${route.mode}`;
+                                        const inherited: Record<string, UntypedApiValue> = {};
+                                        // Only native fields shared by these contracts inherit sources.
+                                        // Never turn context into a seed complex or infer binder chain roles.
+                                        if ('modelId' in route && ['boltzgen', 'ppiflow'].includes(route.modelId) && ['protein_binder', 'antibody_binder', 'nanobody_binder', 'peptide', 'peptide_binder'].includes(route.mode)) {
+                                            const target = route.sources?.target;
+                                            if (target) {
+                                                // Keep source identity/role context in the UI draft. The
+                                                // registry whitelist below remains the scientific request.
+                                                if (target.reference) inherited.target_source = target.reference;
+                                                if ('modelNumber' in target) inherited.target_model_number = target.modelNumber;
+                                                if ('chain' in target) inherited.selected_chain = target.chain;
+                                                if (target.chain && route.modelId === 'boltzgen') inherited.target_chains = target.chain;
+                                                if (target.chain && route.modelId === 'ppiflow' && route.mode === 'protein_binder') inherited.target_chain = target.chain;
+                                                if ('residues' in target) inherited.selected_residues = target.residues;
+                                                // A nonprimary model needs a source-owned materialized
+                                                // document; copying the whole file would change intent.
+                                                if (target.modelNumber == null || target.modelNumber === 1) inherited.target_pdb = target.path;
+                                            }
+                                            if (route.modelId === 'ppiflow' && ['antibody_binder', 'nanobody_binder'].includes(route.mode)) {
+                                                if (route.sources?.framework) inherited.framework_pdb = route.sources.framework.path;
+                                                if (route.sources?.target?.chain) inherited.antigen_chain = route.sources.target.chain;
+                                            }
+                                        }
+                                        const destination = { ...inherited, ...(binderNativeDrafts.current[destinationKey] ?? {}), ...route.initialDraft };
+                                        setClonedValues(destination);
+                                        setParams(destination);
+                                        if (typeof destination.job_name === 'string') setJobName(destination.job_name);
                                         if ('templateId' in route) {
                                             setWizardMode('experimental');
                                             setSelectedTemplateId(route.templateId);
@@ -1790,6 +1917,15 @@ export function JobSubmission() {
                             />
 
                             <div className="space-y-6">
+                                {['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && <label className="block text-sm text-[var(--text-secondary)]">
+                                    Job name
+                                    <input aria-label="Native binder job name" className="mt-2 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-[var(--text-primary)]"
+                                        value={jobName} onChange={event => {
+                                            const name = event.target.value;
+                                            setJobName(name);
+                                            binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(params, name);
+                                        }} />
+                                </label>}
                                 {/* Mode Selection */}
                                 <div>
                                     <label className="block text-sm font-medium text-slate-400 mb-2">
@@ -1797,7 +1933,19 @@ export function JobSubmission() {
                                     </label>
                                     <select
                                         value={selectedModeId || ''}
-                                        onChange={(e) => setSelectedModeId(e.target.value)}
+                                        onChange={(e) => {
+                                            const mode = e.target.value;
+                                            if (['boltzgen', 'ppiflow'].includes(selectedModelId ?? '')) {
+                                                binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(params, jobName);
+                                                const sourceContext = Object.fromEntries(['target_pdb', 'target_source', 'target_model_number', 'selected_chain', 'selected_residues']
+                                                    .filter(key => Object.hasOwn(params, key)).map(key => [key, params[key]]));
+                                                const draft = { ...sourceContext, ...binderNativeDrafts.current[`${selectedModelId}:${mode}`] };
+                                                setClonedValues(draft);
+                                                setParams(draft);
+                                                setJobName(typeof draft.job_name === 'string' ? draft.job_name : '');
+                                            }
+                                            setSelectedModeId(mode);
+                                        }}
                                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                     >
                                         <option value="" disabled>Select a mode...</option>
@@ -1814,8 +1962,29 @@ export function JobSubmission() {
                                     )}
                                 </div>
 
-                                {/* Dynamic Parameters - Grouped */}
-                                {selectedMode && Object.keys(groupedParams).length > 0 && (
+                                {isNativeBinderGeneration && selectedMode && <>
+                                    <button type="button" onClick={() => {
+                                        binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(params, jobName);
+                                        const saved = binderDraftRef.current ?? params.binder_workflow_draft;
+                                        const source = params.target_source;
+                                        const inherited = { target_pdb: params.target_pdb ?? params.boltzgen_target_pdb_path,
+                                            target_source: source, selected_chain: params.target_chain ?? params.antigen_chain ?? params.target_chains,
+                                            selected_residues: params.selected_residues, target_model_number: params.target_model_number };
+                                        setBinderInitialDraft({ ...inherited, ...saved });
+                                        setClonedValues(undefined);
+                                        setWizardMode('templates'); setSelectedTemplateId('antibody_denovo');
+                                    }}>Change generation engine</button>
+                                    {nativeGenerationQuery.error && <p role="status" className="text-sm text-amber-500">{nativeGenerationQuery.error.message} Catalog controls remain available; the native inventory may contain additional settings.</p>}
+                                    <NativeBinderGeneration key={`${selectedModelId}:${selectedModeId}`} model={selectedModelId as NativeBinderModel} mode={selectedModeId!}
+                                        parameters={visibleParams} values={params} profile={nativeGenerationInventory ? { profile: nativeGenerationInventory.profile, assets: nativeGenerationInventory.assets } : undefined} nativeBehavior={nativeGenerationInventory?.native_behavior} onBrowse={setShowFileBrowser}
+                                        onPatch={patch => setParams(previous => {
+                                            const next = { ...previous, ...patch };
+                                            binderNativeDrafts.current[`${selectedModelId}:${selectedModeId}`] = nativeBinderDraft(next, jobName);
+                                            return next;
+                                        })} />
+                                </>}
+                                {/* Other models retain their existing editor. */}
+                                {!isNativeBinderGeneration && selectedMode && Object.keys(groupedParams).length > 0 && (
                                     <div className="space-y-6 pt-6 border-t border-slate-700/50">
                                         {/* Render groups in preferred order */}
                                         {['Inputs', 'Docking Settings', 'General'].filter(g => groupedParams[g]).map(groupName => (
@@ -1886,7 +2055,7 @@ export function JobSubmission() {
                         {(isTemplateMode || (wizardMode === 'manual' && selectedModelId)) && (
                             <button
                                 onClick={() => openTemplateManager({
-                                    currentParams: templateManagerParams,
+                                    currentParams: isNativeBinderGeneration ? { ...nativeBinderDraft(templateManagerParams, jobName), native_generation_authoring: true, binder_workflow_draft: binderDraftRef.current, binder_native_drafts: { ...binderNativeDrafts.current, [`${selectedModelId}:${selectedModeId}`]: nativeBinderDraft(params, jobName) } } : templateManagerParams,
                                     currentModelId: selectedModelId || templateDetail?.preset_params?.template_model_id || undefined,
                                     currentMode: selectedModeId || templateDetail?.preset_params?.template_mode_id || undefined,
                                     baseTemplateId: selectedTemplateId || undefined,

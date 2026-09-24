@@ -1493,7 +1493,7 @@ async def _fetch_result_manifest(
     reader = (
         "import pathlib,sys; "
         "p=pathlib.Path(sys.argv[1]); n=int(sys.argv[2]); "
-        "b=p.read_bytes(); "
+        "f=p.open('rb'); b=f.read(n+1); f.close(); "
         "(_ for _ in ()).throw(RuntimeError('manifest too large')) if len(b)>n else None; "
         "sys.stdout.buffer.write(b)"
     )
@@ -1547,10 +1547,12 @@ async def _fetch_result_manifest(
                 # the final complete-package inventory/hash check.
                 import re
 
-                temporary_for = any(
-                    path.parent == incoming / Path(name).parent
-                    and re.fullmatch(r"\." + re.escape(Path(name).name) + r"\.[A-Za-z0-9]{6}", path.name)
-                    for name in declared
+                # Decode the exact rsync sibling once, then use the existing
+                # manifest index. Scanning every declared artifact for every
+                # interrupted temporary file made retry quadratic.
+                match = re.fullmatch(r"\.(.+)\.[A-Za-z0-9]{6}", path.name, re.DOTALL)
+                temporary_for = match is not None and (
+                    relative[:-len(path.name)] + match.group(1) in declared
                 )
                 if temporary_for:
                     path.unlink()

@@ -404,6 +404,25 @@ async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession =
     return result
 
 
+@router.get('/{model_id}/generation-settings')
+async def get_generation_settings(model_id: str, mode: str):
+    """Model-owned initial-generation settings for browser and agent callers."""
+    registry = get_registry()
+    model = registry.get_model(model_id)
+    if model is None or mode not in {item.id for item in model.modes}:
+        raise HTTPException(status_code=404, detail='Initial-generation model/mode not found')
+    try:
+        if model_id == 'ppiflow':
+            from services.ppiflow_generation import ppiflow_generation_inventory
+            return ppiflow_generation_inventory(mode)
+        if model_id == 'boltzgen':
+            from services.boltzgen_request_compatibility import boltzgen_generation_inventory
+            return boltzgen_generation_inventory(mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise HTTPException(status_code=404, detail='Model has no initial-generation settings inventory')
+
+
 @router.get("/{model_id}")
 async def get_model(model_id: str):
     """

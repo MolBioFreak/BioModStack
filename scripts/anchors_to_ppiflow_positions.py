@@ -42,7 +42,9 @@ def build_positions(anchors, *, include_movable_anchors=False):
 
     positions = []
     for chain, nums in sorted(by_chain.items()):
-        for start, end in group_consecutive(nums):
+        compressible = [number for number in nums if number >= 0 and chain.isalpha()]
+        positions.extend(f"{chain}{number}" for number in sorted(set(nums) - set(compressible)))
+        for start, end in group_consecutive(compressible):
             if start == end:
                 positions.append(f"{chain}{start}")
             else:

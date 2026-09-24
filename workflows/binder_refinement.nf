@@ -9,6 +9,16 @@ process PrepareBinderRefinementRegions {
     output:
     tuple val(meta), path(pdb), path("${meta.id}_seed.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: regions
     script:
+    // Redesign consumes generic sequence masks, not a partial-flow region.
+    // Keep the tuple transport without resolving unused CDRs or requiring ANARCII.
+    if (params.get('maturation_flow_enabled') != true) {
+        return """
+        cp '${pdb}' '${meta.id}_seed.pdb'
+        printf '{"anchors":[],"analysis_status":"not_run","anchor_selection_method":"not_run"}' > '${meta.id}_anchors.json'
+        touch '${meta.id}_ppiflow_positions.txt' '${meta.id}_cdr_positions.txt'
+        printf '{}' > '${meta.id}_cdr_positions_by_loop.json'
+        """
+    }
     def loops = groovy.json.JsonOutput.toJson(params.get('cdr_positions_by_loop') ?: [:])
     def manual = groovy.json.JsonOutput.toJson(params.get('manual_cdr_definitions') ?: [])
     """
@@ -83,8 +93,8 @@ workflow {
     params.maturation_anchors_enabled = anchors
     params.maturation_flow_enabled = flow
     params.maturation_redesign_enabled = redesign
-    params.antibody_chains = params.get('binder_chains')
-    params.antigen_chains = params.get('target_chains')
+    // Included modules consume binder_chains/target_chains directly: workflow
+    // assignments do not update their include-time parameter scope in DSL2.
     // Native legacy region names are retained, not relabeled as new biology.
     params.ppiflow_region_mode = params.get('ppiflow_region_mode') ?: 'all_antibody'
     def sources = params.get('source_identity_json') ? new groovy.json.JsonSlurper().parse(file(params.source_identity_json)) : []

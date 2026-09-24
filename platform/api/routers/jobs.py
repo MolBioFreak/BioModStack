@@ -5847,14 +5847,57 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     Runtime presence/readiness remains the materialization owner's concern.
     """
     job_data = job_data.model_copy(deep=True)
-    if str(job_data.model_id).strip().lower() in {'boltzgen', 'ppiflow'}:
-        raise HTTPException(status_code=422, detail=(
-            'This is an internal antibody generator; launch its supported antibody_denovo mode'
-        ))
     registry = registry or get_registry()
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == 'ppiflow':
+        from services.ppiflow_generation import normalize_ppiflow_generation_params
+        # Initial generation owns its native settings. The old antibody-parent
+        # partial-flow normalizer must not inject refinement defaults here.
+        transport_keys = {'ppiflow_generation_request', 'num_parallel_jobs', 'job_name',
+                          'workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        try:
+            science = normalize_ppiflow_generation_params(normalized_mode, {
+                key: value for key, value in job_data.params.items() if key not in transport_keys
+            })
+            for key in ('target_pdb', 'framework_pdb', 'input_csv'):
+                if science.get(key):
+                    science[key] = _resolve_alias_path_for_runtime(science[key])
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, job_data.mode, science)
+        if errors:
+            raise HTTPException(status_code=422, detail={'validation_errors': errors})
+        return job_data
+    if normalized_model_id == 'boltzgen':
+        from services.boltzgen_request_compatibility import (
+            BOLTZGEN_GENERATION_PROTOCOLS, normalize_boltzgen_generation_request, parameter_contract,
+        )
+        if normalized_mode in BOLTZGEN_GENERATION_PROTOCOLS:
+            controller = {key: value for key, value in job_data.params.items()
+                          if key in {'num_parallel_jobs', 'job_name', 'workflow_adapter',
+                                     '_global_resource_admission', '_global_dispatch_authority'}}
+            try:
+                science = normalize_boltzgen_generation_request(normalized_mode, {
+                    key: value for key, value in job_data.params.items() if key not in controller
+                })
+                for field in parameter_contract(normalized_mode):
+                    key = field['name']
+                    if field['type'] == 'file' and science.get(key):
+                        science[key] = _resolve_alias_path_for_runtime(science[key])
+                job_data.params = {**science, **controller}
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            errors = registry.validate_job_params(job_data.model_id, job_data.mode, science)
+            if errors:
+                raise HTTPException(status_code=422, detail={'validation_errors': errors})
+            # The separate native contract already owns its complete defaults.
+            # Legacy structure/antibody normalization adds unrelated fields and
+            # makes a saved request fail its own closed native contract on replay.
+            return job_data
     if normalized_model_id in {'binder_refinement', 'caliby_binder'}:
         from copy import deepcopy
         definition = registry.get_internal_model_definition(normalized_model_id)
@@ -6150,10 +6193,13 @@ async def preview_job_execution_plan(
             raise HTTPException(status_code=409, detail='Launch context header and body must match')
         try:
             context = await resolve_launch_context(experiment_session, job_data.launch_context_id)
+            from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+            native_child = await validate_prepared_child_job_request(experiment_session, context, job_data)
             job_data.params = await validate_bound_job_request(
                 experiment_session, context, job_name=job_data.name,
                 model_id=job_data.model_id, mode=job_data.mode,
-                params=job_data.params, pinned_gpu=job_data.pinned_gpu)
+                params=job_data.params, pinned_gpu=job_data.pinned_gpu,
+                attach_resource_authority=not native_child)
         except LaunchContextError as exc:
             raise _launch_context_http_error(exc) from exc
     from services.remote_execution.targets import target_eligible
@@ -6179,6 +6225,7 @@ async def _create_job(
     _md_input_resolver: Any = Depends(lambda: None),
     _trusted_workflow_adapter: Any = Depends(lambda: False),
     _approved_execution_plan: Any = Depends(lambda: None),
+    _bound_launch_context_id: str | None = None,
 ):
     """Create and queue a new pipeline job."""
     # Reject stale/foreign resume paths before preview, job rows or output writes.
@@ -6270,6 +6317,40 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if (normalized_model_id == 'ppiflow' and selected_execution_target is not None
+            and not job_data.params.get('ppiflow_generation_request')):
+        from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract
+        job_data = normalize_job_request(job_data)
+        names = {field['name'] for field in parameter_contract(normalized_mode)}
+        prepared = get_inputs_dir() / 'ppiflow-generation' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_ppiflow_generation_request, normalized_mode, job_data.params, prepared,
+                allowed_roots=tuple(get_allowed_roots().values()),
+                requested_settings={key: value for key, value in original_requested_params.items() if key in names},
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Reuse the existing remote prepared-request review. Only these retained
+        # bytes are approved; the selected endpoint is not replayed on approval.
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': 'ppiflow', 'mode': normalized_mode})
+
+    if (normalized_model_id == 'boltzgen'
+            and normalized_mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+            and selected_execution_target is not None
+            and not (job_data.params.get('boltzgen_yaml_config') and job_data.params.get('boltzgen_prepared_sha256'))):
+        from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'boltzgen-generation' / str(uuid.uuid4())
+        try:
+            job_data.params = await prepare_boltzgen_generation_input(job_data.params, prepared,
+                allowed_input_roots=tuple(get_allowed_roots().values()))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': 'boltzgen', 'mode': normalized_mode})
+
     bc2_action_source = None
     bc2_action_prepared = False
     if normalized_model_id == 'bindcraft2':
@@ -6892,6 +6973,32 @@ async def _create_job(
             output_dir = base_output_dir
             job_params = dict(job_data.params)
 
+        if normalized_model_id == 'ppiflow':
+            from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract
+            names = {field['name'] for field in parameter_contract(normalized_mode)}
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_ppiflow_generation_request, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'ppiflow-generation',
+                    allowed_roots=tuple(get_allowed_roots().values()),
+                    source_identity={'job_id': job_id},
+                    retain_prepared=execution_preview is not None,
+                    requested_settings={key: value for key, value in original_requested_params.items() if key in names},
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if normalized_model_id == 'boltzgen' and normalized_mode in {
+                'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+            from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
+            try:
+                job_params = await prepare_boltzgen_generation_input(job_params,
+                    Path(output_dir) / 'inputs' / 'boltzgen-generation',
+                    allowed_input_roots=tuple(get_allowed_roots().values()),
+                    retain_prepared=execution_preview is not None)
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         if normalized_model_id == 'bindcraft2' and normalized_mode == 'campaign':
             from services.bindcraft2_launch import materialize_campaign
             try:
@@ -7191,7 +7298,8 @@ async def _create_job(
             selection_source_job_id=provenance_selection_source_job_id,
             selection_dataset_name=provenance_selection_dataset_name,
             selected_loop_scope=provenance_selection_scope,
-            provenance=provenance_payload,
+            provenance=({**(provenance_payload or {}), 'launch_context_id': _bound_launch_context_id}
+                        if _bound_launch_context_id else provenance_payload),
             execution_target_id=job_data.execution_target_id,
             execution_source_revision=inherited_source_revision,
             execution_source_tree=inherited_source_tree,
@@ -7676,6 +7784,132 @@ async def pull_remote_job_results(
     return JobResponse.model_validate(job)
 
 
+async def _reserve_selected_run_group(experiment_session, *, group_id, domain_id):
+    from services.ngs_molbio_n5 import reserve_run_group, ResourceAdmissionDenied
+    try:
+        return await reserve_run_group(experiment_session, group_id=group_id,
+                                       domain_id=domain_id, actor='native-child-submission')
+    except ResourceAdmissionDenied as exc:
+        raise LaunchContextError(exc.code, exc.reason, status_code=409) from exc
+
+
+async def submit_selected_child_jobs(
+    requests: list[JobCreate], background_tasks: BackgroundTasks,
+    session: AsyncSession, experiment_session: AsyncSession, *,
+    destination_launch_context_id: str | None, idempotency_key: str,
+    response_context: dict[str, Any],
+) -> list[JobResponse]:
+    """Submit native selected requests with one destination attempt per child.
+
+    Preparation and publication reuse the Project transaction owners. Core Jobs
+    are inserted as one transaction, and no child is scheduler-visible until all
+    Project bindings have committed. This is the existing two-store handoff, not
+    a distributed transaction or a replacement scheduler.
+    """
+    from services.global_experiments.launch_contexts import prepare_child_launch_contexts
+    from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
+
+    prepared = None
+    try:
+        if destination_launch_context_id:
+            prepared = await prepare_child_launch_contexts(
+                experiment_session, destination_launch_context_id=destination_launch_context_id,
+                job_requests=requests,
+                native_entrypoints=[MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((r.model_id, r.mode)) for r in requests],
+                idempotency_key=idempotency_key, core_session=session)
+            requests = [JobCreate.model_validate(child['job_request']) for child in prepared['children']]
+        remote = any(item.execution_target_id for item in requests)
+        if remote:
+            # Preserve the actual normalized child requests across review. Their
+            # source snapshots and destination attempts are not reacquired.
+            if prepared:
+                await experiment_session.commit()
+            if len(requests) == 1:
+                _require_prepared_remote_review(requests[0], response_context)
+            else:
+                raise HTTPException(409, {'code': 'remote_prepared_job_review_required',
+                    'job_requests': [item.model_dump(mode='json') for item in requests],
+                    'response_context': response_context})
+        if not prepared:
+            responses = [await create_job(item, background_tasks, session, _commit=False) for item in requests]
+            await session.commit()
+            return responses
+        destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
+        await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
+                                          domain_id=destination.domain_experiment_id)
+        return await _create_prepared_child_batch(requests, background_tasks, session, experiment_session)
+    except LaunchContextError as exc:
+        await session.rollback()
+        await experiment_session.rollback()
+        raise _launch_context_http_error(exc) from exc
+    except HTTPException as exc:
+        if not (exc.status_code == 409 and isinstance(exc.detail, dict)
+                and exc.detail.get('code') == 'remote_prepared_job_review_required'):
+            await session.rollback()
+            if prepared:
+                await experiment_session.rollback()
+        raise
+    except Exception:
+        await session.rollback()
+        if destination_launch_context_id:
+            await experiment_session.rollback()
+        raise
+
+
+async def _create_prepared_child_batch(requests, background_tasks, session, experiment_session):
+    from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+    from routers.project_manager import _project_bound_job
+    pending = []
+    # The incoming header describes the destination, not any child. Explicit
+    # server-owned provenance below replaces that transport-only inheritance;
+    # never manufacture a child HTTP header or modify the destination context.
+    transport_token = current_launch_context_id.set(None)
+    try:
+        for original in requests:
+            item = original.model_copy(deep=True)
+            context = await resolve_launch_context_for_display(experiment_session, item.launch_context_id)
+            attempt = await experiment_session.get(ExperimentRunAttempt, context.run_attempt_id)
+            await validate_prepared_child_job_request(experiment_session, context, item)
+            existing = await session.get(Job, attempt.scheduler_job_id)
+            if existing is not None:
+                await validate_bound_job(experiment_session, context, existing)
+                pending.append((context, context.claim_token, existing, JobResponse.model_validate(existing)))
+                continue
+            context, claim = await claim_launch_context(experiment_session, item.launch_context_id)
+            item.params = await validate_bound_job_request(experiment_session, context,
+                job_name=item.name, model_id=item.model_id, mode=item.mode,
+                params=dict(item.params), pinned_gpu=item.pinned_gpu)
+            response = await _create_job(item, background_tasks, session,
+                _preallocated_job_id=attempt.scheduler_job_id, _commit=False,
+                _trusted_workflow_adapter=True, _bound_launch_context_id=context.launch_context_id)
+            job = await session.get(Job, response.id)
+            await validate_bound_job(experiment_session, context, job)
+            pending.append((context, claim, job, response))
+        # No partial core Job set is committed if any later child fails. Durable
+        # claims precede the core commit just as on canonical single submission.
+        await experiment_session.commit()
+        await session.commit()
+        bindings = []
+        for context, claim, job, response in pending:
+            if context.canonical_job_id:
+                binding = json.loads(context.binding_receipt_json)
+            else:
+                context, binding = await consume_launch_context(experiment_session,
+                    launch_context_id=context.launch_context_id, claim_token=claim,
+                    canonical_job_id=job.id, canonical_batch_id=job.batch_id)
+            await _project_bound_job(experiment_session, session, context, job, binding)
+            bindings.append((context, job, response, binding))
+        await experiment_session.commit()
+        for context, job, response, binding in bindings:
+            await publish_launch_context_binding(session, context=context, job=job, binding=binding, commit=False)
+        await session.commit()
+        return [response.model_copy(update={'launch_context_id': context.launch_context_id,
+            'launch_context_binding': binding, 'return_uri': context.return_uri})
+            for context, job, response, binding in bindings]
+    finally:
+        current_launch_context_id.reset(transport_token)
+
+
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(
     job_data: JobCreate,
@@ -7738,6 +7972,12 @@ async def create_job(
                 raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
             _preallocated_job_id = prepared_attempt.scheduler_job_id
         if typed_md_project_launch is None:
+            from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+            if await validate_prepared_child_job_request(experiment_session, preview_context, job_data):
+                from experiment_models import ExperimentWorkflowRun
+                run = await experiment_session.get(ExperimentWorkflowRun, prepared_attempt.workflow_run_id)
+                await _reserve_selected_run_group(experiment_session, group_id=run.run_group_id,
+                    domain_id=preview_context.domain_experiment_id)
             job_data.params = await validate_bound_job_request(
                 experiment_session,
                 preview_context,
@@ -8763,6 +9003,30 @@ async def delete_job_permanently(
 
 
 from services.core_protein_execution_settings import ExecutionSettings
+
+
+@router.get("/{job_id}/generation-results")
+async def get_native_generation_results(
+    job_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read native generation accounting, including valid zero-yield runs."""
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder"}:
+        from services.boltzgen_candidate_publication import read_published_generation_results
+    elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
+        from services.ppiflow_generation import read_published_generation_results
+    else:
+        raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
+    try:
+        return await read_published_generation_results(job, session, offset=offset, limit=limit)
+    except (ValueError, RuntimeError, OSError) as exc:
+        logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc
 
 
 @router.get("/{job_id}/bindcraft2-results")

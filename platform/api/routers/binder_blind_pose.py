@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, Job, get_session
+from experiment_database import get_experiment_session
 from paths import get_inputs_dir
 from schemas import JobCreate
 from services.binder_blind_pose_selected import (
@@ -38,11 +39,13 @@ class SelectedBlindPoseRequest(BaseModel):
     binder_chains: dict[str, list[str]]
     target_chains: list[str] = Field(min_length=1)
     settings: BlindPoseSettings
+    launch_context_id: str | None = None
 
 
 @router.post('/selected', status_code=201)
 async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: BackgroundTasks,
-                          session: AsyncSession = Depends(get_session)):
+                          session: AsyncSession = Depends(get_session),
+                          experiment_session: AsyncSession = Depends(get_experiment_session)):
     # Check executable registration before materializing inputs. A generic model
     # fallback would silently invoke protein_design.nf instead of this leaf.
     if MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('esmfold2', 'blind_pose')) != 'workflows/binder_blind_pose.nf':
@@ -94,6 +97,12 @@ async def launch_selected(request: SelectedBlindPoseRequest, background_tasks: B
     job = JobCreate(name=f'blind-pose-{source.id[:8]}', model_id='esmfold2', mode='blind_pose', params=params)
     from services.binder_blind_pose_trust import selected_submission
     with selected_submission():
+        if request.launch_context_id:
+            from routers.jobs import submit_selected_child_jobs
+            children = await submit_selected_child_jobs([job], background_tasks, session, experiment_session,
+                destination_launch_context_id=request.launch_context_id, idempotency_key=str(directory),
+                response_context={"source_job_id": source.id, "operation": "blind_pose"})
+            return children[0]
         return await create_job(job, background_tasks, session)
 
 

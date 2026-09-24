@@ -1404,7 +1404,7 @@ async def test_canonical_job_context_branch_preserves_trusted_adapter_behavior(
     input_pdb = tmp_path / "input.pdb"
     input_pdb.write_text("ATOM      1  N   ALA A   1      11.104  13.207   9.997  1.00 20.00           N\n")
     launch_context_id = "launch-context:binding-probe"
-    context = SimpleNamespace(contract_version="1")
+    context = SimpleNamespace(contract_version="1", workflow_id=None)
 
     class _ExperimentSession:
         async def commit(self) -> None:

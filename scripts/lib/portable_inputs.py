@@ -215,6 +215,23 @@ def _format(document, path):
     return "json"
 
 
+def prepared_generation_source_fields(model_id, mode, params):
+    """Original source settings are provenance once the native tree is prepared.
+
+    Do not reacquire controller sources on replay; only these model-owned input
+    slots are superseded. Other parameters retain existing discovery behavior.
+    """
+    if (model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}
+            and params.get('ppiflow_generation_request')):
+        return {'target_pdb', 'framework_pdb', 'input_csv'}
+    if (model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+            and params.get('boltzgen_yaml_config')):
+        return {'target_pdb', 'input_pdb', 'ligand_pdb', 'dna_structure', 'scaffold_path',
+                'boltzgen_target_pdb_path', 'boltzgen_input_pdb', 'boltzgen_ligand_pdb',
+                'boltzgen_dna_structure', 'boltzgen_scaffold_path', 'boltzgen_nanobody_scaffold_specs'}
+    return set()
+
+
 def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None):
     """Discover declared native closure. YAML uses the caller's native safe loader.
 
@@ -278,6 +295,17 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         if source_owner and not Path(value).is_absolute():
             record["reference_path"] = os.path.abspath(Path(owner).parent / value)
         records.append(record)
+        if role == 'ppiflow-csv' and path not in visited:
+            # Native CSV processed_path is a source read, unlike observational
+            # original paths archived inside the prepared request JSON.
+            import csv
+            visited.add(path)
+            with path.open(newline='') as handle:
+                for index, row in enumerate(csv.DictReader(handle)):
+                    if row.get('processed_path'):
+                        visit(row['processed_path'], path, ('processed_path', index),
+                              lineage=(*lineage, logical_id))
+            return
         if path in visited or role == "runtime" or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             return
         visited.add(path)
@@ -316,6 +344,18 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                 visit(path.strip(), None, ('pdb_paths', index))
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')
+    if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:
+        keys.add('ppiflow_generation_request')
+        if not params.get('ppiflow_generation_request'):
+            keys.update({'target_pdb', 'framework_pdb'})
+            if params.get('input_csv'):
+                visit(params['input_csv'], None, ('input_csv',), 'ppiflow-csv')
+    if model_id in {'boltzgen', 'boltzgen_child'}:
+        keys.add('boltzgen_yaml_config')
+        if not params.get('boltzgen_yaml_config'):
+            keys.update({'boltzgen_target_pdb_path', 'boltzgen_scaffold_path',
+                         'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'})
+    keys.difference_update(prepared_generation_source_fields(model_id, mode, params))
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
     for key in sorted(keys & params.keys()):

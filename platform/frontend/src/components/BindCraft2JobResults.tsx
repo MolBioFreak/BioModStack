@@ -49,7 +49,7 @@ function NativeActionField({ name, field, value, onChange, page, required = fals
     required={required} value={value === undefined ? '' : String(value)} onChange={event => onChange(numeric && event.target.value !== '' ? Number(event.target.value) : event.target.value)} /></label>;
 }
 
-export function BindCraft2NativeActions({ jobId, page }: { jobId: string; page?: BindCraft2NativePage }) {
+export function BindCraft2NativeActions({ jobId, page, launchContextId }: { jobId: string; page?: BindCraft2NativePage; launchContextId?: string | null }) {
   const [open, setOpen] = useState(false);
   const [operation, setOperation] = useState('');
   const [saved, setSaved] = useState<Record<string, Record<string, unknown>>>({});
@@ -70,7 +70,7 @@ export function BindCraft2NativeActions({ jobId, page }: { jobId: string; page?:
   const options = saved[operation] ?? (descriptor ? nativeActionDefaults(descriptor) : {});
   const run = async () => {
     setBusy(true); setError(null); setChild(null);
-    try { setChild((await submitBindCraft2Lifecycle(jobId, operation, options, target)).id); }
+    try { setChild((await submitBindCraft2Lifecycle(jobId, operation, options, target, launchContextId)).id); }
     catch (reason) {
       const detail = isAxiosError(reason) ? reason.response?.data?.detail : null;
       setError(typeof detail === 'string' ? detail : reason instanceof Error ? reason.message : String(reason));
@@ -100,7 +100,7 @@ export function BindCraft2NativeActions({ jobId, page }: { jobId: string; page?:
 }
 
 /** Native evidence supplements the existing selectable Design workbench. */
-export function BindCraft2JobResults({ jobId, resultsAvailable = true }: { jobId: string; resultsAvailable?: boolean }) {
+export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchContextId }: { jobId: string; resultsAvailable?: boolean; launchContextId?: string | null }) {
   const [query, setQuery] = useState<{ arm: string | null; stage: BindCraft2Stage; offset: number; limit: number }>({
     arm: null, stage: 'trajectory', offset: 0, limit: 25,
   });
@@ -144,9 +144,9 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true }: { jobId
           </details>
         </>}
     </section>
-    <BindCraft2NativeActions key={jobId} jobId={jobId} page={data} />
+    <BindCraft2NativeActions key={jobId} jobId={jobId} page={data} launchContextId={launchContextId} />
     {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
       : isError || !data ? <p role="status">BindCraft2 native records are not available for this job.</p>
-        : <BindCraft2NativeResults page={data} onPage={setQuery} jobId={jobId} />}
+        : <BindCraft2NativeResults page={data} onPage={setQuery} jobId={jobId} launchContextId={launchContextId} />}
   </div>;
 }

@@ -261,12 +261,18 @@ def publish(job, incoming: Path) -> tuple[Path, Path | None]:
     if backup.exists():
         raise GenerationError("Prior result generation already retained")
     # Persist the complete received tree before either rename or the DB commit.
+    directories = []
     for path in incoming.rglob("*"):
         checked(path)
         if path.is_file():
             with path.open("rb") as handle:
                 os.fsync(handle.fileno())
-    for path in sorted((p for p in incoming.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        elif path.is_dir():
+            directories.append(path)
+    # The owned, quiescent tree cannot change during publication. Retain only
+    # directory paths from the file pass, preserving bottom-up durability
+    # without walking and statting every payload a second time.
+    for path in sorted(directories, key=lambda p: len(p.parts), reverse=True):
         sync_dir(path)
     sync_dir(incoming)
     had_prior = output.exists()

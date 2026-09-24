@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from scripts.lib.container_runtime import container_executable
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/api/boltzgen", tags=["boltzgen"])
 class BoltzGenPreviewRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    mode: Literal['protein_binder', 'peptide_binder', 'nanobody_binder'] | None = None
     params: Dict[str, Any] = Field(default_factory=dict)
     run_check: bool = Field(True, alias="validate")
 
@@ -44,7 +46,14 @@ def _append_arg(argv: list[str], flag: str, value: Any) -> None:
 
 @router.post("/preview", response_model=BoltzGenPreviewResponse)
 async def preview_design_spec(request: BoltzGenPreviewRequest) -> BoltzGenPreviewResponse:
-    resolved_params, notes = await prepare_boltzgen_params_for_launch(request.params)
+    params = request.params
+    if request.mode is not None:
+        from services.boltzgen_request_compatibility import normalize_boltzgen_generation_request
+        try:
+            params = normalize_boltzgen_generation_request(request.mode, params)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    resolved_params, notes = await prepare_boltzgen_params_for_launch(params)
     code_root = get_code_root()
     prep_script = code_root / "scripts" / "prep_boltzgen.py"
     boltzgen_sif = get_container_path("boltzgen.sif")
@@ -52,11 +61,14 @@ async def preview_design_spec(request: BoltzGenPreviewRequest) -> BoltzGenPrevie
     with tempfile.TemporaryDirectory(prefix="boltzgen_preview_") as tmp_dir:
         tmp_path = Path(tmp_dir)
         output_yaml = tmp_path / "boltzgen_input.yaml"
-        prep_cmd = ["python3", str(prep_script)]
+        prep_cmd = [sys.executable, str(prep_script)]
 
         _append_arg(prep_cmd, "--ligand_smiles", resolved_params.get("boltzgen_ligand_smiles"))
         _append_arg(prep_cmd, "--ntp_type", resolved_params.get("boltzgen_ntp_type"))
-        _append_arg(prep_cmd, "--scaffold_length", resolved_params.get("boltzgen_scaffold_length") or "100-135")
+        # Legacy optional preview keeps its historical initial values; typed
+        # generation uses the same preparation parser defaults as execution.
+        scaffold_default = "80-120" if request.mode is not None else "100-135"
+        _append_arg(prep_cmd, "--scaffold_length", resolved_params.get("boltzgen_scaffold_length") or scaffold_default)
         _append_arg(prep_cmd, "--num_designs", resolved_params.get("boltzgen_num_designs") or 1)
         _append_arg(prep_cmd, "--binding_site_residues", resolved_params.get("boltzgen_binding_site_residues"))
         if bool(resolved_params.get("boltzgen_catalytic_site")):
@@ -76,6 +88,8 @@ async def preview_design_spec(request: BoltzGenPreviewRequest) -> BoltzGenPrevie
         _append_arg(prep_cmd, "--cdr_h2_length", resolved_params.get("boltzgen_cdr_h2_length") or "6-10")
         _append_arg(prep_cmd, "--cdr_h3_length", resolved_params.get("boltzgen_cdr_h3_length") or "12-18")
         _append_arg(prep_cmd, "--target_pdb", resolved_params.get("boltzgen_target_pdb_path"))
+        for key in ('generation_mode', 'target_chains', 'target_binding_positions', 'binder_sequence', 'scaffold_path', 'scaffold_chain', 'scaffold_design_ranges'):
+            _append_arg(prep_cmd, '--' + key, resolved_params.get('boltzgen_' + key))
         _append_arg(prep_cmd, "--output_yaml", output_yaml)
 
         prep_result = subprocess.run(

@@ -541,12 +541,16 @@ async def test_prepare_launch_freezes_authorities_without_run_or_job_submission(
         assert prepared["preparation_id"]
         preparation = await session.get(ExperimentWorkflowPreparation, prepared["preparation_id"])
         assert preparation is not None
-        assert json.loads(preparation.scheduler_payload_json) == {
-            "name": "Target — ESMFold2 structure prediction",
-            "model_id": "esmfold2",
-            "mode": "predict",
-            "params": json.loads(preparation.normalized_request_json),
-        }
+        from experiment_services import _normalize_native_scheduler, validate_preparation_authority
+        normalized = json.loads(preparation.normalized_request_json)
+        assert normalized['native_job_normalization'] is True
+        assert json.loads(preparation.scheduler_payload_json) == _normalize_native_scheduler(
+            normalized['workflow']['scheduler'])
+        scheduler = json.loads(preparation.scheduler_payload_json)
+        assert scheduler['name'] == "Target — ESMFold2 structure prediction"
+        assert (scheduler['model_id'], scheduler['mode']) == ('esmfold2', 'predict')
+        assert scheduler['params']['sequence'] == 'MQIFVK'
+        await validate_preparation_authority(session, preparation)
         assert await session.scalar(select(func.count()).select_from(ExperimentWorkflowPreparation)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentLaunchContext)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentRunGroup)) == 0
@@ -557,6 +561,9 @@ async def test_managed_preparation_issues_no_typed_launch_context(setup_store, m
     capability = workflow_setups.protein_capability_record("protein.structure_prediction.esmfold2")
     capability["launch_mode"] = "managed_materialization"
     monkeypatch.setattr(workflow_setups, "protein_capability_record", lambda _capability_id: copy.deepcopy(capability))
+    # The immutable Plan now pins the same capability through its own owner.
+    import experiment_services
+    monkeypatch.setattr(experiment_services, "protein_capability_record", lambda _capability_id: copy.deepcopy(capability))
     async with setup_store() as session:
         project = await _project(session)
         setup = await workflow_setups.create_workflow_setup(

@@ -457,6 +457,8 @@ async def persist_workflow_plan_authority(
     domain_experiment_id: str,
     expected_domain_revision_id: str,
     capability_id: str,
+    normalized_job_request: Any | None = None,
+    native_entrypoint: str | None = None,
 ) -> tuple[ExperimentWorkflowPlanAuthority, dict[str, Any]]:
     """Persist or exactly replay the immutable authority for one Project Manager Plan."""
     head = await _head(session, workflow_id, "workflow")
@@ -479,7 +481,16 @@ async def persist_workflow_plan_authority(
         ):
             raise IdempotencyConflict("Workflow Plan authority conflicts with the immutable stored authority")
         return existing, stored_contract
-    contract = workflow_plan_capability_contract(capability_id)
+    if normalized_job_request is None:
+        contract = workflow_plan_capability_contract(capability_id)
+    else:
+        from services.protein_project_capabilities import normalized_job_plan_contract
+        from services.protein_project_capabilities import _PARAMETER_SCHEMAS
+        setup_capability = capability_id if _PARAMETER_SCHEMAS.get(capability_id, {}).get("x-bms-native-editor-draft") else None
+        contract = normalized_job_plan_contract(normalized_job_request, native_entrypoint=native_entrypoint,
+                                                setup_capability_id=setup_capability)
+        if contract["capability"]["capability_id"] != capability_id:
+            raise ValidationFailure("native Job Plan capability identity disagrees")
     contract_json = canonical_json(contract)
     contract_sha256 = sha256_text(contract_json)
     if (
@@ -846,7 +857,18 @@ def _validate_workflow_payload(
         elif isinstance(value, list):
             for child in value:
                 walk(child)
-    walk(payload)
+    if capability_contract is not None and isinstance(
+        capability_contract.get("capability", {}).get("normalized_job_request"), dict
+    ):
+        # Native params were accepted by the Job normalizer and are pinned by
+        # exact const properties below. Input paths are data, not graph code.
+        graph_payload = copy.deepcopy(payload)
+        graph_payload.pop("parameters", None)
+        if isinstance(graph_payload.get("scheduler"), dict):
+            graph_payload["scheduler"].pop("params", None)
+        walk(graph_payload)
+    else:
+        walk(payload)
     allowed_node_keys = {"id", "kind", "required", "adapter_id", "parameters", "label", "depends_on"}
     for index, node in enumerate(nodes):
         unknown_node_keys = sorted(set(node) - allowed_node_keys)
@@ -2220,12 +2242,72 @@ async def save_dataset_revision(
     return revision
 
 
+async def protein_setup_launch_authority(
+    session: AsyncSession,
+    authority: ExperimentWorkflowPlanAuthority,
+    *,
+    pinned: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind a native Protein setup to real immutable Project revisions.
+
+    Native Protein setups have no MolBio connector/local-state replica. Their
+    authority is the existing global hierarchy, not fabricated connector IDs.
+    Replay reads the pinned revisions, never re-snapshots scientific inputs.
+    """
+    domain = await _head(session, authority.domain_experiment_id, "domain_experiment")
+    experiment = await _head(session, str(domain.parent_id), "experiment")
+    project = await _head(session, authority.workspace_id, "workspace")
+    if domain.workspace_id != project.aggregate_id or experiment.parent_id != project.aggregate_id:
+        raise ValidationFailure("Protein setup hierarchy does not match its pinned Plan")
+    result: dict[str, Any] = {
+        "schema": "bms.protein-setup-launch-authority.v1",
+        "capability_contract_sha256": authority.capability_contract_sha256,
+    }
+    for prefix, head in (("project", project), ("global_experiment", experiment), ("domain", domain)):
+        revision_id = (pinned or {}).get(f"{prefix}_revision_id", head.current_revision_id)
+        if prefix == "domain":
+            revision_id = authority.expected_domain_revision_id
+        revision = await session.get(ExperimentRevision, revision_id)
+        if (revision is None or revision.subject_id != head.aggregate_id
+                or sha256_text(revision.canonical_payload) != revision.payload_sha256):
+            raise ValidationFailure("Protein setup immutable hierarchy revision is invalid")
+        payload = json.loads(revision.canonical_payload)
+        if canonical_json(payload) != revision.canonical_payload:
+            raise ValidationFailure("Protein setup hierarchy revision is not canonical")
+        if prefix == "domain" and (
+            payload.get("schema") != "bms.domain-experiment.v1"
+            or payload.get("domain_kind") != "protein_in_silico"
+        ):
+            raise ValidationFailure("native Protein setup authority requires its Protein Domain")
+        result.update({
+            f"{prefix}_id": head.aggregate_id,
+            f"{prefix}_revision_id": revision.resource_id,
+            f"{prefix}_revision_generation": revision.revision_number,
+            f"{prefix}_revision_sha256": revision.payload_sha256,
+        })
+    if pinned is not None and pinned != result:
+        raise ValidationFailure("Protein setup no longer matches its immutable hierarchy authority")
+    return result
+
+
+def _normalize_native_scheduler(scheduler: dict[str, Any]) -> dict[str, Any]:
+    from schemas import JobCreate
+    from routers.jobs import normalize_job_request
+    resources = scheduler.get("resources") or {}
+    request = normalize_job_request(JobCreate(
+        name=scheduler["name"], model_id=scheduler["model_id"], mode=scheduler["mode"],
+        params=scheduler["params"], pinned_gpu=resources.get("pinned_gpu"),
+    ))
+    return {**scheduler, "params": request.params}
+
+
 async def prepare_workflow(
     session: AsyncSession,
     workflow_revision_id: str,
     bindings: dict[str, Any],
     *,
     core_session: AsyncSession | None = None,
+    normalize_native_job: bool = False,
 ) -> ExperimentWorkflowPreparation:
     revision = await session.get(ExperimentRevision, workflow_revision_id)
     if revision is None:
@@ -2250,7 +2332,9 @@ async def prepare_workflow(
         validate_workflow_payload_for_plan(payload, capability_contract)
         receipt_contracts = _capability_receipt_contracts(capability_contract["capability"])
         raw_launch_authority = bindings.get("launch_authority")
-        if (
+        if isinstance(raw_launch_authority, dict) and raw_launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1":
+            await protein_setup_launch_authority(session, authority_row, pinned=raw_launch_authority)
+        elif (
             not isinstance(raw_launch_authority, dict)
             or set(raw_launch_authority) != PLAN_LAUNCH_AUTHORITY_FIELDS
             or any(
@@ -2328,17 +2412,26 @@ async def prepare_workflow(
                         reasons.append(str(exc))
                     else:
                         scheduler_payload["params"] = params
-                reasons.extend(get_registry().validate_job_params(model_id, mode, params))
+                native_entrypoint = (
+                    plan_authority[1]["capability"].get("native_entrypoint")
+                    if plan_authority is not None else None
+                )
+                native_kwargs = {"native_entrypoint": native_entrypoint} if native_entrypoint else {}
+                reasons.extend(get_registry().validate_job_params(model_id, mode, params, **native_kwargs))
         elif payload.get("workflow_family") == "conformational_mapping":
             scheduler_payload["params"]["cm_source_receipt_ids"] = list(
                 payload.get("source_receipt_ids") or []
             )
+    if normalize_native_job:
+        scheduler_payload = _normalize_native_scheduler(scheduler_payload)
     normalized = {
         "workflow_revision_id": workflow_revision_id,
         "input_dataset_revision_ids": [str(value) for value in dataset_revision_ids],
         "input_authority": input_authority,
         "workflow": payload,
     }
+    if normalize_native_job:
+        normalized["native_job_normalization"] = True
     if launch_authority is not None:
         normalized["launch_authority"] = launch_authority
     normalized_json = canonical_json(normalized)
@@ -2476,7 +2569,12 @@ async def validate_preparation_authority(
         validate_workflow_payload_for_plan(normalized_workflow, capability_contract)
         receipt_contracts = _capability_receipt_contracts(capability_contract["capability"])
         launch_authority = normalized.get("launch_authority")
-        if (
+        if isinstance(launch_authority, dict) and launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1":
+            await protein_setup_launch_authority(session, authority_row, pinned=launch_authority)
+            if (receipt.get("capability_contract_sha256") != authority_row.capability_contract_sha256
+                    or receipt.get("launch_authority") != launch_authority):
+                raise ValidationFailure("preparation no longer matches its pinned Plan authority")
+        elif (
             not isinstance(launch_authority, dict)
             or set(launch_authority) != PLAN_LAUNCH_AUTHORITY_FIELDS
             or any(
@@ -2556,6 +2654,8 @@ async def validate_preparation_authority(
         if not isinstance(expected_params, dict):
             raise ValidationFailure("preparation scheduler parameters are malformed")
         expected_params["cm_source_receipt_ids"] = list(normalized_workflow.get("source_receipt_ids") or [])
+    if normalized.get("native_job_normalization") is True:
+        expected_scheduler = _normalize_native_scheduler(expected_scheduler)
     if canonical_json(scheduler) != canonical_json(expected_scheduler):
         raise ValidationFailure("preparation scheduler no longer matches its validated workflow")
 

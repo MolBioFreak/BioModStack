@@ -633,6 +633,111 @@ async def set_protein_dataset_lifecycle(
     return response
 
 
+async def browse_structure_sources(session, core_session, *, project_id=None, dataset_id=None,
+                                   revision_id=None, receipt_id=None, design_id=None,
+                                   collection="resources", offset=0, limit=50):
+    """Read existing Projects, pinned Datasets and producer-owned documents.
+
+    This is acquisition, not destination membership or a new dataset authority.
+    """
+    from sqlalchemy import func
+    from database import Design, Job
+    from experiment_models import ExperimentDatasetRevisionMember
+    from services.binder_diagnostic_selection import documents, selected_document, CandidateDocument
+    from paths import to_allowed_relative, resolve_allowed_path
+    from urllib.parse import quote
+
+    async def page(statement, render):
+        total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        rows = (await session.scalars(statement.offset(offset).limit(limit))).all()
+        return {"items": [render(row) for row in rows], "total": total, "offset": offset, "limit": limit}
+
+    if not project_id:
+        if dataset_id or revision_id or receipt_id or design_id:
+            raise ValidationFailure("Project identity is required")
+        return await page(select(ExperimentAggregateHead).where(
+            ExperimentAggregateHead.aggregate_kind == "workspace").order_by(ExperimentAggregateHead.aggregate_id),
+            lambda row: {"kind": "project", "name": row.display_name, "project_id": row.aggregate_id})
+    project = await session.get(ExperimentAggregateHead, project_id)
+    if project is None or project.aggregate_kind != "workspace":
+        raise NotFound("Project not found")
+    context = {"project_id": project_id}
+    if dataset_id:
+        head = await session.get(ExperimentAggregateHead, dataset_id)
+        revision = await session.get(ExperimentRevision, revision_id or "")
+        if (head is None or head.aggregate_kind != "dataset" or head.workspace_id != project_id
+                or revision is None or revision.subject_id != dataset_id):
+            raise NotFound("Exact Dataset revision not found in Project")
+        context.update(dataset_id=dataset_id, revision_id=revision_id)
+        members = select(ExperimentDatasetRevisionMember).where(ExperimentDatasetRevisionMember.revision_id == revision_id)
+        if not receipt_id:
+            return await page(members.order_by(ExperimentDatasetRevisionMember.ordinal), lambda row: {
+                **context, "kind": "resource", "name": json.loads(row.value_json).get("metadata", {}).get("display_label") or row.semantic_identity,
+                "receipt_id": row.semantic_identity})
+        member = await session.scalar(members.where(ExperimentDatasetRevisionMember.semantic_identity == receipt_id))
+        if member is None:
+            raise NotFound("Resource is not a member of this exact Dataset revision")
+    elif revision_id:
+        raise ValidationFailure("Dataset identity is required with a revision")
+    if not receipt_id:
+        if collection == "datasets":
+            return await page(select(ExperimentAggregateHead).where(
+                ExperimentAggregateHead.workspace_id == project_id,
+                ExperimentAggregateHead.aggregate_kind == "dataset").order_by(ExperimentAggregateHead.aggregate_id),
+                lambda row: {**context, "kind": "dataset", "name": row.display_name,
+                             "dataset_id": row.aggregate_id, "revision_id": row.current_revision_id})
+        return await page(select(ExperimentExternalEntityReceipt).where(
+            ExperimentExternalEntityReceipt.workspace_id == project_id,
+            ExperimentExternalEntityReceipt.entity_kind.in_(("design", "native_binder_job_result", "typed_core_job_result")))
+            .order_by(ExperimentExternalEntityReceipt.id),
+            lambda row: {**context, "kind": "resource", "name": row.entity_id, "receipt_id": row.id})
+    receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
+    if receipt is None or receipt.workspace_id != project_id:
+        raise NotFound("Resource not found in Project")
+    context["receipt_id"] = receipt_id
+    adapter = registry.get(receipt.verification_authority)
+    fresh = await adapter.verify(core_session, receipt.entity_id)
+    persisted = json.loads(receipt.acknowledgement_json or "{}")
+    fields = ("store_id", "entity_kind", "entity_id", "entity_revision_id", "content_digest", "contract_digest", "verifier_id", "reopen_uri")
+    if any(fresh.get(key) != persisted.get(key) for key in fields):
+        raise ValidationFailure("Project resource differs from its attached native revision")
+    if dataset_id:
+        bound = json.loads(member.value_json)
+        if (bound.get("native_content_sha256") != fresh.get("content_digest")
+                or str(bound.get("native_revision_or_generation")) != str(fresh.get("entity_revision_id"))):
+            raise ValidationFailure("Dataset member differs from its pinned native revision")
+    if receipt.entity_kind == "design":
+        if design_id is not None and design_id != receipt.entity_id:
+            raise NotFound("Design does not belong to this Project resource")
+        design_id = receipt.entity_id
+    else:
+        statement = select(Design).where(Design.job_id == receipt.entity_id)
+        if fresh.get("metadata", {}).get("result_scope") == "declared_native_final_candidates":
+            statement = statement.where(Design.source_stage.is_(None))
+        if design_id is None:
+            total = int(await core_session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+            rows = (await core_session.scalars(statement.order_by(Design.id).offset(offset).limit(limit))).all()
+            return {"items": [{**context, "kind": "design", "name": row.name or row.id, "design_id": row.id} for row in rows], "total": total, "offset": offset, "limit": limit}
+        if await core_session.scalar(statement.where(Design.id == design_id)) is None:
+            raise NotFound("Design does not belong to this Project resource")
+    design = await core_session.get(Design, design_id)
+    owner = await core_session.get(Job, design.job_id)
+    declared = documents(owner, design)
+    # Legacy Designs have an explicit primary document; never replace an explicit alternate.
+    choices = declared if declared else [{"primary": True}]
+    items = []
+    for doc in choices:
+        selector = CandidateDocument(artifact_id=doc.get("artifact_id"), target_state=doc.get("target_state"))
+        path, identity = await selected_document(owner, design, selector, core_session)
+        path = path if path.is_absolute() else resolve_allowed_path(str(path))
+        alias = to_allowed_relative(path)
+        items.append({**context, "kind": "document", "name": f"{design.name or design.id} · {doc.get('target_state') or path.name}",
+                      "design_id": design.id, "job_id": owner.id, "path": alias,
+                      "document": {**doc, "download_url": "/api/files/download/" + quote(alias, safe="/"),
+                                   "format": "cif" if path.suffix.lower() in {".cif", ".mmcif"} else "pdb"}})
+    return {"items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit}
+
+
 __all__ = [
     "InvalidProteinDatasetLifecycle",
     "PROTEIN_DATASET_KINDS",

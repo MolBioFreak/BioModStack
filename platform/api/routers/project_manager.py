@@ -602,6 +602,15 @@ async def _launch_context_document(
                     "Prepared scheduler payload is not an object.",
                     status_code=409,
                 )
+            if context.workflow_id:
+                from experiment_services import load_workflow_plan_authority
+                plan = await load_workflow_plan_authority(session, context.workflow_id, required=False)
+                native_request = plan[1]['capability'].get('normalized_job_request') if plan else None
+                if native_request is not None:
+                    # The editor submits this exact retained JobCreate, including
+                    # placement/lineage. Plan-only resources are not Job fields.
+                    scheduler = {**native_request, 'params': scheduler['params'],
+                                 'launch_context_id': context.launch_context_id}
             document["pinned_scheduler"] = scheduler
     return document
 

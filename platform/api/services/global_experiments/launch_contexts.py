@@ -42,7 +42,8 @@ DOMAIN_JOB_MODELS = {
     "protein_in_silico": {
         "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "molecular_dynamics",
         "ppiflow", "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3",
-        "template_antibody_denovo",
+        "template_antibody_denovo", "antibody_denovo", "bindcraft2", "binder_refinement",
+        "caliby_binder", "frustrampnn", "ligandmpnn",
     },
     "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design"},
 }
@@ -394,6 +395,7 @@ async def publish_launch_context_binding(
     context: ExperimentLaunchContext,
     job: Any,
     binding: dict[str, Any],
+    commit: bool = True,
 ) -> None:
     """Publish the core scheduler gate only after the source binding commits."""
     from database import (
@@ -458,8 +460,11 @@ async def publish_launch_context_binding(
                 status_code=409,
             )
         return
-    await core_session.commit()
-    await core_session.refresh(job)
+    if commit:
+        await core_session.commit()
+        await core_session.refresh(job)
+    else:
+        await core_session.flush()
 
 
 def normalize_bound_job_params(
@@ -484,6 +489,20 @@ def normalize_bound_job_params(
     return {**supplied_params, "workflow_adapter": expected_adapter}
 
 
+async def _normalized_setup_scheduler(
+    session: AsyncSession, context: ExperimentLaunchContext, scheduler: dict[str, Any],
+) -> dict[str, Any]:
+    preparation = await session.get(ExperimentWorkflowPreparation, context.preparation_id)
+    if preparation is not None and json.loads(preparation.normalized_request_json).get("native_job_normalization") is True:
+        from experiment_services import validate_preparation_authority
+        await validate_preparation_authority(session, preparation)
+        if (preparation.workflow_revision_id != context.workflow_revision_id
+                or preparation.normalized_request_sha256 != context.normalized_request_sha256):
+            raise LaunchContextError("launch_context_binding_invalid", "Normalized preparation identity changed.", status_code=409)
+        return json.loads(preparation.scheduler_payload_json)
+    return scheduler
+
+
 async def validate_bound_job_request(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -493,6 +512,7 @@ async def validate_bound_job_request(
     mode: str,
     params: dict[str, Any],
     pinned_gpu: int | None,
+    attach_resource_authority: bool = True,
 ) -> dict[str, Any]:
     """Validate immutable Workflow Revision authority before any Job transaction."""
     _require_v2_context(context, operation="used for Job submission")
@@ -520,6 +540,8 @@ async def validate_bound_job_request(
                 "Native RFD3 workflow_adapter is server-owned.",
                 status_code=409,
             )
+        if not attach_resource_authority:
+            return dict(params)
         return await _attach_typed_resource_authority(
             session,
             context,
@@ -532,6 +554,7 @@ async def validate_bound_job_request(
     payload = decoded_payload if isinstance(decoded_payload, dict) else {}
     raw_scheduler = payload.get("scheduler")
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
+    scheduler = await _normalized_setup_scheduler(session, context, scheduler)
     expected_adapter = str(payload.get("adapter_id") or "")
     raw_expected_params = scheduler.get("params")
     expected_params: dict[str, Any] = dict(raw_expected_params) if isinstance(raw_expected_params, dict) else {}
@@ -608,6 +631,8 @@ async def validate_bound_job_request(
             detail,
             status_code=409,
         )
+    if not attach_resource_authority:
+        return prepared_params
     return await _attach_typed_resource_authority(
         session,
         context,
@@ -726,6 +751,197 @@ async def create_prepared_launch_context(
     session.add(context)
     await session.flush()
     return context
+
+
+async def prepare_child_launch_contexts(
+    session: AsyncSession,
+    *,
+    destination_launch_context_id: str | None,
+    preparation_ids: Sequence[str] | None = None,
+    job_requests: Sequence[Any] | None = None,
+    native_entrypoints: Sequence[str | None] | None = None,
+    idempotency_key: str,
+    core_session: AsyncSession | None = None,
+) -> dict[str, Any] | None:
+    """Reserve one existing run/attempt handoff per native-owned preparation.
+
+    The explicit context selects destination hierarchy only; it is never claimed
+    or reused. Native owners prepare each child's exact request (including any
+    approved remote review) before calling this helper. No source Job ancestry
+    is inspected and no scientific params are rewritten. None keeps standalone
+    submissions standalone. The caller owns commit/rollback.
+    """
+    if destination_launch_context_id is None:
+        return None
+    from experiment_services import create_run_group
+    from services.global_experiments.workflow_setups import _claim, _replay, _request_digest
+
+    if job_requests is not None:
+        if preparation_ids is not None:
+            raise LaunchContextError("child_preparations_invalid", "Supply Job requests or preparation IDs, not both.", status_code=422)
+        return await _prepare_child_job_requests(
+            session, destination_launch_context_id=destination_launch_context_id,
+            job_requests=job_requests, native_entrypoints=native_entrypoints,
+            idempotency_key=idempotency_key, core_session=core_session,
+        )
+    if native_entrypoints is not None:
+        raise LaunchContextError("child_preparations_invalid", "Entrypoints require Job requests.", status_code=422)
+    ids = list(preparation_ids or [])
+    if not ids or any(type(value) is not str or not value for value in ids) or len(set(ids)) != len(ids):
+        raise LaunchContextError("child_preparations_invalid", "Each child requires its own preparation.", status_code=422)
+    if type(idempotency_key) is not str or not idempotency_key:
+        raise LaunchContextError("child_idempotency_invalid", "A child handoff idempotency key is required.", status_code=422)
+    scope = f"launch-context:children:{destination_launch_context_id}"
+    digest = _request_digest({"destination_launch_context_id": destination_launch_context_id, "preparation_ids": ids})
+    replay = await _replay(session, scope=scope, key=idempotency_key, request_sha256=digest)
+    if replay is not None:
+        return replay
+    destination = await resolve_launch_context_for_display(session, destination_launch_context_id)
+    _require_v2_context(destination, operation="used as a destination")
+    if destination.preparation_id in ids:
+        raise LaunchContextError("child_preparations_invalid", "The destination preparation cannot be reused for a child.", status_code=409)
+    async with session.begin_nested():
+        contexts = []
+        for preparation_id in ids:
+            contexts.append(await create_prepared_launch_context(
+                session, project_id=destination.project_id,
+                global_experiment_id=destination.global_experiment_id,
+                domain_experiment_id=destination.domain_experiment_id,
+                preparation_id=preparation_id, return_uri=destination.return_uri,
+            ))
+        group = await create_run_group(
+            session, destination.project_id, ids,
+            idempotency_key=f"{scope}:{idempotency_key}",
+            launch_context_ids={row.preparation_id: row.launch_context_id for row in contexts},
+            core_session=core_session,
+            source_domain_id=destination.domain_experiment_id,
+        )
+        response = {
+            "run_group_id": group.resource_id,
+            "destination_launch_context_id": destination_launch_context_id,
+            "children": [{"preparation_id": row.preparation_id,
+                          "launch_context_id": row.launch_context_id,
+                          "run_attempt_id": row.run_attempt_id} for row in contexts],
+        }
+        await _claim(session, scope=scope, key=idempotency_key, request_sha256=digest,
+                     result_resource_id=group.resource_id, response=response)
+    return response
+
+
+async def _prepare_child_job_requests(
+    session: AsyncSession, *, destination_launch_context_id: str,
+    job_requests: Sequence[Any], native_entrypoints: Sequence[str | None] | None,
+    idempotency_key: str, core_session: AsyncSession | None,
+) -> dict[str, Any]:
+    from schemas import JobCreate
+    from experiment_models import ExperimentWorkflowDraft
+    from experiment_services import (
+        create_workflow, persist_workflow_plan_authority, prepare_workflow,
+        protein_setup_launch_authority, save_workflow_draft, save_workflow_revision,
+        validate_preparation_authority, ValidationFailure,
+    )
+    from services.global_experiments.workflow_setups import _claim, _replay, _request_digest
+
+    requests = [JobCreate.model_validate(value).model_copy(deep=True) for value in job_requests]
+    entrypoints = list(native_entrypoints) if native_entrypoints is not None else [None] * len(requests)
+    if not requests or len(entrypoints) != len(requests) or not idempotency_key:
+        raise LaunchContextError("child_preparations_invalid", "Each child requires an ordered request and native route.", status_code=422)
+    scope = f"launch-context:child-requests:{destination_launch_context_id}"
+    digest = _request_digest({"requests": [value.model_dump(mode="json") for value in requests],
+                              "native_entrypoints": entrypoints})
+    replay = await _replay(session, scope=scope, key=idempotency_key, request_sha256=digest)
+    if replay is not None:
+        # Return retained normalized requests without native re-normalization or
+        # source acquisition. Ordinary submission still verifies bound authority.
+        return replay
+    destination = await resolve_launch_context_for_display(session, destination_launch_context_id)
+    _require_v2_context(destination, operation="used as a destination")
+    domain = await session.get(ExperimentAggregateHead, destination.domain_experiment_id)
+    prepared_ids: list[str] = []
+    prepared_requests: list[dict[str, Any]] = []
+    async with session.begin_nested():
+        for request, entrypoint in zip(requests, entrypoints):
+            capability_id = f"protein.native.{request.model_id}.{request.mode}"
+            workflow = await create_workflow(session, destination.project_id, request.name,
+                capability_id, experiment_id=destination.domain_experiment_id)
+            authority, contract = await persist_workflow_plan_authority(
+                session, workflow_id=workflow.aggregate_id, workspace_id=destination.project_id,
+                domain_experiment_id=destination.domain_experiment_id,
+                expected_domain_revision_id=domain.current_revision_id, capability_id=capability_id,
+                normalized_job_request=request, native_entrypoint=entrypoint,
+            )
+            native_request = contract["capability"]["normalized_job_request"]
+            draft = await session.scalar(select(ExperimentWorkflowDraft).where(
+                ExperimentWorkflowDraft.workflow_id == workflow.aggregate_id))
+            payload = json.loads(draft.canonical_payload)
+            # Destination membership is not scientific source ancestry.
+            payload["source_receipt_ids"] = []
+            payload["scheduler"]["resources"] = {"pinned_gpu": native_request["pinned_gpu"]}
+            await save_workflow_draft(session, workflow.aggregate_id, payload,
+                                      expected_generation=draft.generation)
+            revision = await save_workflow_revision(session, workflow.aggregate_id,
+                expected_head_generation=workflow.head_generation, change_summary="Prepared native child Job")
+            domain_revision = await session.get(ExperimentRevision, authority.expected_domain_revision_id)
+            if json.loads(domain_revision.canonical_payload).get("schema") == "bms.domain-experiment.v1":
+                launch_authority = await protein_setup_launch_authority(session, authority)
+            else:
+                # Connector-backed destinations retain their real pinned local
+                # authority; never invent MolBio binding/acknowledgement IDs.
+                destination_preparation = await session.get(ExperimentWorkflowPreparation, destination.preparation_id)
+                await validate_preparation_authority(session, destination_preparation, core_session=core_session)
+                launch_authority = dict(json.loads(destination_preparation.normalized_request_json)["launch_authority"])
+                launch_authority["capability_contract_sha256"] = authority.capability_contract_sha256
+            preparation = await prepare_workflow(session, revision.resource_id,
+                {"input_dataset_revision_ids": [], "launch_authority": launch_authority},
+                core_session=core_session)
+            if preparation.validation_status != "valid":
+                raise ValidationFailure(preparation.validation_receipt_json)
+            await validate_preparation_authority(session, preparation, core_session=core_session)
+            prepared_ids.append(preparation.resource_id)
+            native_request["params"] = json.loads(preparation.scheduler_payload_json)["params"]
+            prepared_requests.append(native_request)
+        response = await prepare_child_launch_contexts(session,
+            destination_launch_context_id=destination_launch_context_id,
+            preparation_ids=prepared_ids, idempotency_key=f"requests:{idempotency_key}",
+            core_session=core_session)
+        for child, request in zip(response["children"], prepared_requests):
+            request["launch_context_id"] = child["launch_context_id"]
+            child["job_request"] = request
+        await _claim(session, scope=scope, key=idempotency_key, request_sha256=digest,
+                     result_resource_id=response["run_group_id"], response=response)
+    return response
+
+
+async def validate_prepared_child_job_request(
+    session: AsyncSession, context: ExperimentLaunchContext, job_request: Any,
+) -> bool:
+    """Check retained child lineage/placement fields before Job materialization.
+
+    The existing execution-plan owner validates the later approval digest. It is
+    the only mutable field between remote review and submission; scientific
+    inputs, parent lineage and requested placement remain the pinned request.
+    """
+    from schemas import JobCreate
+    from experiment_services import load_workflow_plan_authority
+    if context.workflow_id is None:
+        return False
+    loaded = await load_workflow_plan_authority(session, context.workflow_id, required=False)
+    if loaded is None:
+        return False
+    expected = loaded[1]["capability"].get("normalized_job_request")
+    if expected is None:
+        return False  # Historical/ordinary Plan handoffs retain their existing owner.
+    actual = JobCreate.model_validate(job_request).model_dump(mode="json")
+    expected = dict(expected)
+    expected["params"] = {**expected["params"], "workflow_adapter": loaded[1]["capability"]["workflow_adapter_id"]}
+    if actual["launch_context_id"] != context.launch_context_id:
+        raise LaunchContextError("launch_context_binding_invalid", "Child request context does not match its preparation.", status_code=409)
+    for value in (expected, actual):
+        value.pop("launch_context_id", None)
+        value.pop("execution_plan_approval", None)
+    if actual != expected:
+        raise LaunchContextError("launch_context_workflow_mismatch", "Child request differs from its immutable normalized Job authority.", status_code=409)
+    return True
 
 
 async def create_launch_context(
@@ -986,6 +1202,7 @@ async def validate_bound_job(
         payload = decoded_payload if isinstance(decoded_payload, dict) else {}
         raw_scheduler = payload.get("scheduler")
         scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
+        scheduler = await _normalized_setup_scheduler(session, context, scheduler)
         expected_adapter = payload.get("adapter_id")
         job_adapter = base_job_params.get("workflow_adapter")
         raw_expected_params = scheduler.get("params")
@@ -1000,6 +1217,29 @@ async def validate_bound_job(
             base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
             for key, value in expected_job_params.items()
         )
+        if not params_match and job.model_id == "boltzgen":
+            from services.boltzgen_request_compatibility import (
+                BOLTZGEN_GENERATION_PROTOCOLS, compile_boltzgen_settings,
+            )
+            if job.mode in BOLTZGEN_GENERATION_PROTOCOLS:
+                # Native creation preserves the bound request in the existing
+                # server-owned provenance, then compiles rank settings and
+                # materializes YAML into its owned input directory. Compare
+                # request to request and effective values to the same compiler;
+                # a generated transport path is not an operator setting change.
+                requested = (job.provenance or {}).get("core_protein_requested_params")
+                try:
+                    effective = compile_boltzgen_settings(expected_job_params)
+                except ValueError:
+                    effective = {}
+                params_match = (
+                    isinstance(requested, dict)
+                    and all(key in requested and requested[key] == value
+                            for key, value in expected_job_params.items())
+                    and bool(effective)
+                    and all(key in base_job_params and base_job_params[key] == value
+                            for key, value in effective.items() if key != "boltzgen_yaml_config")
+                )
         if job.model_id == "protein_local_redesign":
             try:
                 expected_native_params = prepare_local_redesign_scheduler_params(
@@ -1755,6 +1995,7 @@ __all__ = [
     "context_document",
     "create_launch_context",
     "create_prepared_launch_context",
+    "prepare_child_launch_contexts",
     "publish_launch_context_binding",
     "publish_consumed_launch_context_bindings",
     "recover_stale_typed_launch_context_claims",
@@ -1763,5 +2004,6 @@ __all__ = [
     "resolve_launch_context_for_display",
     "validate_bound_job",
     "validate_bound_job_request",
+    "validate_prepared_child_job_request",
     "workflow_pinned_gpu",
 ]

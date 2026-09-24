@@ -64,6 +64,8 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
+import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
+import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
@@ -73,10 +75,9 @@ import {
 } from './rfd3LocalRedesignResultsView';
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
-import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import BlindPoseSelectedControls from './BlindPoseSelectedControls';
 import BinderSelectedControls from './BinderSelectedControls';
-import { readBinderSelection, writeBinderSelection } from '../lib/binderContinuation';
+import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import {
     parseFrustraMpnnExperimentContext,
@@ -1693,11 +1694,15 @@ export function ResultsViewer() {
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
+    const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
+    const exactArtifactId = new URLSearchParams(location.search).get('artifact_id');
+    const exactTargetState = new URLSearchParams(location.search).get('target_state');
     const [localDesignId, setSelectedDesignId] = useState<string>('');
     const selectedDesignId = requestedDesignId || localDesignId;
     const selectDesign = useCallback((id: string) => {
         const params = new URLSearchParams(location.search);
         params.set('design_id', id);
+        params.delete('artifact_id'); params.delete('target_state');
         navigate(`${location.pathname}?${params}`, { replace: true });
     }, [location.pathname, location.search, navigate]);
     const [designSelection, setDesignSelection] = useState(() => ({ jobId: selectedJobId, ids: readBinderSelection(selectedJobId) }));
@@ -1709,6 +1714,28 @@ export function ResultsViewer() {
         });
     }, [selectedJobId]);
     useEffect(() => { writeBinderSelection(designSelection.jobId, designSelection.ids); }, [designSelection]);
+    useEffect(() => {
+        if (!requestedDesignId || !exactArtifactId) return;
+        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
+        setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
+    }, [selectedJobId, requestedDesignId, exactArtifactId, exactTargetState, setSelectedDesignIds]);
+    useEffect(() => {
+        const syncDocumentRoute = (event: Event) => {
+            const { jobId: owner, documents } = (event as CustomEvent).detail;
+            if (owner !== selectedJobId || !requestedDesignId) return;
+            const selector = documents[requestedDesignId];
+            const params = new URLSearchParams(location.search);
+            if (selector?.artifact_id) params.set('artifact_id', selector.artifact_id); else params.delete('artifact_id');
+            if (selector?.target_state !== undefined) params.set('target_state', selector.target_state); else params.delete('target_state');
+            if (params.toString() !== new URLSearchParams(location.search).toString()) navigate(`${location.pathname}?${params}`, { replace: true });
+        };
+        window.addEventListener('bms:binder-documents', syncDocumentRoute);
+        return () => window.removeEventListener('bms:binder-documents', syncDocumentRoute);
+    }, [selectedJobId, requestedDesignId, location.pathname, location.search, navigate]);
+    const mdRoute = (source: string, design: string) => {
+        const route = buildResultsViewerMolecularDynamicsRoute(source, design);
+        return destinationLaunchContextId ? `${route}&launch_context_id=${encodeURIComponent(destinationLaunchContextId)}` : route;
+    };
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
@@ -1864,9 +1891,9 @@ export function ResultsViewer() {
         retry: false,
         refetchInterval: (query) => {
             const job = query.state.data?.data;
-            if ((job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
+            if (isNativeBinderGeneration(job) || (job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
                 || (job?.model_id === 'ligandmpnn' && job.mode === 'interface_context')) {
-                return job.status === 'queued' || job.status === 'running' ? jobPollingInterval(1500, query) : false;
+                return job?.status === 'queued' || job?.status === 'running' ? jobPollingInterval(1500, query) : false;
             }
             return false;
         },
@@ -2303,7 +2330,7 @@ export function ResultsViewer() {
         if (newId) {
             const params = new URLSearchParams(location.search);
             if (newId !== selectedJobId) {
-                ['design_id', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
+                ['design_id', 'artifact_id', 'target_state', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
             }
             const query = params.toString();
             navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
@@ -2323,6 +2350,7 @@ export function ResultsViewer() {
         setCurrentPage(1);
         const params = new URLSearchParams(location.search);
         params.delete('design_id');
+        params.delete('artifact_id'); params.delete('target_state');
         params.delete('result_model');
         const query = params.toString();
         navigate(`/designs/${activeLineageRootJob.id}${query ? `?${query}` : ''}`, { replace: true });
@@ -2490,6 +2518,7 @@ export function ResultsViewer() {
         // An explicit model choice supersedes the previous model's exact Design.
         // Unavailable bookmarked IDs remain pinned until such an operator action.
         if (model !== resultSurface) params.delete('design_id');
+        params.delete('artifact_id'); params.delete('target_state');
         navigate(`${location.pathname}${updateWorkflowResultViewSearch(params.toString(), { model, scope })}`, { replace: true });
     }, [frustraMpnnScope, location.pathname, location.search, navigate, resultSurface]);
     const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
@@ -3266,7 +3295,6 @@ export function ResultsViewer() {
     }, [someVisibleSelected]);
 
     useEffect(() => {
-        setSelectedDesignIds(readBinderSelection(selectedJobId));
         setIterationMessage(null);
         setSavedFilterSetName('');
     }, [selectedJobId, setSelectedDesignIds]);
@@ -5128,11 +5156,6 @@ export function ResultsViewer() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
-    const { data: selectedFrustraMpnnDesigns = [], error: selectedRowsError } = useQuery({
-        queryKey: ['selected-design-details', selectedJobId, selectedDesignIds],
-        queryFn: () => Promise.all(selectedDesignIds.map(id => fetchDesignById(id, selectedJobId).then(response => response.data))),
-        enabled: selectedDesignIds.length > 0,
-    });
     const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
         <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
             {resultModelHierarchy.map((item) => <button
@@ -5203,7 +5226,7 @@ export function ResultsViewer() {
                                 {selectedDesign && activeJob.status === 'completed' && (
                                     <button
                                         type="button"
-                                        onClick={() => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, selectedDesign.id))}
+                                        onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}
                                         className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
                                     >
                                         Use as MD starting structure
@@ -5368,13 +5391,15 @@ export function ResultsViewer() {
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
+                {isNativeBinderGeneration(activeJob) && <NativeBinderGenerationResults key={selectedJobId} jobId={selectedJobId} status={activeJob?.status} launchContextId={destinationLaunchContextId} />}
                 {activeJob?.model_id === 'bindcraft2' && (
-                    <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} />
+                    <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} launchContextId={destinationLaunchContextId} />
                 )}
                 {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
                     || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
                     <BlindPoseSelectedControls key={activeJob.id} sourceJobId={activeJob.id}
-                        sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
+                        launchContextId={destinationLaunchContextId}
+                            sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
                     isRFD3GenerationResultJob(activeJob) ? (
@@ -5545,21 +5570,17 @@ export function ResultsViewer() {
 
                         {activeJob && <BinderSelectedControls key={`binder-${activeJob.id}`}
                             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
+                            launchContextId={destinationLaunchContextId}
+                            candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
+                            inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
                             onOpenJob={handleSelectJob}
-                            onStartMD={designId => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, designId))} />}
-                        {selectedRowsError && <p role="alert">Selected Design details could not be loaded. The selected IDs have been retained.</p>}
-                        {activeJob && selectedFrustraMpnnDesigns.length > 0 && (
-                            <FrustraMpnnAnalysisControls
-                                parentJobId={activeJob.id}
-                                selectedDesigns={selectedFrustraMpnnDesigns}
-                                onOpenJob={handleSelectJob}
-                            />
-                        )}
+                            onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />}
 
                         {activeJob && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
                             || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
                             key={activeJob.id}
                             sourceJobId={activeJob.id}
+                            launchContextId={destinationLaunchContextId}
                             sourceModelId={activeJob.model_id}
                             sourceParams={activeJob.params}
                             selectedDesignIds={selectedDesignIds}
@@ -7101,7 +7122,8 @@ export function ResultsViewer() {
                                     )}
 
                                     {/* STRUCTURE TAB - Fullscreen-Aware with Overlays */}
-                                    {activeTab === 'structure' && selectedDesignSupportsStructureViewer && (
+                                    {activeTab === 'structure' && exactArtifactId && <p>Exact native document {exactArtifactId} is inspected in Selected candidate workspace → Sources. The Design primary structure is not substituted.</p>}
+                                    {activeTab === 'structure' && !exactArtifactId && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
                                             <StructureViewerPane
                                                 selectedDesignId={selectedDesignId}

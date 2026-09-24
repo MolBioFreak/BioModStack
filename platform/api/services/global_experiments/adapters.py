@@ -3259,6 +3259,88 @@ class TypedCoreJobResultAdapter:
         )
 
 
+class NativeBinderJobResultAdapter:
+    """Reference model-owned publication bytes, including zero-Design results.
+
+    This is deliberately separate from the Design-set adapter: a successful
+    campaign or diagnostic is not a claim that a candidate Design exists.
+    """
+
+    domain_kind = "protein_in_silico"
+    store_id = "core"
+    adapter_version = 1
+    entity_kind = "native_binder_job_result"
+    _MODES = {
+        "bindcraft2": {"campaign", "resume", "score", "rank", "filter", "campaign_output", "archive", "unarchive"},
+        "ligandmpnn": {"interface_context"},
+        "esmfold2": {"blind_pose"},
+        "ppiflow": {"protein_binder", "antibody_binder", "nanobody_binder"},
+        "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder"},
+    }
+
+    def __init__(self, model_id: str):
+        if model_id not in self._MODES:
+            raise ValueError("No native binder publication reader for this model")
+        self.model_id = model_id
+        self.adapter_id = f"bms.native-binder.{model_id}.adapter.v1"
+        self.display_name = f"Native binder result: {model_id}"
+
+    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
+        normalized = _search_inputs(query, limit)
+        statement = select(Job).where(
+            Job.model_id == self.model_id,
+            Job.mode.in_(self._MODES[self.model_id]),
+            Job.status.in_(("completed", "succeeded")),
+        )
+        if normalized:
+            pattern = f"%{normalized}%"
+            statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
+        rows = (await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all()
+        return [EntityProjection(
+            entity_id=row.id, entity_kind=self.entity_kind,
+            label=_bounded_label(row.name, row.id), canonical_state=str(row.status),
+            metadata={"model_id": row.model_id, "mode": row.mode},
+        ) for row in rows]
+
+    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
+        job = await core_session.get(Job, entity_id)
+        if job is None or job.model_id != self.model_id or job.mode not in self._MODES[self.model_id]:
+            raise AdapterError("entity_not_found", "Native result does not belong to this adapter")
+        if job.status not in {"completed", "succeeded"}:
+            raise AdapterError("source_contract_unavailable", "Native Job result is not complete")
+        from services.core_protein_result_contract import CandidateIntegrityError
+        try:
+            if self.model_id == "bindcraft2":
+                from services.bindcraft2_publication import read_published_native_results
+                _, publication = await read_published_native_results(job, core_session)
+            elif self.model_id in {"ppiflow", "boltzgen"}:
+                if self.model_id == "ppiflow":
+                    from services.ppiflow_generation import read_published_generation_results
+                else:
+                    from services.boltzgen_candidate_publication import read_published_generation_results
+                publication = (await read_published_generation_results(job, core_session))["publication"]
+            elif self.model_id == "ligandmpnn":
+                from services.ligandmpnn_interface_publication import read_selected
+                publication = await read_selected(job, core_session)
+            else:
+                from services.binder_blind_pose_selected import read_selected
+                publication = (await read_selected(job, core_session))["publication"]
+        except (ValueError, OSError, KeyError, TypeError, CandidateIntegrityError) as exc:
+            raise AdapterError("source_contract_unavailable", "Native publication is unavailable or changed") from exc
+        return _receipt(
+            self, entity_id=job.id,
+            content_digest=_canonical_json_sha256(publication),
+            contract_digest=_canonical_json_sha256({"model_id": job.model_id, "mode": job.mode, "params": job.params or {}}),
+            reopen_uri=f"/designs/{job.id}",
+            metadata={
+                "canonical_state": str(job.status), "job_status": str(job.status),
+                "model_id": job.model_id, "mode": job.mode,
+                "artifact_authority": "verified_native_publication",
+                "result_contract_id": "native_binder_job_result_v1",
+            },
+        )
+
+
 _TYPED_CORE_RESULT_MODELS = {
     "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "ppiflow",
     "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
@@ -3301,3 +3383,6 @@ for _adapter in (
 
 for _model_id in sorted(_TYPED_CORE_RESULT_MODELS):
     registry.register(TypedCoreJobResultAdapter(_model_id))
+
+for _model_id in sorted(NativeBinderJobResultAdapter._MODES):
+    registry.register(NativeBinderJobResultAdapter(_model_id))

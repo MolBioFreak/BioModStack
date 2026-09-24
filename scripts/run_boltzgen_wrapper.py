@@ -382,7 +382,9 @@ def main():
             protocol = args.protocol
         
         # BoltzGen CLI: boltzgen run <design_spec.yaml> --output <dir> --num_designs N --protocol X
-        cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {protocol}"
+        import shlex
+        cmd = shlex.join(['boltzgen', 'run', str(config_path), '--output', str(batch_out_dir),
+                          '--num_designs', str(args.num_designs), '--protocol', protocol])
 
         if args.diffusion_batch_size:
             cmd += f" --diffusion_batch_size {args.diffusion_batch_size}"
@@ -395,7 +397,7 @@ def main():
         
         # Add inverse folding parameters if specified
         if args.inverse_fold_avoid:
-            cmd += f" --inverse_fold_avoid '{args.inverse_fold_avoid}'"
+            cmd += ' --inverse_fold_avoid ' + shlex.quote(args.inverse_fold_avoid)
         if args.inverse_fold_num_sequences:
             cmd += f" --inverse_fold_num_sequences {args.inverse_fold_num_sequences}"
         

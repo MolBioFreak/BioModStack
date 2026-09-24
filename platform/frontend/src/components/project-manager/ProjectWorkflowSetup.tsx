@@ -86,7 +86,8 @@ export function useProjectWorkflowSetup() {
     const settings = setup?.draft ?? {};
     const saveDraft = async (exactSettings: JsonObject) => {
         if (!setup) throw new Error('Project workflow setup is not hydrated.');
-        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: setup.generation, draft: exactSettings });
+        const current = queryClient.getQueryData<ProjectWorkflowSetup>(['project-workflow-setup', projectId, setupContextId]) ?? setup;
+        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: current.generation, draft: exactSettings });
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], updated);
         return updated;
     };
@@ -97,7 +98,7 @@ export function useProjectWorkflowSetup() {
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], updated);
         return updated;
     };
-    const startRun = async (exactSettings: JsonObject) => {
+    const startRun = async (exactSettings: JsonObject, options: { stayInEditor?: boolean } = {}) => {
         const saved = await saveDraft(exactSettings);
         const prepared = await prepareProjectWorkflowSetup(saved.project_id, saved.setup_context_id, saved.generation);
         if (!prepared.preparation_id) throw new Error('The server did not issue immutable preparation authority.');
@@ -108,6 +109,7 @@ export function useProjectWorkflowSetup() {
             [{ preparation_id: prepared.preparation_id, launch_context_id: prepared.launch_context_id ?? null }],
         );
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], prepared);
+        if (options.stayInEditor) return prepared;
         if (!prepared.launch_context_id) {
             navigate(prepared.return_uri);
             return prepared;

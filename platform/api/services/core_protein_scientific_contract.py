@@ -24,7 +24,7 @@ SUPPORTED_CALLERS = MappingProxyType({
     **{(model, mode): "structure_prediction" for model in ("boltz2", "protenix") for mode in ("predict", "complex")},
     **{(model, "predict"): "structure_prediction" for model in ("esmfold2", "esmfold2_experimental")},
     **{("boltzgen", mode): "boltzgen" for mode in (
-        "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking", "nanobody_binder", "peptide_binder")},
+        "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking", "nanobody_binder", "peptide_binder", "protein_binder")},
     **{("boltzgen_child", mode): "boltzgen" for mode in ("nanobody_binder", "peptide_binder", "protein_binder")},
     **{("fampnn", mode): "fampnn" for mode in ("design", "fixed_backbone", "binder_design")},
     ("fampnn_child", "sequence_design"): "fampnn",

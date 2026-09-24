@@ -44,6 +44,8 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
         sourceFiles: [
             'platform/api/config/models/antibody_denovo.yaml',
             'platform/frontend/src/components/AntibodyDenovoTemplate.tsx',
+            'platform/frontend/src/components/BinderWorkflowWorkspace.tsx',
+            'platform/frontend/src/components/BinderGeneratorChooser.tsx',
             'workflows/antibody_denovo.nf',
             'nextflow.config',
         ],

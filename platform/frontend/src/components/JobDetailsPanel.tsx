@@ -6,13 +6,15 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import type { Job } from '../lib/api';
 import { CandidateAccountingStatus } from './CandidateAccountingStatus';
 import { ExecutionSettingsPanel } from './ExecutionSettingsPanel';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
 import { RemoteDiagnosticsPrompt } from './RemoteDiagnosticsPrompt';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
+import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
+import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
 
 interface DockingResult {
     name: string;
@@ -35,6 +37,7 @@ interface JobDetailsPanelProps {
 }
 
 export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
+    const destinationLaunchContextId = new URLSearchParams(useLocation().search).get('launch_context_id');
     // Check if this is a docking job
     const isDockingJob = job.model_id === 'diffdock' || job.mode?.includes('dock');
     const isBindCraft2 = job.model_id === 'bindcraft2';
@@ -112,7 +115,8 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
 
                     {!isBindCraft2 && <CandidateAccountingStatus job={job} />}
                     {['esmfold2', 'esmfold2_experimental', 'antibody_denovo', 'antibody_child'].includes(job.model_id) && <ExecutionSettingsPanel jobId={job.id} />}
-                    {isBindCraft2 && <BindCraft2JobResults key={job.id} jobId={job.id} resultsAvailable={['completed', 'failed', 'cancelled'].includes(job.status)} />}
+                    {isNativeBinderGeneration(job) && <NativeBinderGenerationResults key={job.id} jobId={job.id} status={job.status} launchContextId={destinationLaunchContextId} />}
+                    {isBindCraft2 && <BindCraft2JobResults key={job.id} jobId={job.id} launchContextId={destinationLaunchContextId} resultsAvailable={['completed', 'failed', 'cancelled'].includes(job.status)} />}
                     {/* Results Summary */}
                     {!isBindCraft2 && job.status === 'completed' && (
                         <div className="flex flex-wrap gap-2">

@@ -18,16 +18,43 @@ process PrepBoltzGenInput {
     val cdr_h1_length
     val cdr_h2_length
     val cdr_h3_length
-    path input_pdb
-    path ligand_pdb
-    path dna_structure
-    path target_pdb
+    path input_pdb, stageAs: 'backbone/*'
+    path ligand_pdb, stageAs: 'ligand/*'
+    path dna_structure, stageAs: 'dna/*'
+    path target_pdb, stageAs: 'target/*'
 
     output:
     path "boltzgen_prepared", emit: yaml
 
     script:
-    def nanobodyScaffoldSpecs = params.get('boltzgen_nanobody_scaffold_specs')
+    def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
+    def generationMode = params.get('boltzgen_generation_mode')
+    def genericScaffold = generationMode in ['protein_binder', 'peptide_binder'] && params.get('boltzgen_scaffold_path')
+    def arguments = [
+        ligand_smiles: ligand_smiles, ntp_type: ntp_type,
+        scaffold_length: scaffold_length, num_designs: num_designs,
+        binding_site_residues: binding_site_residues,
+        protein_sequence: protein_sequence, dna_template_seq: dna_template_seq,
+        dna_primer_seq: dna_primer_seq, secondary_structure: secondary_structure,
+        protocol: protocol ?: 'protein-anything', covalent_bonds: covalent_bonds,
+        nanobody_framework: nanobody_framework,
+        nanobody_scaffold_specs: params.get('boltzgen_nanobody_scaffold_specs'),
+        cdr_h1_length: cdr_h1_length, cdr_h2_length: cdr_h2_length, cdr_h3_length: cdr_h3_length,
+        generation_mode: generationMode,
+        target_chains: params.get('boltzgen_target_chains'),
+        target_binding_positions: params.get('boltzgen_target_binding_positions'),
+        binder_sequence: params.get('boltzgen_binder_sequence'),
+        scaffold_chain: params.get('boltzgen_scaffold_chain'),
+        scaffold_design_ranges: params.get('boltzgen_scaffold_design_ranges'),
+        output_yaml: 'boltzgen_input.yaml'
+    ]
+    if (input_pdb.name != 'NO_INPUT_PDB') arguments[genericScaffold ? 'scaffold_path' : 'input_pdb'] = input_pdb
+    if (ligand_pdb.name != 'NO_LIGAND_PDB') arguments.ligand_pdb = ligand_pdb
+    if (dna_structure.name != 'NO_DNA_STRUCT') arguments.dna_structure = dna_structure
+    if (target_pdb.name != 'NO_TARGET_PDB') arguments.target_pdb = target_pdb
+    def argv = arguments.findAll { key, value -> value != null && value.toString() != '' }
+        .collect { key, value -> "--${key} ${quote(value)}" }.join(' ')
+    if (catalytic_site) argv += ' --catalytic_site'
     """
     export MAMBA_ROOT_PREFIX=/opt/conda/
     if [ -x /opt/conda/envs/pyrosetta/bin/python3 ]; then
@@ -38,38 +65,8 @@ process PrepBoltzGenInput {
             micromamba activate pyrosetta
         fi
     fi
-
-    # Prepare input YAML for BoltzGen
-    python3 ${params.code_root}/scripts/prep_boltzgen.py \\
-        ${ligand_smiles ? "--ligand_smiles '${ligand_smiles}'" : ''} \\
-        ${ntp_type ? "--ntp_type '${ntp_type}'" : ''} \\
-        --scaffold_length '${scaffold_length}' \\
-        --num_designs ${num_designs} \\
-        ${binding_site_residues ? "--binding_site_residues '${binding_site_residues}'" : ''} \\
-        ${catalytic_site ? "--catalytic_site" : ''} \\
-        ${protein_sequence ? "--protein_sequence '${protein_sequence}'" : ''} \\
-        ${dna_template_seq ? "--dna_template_seq '${dna_template_seq}'" : ''} \\
-        ${dna_primer_seq ? "--dna_primer_seq '${dna_primer_seq}'" : ''} \\
-        ${secondary_structure ? "--secondary_structure '${secondary_structure}'" : ''} \\
-        ${protocol ? "--protocol '${protocol}'" : '--protocol protein-anything'} \\
-        ${covalent_bonds ? "--covalent_bonds '${covalent_bonds}'" : ''} \\
-        ${nanobody_framework ? "--nanobody_framework '${nanobody_framework}'" : ''} \\
-        ${nanobodyScaffoldSpecs ? "--nanobody_scaffold_specs '${nanobodyScaffoldSpecs}'" : ''} \\
-        ${cdr_h1_length ? "--cdr_h1_length '${cdr_h1_length}'" : ''} \\
-        ${cdr_h2_length ? "--cdr_h2_length '${cdr_h2_length}'" : ''} \\
-        ${cdr_h3_length ? "--cdr_h3_length '${cdr_h3_length}'" : ''} \\
-        ${input_pdb.name != 'NO_INPUT_PDB' ? "--input_pdb '${input_pdb}'" : ''} \\
-        ${ligand_pdb.name != 'NO_LIGAND_PDB' ? "--ligand_pdb '${ligand_pdb}'" : ''} \\
-        ${dna_structure.name != 'NO_DNA_STRUCT' ? "--dna_structure '${dna_structure}'" : ''} \\
-        ${target_pdb.name != 'NO_TARGET_PDB' ? "--target_pdb '${target_pdb}'" : ''} \\
-        --output_yaml boltzgen_input.yaml
-
-    # Note: boltzgen YAML validation skipped here (boltzgen CLI only in boltzgen.sif)
-    # The prep_boltzgen.py script validates structure internally
-    echo "BoltzGen YAML prepared: boltzgen_input.yaml"
-    cat boltzgen_input.yaml
-    python3 ${params.code_root}/scripts/lib/boltzgen_inputs.py \
-        --config boltzgen_input.yaml --output boltzgen_prepared
+    python3 ${quote(params.code_root + '/scripts/prep_boltzgen.py')} ${argv}
+    python3 ${quote(params.code_root + '/scripts/lib/boltzgen_inputs.py')} --config boltzgen_input.yaml --output boltzgen_prepared
     """
 }
 
@@ -94,6 +91,7 @@ process RunBoltzGen {
     path "*.log"
 
     script:
+    def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def numDesigns = params.get('boltzgen_num_designs') ?: 10
     def diffusionBatchSize = params.get('boltzgen_diffusion_batch_size') ?: params.get('boltzgen_batch_size') ?: 1
     def protocol = params.get('boltzgen_protocol') ?: 'auto'
@@ -110,13 +108,13 @@ process RunBoltzGen {
     def reuseExisting = params.get('boltzgen_reuse') ?: false
     // Handle both single config and batch of configs
     def preparedDirectory = !(yaml_configs instanceof List) && yaml_configs.isDirectory()
-    def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.join(' ')}" :
-        (preparedDirectory ? '--config boltzgen_input.yaml' : "--config ${yaml_configs}")
+    def configArg = yaml_configs instanceof List ? "--configs ${yaml_configs.collect { quote(it) }.join(' ')}" :
+        (preparedDirectory ? '--config boltzgen_input.yaml' : "--config ${quote(yaml_configs)}")
     """
     # Work beside the original YAML so its unchanged relative inputs resolve.
     task_dir=\$(pwd)
-    ${preparedDirectory ? "cd '${yaml_configs}'" : ''}
-    ${params.get('boltzgen_prepared_sha256') ? "python3 ${params.code_root}/scripts/lib/boltzgen_inputs.py --config " + (preparedDirectory ? 'boltzgen_input.yaml' : yaml_configs) + " --expected-sha256 ${params.boltzgen_prepared_sha256}" : ''}
+    ${preparedDirectory ? "cd ${quote(yaml_configs)}" : ''}
+    ${params.get('boltzgen_prepared_sha256') ? "python3 ${params.code_root}/scripts/lib/boltzgen_inputs.py --config " + (preparedDirectory ? 'boltzgen_input.yaml' : quote(yaml_configs)) + " --expected-sha256 ${params.boltzgen_prepared_sha256}" : ''}
     python3 /scripts/run_boltzgen_wrapper.py \\
         ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1" : ''} \\
         ${configArg} \\

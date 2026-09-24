@@ -1,5 +1,6 @@
 import type { BC2Request } from '../components/BindCraft2Settings';
-import { materializeStructureTarget } from './api';
+import type { SelectedSourceDocument } from '../components/TargetAntigenSelector';
+import { materializeStructureTarget, materializeExactStructure, type StructureMaterialization, type ProjectStructureQuery } from './api';
 import { parsePDB, type Chain, type Residue } from '../utils/pdbUtils';
 
 export interface BC2InitialSources {
@@ -7,9 +8,9 @@ export interface BC2InitialSources {
     scaffold?: { file?: File; path?: string; url?: string; pdbContent?: string; name: string };
 }
 export type BC2Target = Record<string, unknown>;
-export type BC2Source = { file?: File; path?: string; url?: string; name: string };
+export type BC2Source = { file?: File; path?: string; url?: string; name: string; designId?: string; jobId?: string; document?: SelectedSourceDocument; derivedFrom?: BC2Source; modelNumber?: number; chainIds?: readonly string[]; projectSource?: ProjectStructureQuery; materialization?: StructureMaterialization };
 export type BC2Model = { number: number; chains: Chain[]; content: string };
-export type BC2Document = { content: string; format: 'pdb' | 'cif' | 'fasta'; models: BC2Model[]; records?: Record<string, string> };
+export type BC2Document = { content: string; format: 'pdb' | 'cif' | 'fasta'; models: BC2Model[]; records?: Record<string, string>; source?: BC2Source };
 export const sourceDownloadUrl = (path: string) => `/api/files/download/${encodeURIComponent(path)}`;
 export const bc2Targets = (value: BC2Request): BC2Target[] => Array.isArray(value.targets) ? value.targets as BC2Target[] : [];
 export const textValue = (value: unknown): string => typeof value === 'string' ? value : '';
@@ -26,9 +27,17 @@ export async function readBC2Source(source: BC2Source, signal?: AbortSignal): Pr
     return response.text();
 }
 
-export async function acquireBC2Source(source: BC2Source): Promise<{ path: string; document: BC2Document }> {
-    const content = await readBC2Source(source);
-    const document = await parseBC2Document(content, source.file?.name || source.path || source.name);
+export async function acquireBC2Source(source: BC2Source, prepared?: BC2Document): Promise<{ path: string; document: BC2Document }> {
+    if (source.designId && !source.file && !(source.materialization && source.materialization.path === source.path)) {
+        const materialization = await materializeExactStructure({ design_id: source.designId, job_id: source.jobId,
+            document: source.document && { artifact_id: source.document.artifact_id, target_state: source.document.target_state },
+            expected_sha256: source.document?.sha256, output_format: 'native', model_number: source.modelNumber });
+        const retained = { ...source, path: materialization.path, materialization };
+        const content = await readBC2Source({ name: source.name, path: materialization.path });
+        return { path: materialization.path, document: { ...await parseBC2Document(content, materialization.path), source: retained } };
+    }
+    const content = prepared?.content ?? await readBC2Source(source);
+    const document = prepared ?? await parseBC2Document(content, source.file?.name || source.path || source.name);
     // Fetch URL-only selections once; upload and preview exactly those same bytes.
     const extension = document.format === 'fasta' ? 'fasta' : document.format;
     const originalName = source.file?.name || source.path || source.name;
@@ -39,7 +48,82 @@ export async function acquireBC2Source(source: BC2Source): Promise<{ path: strin
         name: source.name,
         file: source.file && compatibleSuffix.test(originalName) ? source.file : new File([content], `${source.name.replace(/\.(pdb|cif|mmcif|fa|fasta|faa)$/i, '')}.${extension}`),
     }, 'inputs');
-    return { path, document };
+    return { path, document: { ...document, source } };
+}
+
+/** Mount-owned reuse: immutable File identity or exact path/URL, never filenames.
+ * In-flight reads survive display switches; callers independently guard commits.
+ * Rejections are evicted so retry is real. No process-wide structure-byte cache. */
+export function createBC2SourceSession() {
+    const files = new WeakMap<File, Map<number | undefined, object>>();
+    const documents = new Map<string | object, Promise<BC2Document>>();
+    const acquisitions = new Map<string | object, Promise<{ path: string; document: BC2Document }>>();
+    const key = (source: BC2Source): string | object => {
+        if (source.file) {
+            if (!files.has(source.file)) files.set(source.file, new Map());
+            const models = files.get(source.file)!;
+            if (!models.has(source.modelNumber)) models.set(source.modelNumber, {});
+            return models.get(source.modelNumber)!;
+        }
+        return JSON.stringify([source.path ? 'path' : 'url', source.path || source.url, source.document?.artifact_id, source.document?.sha256, source.designId, source.jobId, source.modelNumber]);
+    };
+    const read = (source: BC2Source) => {
+        const id = key(source);
+        let pending = documents.get(id);
+        if (!pending) {
+            pending = readBC2Source(source).then(content => parseBC2Document(content, source.file?.name || source.path || source.name)).then(document => ({ ...document, source }));
+            documents.set(id, pending);
+            void pending.catch(() => { if (documents.get(id) === pending) documents.delete(id); });
+        }
+        return pending;
+    };
+    const acquire = (source: BC2Source) => {
+        const id = key(source);
+        let pending = acquisitions.get(id);
+        if (!pending) {
+            pending = (source.designId && !source.file && !(source.materialization && source.materialization.path === source.path) ? acquireBC2Source(source) : read(source).then(document => acquireBC2Source(source, document))).then(result => {
+                // The receiving effect reads this exact retained path. Reuse the
+                // just-parsed document rather than fetching/parsing it again.
+                documents.set(key({ ...result.document.source, name: source.name, path: result.path, file: undefined }), Promise.resolve(result.document));
+                return result;
+            });
+            acquisitions.set(id, pending);
+            void pending.catch(() => { if (acquisitions.get(id) === pending) acquisitions.delete(id); });
+        }
+        return pending.then(result => ({ ...result, document: { ...result.document, source: { ...source, ...result.document.source } } }));
+    };
+    const derivatives = new Map<string | object, Promise<{ path: string; document: BC2Document }>>();
+    const pdb = (source: BC2Source) => {
+        const id = key(source);
+        let pending = derivatives.get(id);
+        if (!pending) {
+            pending = convertPdbSource(source, acquire).then(result => {
+                documents.set(key({ ...result.document.source, name: source.name, path: result.path, file: undefined }), Promise.resolve(result.document));
+                return result;
+            });
+            derivatives.set(id, pending);
+            void pending.catch(() => { if (derivatives.get(id) === pending) derivatives.delete(id); });
+        }
+        return pending;
+    };
+    return { read, acquire, pdb };
+}
+
+/** Public receiving seam for PDB-only consumers; never relabel native CIF. */
+export async function preparePdbStructureSource(source: BC2Source, session = createBC2SourceSession()) {
+    return session.pdb(source);
+}
+async function convertPdbSource(source: BC2Source, acquire: (source: BC2Source) => Promise<{ path: string; document: BC2Document }>): Promise<{ path: string; document: BC2Document }> {
+    const acquired = await acquire(source);
+    if (acquired.document.format === 'fasta') throw new Error('A sequence is not a PDB structure.');
+    if (acquired.document.format === 'pdb') return acquired;
+    const native = acquired.document.source || source;
+    const materialization = await materializeExactStructure({ path: acquired.path, output_format: 'pdb',
+        model_number: source.modelNumber, expected_sha256: native.materialization?.sha256 });
+    const retained: BC2Source = { ...native, path: materialization.path, materialization,
+        derivedFrom: { ...native, path: acquired.path } };
+    const content = await readBC2Source({ name: source.name, path: materialization.path });
+    return { path: materialization.path, document: { ...await parseBC2Document(content, materialization.path), source: retained } };
 }
 
 const aminoAcids: Record<string, string> = Object.fromEntries('ALA:A ARG:R ASN:N ASP:D CYS:C GLN:Q GLU:E GLY:G HIS:H ILE:I LEU:L LYS:K MET:M PHE:F PRO:P SER:S THR:T TRP:W TYR:Y VAL:V MSE:M'.split(' ').map(pair => pair.split(':')));

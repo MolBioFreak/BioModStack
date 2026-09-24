@@ -194,6 +194,8 @@ async def ingest(job, output, session, *, commit=True):
     prior = (job.provenance or {}).get('core_protein_candidate_publication')
     if rows or prior is not None:
         validate_persisted_publication(job, rows, root)
+        if (job.provenance or {}).get('boltzgen_generation_publication') is not None:
+            await read_published_generation_results(job, session)
         return 0
     revalidate_prepared_publication(root, receipt)
     # Entire set has been checked. Only now may review cleanup and writes occur.
@@ -207,6 +209,105 @@ async def ingest(job, output, session, *, commit=True):
                                 'core_protein_scientific': scalar_block(item, design_id),
                                 'core_protein_candidate_artifacts': item['artifacts']}))
     job.provenance = {**(job.provenance or {}), 'core_protein_candidate_publication': receipt}
+    await session.flush()
+    if job.model_id == 'boltzgen':
+        await _generation_publication(job, output, session, publish=True)
     if commit:
         await session.commit()
     return len(prepared)
+
+
+def generation_workbench(result, publication, *, offset=0, limit=100):
+    """Exact native rows with persisted Design/document and governed file handles."""
+    from services.bindcraft2_publication import native_workbench_page
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError('Invalid native result page')
+    page = native_workbench_page({'arm': '', 'stage': 'generation',
+                                 'rows': result['records'][offset:offset + limit]}, publication)
+    return {**result, 'records': page['rows'], 'total': len(result['records']),
+            'offset': offset, 'limit': limit, 'publication': publication, 'artifacts': page['artifacts']}
+
+
+async def _generation_publication(job, output, session, *, publish=False, offset=0, limit=100):
+    """Wrap existing native accounting authority; do not re-rank or invent joins."""
+    import asyncio
+    from database import JobArtifact
+    if job.model_id != 'boltzgen' or not job.output_dir or Path(job.output_dir).absolute() != Path(output).absolute():
+        raise ValueError('BoltzGen generation publication root or owner differs')
+    root, prepared, core = await asyncio.to_thread(prepare, job, output)
+    if (job.provenance or {}).get('core_protein_candidate_publication') != core:
+        raise ValueError('BoltzGen native candidate publication missing')
+    with session.no_autoflush:
+        designs = list((await session.scalars(select(Design).where(Design.job_id == job.id, Design.source_stage.is_(None)))).all())
+        artifacts = list((await session.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all())
+    await asyncio.to_thread(validate_persisted_publication, job, designs, root)
+    for design in designs:
+        block = await asyncio.to_thread(scalar_block, prepared[design.name], design.id)
+        if (design.confidence_metrics or {}).get('core_protein_scientific') != block:
+            raise ValueError('BoltzGen persisted native scalars changed')
+    previous = (job.provenance or {}).get('boltzgen_generation_publication')
+    if previous is None and not publish:
+        # Historical marked publications already have their own immutable authority.
+        # Reopen without mutating them or pretending a JobArtifact was registered.
+        report = json.loads((root / 'filter_summary.json').read_bytes())
+        records = report['dispositions']
+        return {'receipt': report, 'records': records[offset:offset + limit],
+                'publication': core, 'artifacts': [], 'total': len(records),
+                'offset': offset, 'limit': limit}
+    files = {}
+    for entry in [core['manifest'], *(a for item in prepared.values() for a in item['artifacts'].values())]:
+        path = Path(entry['path'])
+        files[path.relative_to(root).as_posix()] = {'sha256': entry['sha256'], 'bytes': path.stat().st_size}
+    publication = {'schema': 'boltzgen.generation-publication.v1', 'job_id': job.id,
+                   'root': str(Path(output).absolute()), 'campaign_root': 'collected/boltzgen_filtered',
+                   'attempt': job.retry_count or 0, 'remote_attempt_id': job.remote_attempt_id, 'files': files}
+    owned = {a.logical_path.removeprefix('boltzgen/native/'): a for a in artifacts if a.logical_path.startswith('boltzgen/native/')}
+    if previous is not None and ({k: v for k, v in previous.items() if k != 'candidates'} != publication
+                                 or set(owned) != set(files)):
+        raise ValueError('BoltzGen native publication replay changed')
+    if len(owned) != sum(a.logical_path.startswith('boltzgen/native/') for a in artifacts):
+        raise ValueError('BoltzGen registered artifacts span multiple attempts')
+    if previous is None and owned:
+        raise ValueError('BoltzGen artifacts exist without publication')
+    for name, info in files.items():
+        row = owned.get(name)
+        if row is None:
+            row = JobArtifact(id=str(uuid.uuid4()), owner_job_id=job.id, attempt=publication['attempt'],
+                              logical_path='boltzgen/native/' + name, storage_path=str(root / name),
+                              sha256=info['sha256'], bytes=info['bytes'],
+                              media_type='chemical/x-pdb' if name.endswith('.pdb') else 'application/octet-stream',
+                              provenance={'model_id': 'boltzgen'})
+            session.add(row)
+            owned[name] = row
+        elif (row.storage_path, row.sha256, row.bytes, row.attempt) != (str(root / name), info['sha256'], info['bytes'], publication['attempt']):
+            raise ValueError('BoltzGen registered artifact changed')
+    publication['candidates'] = []
+    for design in sorted(designs, key=lambda d: d.name):
+        path = Path(prepared[design.name]['artifacts']['structure']['path']).relative_to(root).as_posix()
+        artifact = owned[path]
+        publication['candidates'].append({'design_id': design.id, 'candidate_key': design.name,
+            'structures': [{'artifact_id': artifact.id, 'logical_path': artifact.logical_path,
+                            'path': path, 'sha256': artifact.sha256, 'primary': True, 'target_state': None}]})
+        fields = {'lineage_root_job_id': job.lineage_root_job_id or job.id, 'origin_job_id': job.id,
+                  'stage_family': 'boltzgen', 'stage_mode': job.mode,
+                  'provenance': {'schema': 'boltzgen.candidate-lineage.v1', 'candidate_key': design.name,
+                                 'primary_artifact_id': artifact.id, 'validation_state': 'unvalidated'}}
+        if previous is None:
+            for key, value in fields.items():
+                setattr(design, key, value)
+        elif any(getattr(design, key) != value for key, value in fields.items()):
+            raise ValueError('BoltzGen persisted candidate lineage changed')
+    if previous is not None and publication != previous:
+        raise ValueError('BoltzGen candidate document bindings changed')
+    if previous is None:
+        job.provenance = {**(job.provenance or {}), 'boltzgen_generation_publication': publication}
+        await session.flush()
+    report = json.loads((root / 'filter_summary.json').read_bytes())
+    by_key = {d.name: d for d in designs}
+    records = [{**record, **({'native_metrics': scalar_block(prepared[record['candidate_id']], by_key[record['candidate_id']].id)}
+                if record['candidate_id'] in prepared else {})} for record in report['dispositions']]
+    return generation_workbench({'receipt': report, 'records': records}, publication, offset=offset, limit=limit)
+
+
+async def read_published_generation_results(job, session, *, offset=0, limit=100):
+    return await _generation_publication(job, job.output_dir, session, offset=offset, limit=limit)

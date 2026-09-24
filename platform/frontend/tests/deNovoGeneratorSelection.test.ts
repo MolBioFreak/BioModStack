@@ -6,8 +6,10 @@ import { launcherWorkflowTemplates } from '../src/lib/launcherCatalog.js';
 test('launcher retains every existing generator and describes exact supported modality', () => {
     const card = launcherWorkflowTemplates.find(item => item.id === 'antibody_denovo');
     assert.equal(card?.name, 'De Novo Binder Design');
-    assert.match(card?.stages[0].tool ?? '', /RFantibody.*BoltzGen VHH.*seeded PPIFlow/);
-    assert.match(card?.description ?? '', /antibody-specific/);
+    assert.deepEqual(card?.stages[0].tool.split(' / '), ['BindCraft2', 'BoltzGen', 'PPIFlow', 'RFantibody']);
+    assert.match(card?.description ?? '', /model-native inputs and settings/);
+    assert.match(card?.description ?? '', /optional selected refinement/);
+    assert.doesNotMatch(card?.stages[0].tool ?? '', /seeded|RFD3|VHH/);
 });
 
 test('saved native generator mode restores its own route and unknown selectors refuse substitution', () => {

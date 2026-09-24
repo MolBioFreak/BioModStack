@@ -1,3 +1,4 @@
+import { nativeCandidateRoute } from '../lib/nativeBinderResults';
 import React from 'react';
 
 export type BindCraft2Stage = 'trajectory' | 'draw' | 'retained' | 'attempt' | 'document';
@@ -30,10 +31,11 @@ export function BindCraft2SettingsReadback({ value }: { value: unknown }) {
 }
 
 /** Presentation only: uses native page order/ranks and existing verified handles. */
-export function BindCraft2NativeResults({ page, onPage, jobId }: {
+export function BindCraft2NativeResults({ page, onPage, jobId, launchContextId }: {
   page: BindCraft2NativePage;
   onPage: (query: { arm: string | null; stage: BindCraft2Stage; offset: number; limit: number }) => void;
   jobId?: string;
+  launchContextId?: string | null;
 }) {
   const change = (arm: string | null, stage: BindCraft2Stage, offset = 0, limit = page.limit) =>
     onPage({ arm, stage, offset, limit });
@@ -73,8 +75,8 @@ export function BindCraft2NativeResults({ page, onPage, jobId }: {
           ? <dl>{Object.entries(object(object(row.target_readings)[key])).map(([state, value]) => <React.Fragment key={state}><dt>{state}</dt><dd>{scalar(value)}</dd></React.Fragment>)}</dl>
           : scalar(object(row.values)[key])}</td>)}
         <td className="p-2"><dl><dt>Trajectory</dt><dd>{scalar(row.trajectory_design)}</dd><dt>Scored draw</dt><dd>{scalar(row.scored_design)}</dd></dl>
-          {Array.isArray(row.structures) && row.structures.map((item, i) => { const structure = object(item); return <p key={String(structure.artifact_id ?? i)}>{scalar(structure.target_state)} · {scalar(structure.variant)}{structure.primary ? ' · primary' : ''} · binder {scalar(structure.binder_chains)} / target {scalar(structure.target_chains)} {typeof structure.download_url === 'string' && <a className="text-accent underline" href={structure.download_url} download>Native structure</a>}</p>; })}
-          {jobId && typeof row.design_id === 'string' && <a className="text-accent underline" href={`/designs/${encodeURIComponent(jobId)}`}>Candidate workbench</a>}
+          {Array.isArray(row.structures) && row.structures.map((item, i) => { const structure = object(item); return <p key={String(structure.artifact_id ?? i)}>{scalar(structure.target_state)} · {scalar(structure.variant)}{structure.primary ? ' · primary' : ''} · binder {scalar(structure.binder_chains)} / target {scalar(structure.target_chains)} {typeof structure.download_url === 'string' && <a className="text-accent underline" href={structure.download_url} download>Native structure</a>} {jobId && typeof row.design_id === 'string' && typeof structure.artifact_id === 'string' && <a className="text-accent underline" href={nativeCandidateRoute(jobId, row.design_id, { artifact_id: structure.artifact_id, target_state: typeof structure.target_state === 'string' ? structure.target_state : undefined }, launchContextId)}>Select exact native document</a>}</p>; })}
+          {jobId && typeof row.design_id === 'string' && <a className="text-accent underline" href={nativeCandidateRoute(jobId, row.design_id, undefined, launchContextId)}>Candidate workbench</a>}
         </td>
       </> : page.stage === 'attempt' ? <>
         <td className="p-2">{scalar(row.trajectory)}</td><td className="p-2"><details><summary>Effective settings</summary><BindCraft2SettingsReadback value={row.effective_settings} /></details><details><summary>Drawn / adaptive choices</summary><BindCraft2SettingsReadback value={row.drawn} /></details><p className="break-all">Attempt SHA-256: {scalar(row.sha256)}</p></td>

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, Job, get_session
+from experiment_database import get_experiment_session
 from schemas import JobCreate
 from paths import get_allowed_roots, resolve_runtime_data_path
 from services.ligandmpnn_interface_selection import InterfaceContextSelection, selected_submission
@@ -17,9 +18,16 @@ from services.nextflow import MODEL_MODE_WORKFLOW_ENTRYPOINTS
 router = APIRouter(prefix='/api/ligandmpnn/interface-context', tags=['ligandmpnn-interface-context'])
 
 
+class ProjectInterfaceContextSelection(InterfaceContextSelection):
+    launch_context_id: str | None = None
+
+
 @router.post('/selected', status_code=201)
-async def submit_selected(selection: InterfaceContextSelection, background_tasks: BackgroundTasks,
-                          session: AsyncSession = Depends(get_session)):
+async def submit_selected(selection: ProjectInterfaceContextSelection, background_tasks: BackgroundTasks,
+                          session: AsyncSession = Depends(get_session),
+                          experiment_session: AsyncSession = Depends(get_experiment_session)):
+    destination = getattr(selection, 'launch_context_id', None)
+    selection = InterfaceContextSelection.model_validate(selection.model_dump(exclude={'launch_context_id'}))
     if MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('ligandmpnn', 'interface_context')) != 'workflows/ligandmpnn_interface_context.nf':
         raise HTTPException(503, 'Selected interface-context workflow is not registered')
     from routers.jobs import create_job
@@ -79,7 +87,14 @@ async def submit_selected(selection: InterfaceContextSelection, background_tasks
                         mode='interface_context', params=params)
     token = selected_submission.set(True)
     try:
-        response = await create_job(request, background_tasks, session)
+        if destination:
+            from routers.jobs import submit_selected_child_jobs
+            children = await submit_selected_child_jobs([request], background_tasks, session, experiment_session,
+                destination_launch_context_id=destination, idempotency_key=str(binding["manifest"]),
+                response_context={"source_job_id": source.id, "operation": "interface_context"})
+            response = children[0]
+        else:
+            response = await create_job(request, background_tasks, session)
     finally:
         selected_submission.reset(token)
     return {'job': response, 'selection': selection.model_dump()}

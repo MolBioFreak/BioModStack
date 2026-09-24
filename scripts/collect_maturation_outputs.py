@@ -139,7 +139,7 @@ def main():
             "*_matured.json",
             "*.json",
         ],
-        subdirs=search_subdirs,
+        subdirs=[*search_subdirs, "run/ppiflow/sample_identity"],
         accepted=accepted,
     )
 
