@@ -1217,6 +1217,29 @@ async def validate_bound_job(
             base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
             for key, value in expected_job_params.items()
         )
+        if not params_match and job.model_id == "boltzgen":
+            from services.boltzgen_request_compatibility import (
+                BOLTZGEN_GENERATION_PROTOCOLS, compile_boltzgen_settings,
+            )
+            if job.mode in BOLTZGEN_GENERATION_PROTOCOLS:
+                # Native creation preserves the bound request in the existing
+                # server-owned provenance, then compiles rank settings and
+                # materializes YAML into its owned input directory. Compare
+                # request to request and effective values to the same compiler;
+                # a generated transport path is not an operator setting change.
+                requested = (job.provenance or {}).get("core_protein_requested_params")
+                try:
+                    effective = compile_boltzgen_settings(expected_job_params)
+                except ValueError:
+                    effective = {}
+                params_match = (
+                    isinstance(requested, dict)
+                    and all(key in requested and requested[key] == value
+                            for key, value in expected_job_params.items())
+                    and bool(effective)
+                    and all(key in base_job_params and base_job_params[key] == value
+                            for key, value in effective.items() if key != "boltzgen_yaml_config")
+                )
         if job.model_id == "protein_local_redesign":
             try:
                 expected_native_params = prepare_local_redesign_scheduler_params(

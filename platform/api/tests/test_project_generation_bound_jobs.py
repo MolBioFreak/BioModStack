@@ -111,6 +111,23 @@ async def test_reserved_native_children_create_bind_replay_and_reopen(setup_stor
                 assert job.params["self_condition"] is False
             else:
                 assert job.params["boltzgen_filter_biased"] is False
+                from services.global_experiments.launch_contexts import LaunchContextError
+                saved_params = copy.deepcopy(job.params)
+                saved_provenance = copy.deepcopy(job.provenance)
+                # Owned materialization is allowed, not arbitrary science or
+                # request mutation. Both requested and effective views matter.
+                for key, changed in (("boltzgen_alpha", 0.7), ("boltzgen_metrics_override", "design_ptm=9")):
+                    job.params = {**saved_params, key: changed}
+                    with pytest.raises(LaunchContextError, match="bound Workflow Revision"):
+                        await validate_bound_job(exp, context, job)
+                job.params = saved_params
+                changed_provenance = copy.deepcopy(saved_provenance)
+                changed_provenance["core_protein_requested_params"]["boltzgen_alpha"] = 0.7
+                job.provenance = changed_provenance
+                with pytest.raises(LaunchContextError, match="bound Workflow Revision"):
+                    await validate_bound_job(exp, context, job)
+                job.provenance = saved_provenance
+                await validate_bound_job(exp, context, job)
         assert source.provenance == original_source
         assert (await exp.get(ExperimentLaunchContext, dest["launch_context_id"])).state == "issued"
         replay = await jobs.submit_selected_child_jobs(
