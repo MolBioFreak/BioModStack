@@ -28,6 +28,7 @@ from pydantic import (
 )
 
 from .errors import RobotResponseError, RobotTimeoutError, RobotTransportError
+from .camera_illumination import CameraIlluminationState, CameraIlluminationCommand, CameraRgbResponse
 from .target_policy import ValidatedBioXpTarget
 
 
@@ -50,6 +51,9 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "stop_axis_diagnostic": ("POST", "/motion/diagnostics/stop", 25.0),
     "emergency_stop": ("POST", "/oem/runtime/emergency_stop", 5.0),
     "camera_status": ("GET", "/camera/status", 5.0),
+    "camera_illumination_state": ("GET", "/camera/illumination/state", 5.0),
+    "camera_illumination": ("POST", "/camera/illumination", 15.0),
+    "camera_rgb": ("POST", "/led/rgb", 20.0),
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
     "camera_stream_start": ("POST", "/camera/stream/start", 15.0),
@@ -393,6 +397,35 @@ class BioXpRobotClient:
 
     async def camera_stream_start(self) -> dict[str, Any]:
         return await self._camera_stream_command("camera_stream_start")
+
+    async def camera_illumination_state(self) -> dict[str, Any]:
+        payload = await self.request("camera_illumination_state")
+        try:
+            return CameraIlluminationState.model_validate(payload).model_dump(mode="json")
+        except ValidationError as exc:
+            raise RobotTransportError("Malformed camera illumination state") from exc
+
+    async def camera_rgb(self, *, r: int, g: int, b: int) -> dict[str, Any]:
+        payload = await self.request("camera_rgb", json_data={
+            "r": r, "g": g, "b": b, "reconnect_first": False, "activate_first": False,
+        })
+        try:
+            result = CameraRgbResponse.model_validate(payload)
+            if result.rgb != [r, g, b]:
+                raise RobotTransportError("RGB response does not match request")
+            return result.model_dump(mode="json")
+        except ValidationError as exc:
+            raise RobotTransportError("Malformed RGB response") from exc
+
+    async def camera_illumination(self, *, channel: int, on: bool) -> dict[str, Any]:
+        payload = await self.request("camera_illumination", json_data={"channel": channel, "on": on})
+        try:
+            result = CameraIlluminationCommand.model_validate(payload)
+            if result.channel != channel or result.on is not on:
+                raise RobotTransportError("Camera illumination response does not match request")
+            return result.model_dump(mode="json")
+        except ValidationError as exc:
+            raise RobotTransportError("Malformed camera illumination command") from exc
 
     async def camera_stream_state(self) -> dict[str, Any]:
         return await self._camera_stream_command("camera_stream_state")

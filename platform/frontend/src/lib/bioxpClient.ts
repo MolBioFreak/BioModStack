@@ -107,6 +107,52 @@ export interface BioXpCameraImage {
     connectionGeneration: number;
 }
 
+export type BioXpIlluminationChannel = 1 | 2 | 3;
+export interface BioXpCameraIllumination {
+    schema_version: 'bioxp.camera_illumination.v1';
+    provider_generation: number;
+    connection_generation: number;
+    channels: { channel: BioXpIlluminationChannel; on: boolean | null }[];
+    state_source: 'last_successful_command';
+    physical_effect_verified: false;
+}
+export interface BioXpCameraIlluminationCommand extends BioXpCameraIllumination {
+    ok: true;
+    channel: BioXpIlluminationChannel;
+    on: boolean;
+    delivery_attempted: true;
+}
+
+export interface BioXpCameraRgbResult {
+    ok: boolean;
+    rgb: [number, number, number];
+    tmcl: [number, number, number];
+    acks: Record<'r' | 'g' | 'b', Record<string, unknown> | null>;
+    sent: number;
+    elapsed_ms: number;
+    connection_generation: number;
+}
+
+export async function setBioXpCameraRgb(generation: number, rgb: readonly [number, number, number]): Promise<BioXpCameraRgbResult> {
+    return (await api.post<BioXpCameraRgbResult>('/api/bioxp/camera/rgb', {
+        expected_connection_generation: generation, r: rgb[0], g: rgb[1], b: rgb[2],
+    })).data;
+}
+
+export async function getBioXpCameraIllumination(generation: number): Promise<BioXpCameraIllumination> {
+    return (await api.get<BioXpCameraIllumination>('/api/bioxp/camera/illumination/state', {
+        params: { expected_generation: generation },
+    })).data;
+}
+
+export async function setBioXpCameraIllumination(
+    generation: number, channel: BioXpIlluminationChannel, on: boolean,
+): Promise<BioXpCameraIlluminationCommand> {
+    return (await api.post<BioXpCameraIlluminationCommand>('/api/bioxp/camera/illumination', {
+        expected_generation: generation, channel, on,
+    })).data;
+}
+
 export interface BioXpCameraStream {
     schema_version: 'bioxp.camera_stream.v1';
     state: 'off' | 'starting' | 'live' | 'error';

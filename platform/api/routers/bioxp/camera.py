@@ -10,6 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Valida
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTransportError
 from services.bioxp.runtime import BioXpRuntime
+from services.bioxp.camera_illumination import (
+    CameraIlluminationCommand,
+    CameraIlluminationState,
+    CameraRgbResponse,
+    RgbByte,
+)
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
@@ -27,6 +33,82 @@ class CameraStreamRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_generation: StrictInt = Field(ge=1)
+
+
+class CameraIlluminationRequest(CameraStreamRequest):
+    channel: StrictInt = Field(ge=1, le=3)
+    on: StrictBool
+
+
+class CameraRgbRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: StrictInt = Field(ge=1)
+    r: RgbByte
+    g: RgbByte
+    b: RgbByte
+
+
+@router.post("/camera/rgb", dependencies=[Depends(require_bioxp_mutation_access)])
+async def set_camera_rgb(
+    http_request: Request,
+    request: CameraRgbRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    _reject_stream_command_query(http_request)
+    payload = await _leased_camera_call(
+        runtime,
+        expected_generation=request.expected_connection_generation,
+        method_name="camera_rgb",
+        method_kwargs={"r": request.r, "g": request.g, "b": request.b},
+    )
+    try:
+        result = CameraRgbResponse.model_validate(payload)
+        if result.rgb != [request.r, request.g, request.b]:
+            raise ValueError("RGB response does not match request")
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Malformed RGB response") from exc
+    return {**result.model_dump(mode="json"), "connection_generation": request.expected_connection_generation}
+
+
+@router.get("/camera/illumination/state")
+async def get_camera_illumination_state(
+    request: Request,
+    expected_generation: int = Query(ge=1),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    _reject_unknown_query(request)
+    payload = await _leased_camera_call(
+        runtime,
+        expected_generation=expected_generation,
+        method_name="camera_illumination_state",
+    )
+    try:
+        state = CameraIlluminationState.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=502, detail="Malformed camera illumination state") from exc
+    return {**state.model_dump(mode="json"), "connection_generation": expected_generation}
+
+
+@router.post("/camera/illumination", dependencies=[Depends(require_bioxp_mutation_access)])
+async def set_camera_illumination(
+    http_request: Request,
+    request: CameraIlluminationRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> dict[str, Any]:
+    _reject_stream_command_query(http_request)
+    payload = await _leased_camera_call(
+        runtime,
+        expected_generation=request.expected_generation,
+        method_name="camera_illumination",
+        method_kwargs={"channel": request.channel, "on": request.on},
+    )
+    try:
+        result = CameraIlluminationCommand.model_validate(payload)
+        if result.channel != request.channel or result.on is not request.on:
+            raise ValueError("Command response does not match request")
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Malformed camera illumination command") from exc
+    return {**result.model_dump(mode="json"), "connection_generation": request.expected_generation}
 
 
 class CameraStreamPayload(BaseModel):
@@ -79,6 +161,7 @@ async def _leased_camera_call(
     *,
     expected_generation: int,
     method_name: str,
+    method_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     try:
         async with runtime.connection.active_query_lease(
@@ -88,7 +171,7 @@ async def _leased_camera_call(
             method = getattr(client, method_name, None)
             if not callable(method):
                 raise RobotTransportError("Connected BioXP client does not implement the camera contract")
-            payload = await cast(Callable[[], Awaitable[Any]], method)()
+            payload = await cast(Callable[..., Awaitable[Any]], method)(**(method_kwargs or {}))
             if runtime.connection.snapshot().generation != expected_generation:
                 raise ConnectionStateError("BioXP connection changed during camera request")
             return payload
