@@ -9,6 +9,18 @@ from services.global_experiments.launch_contexts import validate_bound_job_reque
 from test_project_workflow_setups import setup_store, _project
 
 
+@pytest.fixture(autouse=True)
+def isolate_applied_local_policy():
+    # Other fixtures change the installation home; do not inherit their cached
+    # process policy. Resolve the real policy without mocking source/admission.
+    from biomodstack_local_resources import applied_local_policy
+    applied_local_policy.cache_clear()
+    try:
+        yield
+    finally:
+        applied_local_policy.cache_clear()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_admission", [False, True])
 async def test_setup_reopen_prepare_reserve_and_validate_job(setup_store, include_admission):
