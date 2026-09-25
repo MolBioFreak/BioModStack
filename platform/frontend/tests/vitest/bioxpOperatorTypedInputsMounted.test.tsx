@@ -175,6 +175,41 @@ describe('all retained published liquid action input types', () => {
         expect(await run()).toEqual({ metadata: { rows: [{ channel: 3, amount: 4.5, off: false, note: '', empty: '' }] } });
     });
 
+    it('renders self-contained $defs and discriminated manual steps without sending schema metadata', async () => {
+        await mount('/liquid/terminate', action => ({ ...action, inputs: action.inputs.map(input => input.name === 'metadata' ? { ...input,
+            json_schema: { type: 'array', items: { oneOf: [{ $ref: '#/$defs/Move' }, { $ref: '#/$defs/Lift' }, { $ref: '#/$defs/Liquid' }],
+                discriminator: { propertyName: 'operation', mapping: { move: '#/$defs/Move', lift: '#/$defs/Lift', aspirate: '#/$defs/Liquid', dispense: '#/$defs/Liquid' } } },
+                $defs: {
+                    Move: { title: 'Move', type: 'object', additionalProperties: false, properties: { operation: { const: 'move' }, location_id: { type: 'integer' }, well: { type: 'string' } } },
+                    Lift: { title: 'Lift', type: 'object', additionalProperties: false, properties: { operation: { const: 'lift' }, location_id: { type: 'integer' }, height_steps: { anyOf: [{ type: 'integer' }, { type: 'null' }] } } },
+                    Liquid: { title: 'Liquid', type: 'object', required: ['operation'], additionalProperties: false, properties: { operation: { type: 'string', enum: ['aspirate', 'dispense'] }, speed: { type: 'number' } } },
+                } },
+        } : input) }));
+        await change('Metadata presence', 'value'); await click('Add Metadata item');
+        expect((container.querySelector('[aria-label="Metadata[0].operation"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe('move');
+        await change('Metadata[0].location_id presence', 'value'); await change('Metadata[0].location_id', '4');
+        await change('Metadata[0].well presence', 'value'); await change('Metadata[0].well', 'C3');
+        await click('Add Metadata item'); await change('Metadata[1] variant', '1');
+        expect(container.querySelector('[aria-label="Metadata[1].well presence"]')).toBeNull();
+        await change('Metadata[1].height_steps presence', 'value'); await change('Metadata[1].height_steps variant', '1');
+        await click('Add Metadata item'); await change('Metadata[2] variant', '2');
+        await change('Metadata[2].operation', '1'); await change('Metadata[2].speed presence', 'value'); await change('Metadata[2].speed', '62.5');
+        expect(await run()).toEqual({ metadata: [{ operation: 'move', location_id: 4, well: 'C3' }, { operation: 'lift', height_steps: null }, { operation: 'dispense', speed: 62.5 }] });
+    });
+
+    it('keeps recursive refs lazy and literal $ref values unchanged', async () => {
+        await mount('/liquid/terminate', action => ({ ...action, inputs: action.inputs.map(input => input.name === 'metadata' ? { ...input,
+            json_schema: { $ref: '#/$defs/Node', $defs: { Node: { type: 'object', additionalProperties: false, properties: {
+                literal: { type: 'object', default: { $ref: '#/not-a-schema-ref' } },
+                children: { type: 'array', items: { $ref: '#/$defs/Node' } },
+            } } } },
+        } : input) }));
+        await change('Metadata presence', 'value'); await change('Metadata.literal presence', 'value');
+        await change('Metadata.children presence', 'value'); await click('Add Metadata.children item');
+        await change('Metadata.children[0].children presence', 'value');
+        expect(await run()).toEqual({ metadata: { literal: { $ref: '#/not-a-schema-ref' }, children: [{ children: [] }] } });
+    });
+
     it('preserves top-level schema null/false/zero/empty defaults through the shared invoke transport', async () => {
         await mount('/liquid/terminate', action => ({ ...action, inputs: action.inputs.map(input => ({ ...input, json_schema: input.name === 'metadata'
             ? { type: 'object', default: { off: false, zero: 0, empty: '', nothing: null, rows: [] } }

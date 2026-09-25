@@ -3629,6 +3629,41 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 });
 
 
+describe('Well pipetting cockpit integration', () => {
+    it('uses catalog locationID rather than target ordinals and dispatches independently of projected availability', async () => {
+        nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
+        const action = state.v2Catalog.data.actions.find(a => a.action_id === 'oem.deck.move_to_location')!;
+        Object.assign(action, { destination_options: [{ target: 'not-a-plate-ordinal', label: 'Catalog pipetting block', location_id: 4,
+            enabled: false, disabled_reason: 'missing historical observation', aliases: [], branch_kind: 'ordinary', camera_offset_option: false, source_anchors: [] }] });
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+        vi.mocked(api.post).mockReset().mockRejectedValue(new Error('offline robot refusal'));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
+            const panel = container.querySelector('[aria-label="Well pipetting"]')!;
+            expect(panel).not.toBeNull();
+            for (const [name, value] of [['Block', '4'], ['Move Z position', '1']]) {
+                await act(async () => {
+                    const select = panel.querySelector(`[aria-label="${name}"]`) as HTMLSelectElement;
+                    select.value = value; select.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            }
+            await act(async () => (panel.querySelector('[aria-label="Reference well D5"]') as HTMLButtonElement).click());
+            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move now')!;
+            expect(move.disabled).toBe(false);
+            await act(async () => { move.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+            expect(api.post).toHaveBeenCalledTimes(1);
+            const [path, request] = vi.mocked(api.post).mock.calls[0] as [string, any];
+            expect(path).toBe('/api/bioxp/protocols/submit');
+            expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_position',
+                params: { operation: 'move', location_id: 4, well: 'D5', position_flag: 1 } });
+            expect(panel.textContent).toContain('offline robot refusal');
+            expect(move.disabled).toBe(false);
+        } finally {
+            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
+        }
+    });
+});
+
 describe('OEM software Abort distinct from addressed Stops', () => {
     const render = () => act(async () => root.render(<BioXpCockpit />));
     const abort = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Software Abort (cancel waiters)')!;

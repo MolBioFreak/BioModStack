@@ -826,6 +826,9 @@ export interface BioXpOperatorAdmission {
 
 /** Robot-published, locally resolved JSON Schema for structured input controls. */
 export interface BioXpOperatorJsonSchema {
+    $ref?: string;
+    $defs?: Record<string, BioXpOperatorJsonSchema>;
+    discriminator?: { propertyName: string; mapping?: Record<string, string> };
     type?: string | string[];
     title?: string;
     description?: string;
