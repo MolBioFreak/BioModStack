@@ -183,10 +183,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
             {job.execution?.runtime_state.action_results?.map((result, index) => {
                 const value = result as Record<string, unknown>;
-                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number') return null;
+                const child = Array.isArray(value.source_children) ? value.source_children[0] as { result?: { source_return?: unknown; samples?: unknown } } | undefined : undefined;
+                const scan = child?.result;
+                const scanned = Array.isArray(scan?.samples) && typeof scan?.source_return === 'number';
+                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number' && !scanned) return null;
                 return <dl key={index} className="text-sm" aria-label={`Measurement ${index + 1}`}>
                     {typeof value.position_steps === 'number' && <><dt>Measured fluid height (Z steps)</dt><dd>{value.position_steps}</dd></>}
                     {typeof value.lost_steps === 'number' && <><dt>Pickup lost steps</dt><dd>{value.lost_steps}{value.lost_steps_warning === true ? ' · source warning' : ''}</dd></>}
+                    {scanned && <><dt>OEM fluid offset (Z steps)</dt><dd>{scan!.source_return as number}</dd><dt>Sampled wells</dt><dd>{(scan!.samples as { well: string }[]).map(sample => sample.well).join(', ')}</dd></>}
                     <dt>Calibration saved</dt><dd>No</dd>
                 </dl>;
             })}</>}

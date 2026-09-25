@@ -114,6 +114,13 @@ it('mounts the typed OEM fluid offset scan without confusing it with the diagnos
         { kind: 'pipette_manual_physical', params: { operation: 'source_fluid_offset', plate: 'RC', speed: 280,
             transfer_fluid: true, skip_steps: 12 } },
     ]);
+    job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state,
+        action_results: [{ kind: 'pipette_manual_physical', source_children: [{ result: {
+            source_return: 88000, samples: [{ well: 'A1' }, { well: 'B1' }] } }] }] } } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
+    expect(host.textContent).toContain('OEM fluid offset (Z steps)');
+    expect(host.textContent).toContain('88000');
+    expect(host.textContent).toContain('A1, B1');
     expect(host.textContent).toContain('not the multi-station Detect Fluid wizard');
     await append('source_fluid_offset');
     await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
