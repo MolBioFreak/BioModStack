@@ -238,6 +238,59 @@ it('recovers an initial read failure only through GET retry without inventing an
     expect(changes).not.toHaveBeenCalled();
 });
 
+it('projects BoltzGen verified native scalars without turning disposition criteria or unavailable values into scores', async () => {
+    const metric = (key: string, state: string, value: unknown, unit: string, reason_code: string | null = null) =>
+        ({ metric_key: key, state, value, unit, reason_code });
+    // Authorized test-only shape: filter_summary dispositions joined to scalar_block's native_metrics.
+    const rows: NativeGenerationRecord[] = [
+        { candidate_key: 'selected-cif', design_id: 'boltz-design-1', candidate_id: 'selected-cif', disposition: 'selected',
+            criteria: [{ criterion: 'design_ptm', disposition: 'passed', evidence: { value: 0.8 } }],
+            native_metrics: { schema_version: 1, producer: 'boltzgen', design_id: 'boltz-design-1', metrics: {
+                design_ptm: metric('design_ptm', 'ok', 0.8, 'fraction'),
+                affinity_probability: metric('affinity_probability', 'ok', 0, 'fraction'),
+                filter_rmsd: metric('filter_rmsd', 'ok', 1.25, 'angstrom'),
+            } }, structures: [{ artifact_id: 'native-cif', target_state: null, primary: true, logical_path: 'selected-cif.cif', download_url: '/api/files/selected-cif.cif', sha256: 'c'.repeat(64) }] },
+        { candidate_key: 'selected-missing', candidate_id: 'selected-missing', disposition: 'selected',
+            criteria: [],
+            native_metrics: { schema_version: 1, producer: 'boltzgen', metrics: {
+                design_ptm: metric('design_ptm', 'unavailable', null, 'fraction', 'missing_native_metric'),
+                affinity_probability: metric('affinity_probability', 'invalid', null, 'fraction', 'nonfinite'),
+                filter_rmsd: metric('filter_rmsd', 'ok', 2.5, 'angstrom'),
+            } }, structures: [] },
+        { candidate_key: 'rejected-cif', candidate_id: 'rejected-cif', disposition: 'rejected', criterion: 'design_ptm', reason_code: 'below_threshold',
+            criteria: [{ criterion: 'design_ptm', disposition: 'rejected_threshold', evidence: { value: 0.2 } }], structures: [] },
+    ];
+    await mount(rows);
+    const projected = tree.root.findByType(CohortAnalytics).props.rows;
+    expect(projected.map((row: { values: Record<string, unknown> }) => row.values)).toEqual([
+        { design_ptm: 0.8, affinity_probability: 0, filter_rmsd: 1.25 },
+        { design_ptm: undefined, affinity_probability: undefined, filter_rmsd: 2.5 },
+        {},
+    ]);
+    expect(Object.keys(projected[0].values)).toEqual(['design_ptm', 'affinity_probability', 'filter_rmsd']);
+    expect(scatter().props.data[0].customdata).toEqual(['selected-cif']);
+    expect(scatter().props.data[0].x).toEqual([0.8]);
+    expect(scatter().props.data[0].y).toEqual([0]);
+    expect(text(control('Candidate data table'))).toContain('Filter rmsd (angstrom)');
+    expect(tableRows()[0].findAllByType('td')[2].props.title).toBe('0 · fraction');
+    expect(tableRows()[1].findAllByType('td')[1].props.title).toBe('Not reported · fraction · unavailable · missing_native_metric');
+    expect(tableRows()[1].findAllByType('td')[2].props.title).toBe('Not reported · fraction · invalid · nonfinite');
+    expect(text(tableRows()[1])).not.toContain('0.2');
+    expect((await exported('Metrics CSV')).split('\r\n')[0]).toContain('"design_ptm","affinity_probability","filter_rmsd"');
+    expect(await exported('Metrics CSV')).toContain('"Not reported"');
+    expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
+    await click('selected-cif');
+    expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: '/api/files/selected-cif.cif', structureDocumentId: 'native-cif', structureContentSha256: 'c'.repeat(64), format: 'cif' });
+    expect(text(control('Candidate structure inspector'))).toContain('Filter rmsd (angstrom)');
+    expect(changes).not.toHaveBeenCalled();
+});
+
+it('keeps PPIFlow flat metrics unchanged even when a non-BoltzGen native block is present', async () => {
+    await mount([{ candidate_key: 'ppi', metrics: { ppiflow_clash_count_ca: 0, seq_length: 31 }, native_metrics: { producer: 'ppiflow', metrics: { invented: { state: 'ok', value: 100 } } } }]);
+    expect(tree.root.findByType(CohortAnalytics).props.rows[0].values).toEqual({ ppiflow_clash_count_ca: 0, seq_length: 31 });
+    expect(text(control('Candidate data table'))).not.toContain('invented');
+});
+
 it('keeps no-metric historical records inspectable and exportable with no invented numeric observations', async () => {
     const rows = [{ candidate_key: 'historical-only', metrics: {}, structures: [] }]; await mount(rows);
     expect(visibleIds()).toEqual(['historical-only']); expect(text(tree.root)).toContain('No finite numeric observations');

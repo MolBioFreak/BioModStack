@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import Plot from 'react-plotly.js';
 import type { Config, Data, Layout, PlotMouseEvent, PlotSelectionEvent } from 'plotly.js';
-import { correlateMetrics, formatMetric, isFiniteMetric, metricKeys, metricLabel, numericMetricKeys, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
+import { correlateMetrics, formatMetric, isFiniteMetric, metricKeys, metricLabel, numericMetricKeys, secondaryStructureComposition, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
 
 interface Props {
     rows: CohortRow[];
@@ -73,15 +73,26 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
     const [heatChoice, setHeatChoice] = useState<string[] | null>(null);
     const [metricSearch, setMetricSearch] = useState('');
     const [metricPage, setMetricPage] = useState(0);
+    const [zChoice, setZChoice] = useState('radius_of_gyration');
+    const [color3dChoice, setColor3dChoice] = useState('');
+    const [barChoice, setBarChoice] = useState('dsasa');
     const theme = usePlotTheme();
     const xKey = numeric.includes(xChoice) ? xChoice : numeric.includes('seq_length') ? 'seq_length' : numeric[0] ?? '';
     const yKey = numeric.includes(yChoice) ? yChoice : numeric.includes('dsasa') ? 'dsasa' : numeric[1] ?? numeric[0] ?? '';
     const distKey = numeric.includes(distributionChoice) ? distributionChoice : yKey;
+    const zKey = numeric.includes(zChoice) ? zChoice : numeric.find(key => key !== xKey && key !== yKey) ?? '';
+    const barKey = numeric.includes(barChoice) ? barChoice : yKey;
+    const color3dKey = numeric.includes(color3dChoice) ? color3dChoice : '';
     const colorKey = mode === 'analytics' && numeric.includes(colorChoice) ? colorChoice : '';
     const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
     const pairs = useMemo(() => rows.filter(row => isFiniteMetric(row.values[xKey]) && isFiniteMetric(row.values[yKey])), [rows, xKey, yKey]);
     const distribution = useMemo(() => rows.map(row => row.values[distKey]).filter(isFiniteMetric), [rows, distKey]);
     const distributionSummary = useMemo(() => summarizeMetric(rows, distKey), [rows, distKey]);
+    const barRows = useMemo(() => rows.filter(row => isFiniteMetric(row.values[barKey]))
+        .sort((a, b) => (b.values[barKey] as number) - (a.values[barKey] as number)).slice(0, 20), [rows, barKey]);
+    const active = rows.find(row => row.id === activeId);
+    const composition = secondaryStructureComposition(active);
+    const spacePoints = rows.filter(row => isFiniteMetric(row.values[xKey]) && isFiniteMetric(row.values[yKey]) && isFiniteMetric(row.values[zKey]));
     const heatKeys = (heatChoice ?? numeric.slice(0, 6)).filter(key => numeric.includes(key));
     const heatKeyIdentity = JSON.stringify(heatKeys);
     const correlations = useMemo(() => {
@@ -127,6 +138,19 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
         const ids = [...new Set((event?.points ?? []).flatMap(point => typeof point.customdata === 'string' && validIds.has(point.customdata) ? [point.customdata] : []))];
         if (ids.length) onSelect(ids);
     };
+    // The earlier nanobody Plotly Lab's X/Y/Z/color controls use Design metrics.
+    // Adapt that scatter to the native-row authority without imputing missing color.
+    const spaceTrace = (points: CohortRow[], colored: boolean): Data => ({
+        type: 'scatter3d', mode: 'markers',
+        x: points.map(row => row.values[xKey] as number), y: points.map(row => row.values[yKey] as number),
+        z: points.map(row => row.values[zKey] as number), customdata: points.map(row => row.id),
+        text: points.map(row => escape(row.label)),
+        hovertemplate: `%{text}<br>${escape(caption(xKey))}: %{x}<br>${escape(caption(yKey))}: %{y}<br>${escape(caption(zKey))}: %{z}<extra></extra>`,
+        marker: { size: points.map(row => row.id === activeId ? 8 : selected.has(row.id) ? 7 : 5),
+            color: colored ? points.map(row => row.values[color3dKey] as number) : color3dKey ? '#94a3b8' : '#3b82f6',
+            colorscale: 'Viridis', showscale: colored, opacity: 0.85,
+            colorbar: { title: { text: escape(metricLabel(color3dKey)) }, thickness: 12 } },
+    });
     return <section aria-label={mode === 'dashboard' ? 'Cohort dashboard charts' : 'Cohort exploratory analytics'} className="space-y-3 text-[var(--text-primary)]">
         {!numeric.length ? <p role="status" className={card}>No finite numeric observations in this cohort. Missing, explicit null, boolean, string and nonfinite values are not plotted.</p> : <>
             <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
@@ -162,10 +186,47 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                         uirevision: JSON.stringify([distKey, rows.map(row => row.id)]) }} />
                     <p className="pt-2 text-xs text-[var(--text-secondary)]">Median {formatMetric(distributionSummary.median)} · Q1–Q3 {formatMetric(distributionSummary.q1)}–{formatMetric(distributionSummary.q3)} · Whiskers: min–max.</p>
                 </article>
+                {barRows.length > 0 && <article className={card}>
+                    <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Candidates by native measurement</h4><span className="text-xs text-[var(--text-secondary)]">{barRows.length} of {rows.filter(row => isFiniteMetric(row.values[barKey])).length} observed</span></div>
+                    {picker('Bar metric', barKey, setBarChoice)}
+                    <CohortPlot label={`Candidate bars: ${caption(barKey)}`} data={[{
+                        type: 'bar', x: barRows.map(row => row.label), y: barRows.map(row => row.values[barKey] as number),
+                        customdata: barRows.map(row => row.id), marker: { color: barRows.map(row => row.id === activeId ? '#14b8a6' : selected.has(row.id) ? '#a78bfa' : '#3b82f6') },
+                        hovertemplate: `%{x}<br>${escape(caption(barKey))}: %{y}<extra></extra>`,
+                    } as Data]} layout={{ ...base, margin: { l: 60, r: 24, t: 24, b: 95 },
+                        xaxis: { type: 'category', tickangle: -45, automargin: true, color: theme.text }, yaxis: axis(caption(barKey)) }} onClick={inspect} />
+                    <p className="pt-2 text-xs text-[var(--text-secondary)]">Highest 20 observed values in this filtered view, not a binder-quality rank. Click a bar to inspect its exact document.</p>
+                </article>}
+                {composition && <article className={card}>
+                    <h4 className="mb-2 text-sm font-semibold">Selected candidate: secondary structure</h4>
+                    <p className="text-xs text-[var(--text-secondary)]">{active?.label} · native residue fractions</p>
+                    <CohortPlot label="Selected candidate native secondary-structure composition" data={[{
+                        type: 'pie', labels: ['Coil', 'Helix', 'Strand'], values: composition, hole: 0.45,
+                        marker: { colors: ['#3b82f6', '#14b8a6', '#a78bfa'] },
+                        textinfo: 'label+percent', hovertemplate: '%{label}: %{value:.4f} of residues<extra></extra>',
+                    } as Data]} layout={{ ...base, margin: { l: 24, r: 24, t: 24, b: 24 }, showlegend: false }} height={300} />
+                    <p className="pt-2 text-xs text-[var(--text-secondary)]">Shown only when this record reports a complete coil/helix/strand partition. Not a campaign or binding composition.</p>
+                </article>}
             </div>
             <p className="text-xs text-[var(--text-secondary)]">Full filtered cohort · Finite observations only, native scales unchanged; not a verdict. Click to inspect; box/lasso adds selection (also available in the table). Double-click resets zoom; camera exports SVG. Metric controls expose original keys on hover.</p>
         </>}
         {mode === 'analytics' && <>
+            {numeric.length >= 3 && <article className={card}>
+                <div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-sm font-semibold">Explore native metrics in 3D</h4><span className="text-xs text-[var(--text-secondary)]">{spacePoints.length} plotted · {rows.length - spacePoints.length} omitted</span></div>
+                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    {picker('3D X metric', xKey, setXChoice)}{picker('3D Y metric', yKey, setYChoice)}
+                    {picker('3D Z metric', zKey, setZChoice)}{picker('3D color metric', color3dKey, setColor3dChoice, true)}
+                </div>
+                {spacePoints.length ? <CohortPlot label={`Native 3D scatter: ${caption(xKey)}, ${caption(yKey)}, ${caption(zKey)}`}
+                    height={440} data={color3dKey ? [spaceTrace(spacePoints.filter(row => isFiniteMetric(row.values[color3dKey])), true), spaceTrace(spacePoints.filter(row => !isFiniteMetric(row.values[color3dKey])), false)] : [spaceTrace(spacePoints, false)]}
+                    layout={{ ...base, margin: { l: 0, r: 0, t: 18, b: 0 }, scene: {
+                        xaxis: { title: { text: escape(metricLabel(xKey)) }, color: theme.text, gridcolor: theme.grid },
+                        yaxis: { title: { text: escape(metricLabel(yKey)) }, color: theme.text, gridcolor: theme.grid },
+                        zaxis: { title: { text: escape(metricLabel(zKey)) }, color: theme.text, gridcolor: theme.grid },
+                        bgcolor: theme.background }, uirevision: JSON.stringify([xKey, yKey, zKey, rows.map(row => row.id)]) }} onClick={inspect} />
+                    : <p role="status" className="py-6 text-sm">No records have complete finite coordinates for these three metrics.</p>}
+                <p className="pt-2 text-xs text-[var(--text-secondary)]">Rotate to explore; click a point to inspect its exact native document. Missing color observations remain gray, not zero.</p>
+            </article>}
             {numeric.length > 0 && <article className={card}>
                 <h4 className="text-sm font-semibold">Pairwise correlation</h4>
                 <p className="my-2 text-xs text-[var(--text-secondary)]">Pearson r, pairwise complete observations; at least 3 pairs and nonzero variance. Blank cells are undefined, not zero. No p-values or causal claims. Select up to 8 metrics ({heatKeys.length} of {numeric.length} selected{heatChoice === null ? '; initial selection is the first 6 available metrics' : ''}).</p>

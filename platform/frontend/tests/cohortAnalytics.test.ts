@@ -6,7 +6,7 @@ import * as React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import ts from 'typescript';
 import * as analytics from '../src/lib/cohortAnalytics';
-import { correlateMetrics, formatMetric, metricKeys, metricLabel, numericMetricKeys, summarizeMetric, type CohortRow } from '../src/lib/cohortAnalytics';
+import { correlateMetrics, formatMetric, metricKeys, metricLabel, numericMetricKeys, secondaryStructureComposition, summarizeMetric, type CohortRow } from '../src/lib/cohortAnalytics';
 
 const rowsOf = (values: Record<string, unknown>[]): CohortRow[] => values.map((values, index) => ({ id: `row:${index}`, label: `Sample ${index}`, values }));
 const metricRows = (values: unknown[]) => rowsOf(values.map(x => ({ x })));
@@ -137,6 +137,14 @@ test('display labels and formatting retain zeros, false, missing/null distinctio
     assert.equal(formatMetric(Infinity), 'Infinity');
 });
 
+test('native composition requires complete residue fractions and never invents a campaign pie', () => {
+    assert.deepEqual(secondaryStructureComposition(rowsOf([{ coil_percent: 0.4, helix_percent: 0.24, strand_percent: 0.36 }])[0]), [0.4, 0.24, 0.36]);
+    assert.equal(secondaryStructureComposition(rowsOf([{ coil_percent: 0.4, helix_percent: 0.24 }])[0]), null);
+    assert.equal(secondaryStructureComposition(rowsOf([{ coil_percent: 40, helix_percent: 24, strand_percent: 36 }])[0]), null);
+    assert.equal(secondaryStructureComposition(rowsOf([{ coil_percent: 0.4, helix_percent: null, strand_percent: 0.6 }])[0]), null);
+    assert.equal(secondaryStructureComposition(undefined), null);
+});
+
 test('mounted chart contract: full cohort, exact inspection, explicit selection, analytics and empty state', async () => {
     // Mock only Plotly's browser engine; execute the real TSX and all real descriptive helpers.
     const nativeRequire = createRequire(import.meta.url);
@@ -167,7 +175,7 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
     const select = (label: string) => renderer!.root.findByProps({ 'aria-label': label });
     try {
         await act(async () => { renderer = create(React.createElement(CohortAnalytics, props), { createNodeMock: () => ({ clientWidth: 620 }) }); });
-        assert.equal(plots().length, 2, 'both dashboard charts are visible without disclosure');
+        assert.equal(plots().length, 3, 'scatter, distribution and bounded native bars are visible without disclosure');
         const scatter = plots()[0].props;
         assert.equal(scatter.data[0].x.length, 1000);
         assert.equal(scatter.data[0].y[999], 0.999, 'native fractions are never multiplied');
@@ -176,6 +184,9 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.equal(scatter.config.toImageButtonOptions.format, 'svg');
         assert.equal(scatter.layout.width, 620);
         assert.equal(plots()[1].props.data[1].q1[0], summarizeMetric(rows, 'dsasa').q1, 'box quartiles agree with the descriptive table');
+        assert.equal(plots()[2].props.data[0].type, 'bar');
+        assert.equal(plots()[2].props.data[0].customdata.length, 20);
+        assert.equal(plots()[2].props.data[0].customdata[0], 'row:999');
         assert.equal(select('X metric').props.title, 'Sequence length (seq_length)');
         assert.deepEqual(selections, [], 'mount must not select candidates');
         await act(async () => {
@@ -189,15 +200,27 @@ test('mounted chart contract: full cohort, exact inspection, explicit selection,
         assert.deepEqual(selections, [['row:888']], 'only explicitly selected valid IDs are returned, not the existing selection');
         assert.equal(plots()[0].props.layout.dragmode, 'lasso');
         await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, mode: 'analytics' })); });
-        assert.equal(plots().length, 3);
+        assert.equal(plots().length, 5);
         assert.ok(renderer!.root.findByProps({ 'aria-label': 'Metric summary pages' }));
-        assert.equal(plots()[2].props.data[0].z[2][0], null, 'constant correlations are undefined');
-        assert.match(plots()[2].props.data[0].customdata[2][0], /constant metric/);
+        assert.equal(plots()[3].props.data[0].type, 'scatter3d');
+        assert.equal(plots()[3].props.data[0].customdata.length, 1000);
+        assert.equal(plots()[4].props.data[0].z[2][0], null, 'constant correlations are undefined');
+        assert.match(plots()[4].props.data[0].customdata[2][0], /constant metric/);
+        await act(async () => { plots()[3].props.onClick({ points: [{ customdata: 'row:998' }] }); plots()[2].props.onClick({ points: [{ customdata: 'row:997' }] }); });
+        assert.deepEqual(inspected, ['row:999', 'row:998', 'row:997']);
+        await act(async () => { select('3D Z metric').props.onChange({ target: { value: 'color' } }); });
+        assert.equal(plots()[3].props.data[0].z.length, 500, 'the third axis omits missing rather than filling zero');
         await act(async () => { select('Color metric').props.onChange({ target: { value: 'color' } }); });
         assert.equal(plots()[0].props.data[0].x.length, 500);
         assert.equal(plots()[0].props.data[1].x.length, 500, 'missing color never removes complete coordinate pairs');
         await act(async () => { select('Correlation metrics').props.onChange({ target: { selectedOptions: [{ value: 'seq_length' }, { value: 'dsasa' }] } }); });
-        assert.equal(plots()[2].props.data[0].z.length, 2);
+        assert.equal(plots()[4].props.data[0].z.length, 2);
+        const compositionRows = rowsOf([{ seq_length: 50, dsasa: 715, radius_of_gyration: 10.45,
+            coil_percent: 0.4, helix_percent: 0.24, strand_percent: 0.36 }]);
+        await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, rows: compositionRows, activeId: 'row:0', mode: 'dashboard' })); });
+        const pie = plots().find(plot => plot.props.data[0].type === 'pie')?.props.data[0];
+        assert.deepEqual(pie?.labels, ['Coil', 'Helix', 'Strand']);
+        assert.deepEqual(pie?.values, [0.4, 0.24, 0.36]);
         await act(async () => { renderer!.update(React.createElement(CohortAnalytics, { ...props, rows: rowsOf([{ x: null }, { x: false }]) })); });
         assert.equal(plots().length, 0);
         assert.match(JSON.stringify(renderer!.toJSON()), /No finite numeric observations/);

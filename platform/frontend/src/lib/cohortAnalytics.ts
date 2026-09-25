@@ -6,6 +6,16 @@ export interface CohortRow {
 
 export const isFiniteMetric = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
+/** Only a complete native residue-fraction partition can be shown as a composition pie. */
+export function secondaryStructureComposition(row: CohortRow | undefined): number[] | null {
+    if (!row) return null;
+    const values = ['coil_percent', 'helix_percent', 'strand_percent'].map(key => row.values[key]);
+    if (!values.every(value => isFiniteMetric(value) && value >= 0 && value <= 1)) return null;
+    const fractions = values as number[];
+    const total = fractions.reduce((sum, value) => sum + value, 0);
+    return Math.abs(total - 1) <= 0.02 ? fractions : null;
+}
+
 /** Native appearance order across the entire supplied cohort; never infer a schema from row one. */
 export function metricKeys(rows: CohortRow[]): string[] {
     return [...new Set(rows.flatMap(row => Object.keys(row.values)))];
