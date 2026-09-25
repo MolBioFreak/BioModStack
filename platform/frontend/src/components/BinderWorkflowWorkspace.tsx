@@ -8,6 +8,7 @@ export interface BinderWorkflowWorkspaceProps {
     activeSection: string;
     onSectionChange: (section: string) => void;
     engineChooser?: ReactNode;
+    initialEngineChooserOpen?: boolean;
     children: ReactNode;
     summary?: ReactNode;
     executionControls?: ReactNode;
@@ -17,11 +18,11 @@ export interface BinderWorkflowWorkspaceProps {
 
 /** Presentation only: native owners retain drafts, validation and submission. */
 export function BinderWorkflowWorkspace({ title, description, sections, activeSection, onSectionChange,
-    engineChooser, children, summary, executionControls, submitControls, library }: BinderWorkflowWorkspaceProps) {
+    engineChooser, initialEngineChooserOpen = false, children, summary, executionControls, submitControls, library }: BinderWorkflowWorkspaceProps) {
     return <section aria-label={title} className="space-y-5 rounded-xl border p-4 sm:p-6"
         style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-primary)', color: 'var(--text-primary)' }}>
         <header><h2 className="text-lg font-semibold">{title}</h2>{description && <div className="mt-1 text-sm text-[var(--text-secondary)]">{description}</div>}</header>
-        {engineChooser && <details className="rounded-lg border p-3" style={{ borderColor: 'var(--border-primary)' }}>
+        {engineChooser && <details open={initialEngineChooserOpen} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-primary)' }}>
             <summary className="cursor-pointer font-medium">Change generation engine</summary>
             <div className="mt-3">{engineChooser}</div>
         </details>}

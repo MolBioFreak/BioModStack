@@ -129,6 +129,17 @@ async def test_real_project_resource_browse_exact_document_materialization(sourc
     query = {'project_id': project.id}
     resources = (await client.get('/api/files/structure-sources', params=query)).json()
     assert resources['total'] == 1
+    assert resources['items'][0]['name'] == 'Fixture campaign'
+    # Display metadata does not change receipt identity or source admission.
+    job.name = ''
+    await core.commit()
+    unnamed = (await client.get('/api/files/structure-sources', params=query)).json()
+    assert unnamed['items'][0]['name'] == job.id
+    assert unnamed['items'][0]['receipt_id'] == resources['items'][0]['receipt_id']
+    empty_page = (await client.get('/api/files/structure-sources', params={**query, 'offset': 1, 'limit': 1})).json()
+    assert empty_page['items'] == [] and empty_page['total'] == 1
+    job.name = 'Fixture campaign'
+    await core.commit()
     query['receipt_id'] = resources['items'][0]['receipt_id']
     assert query['receipt_id'] == attached['source_receipt_id']
     designs = (await client.get('/api/files/structure-sources', params=query)).json()

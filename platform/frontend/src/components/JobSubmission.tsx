@@ -244,27 +244,6 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
     }
 };
 
-const getCompactModelDescription = (model: UntypedApiValue): string => {
-    switch (model.id) {
-        case 'boltz2':
-            return 'Structure and complex prediction validator.';
-        case 'boltz_cp_experimental':
-            return 'NVIDIA Fold-CP Structure predictor.';
-        case 'confornets_experimental':
-            return 'Canonical conformational mapping workflow.';
-        case 'esmfold2':
-        case 'esmfold2_experimental':
-            return 'Local all-atom protein and complex folding.';
-        case 'antibody_denovo':
-            return 'Nanobody generation and refinement toolkit.';
-
-        case 'rfdiffusion':
-            return 'Backbone generation and local redesign.';
-        default:
-            return model.short_description || model.summary || model.description || '';
-    }
-};
-
 export function JobSubmission() {
     const [initialReturnPolicy] = useState(initialExecutionPolicy);
     const queryClient = useQueryClient();
@@ -302,6 +281,7 @@ export function JobSubmission() {
         ? 'protein_modification_experimental'
         : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
+    const [engineChooserOpen, setEngineChooserOpen] = useState(false);
 
     const pendingTemplateRoute = useRef<string | null | undefined>(undefined);
     // Wrapper to sync state with URL
@@ -309,17 +289,33 @@ export function JobSubmission() {
         const canonicalId = id === 'confornets_experimental' ? 'conformational_mapping' : id;
         pendingTemplateRoute.current = canonicalId;
         setSelectedTemplateIdInternal(canonicalId);
+        setEngineChooserOpen(false);
         const next = new URLSearchParams(searchParams);
         if (canonicalId) {
             next.set('template', canonicalId);
-            next.delete('model'); next.delete('mode');
         } else {
             next.delete('template');
         }
+        next.delete('model'); next.delete('mode'); next.delete('engine');
         setSearchParams(next, { replace: true });
     }, [searchParams, setSearchParams]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(() => searchParams.get('model'));
     const [selectedModeId, setSelectedModeId] = useState<string | null>(() => searchParams.get('mode'));
+    // Explicit model handoffs and mode changes must reopen the same editor on
+    // refresh, without resurrecting the template or the retired model catalog.
+    useEffect(() => {
+        if (wizardMode !== 'manual' || !selectedModelId) return;
+        const next = new URLSearchParams(searchParams);
+        next.delete('template');
+        next.delete('engine');
+        next.set('model', selectedModelId);
+        if (selectedModeId) next.set('mode', selectedModeId);
+        else next.delete('mode');
+        if (next.toString() !== searchParams.toString()) {
+            pendingTemplateRoute.current = null;
+            setSearchParams(next, { replace: true });
+        }
+    }, [wizardMode, selectedModelId, selectedModeId, searchParams, setSearchParams]);
     const [jobName, setJobName] = useState('');
     const [params, setParams] = useState<Record<string, UntypedApiValue>>({});
     // Keep user scopes in the canonical cloned/saved request state.
@@ -662,6 +658,7 @@ export function JobSubmission() {
             pendingTemplateRoute.current = undefined;
         }
         if (!routeTemplateId || routeTemplateId === selectedTemplateId) return;
+        setEngineChooserOpen(false);
         if (routeTemplateId === 'boltz_cp_experimental') {
             setSelectedTemplateIdInternal('structure_prediction');
             setClonedValues((previous: UntypedApiValue) => ({ ...(previous || {}), pred_method: 'fold_cp' }));
@@ -1046,35 +1043,6 @@ export function JobSubmission() {
         );
     };
 
-    const getModelCardBadge = (model: UntypedApiValue) => {
-        const identity = `${model.id ?? ''} ${model.name ?? ''}`.toLowerCase();
-        if (identity.includes('proteinmpnn') || identity.includes('ligandmpnn') || identity.includes('fampnn') || identity.includes('full-atom mpnn')) {
-            return 'SEQ';
-        }
-        if (identity.includes('rfantibody') || identity.includes('antibody')) {
-            return 'BIND';
-        }
-        if (identity.includes('boltz2') || identity.includes('alphafold') || identity.includes('rosettafold') || identity.includes('protenix') || identity.includes('rf3')) {
-            return 'FOLD';
-        }
-        if (identity.includes('boltzgen')) {
-            return 'GEN';
-        }
-        if (identity.includes('diffdock') || identity.includes('uni-dock') || identity.includes('unidock')) {
-            return 'DOCK';
-        }
-        if (identity.includes('nanopore') || identity.includes('ngs')) {
-            return 'NGS';
-        }
-        if (identity.includes('oligo') || identity.includes('dna') || identity.includes('rna')) {
-            return 'NA';
-        }
-        if (identity.includes('rfdiffusion') || identity.includes('redesign') || identity.includes('design')) {
-            return 'DES';
-        }
-        return model.ui_icon === 'cube' ? '3D' : 'ML';
-    };
-
     // Filter params for current mode
     const visibleParams = useMemo(() => nativeGenerationInventory?.parameters ?? (selectedModel?.params || []).filter((p: UntypedApiValue) => {
         if (!selectedMode) return false;
@@ -1380,7 +1348,7 @@ export function JobSubmission() {
 
     // Dedicated templates that handle their own header/navigation
     const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
-    const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
+    const showMainHeader = !isNativeBinderGeneration && (!selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId));
 
     const preparedStructureModelId = launchContextQuery.data?.pinned_scheduler?.model_id;
     const isPreparedStructureFamily = ['boltz2', 'protenix'].includes(String(preparedStructureModelId));
@@ -1617,6 +1585,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                     initialDraft={binderInitialDraft}
+                                    initialEngineChooserOpen={engineChooserOpen}
                                     onSubmitRequest={submitBinderRequest}
                                     onDraftChange={draft => {
                                         binderDraftRef.current = draft;
@@ -1733,74 +1702,6 @@ export function JobSubmission() {
                         </div>
                     )}
 
-                    {/* Manual Mode: Select Model */}
-                    {wizardMode === 'manual' && (
-                        <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-2">Select Model</label>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {models.map((model: UntypedApiValue) => {
-                                    const modelDocLinks = getModelDocumentationLinks(getModelDocumentationTopics(model));
-                                    return (
-                                    <div
-                                        key={model.id}
-                                        onClick={() => {
-                                            setClonedValues(undefined);
-                                            setSelectedModelId(model.id);
-                                            setSelectedModeId(null); // Reset mode
-                                        }}
-                                        className={`cursor-pointer p-4 rounded-xl border transition-all relative overflow-hidden group ${selectedModelId === model.id
-                                            ? 'bg-slate-800 border-blue-500 shadow-lg shadow-blue-500/10'
-                                            : 'bg-slate-800/30 border-slate-700 hover:border-slate-600 hover:bg-slate-800/50'
-                                            }`}
-                                    >
-                                        <div className="flex justify-between items-start mb-2">
-                                            <div
-                                                className="w-10 h-10 rounded-lg flex items-center justify-center text-lg shadow-inner"
-                                                style={{ backgroundColor: `${model.ui_color}20`, color: model.ui_color }}
-                                            >
-                                                {getModelCardBadge(model)}
-                                            </div>
-                                            {model.experimental && (
-                                                <span className="text-[10px] uppercase font-bold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded-full">
-                                                    Experimental
-                                                </span>
-                                            )}
-                                        </div>
-                                        <h3 className="font-semibold text-slate-200 mb-1">{model.name}</h3>
-                                        <p className="text-xs text-slate-500 line-clamp-2">{getCompactModelDescription(model)}</p>
-                                        {modelDocLinks.length > 0 && (
-                                            <div className="group/docs relative mt-2 inline-block" onClick={(event) => event.stopPropagation()}>
-                                                <span
-                                                    className="inline-flex rounded-md border border-slate-600/80 bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300 transition-colors group-hover/docs:border-blue-400/60 group-hover/docs:text-blue-200"
-                                                    aria-haspopup="true"
-                                                >
-                                                    Docs ({modelDocLinks.length})
-                                                </span>
-                                                <div
-                                                    data-bms-model-doc-hover="true"
-                                                    className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden min-w-56 max-w-[min(28rem,80vw)] flex-wrap gap-1 rounded-lg border border-slate-700/80 bg-slate-950/95 p-2 shadow-2xl group-hover/docs:flex group-hover/docs:pointer-events-auto"
-                                                >
-                                                    {modelDocLinks.map((link) => (
-                                                        <a
-                                                            key={link.href}
-                                                            href={link.href}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            onClick={(event) => event.stopPropagation()}
-                                                            className="inline-flex rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[10px] font-medium text-slate-200 transition-colors hover:border-blue-400/60 hover:text-blue-200"
-                                                        >
-                                                            {link.label}
-                                                        </a>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
                 </section>
 
                 {/* 3. Template Configuration - Only show if template selected and NOT a dedicated template */}
@@ -1914,7 +1815,7 @@ export function JobSubmission() {
                         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6">
                             <h2 className="text-lg font-semibold text-slate-200 mb-6 flex items-center gap-2">
                                 <span className="w-1.5 h-6 bg-blue-500 rounded-full" />
-                                Configuration
+                                {isNativeBinderGeneration ? 'De Novo Binder Design' : 'Configuration'}
                             </h2>
 
                             <ModelDocumentationLinks
@@ -1981,6 +1882,7 @@ export function JobSubmission() {
                                         setBinderInitialDraft({ ...inherited, ...saved });
                                         setClonedValues(undefined);
                                         setWizardMode('templates'); setSelectedTemplateId('antibody_denovo');
+                                        setEngineChooserOpen(true);
                                     }}>Change generation engine</button>
                                     {nativeGenerationQuery.error && <p role="status" className="text-sm text-amber-500">{nativeGenerationQuery.error.message} Catalog controls remain available; the native inventory may contain additional settings.</p>}
                                     <NativeBinderGeneration key={`${selectedModelId}:${selectedModeId}`} model={selectedModelId as NativeBinderModel} mode={selectedModeId!}

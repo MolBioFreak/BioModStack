@@ -52,7 +52,7 @@ afterEach(async () => { await act(async () => root.unmount()); client.clear(); h
 
 it('PPIFlow real selector invokes checked boundary and saves native/derived author identity without viewer remount', async () => {
     await mount('ppiflow'); await click('Presets'); await click('Native CIF fixture');
-    await settle(() => values.target_pdb === 'inputs/derived.pdb');
+    await settle(() => values.target_pdb === 'inputs/derived.pdb' && host.querySelector('[data-viewer]')?.getAttribute('data-format') === 'pdb');
     expect(post).toHaveBeenCalledWith('/api/files/materialize-structure', expect.objectContaining({ path: 'inputs/native.cif', output_format: 'pdb' }));
     expect(values.target_pdb).toBe('inputs/derived.pdb');
     expect(values.target_pdb_source_reference.materialization).toEqual(materialization);

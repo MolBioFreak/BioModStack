@@ -686,11 +686,21 @@ async def browse_structure_sources(session, core_session, *, project_id=None, da
                 ExperimentAggregateHead.aggregate_kind == "dataset").order_by(ExperimentAggregateHead.aggregate_id),
                 lambda row: {**context, "kind": "dataset", "name": row.display_name,
                              "dataset_id": row.aggregate_id, "revision_id": row.current_revision_id})
-        return await page(select(ExperimentExternalEntityReceipt).where(
+        statement = select(ExperimentExternalEntityReceipt).where(
             ExperimentExternalEntityReceipt.workspace_id == project_id,
             ExperimentExternalEntityReceipt.entity_kind.in_(("design", "native_binder_job_result", "typed_core_job_result")))
-            .order_by(ExperimentExternalEntityReceipt.id),
-            lambda row: {**context, "kind": "resource", "name": row.entity_id, "receipt_id": row.id})
+        total = int(await session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        rows = (await session.scalars(statement.order_by(ExperimentExternalEntityReceipt.id).offset(offset).limit(limit))).all()
+        # Names are presentation metadata, not fresh verification or a new
+        # prerequisite to listing an attached resource. Resolve this page only.
+        labels = {}
+        for model, kinds in ((Design, {"design"}), (Job, {"native_binder_job_result", "typed_core_job_result"})):
+            ids = {row.entity_id for row in rows if row.entity_kind in kinds}
+            if ids:
+                names = dict((await core_session.execute(select(model.id, model.name).where(model.id.in_(ids)))).all())
+                labels.update({row.id: names.get(row.entity_id) for row in rows if row.entity_kind in kinds})
+        return {"items": [{**context, "kind": "resource", "name": labels.get(row.id) or row.entity_id,
+                           "receipt_id": row.id} for row in rows], "total": total, "offset": offset, "limit": limit}
     receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
     if receipt is None or receipt.workspace_id != project_id:
         raise NotFound("Resource not found in Project")

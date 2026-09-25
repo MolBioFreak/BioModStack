@@ -1,16 +1,16 @@
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ authoring: null as any, project: null as any, saveDraft: vi.fn(), submit: vi.fn(async () => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: mocks.submit,
     fetchModelById: vi.fn(async () => ({ data: null })),
-    fetchModels: vi.fn(async () => ({ data: [{ id: 'boltzgen', name: 'BoltzGen', category: 'generative_design', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] }] })),
+    fetchModels: vi.fn(async () => ({ data: [{ id: 'boltzgen', name: 'BoltzGen', category: 'generative_design', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'peptide_binder', name: 'Peptide Binder Generation', params: ['target_pdb'] }, { id: 'nanobody_binder', name: 'Nanobody Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] }] })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchInputPresets: vi.fn(async () => ({ data: [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
-    fetchModel: vi.fn(async () => ({ data: { id: 'boltzgen', name: 'BoltzGen', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] } })),
+    fetchModel: vi.fn(async () => ({ data: { id: 'boltzgen', name: 'BoltzGen', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'peptide_binder', name: 'Peptide Binder Generation', params: ['target_pdb'] }, { id: 'nanobody_binder', name: 'Nanobody Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] } })),
 }));
 vi.mock('../../src/lib/projectManager', async original => ({ ...await original<typeof import('../../src/lib/projectManager')>(),
     getProjectWorkflowSetup: vi.fn(async () => mocks.project),
@@ -30,12 +30,13 @@ vi.mock('../../src/components/StructurePredictionTemplate', () => ({ StructurePr
 vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDynamicsTemplate: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 let root: Root; let client: QueryClient;
+function RouteProbe() { return <output data-route>{useLocation().search}</output>; }
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); mocks.authoring = null; mocks.project = null; });
-async function mount(clone?: unknown, project = false) {
+async function mount(clone?: unknown, project = false, entry?: string) {
     if (clone) localStorage.setItem('clonedJobData', JSON.stringify(clone));
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/submit?template=antibody_denovo${project ? '&setup_context_id=setup&project_id=project' : ''}`]}><JobSubmission /></MemoryRouter></QueryClientProvider>));
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry ?? `/submit?template=antibody_denovo${project ? '&setup_context_id=setup&project_id=project' : ''}`]}><JobSubmission /><RouteProbe /></MemoryRouter></QueryClientProvider>));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
 }
 it('BC2 cloned Job enters its dedicated authoring with exact native route and settings', async () => {
@@ -47,6 +48,7 @@ it('generic BoltzGen clone retains its ligand mode instead of entering VHH autho
     await mount({ model_id: 'boltzgen', mode: 'ligand_binder', name: 'saved ligand request', params: { num_designs: 7 } });
     expect(document.querySelector('[data-authoring]')).toBeNull();
     expect(document.body.textContent).toContain('Ligand Binder Generation');
+    expect(document.body.textContent).not.toContain('Select Model');
 });
 it('binder chooser RFD3 callback enters the existing native launcher', async () => {
     await mount();
@@ -60,6 +62,7 @@ it('binder chooser ligand callback enters model configuration without antibody c
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
     expect(document.querySelector('[data-authoring]')).toBeNull();
     expect(document.body.textContent).toContain('Ligand Binder Generation');
+    expect(document.body.textContent).not.toContain('Select Model');
 });
 
 
@@ -122,7 +125,34 @@ it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('explicit PPIF
     expect(fetchModelById).toHaveBeenCalledWith('ppiflow');
     expect(fetchModels).toHaveBeenCalledWith();
     expect(document.body.textContent).toContain(`Native ${mode}`);
+    expect(document.querySelector('[data-route]')?.textContent).toBe(`?model=ppiflow&mode=${mode}`);
     expect(document.body.textContent).toContain('PPIFlow initial generation');
+    expect(document.body.textContent).not.toContain('Select Model');
+    expect(document.querySelector('[data-bms-model-doc-hover]')).toBeNull();
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+const nativeRoutes = [
+    ['ppiflow', 'protein_binder'], ['ppiflow', 'antibody_binder'], ['ppiflow', 'nanobody_binder'],
+    ['boltzgen', 'protein_binder'], ['boltzgen', 'peptide_binder'], ['boltzgen', 'nanobody_binder'],
+] as const;
+it.each(nativeRoutes)('direct %s / %s opens only its workflow without the retired catalog', async (model, mode) => {
+    const { fetchModelById } = await import('../../src/lib/api');
+    if (model === 'ppiflow') vi.mocked(fetchModelById).mockResolvedValueOnce({ data: {
+        id: model, name: 'PPIFlow', params: [], modes: [{ id: mode, name: mode, params: [] }],
+    } } as any);
+    await mount(undefined, false, `/submit?model=${model}&mode=${mode}`);
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull());
+    const workspace = model === 'ppiflow' ? 'PPIFlow initial generation' : 'BoltzGen generation';
+    expect(document.querySelector(`section[aria-label="${workspace}"]`)).not.toBeNull();
+    expect(document.body.textContent).not.toContain('Select Model');
+    expect(document.querySelector('[data-bms-model-doc-hover]')).toBeNull();
+    expect(document.body.textContent).not.toContain('New Experiment');
+    const workflows = [...document.querySelectorAll('button')].find(button => button.textContent === 'Workflows')!;
+    await act(async () => workflows.click());
+    expect(document.body.textContent).toContain('Choose workflow:');
+    expect(document.querySelector('[data-route]')?.textContent).toBe('');
+    expect(document.querySelector(`section[aria-label="${workspace}"]`)).toBeNull();
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 
@@ -145,7 +175,40 @@ it('native mode navigation restores the destination draft including deliberately
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(target, ''); target.dispatchEvent(new Event('input', { bubbles: true })); });
     const mode = [...document.querySelectorAll('select')].find(select => [...select.options].some(option => option.value === 'protein_binder'))!;
     await act(async () => { mode.value = 'ligand_binder'; mode.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(document.querySelector('[data-route]')?.textContent).toBe('?model=boltzgen&mode=ligand_binder');
     await act(async () => { mode.value = 'protein_binder'; mode.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]')!.value).toBe('');
     expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')!.value).toBe('protein draft');
+});
+
+it('native Change generation engine opens the chooser once and preserves the native draft on return', async () => {
+    const { fetchTemplates } = await import('../../src/lib/api');
+    vi.mocked(fetchTemplates).mockResolvedValueOnce({ data: [{ id: 'antibody_denovo', name: 'De Novo Binder Design', description: 'Binder authoring', params: [], stages: [], color: '#10B981' }] } as any);
+    await mount();
+    expect(mocks.authoring.initialEngineChooserOpen).toBe(false);
+    await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'boltzgen', mode: 'protein_binder', initialDraft: { job_name: 'retained native draft', target_pdb: '' } }));
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull());
+    const change = [...document.querySelectorAll('button')].find(button => button.textContent === 'Change generation engine')!;
+    await act(async () => change.click());
+    expect(mocks.authoring.initialEngineChooserOpen).toBe(true);
+    await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'boltzgen', mode: 'protein_binder' }));
+    await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')?.value).toBe('retained native draft'));
+    expect(document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]')!.value).toBe('');
+    await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent === 'Change generation engine')!.click());
+    await act(async () => mocks.authoring.onBack());
+    await act(async () => [...document.querySelectorAll('h3')].find(heading => heading.textContent === 'De Novo Binder Design')!.click());
+    expect(mocks.authoring.initialEngineChooserOpen).toBe(false);
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it('native URL synchronization clears stale engine identity without dropping Project context', async () => {
+    await mount(undefined, false, '/submit?model=boltzgen&mode=protein_binder&engine=bindcraft2&project_id=retained');
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull());
+    const query = new URLSearchParams(document.querySelector('[data-route]')!.textContent!);
+    expect(query.get('engine')).toBeNull();
+    expect(query.get('template')).toBeNull();
+    expect(query.get('model')).toBe('boltzgen');
+    expect(query.get('mode')).toBe('protein_binder');
+    expect(query.get('project_id')).toBe('retained');
+    expect(mocks.submit).not.toHaveBeenCalled();
 });

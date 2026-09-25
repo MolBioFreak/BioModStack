@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { visibleLauncherTemplates } from '../src/lib/launcherCatalog.js';
 
 import {
   MODEL_DOCUMENTATION_LINKS,
@@ -138,7 +139,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
   assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('antibody_child'), false);
-  assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
+  assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);
   assert.equal(workflowsById.has('protein_cad_experimental'), false);
   assert.equal(workflowsById.has('protein_hunter_experimental'), false);
@@ -158,8 +159,11 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   const source = readSource('src', 'components', 'JobSubmission.tsx');
 
   requireSnippet(source, "import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';");
-  requireSnippet(source, 'const compactUiCopy = (value: unknown, maxLength = 118): string => {');
-  requireSnippet(source, 'compactUiCopy(param.description, 112)');
+  const parameterSource = readSource('src', 'components', 'ModelParameterField.tsx');
+  requireSnippet(source, "import { ParamField, compactUiCopy } from './ModelParameterField';");
+  requireSnippet(source, '<ParamField');
+  requireSnippet(parameterSource, 'export const compactUiCopy = (value: unknown, maxLength = 118): string => {');
+  requireSnippet(parameterSource, 'compactUiCopy(param.description, 112)');
   requireSnippet(source, 'compactUiCopy(selectedMode.description, 120)');
 
   const modeToggle = sourceBlock(source, '{/* 2. Mode Toggle: workflow cards only; the raw model-picker tab stays hidden for now. */}', '{/* Templates Mode */}');
@@ -179,15 +183,21 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];");
 
   requireSnippet(source, "return 'NVIDIA Fold-CP predictor inside Structure Prediction.';");
-  requireSnippet(source, "!LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id)");
+  requireSnippet(source, 'const visibleApiTemplates = useMemo(() => visibleLauncherTemplates(');
+  assert.deepEqual(visibleLauncherTemplates([
+    { id: 'confornets_experimental' }, { id: 'conformational_mapping' },
+  ]), [{ id: 'conformational_mapping' }]);
   rejectSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
 
   rejectSnippet(source, "if (template.id === 'esmfold2' || template.id === 'esmfold2_experimental') return 'EF';");
-  requireSnippet(source, "return 'Backbone generation and local redesign.';");
-  requireSnippet(source, "return 'Structure and complex prediction validator.';");
+  rejectSnippet(source, 'const getCompactModelDescription');
+  rejectSnippet(source, 'const getModelCardBadge');
+  rejectSnippet(source, '>Select Model</label>');
+  rejectSnippet(source, 'models.map((model: UntypedApiValue) =>');
   requireSnippet(source, 'getModelDocumentationLinks(docTopics)');
   requireSnippet(source, 'data-bms-workflow-doc-hover="true"');
-  requireSnippet(source, 'data-bms-model-doc-hover="true"');
+  rejectSnippet(source, 'data-bms-model-doc-hover="true"');
+  requireSnippet(source, 'topics={getModelDocumentationTopics(selectedModel)}');
   requireSnippet(source, 'group-hover/docs:flex');
   requireSnippet(source, 'Docs ({docLinks.length})');
   rejectSnippet(source, 'data-bms-workflow-doc-table="true"');
@@ -206,14 +216,13 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, 'setSelectedTemplateId(apiTemplateId)');
   rejectSnippet(source, '{templateDetail.name} - Configuration');
   rejectSnippet(source, 'Stage Explanation');
-  requireSnippet(source, 'data-bms-sequence-pdb-import-modal="true"');
-  requireSnippet(source, "import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';");
-  requireSnippet(source, "import { parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';");
-  requireSnippet(source, 'Import from PDB');
-  requireSnippet(source, 'handlePdbSequenceImportSelect');
-  requireSnippet(source, 'applySequenceImport(chain.sequence');
-  requireSnippet(source, 'updateParam(\'chain_id\', chainId)');
-  requireSnippet(source, 'data-bms-sequence-pdb-import-modal="true"');
+  requireSnippet(parameterSource, 'data-bms-sequence-pdb-import-modal="true"');
+  requireSnippet(parameterSource, "import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';");
+  requireSnippet(parameterSource, "import { parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';");
+  requireSnippet(parameterSource, 'Import from PDB');
+  requireSnippet(parameterSource, 'handlePdbSequenceImportSelect');
+  requireSnippet(parameterSource, 'applySequenceImport(chain.sequence');
+  requireSnippet(parameterSource, 'updateParam(\'chain_id\', chainId)');
   requireSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail, params)}');
   requireSnippet(source, 'summary="Model docs update from the selected workflow model; launch controls stay here."');
   rejectSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail)}');
@@ -241,7 +250,11 @@ test('dedicated model launchers expose compact documentation linkouts instead of
 
   requireSnippet(structureSource, "import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';");
   requireSnippet(structureSource, 'const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {');
-  requireSnippet(structureSource, "if (usesRf3) topics.push('rf3');");
+  requireSnippet(structureSource, "if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];");
+  requireSnippet(structureSource, "if (usesBoltz) topics.push('boltz2');");
+  requireSnippet(structureSource, "if (usesEsmFold2) topics.push('esmfold2');");
+  requireSnippet(structureSource, "return topics.length > 0 ? topics : ['boltz2'];");
+  rejectSnippet(structureSource, "if (usesRf3) topics.push('rf3');");
   requireSnippet(structureSource, "if (usesProtenix) topics.push('protenix');");
   requireSnippet(structureSource, 'topics={structureDocumentationTopics}');
   requireSnippet(structureSource, 'NVIDIA Fold-CP Settings');
@@ -255,7 +268,7 @@ test('dedicated model launchers expose compact documentation linkouts instead of
 
   requireSnippet(localRedesignSource, "import { ModelDocumentationLinks } from './ModelDocumentationLinks';");
   requireSnippet(localRedesignSource, "topics={['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']}");
-  requireSnippet(localRedesignSource, 'Visual region pick → local remodeling → sequence redesign → optional validator.');
+  requireSnippet(localRedesignSource, 'Visual region pick → RFD3 remodeling → sequence redesign → ESMFold2 and Protenix validation.');
   requireSnippet(localRedesignSource, 'Real structure-driven loop; inspect outputs before reuse.');
   requireSnippet(localRedesignSource, 'Method background and upstream references are linked out; the launcher stays focused on source, region, and validation controls.');
   rejectSnippet(localRedesignSource, 'Choose an existing complex visually');

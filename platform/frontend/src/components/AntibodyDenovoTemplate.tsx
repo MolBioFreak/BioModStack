@@ -68,6 +68,8 @@ import {
 
 export interface AntibodyDenovoTemplateProps {
     onBack: () => void;
+    /** Presentation only: explicitly returning from a native engine opens the chooser. */
+    initialEngineChooserOpen?: boolean;
     initialValues?: Record<string, UntypedApiValue>;
     onOpenNativeRoute?: (route: BinderNativeRoute) => void;
     initialDraft?: Record<string, UntypedApiValue>;
@@ -238,7 +240,7 @@ const buildAvailableResidueKeySet = (chains: Chain[]) =>
 
 const hydrateDeNovoStageSelection = hydrateInitialStageSelection;
 
-export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onSubmitRequest }) => {
+export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onSubmitRequest, initialEngineChooserOpen = false }) => {
     const initialValues = useMemo(() => initialDraft ? { ...savedValues, ...initialDraft } : savedValues, [savedValues, initialDraft]);
     const [retainedDraft, setRetainedDraft] = useState(initialValues ?? {});
     const [workspaceSection, setWorkspaceSection] = useState('sources');
@@ -301,7 +303,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         if (Number.isNaN(parsed.getTime())) return refinementSavedFilterSetCreatedAt;
         return parsed.toLocaleString();
     }, [refinementSavedFilterSetCreatedAt]);
-    const [deNovoGenerator, setDeNovoGenerator] = useState<DeNovoGenerator | null>(() => resolveExistingDeNovoGenerator(initialValues));
+    // URL identity is only a fallback for a new draft; saved/Project/clone owners win.
+    const [deNovoGenerator, setDeNovoGenerator] = useState<DeNovoGenerator | null>(() => {
+        const engine = isRefinementMode ? null : new URLSearchParams(location.search).get('engine');
+        return resolveExistingDeNovoGenerator(initialValues ?? (engine ? { denovo_generator: engine } : undefined));
+    });
+    const selectDeNovoGenerator = (generator: DeNovoGenerator) => {
+        setDeNovoGenerator(generator);
+        const query = new URLSearchParams(location.search);
+        query.set('template', 'antibody_denovo');
+        query.set('engine', generator);
+        navigate({ pathname: location.pathname, search: `?${query}`, hash: location.hash }, { replace: true, state: location.state });
+    };
     const [bc2Settings, setBc2Settings] = useState<BC2Request>(() =>
         initialValues?.bindcraft2_settings && typeof initialValues.bindcraft2_settings === 'object' && !Array.isArray(initialValues.bindcraft2_settings)
             ? initialValues.bindcraft2_settings as BC2Request : {});
@@ -3083,7 +3096,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const bc2Workspace = !isRefinementMode && deNovoGenerator === 'bindcraft2' ? (
         <BindCraft2Campaign
             name={jobName} onNameChange={setJobName} onBack={onBack}
-            generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
+            generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             requestedSettings={bc2Settings} preview={activeBc2Preview}
             section={bc2Section} onSectionChange={setBc2Section}
             previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
@@ -3142,7 +3155,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             description={<><button type="button" onClick={onBack}>← Back</button><span className="ml-3">Model-native settings; optional operations remain explicit.</span></>}
             sections={isRefinementMode ? [] : workspaceSections}
             activeSection={workspaceSection} onSectionChange={setWorkspaceSection}
-            engineChooser={!isRefinementMode && <BinderGeneratorChooser generator={deNovoGenerator} onSelect={setDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
+            initialEngineChooserOpen={initialEngineChooserOpen}
+            engineChooser={!isRefinementMode && <BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             summary={<span>{deNovoGenerator ?? 'Unrecognized saved generator'} · {jobName || 'Unnamed request'}</span>}
             executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
             submitControls={submitControls} library={!bc2Workspace && library}

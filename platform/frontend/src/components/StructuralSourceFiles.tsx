@@ -13,7 +13,13 @@ export function ProjectStructureSources({ onSelect }: { onSelect: (source: Selec
     useEffect(() => {
         const token = ++epoch.current; setBusy(true); setError(''); setPage(undefined);
         void fetchProjectStructureSources(query).then(result => { if (token === epoch.current) setPage(result); })
-            .catch(error => { if (token === epoch.current) setError(error instanceof Error ? error.message : String(error)); })
+            .catch((error: unknown) => {
+                if (token !== epoch.current) return;
+                const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
+                setError(typeof detail === 'string' && detail.trim() ? detail
+                    : error instanceof Error && error.message ? error.message
+                    : typeof error === 'string' && error.trim() ? error : 'Could not load Project sources.');
+            })
             .finally(() => { if (token === epoch.current) setBusy(false); });
         return () => { epoch.current++; };
     }, [query]);

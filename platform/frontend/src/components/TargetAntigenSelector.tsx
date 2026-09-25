@@ -66,7 +66,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     const [preparationError, setPreparationError] = useState('');
     const [pendingConformation, setPendingConformation] = useState<{ source: SelectedTarget; models: number[] }>();
     const select = (source: SelectedTarget | null) => {
-        const token = ++selectionEpoch.current; setPreparationError(''); setPendingConformation(undefined);
+        const token = ++selectionEpoch.current; setPreparationError(''); setPendingConformation(undefined); setFetchError(null);
         if (!source || requiredFormat === 'native') { onSelect(source); return; }
         void (async () => {
             const native = await sourceSession.acquire(source);
@@ -242,23 +242,23 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
 
     // Mutation to fetch from RCSB
     const fetchRcsbMutation = useMutation({
-        mutationFn: async ({ pdbId, epoch }: { pdbId: string; epoch: number }) => {
+        mutationFn: async ({ pdbId, epoch, preset }: { pdbId: string; epoch: number; preset?: PdbPreset }) => {
             const res = await fetch(`/api/rcsb/${pdbId.toUpperCase()}`);
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.detail || 'Fetch failed');
             }
-            return { data: await res.json(), epoch };
+            return { data: await res.json(), epoch, preset };
         },
-        onSuccess: ({ data, epoch }) => {
+        onSuccess: ({ data, epoch, preset }) => {
             queryClient.invalidateQueries({ queryKey: ['rcsb-cached'] });
             if (!alive.current || epoch !== selectionEpoch.current) return;
             setFetchError(null);
             select({
-                type: 'rcsb',
+                type: preset ? 'preset' : 'rcsb',
                 url: data.url,
                 path: data.path,
-                name: `RCSB: ${data.pdb_id}`,
+                name: preset?.name ?? `RCSB: ${data.pdb_id}`,
                 pdbId: data.pdb_id
             });
             setPdbIdInput('');
@@ -291,6 +291,14 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
     };
 
     const handlePresetSelect = (preset: PdbPreset) => {
+        // The RCSB owner handles both cache hits and acquisition; preset paths
+        // advertise an entry, not proof that its bytes already exist locally.
+        const rcsb = /^rcsb\/([a-z0-9]{4})\.(?:pdb|cif|mmcif)$/i.exec(preset.path);
+        if (rcsb) {
+            setFetchError(null); setPreparationError(''); setPendingConformation(undefined);
+            fetchRcsbMutation.mutate({ pdbId: rcsb[1], epoch: ++selectionEpoch.current, preset });
+            return;
+        }
         select({
             type: 'preset',
             path: preset.path,
@@ -329,6 +337,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
             <label className="block text-sm font-medium text-slate-400">{label}</label>
 
             {preparationError && <p role="alert">{preparationError}</p>}
+            {fetchError && <p role="alert">{fetchError}</p>}
             {pendingConformation && <label className="block text-sm">Select the exact CIF conformation for PDB consumption
                 <select aria-label="Source conformation" value="" onChange={event => select({ ...pendingConformation.source, modelNumber: Number(event.target.value) })}>
                     <option value="" disabled>Choose source model</option>
@@ -345,7 +354,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                             {selectedTarget.type === 'upload' && 'Upload: '}
                             {selectedTarget.type === 'run' && 'Run: '}
                             {selectedTarget.type === 'preset' && 'Preset: '}
-                            {selectedTarget.type === 'rcsb' && 'RCSB: '}
+                            {selectedTarget.type === 'rcsb' && !/^RCSB:\s*/i.test(selectedTarget.name) && 'RCSB: '}
                             {selectedTarget.name}
                             {selectedTarget.document && <span className="block text-xs">{selectedTarget.document.target_state ?? 'State not recorded'} · {selectedTarget.document.logical_path ?? selectedTarget.document.artifact_id}</span>}
                         </span>
@@ -571,9 +580,6 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                     {fetchRcsbMutation.isPending ? '...' : 'Fetch'}
                                 </button>
                             </div>
-                            {fetchError && (
-                                <div className="text-xs text-red-400 mt-1">{fetchError}</div>
-                            )}
                         </div>
 
                         {/* Keyword Search */}
