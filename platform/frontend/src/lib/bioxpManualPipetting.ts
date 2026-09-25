@@ -9,6 +9,7 @@ export type BioXpManualStep = BioXpManualPosition
     | { operation: 'measure_fluid_height'; speed: number }
     | { operation: 'source_fluid_offset'; plate: 'TC' | 'MS' | 'OC' | 'RC' | 'STRIP' | 'OCMS'; speed: number; transfer_fluid: boolean; skip_steps: number }
     | { operation: 'diagnostic_detect_fluid' }
+    | { operation: 'source_calwith_fluid' }
     | { operation: 'aspirate' | 'dispense'; channels: number[]; volume_ul: number; speed: number }
     | { operation: 'mix'; channels: number[]; volume_ul: number; aspirate_speed: number; dispense_speed: number; cycles: number };
 export type BioXpManualRequest = { protocol_id: string; steps: BioXpManualStep[] };
@@ -33,7 +34,7 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
         add(operation === 'aspirate' ? 'pipette_aspirate' : 'pipette_dispense', { channels: [...channels], volume_ul, speed }, index);
     };
     steps.forEach((step, index) => {
-        if (step.operation === 'load_tip' || step.operation === 'measure_fluid_height' || step.operation === 'source_fluid_offset' || step.operation === 'diagnostic_detect_fluid') {
+        if (step.operation === 'load_tip' || step.operation === 'measure_fluid_height' || step.operation === 'source_fluid_offset' || step.operation === 'diagnostic_detect_fluid' || step.operation === 'source_calwith_fluid') {
             if (step.operation === 'load_tip' && (!Number.isInteger(step.tray) || step.tray < 1 || step.tray > 5 || !/^[AB](?:[1-9]|1[0-2])$/.test(step.well)))
                 throw new Error('Select tip tray 1–5 and tip well A1–B12.');
             if (step.operation === 'measure_fluid_height' && !Number.isSafeInteger(step.speed)) throw new Error('Enter integer detection speed.');
@@ -68,6 +69,7 @@ export function describeManualStep(step: BioXpManualStep): string {
     if (step.operation === 'measure_fluid_height') return `Measure fluid height · current location · speed ${step.speed}`;
     if (step.operation === 'source_fluid_offset') return `OEM fluid offset scan · ${step.plate} · speed ${step.speed} · ${step.transfer_fluid ? 'prefill' : 'scan only'} · every ${step.skip_steps} well(s)`;
     if (step.operation === 'diagnostic_detect_fluid') return 'OEM Detect Fluid · five stations · no calibration save';
+    if (step.operation === 'source_calwith_fluid') return 'OEM calibrate with fluid · five stations · saves each offset';
     if (step.operation === 'move') return `Move · locationID ${step.location_id} · ${step.well} · flag ${step.position_flag}`;
     if (step.operation === 'lower') return `Lower in place · locationID ${step.location_id} · calibrated zLow`;
     if (step.operation === 'lift') return `Lift in place · locationID ${step.location_id} · ${step.height_steps === null ? 'calibrated zHigh' : `zLow − ${step.height_steps} steps`}`;

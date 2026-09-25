@@ -148,6 +148,25 @@ it('exposes the distinct five-station OEM Detect Fluid caller and its measured r
     expect(host.textContent).toContain('Calibration savedNo');
 });
 
+it('exposes OEM fluid calibration as its own save-producing native action', async () => {
+    await mount(); await click('OEM calibrate with fluid now');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.document.stages[0].actions).toMatchObject([
+        { kind: 'pipette_manual_physical', params: { operation: 'source_calwith_fluid' } },
+    ]);
+    exports.push({ name: 'calibrate-with-fluid', request: requests[0].request });
+    job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state,
+        action_results: [{ kind: 'pipette_manual_physical', calibration_persisted: true,
+            completed_children: [{ result: { saved_revision_id: 'fluid-rev', pending_restart: true,
+                measurements: [{ plate: 'TC', measured_raw_z: 88210 }, { plate: 'STRIP', measured_raw_z: 87990 }] } }] }] } } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
+    expect(host.textContent).toContain('OEM fluid calibration (raw Z steps)');
+    expect(host.textContent).toContain('TC: 88210');
+    expect(host.textContent).toContain('STRIP: 87990');
+    expect(host.textContent).toContain('revision fluid-rev · pending restart');
+    expect(host.textContent).toContain('comparison/restore dialog is not yet bound');
+});
+
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);
