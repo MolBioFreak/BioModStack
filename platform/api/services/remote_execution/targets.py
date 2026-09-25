@@ -585,8 +585,11 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     connection = RemoteConnection.from_target(target)
     started_at = (target.provider_metadata or {}).get("setup", {}).get("started_at")
     fingerprint = target.host_key_sha256
+    # Cache batches share this session, but an AsyncSession cannot execute
+    # overlapping refresh/commit operations. Keep transport outside this lock.
+    session_lock = asyncio.Lock()
 
-    async def checked_io(operation, *args, **kwargs):
+    async def check_current():
         await session.refresh(target)
         if (not inventory_fresh(target)
                 or target.provider_metadata["inventory"].get("present") is not True
@@ -598,6 +601,10 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 or (target.host, target.port, target.username, target.remote_root) !=
                    (connection.host, connection.port, connection.username, connection.remote_root)):
             raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
+
+    async def checked_io(operation, *args, **kwargs):
+        async with session_lock:
+            await check_current()
         return await operation(*args, **kwargs)
 
     try:
@@ -685,8 +692,9 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 pass
             await checked_io(noop)
         async def progress(event):
-            await fence()
-            await set_setup(session, target, "transferring", event['message'], expected_started_at=started_at)
+            async with session_lock:
+                await check_current()
+                await set_setup(session, target, "transferring", event['message'], expected_started_at=started_at)
         with tempfile.TemporaryDirectory(prefix='bms-critical-') as staging:
             projection = asyncio.create_task(asyncio.to_thread(critical_runtime.project_runtime,
                 connection.remote_root, Path(staging)))
