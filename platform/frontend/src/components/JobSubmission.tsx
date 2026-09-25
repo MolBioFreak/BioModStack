@@ -1472,8 +1472,8 @@ export function JobSubmission() {
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
-            {!(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
-            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />
+            {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
+            {!isNativeBinderGeneration && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
@@ -1957,6 +1957,11 @@ export function JobSubmission() {
                         </div>
                     </section>
                 )}
+
+                {isNativeBinderGeneration && <section aria-label="Native binder execution settings" className="space-y-4">
+                    <ExecutionTargetPicker workflowRequest={workflowRequest} />
+                    <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />
+                </section>}
 
                 {/* Submit Button - Hide if Mutagenesis, Antibody De Novo, or Structure Prediction Template is active (they have their own) */}
                 {!isDedicatedLauncherTemplate(selectedTemplateId) && (

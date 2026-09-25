@@ -145,6 +145,11 @@ it.each(nativeRoutes)('direct %s / %s opens only its workflow without the retire
     await vi.waitFor(() => expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull());
     const workspace = model === 'ppiflow' ? 'PPIFlow initial generation' : 'BoltzGen generation';
     expect(document.querySelector(`section[aria-label="${workspace}"]`)).not.toBeNull();
+    const editor = document.querySelector(`section[aria-label="${workspace}"]`)!;
+    const execution = document.querySelector('section[aria-label="Native binder execution settings"]')!;
+    expect(execution).not.toBeNull();
+    expect(editor.compareDocumentPosition(execution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelectorAll('section[aria-label="Native binder execution settings"]')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('Select Model');
     expect(document.querySelector('[data-bms-model-doc-hover]')).toBeNull();
     expect(document.body.textContent).not.toContain('New Experiment');
