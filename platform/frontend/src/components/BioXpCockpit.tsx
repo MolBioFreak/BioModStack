@@ -38,6 +38,7 @@ import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination }
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
+import { BioXpPipetteSettings } from './BioXpPipetteSettings';
 import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpWorkflowControls } from './BioXpWorkflowControls';
@@ -1632,6 +1633,7 @@ export function BioXpCockpit() {
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
                 <BioXpCalibrationSettings key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                <BioXpPipetteSettings key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
                 <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
                     <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
                     {pipettesOpen && <BioXpPipetteControlPanel

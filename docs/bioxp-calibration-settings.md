@@ -36,3 +36,28 @@ acceptance. Set `BIOXP_NATIVE_CONTRACTS` to the externally generated native
 contract file to verify full baseline/save responses losslessly without
 committing captured provenance. No deployment or physical robot tests are
 implied. Full OEM auto-calibration and scientific recipe support are out of scope.
+
+## Manual tip-tray Set and pipette operation flags (offline candidate)
+
+The cockpit also mounts a typed tray 1–4 selector. Its Set button sends
+`POST /api/bioxp/calibration-settings/manual-tip-set` with a BMS connection
+generation; the fixed robot path is
+`POST /motion/oem/calibration_settings/manual_tip_set` with `{ "tray": 1..4 }`.
+The robot owns the current-Z measurement and atomic paired zLow save: tray 1/2
+selects TECANRACK1/2, tray 3/4 selects TECANRACK3/4. The UI displays returned
+`measured_z`, then independently GETs calibration settings for paired saved and
+active zLow and revisions. It does not claim live application, physical
+accuracy or tip pickup. A differing `committed_revision_id` and saved readback
+revision is reported, not hidden.
+
+`GET/PATCH /api/bioxp/operation-parameters` relay the fixed robot
+`/liquid/oem/operation_parameters` path. GET returns an `operation_parameters`
+object; PATCH accepts an omitted-or-strict-Boolean subset of
+`CheckForStaticTipLoss`, `CheckSnapTips`, `LogPressure` only. Explicit false is
+preserved; unrelated settings are not editable here. The UI reads back after
+saving. These three flags have source consumers in OEM initialization/inspection
+and pipette liquid paths. The existing advanced catalog remains the diagnostic
+command owner; no raw JSON/CAN control is added. Both BMS routes retain mutation
+authorization and generation leases. Mock-HTTP qualification does not establish
+a deployed robot endpoint or physical result; robot implementation must match
+these paths and response keys.
