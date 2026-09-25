@@ -14,8 +14,8 @@ export interface NativeGenerationPage {
     publication: Record<string, unknown>; total: number; offset: number; limit: number;
     artifacts?: Array<{ path: string; download_url?: string; bytes?: number }>;
 }
-export async function fetchNativeBinderGeneration(jobId: string, offset = 0, limit = 100): Promise<NativeGenerationPage> {
-    return (await api.get<NativeGenerationPage>(`/api/jobs/${encodeURIComponent(jobId)}/generation-results`, { params: { offset, limit } })).data;
+export async function fetchNativeBinderGeneration(jobId: string, offset = 0, limit = 100, signal?: AbortSignal): Promise<NativeGenerationPage> {
+    return (await api.get<NativeGenerationPage>(`/api/jobs/${encodeURIComponent(jobId)}/generation-results`, { params: { offset, limit }, signal })).data;
 }
 export function nativeCandidateRoute(jobId: string, designId: string, document?: NativeGenerationDocument, launchContextId?: string | null) {
     const query = new URLSearchParams({ design_id: designId });

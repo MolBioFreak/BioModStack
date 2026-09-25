@@ -2,7 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api, type Job } from '../../src/lib/api';
 import { JobDetailsPanel } from '../../src/components/JobDetailsPanel';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
@@ -17,7 +17,9 @@ import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-native-canvas /> }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-native-canvas data-structure-url={props.structureUrl} /> }));
 vi.mock('../../src/components/EpitopeMolstarViewerImpl', () => ({ default: () => <div data-source-canvas /> }));
+vi.mock('react-plotly.js', () => ({ default: (props: any) => <div data-cohort-plot={props.layout?.title?.text ?? ''} /> }));
 const original = api.defaults.adapter;
+beforeEach(() => vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
 let mounted: ReactTestRenderer | undefined;
 let client: QueryClient;
 const calls: Array<{ url: string; params: any; body: any }> = [];
@@ -40,7 +42,10 @@ function transport(job = baseJob, zero = false, designFailure = false) {
         const url = String(config.url); const params = config.params ?? {}; const body = config.data ? JSON.parse(config.data) : undefined;
         calls.push({ url, params, body });
         let data: any = [];
-        if (url.endsWith('/generation-results')) data = { receipt: { emitted_samples: zero ? 0 : 101, status: zero ? 'zero_yield' : 'complete' }, records: zero ? [] : [{ ...record, candidate_key: params.offset ? 'page-two' : record.candidate_key }], total: zero ? 0 : 101, offset: params.offset, limit: params.limit, publication: { candidates: zero ? [] : [record] }, artifacts: [{ path: 'samples.jsonl', download_url: '/api/files/download/samples.jsonl' }] };
+        if (url.endsWith('/generation-results')) {
+            const nativeRows = zero ? [] : Array.from({ length: 26 }, (_, i) => i === 0 ? record : { ...record, design_id: `extra-${i}`, candidate_key: i === 25 ? 'page-two' : `extra-key-${i}` });
+            data = { receipt: { emitted_samples: nativeRows.length, status: zero ? 'zero_yield' : 'complete' }, records: nativeRows.slice(params.offset, params.offset + params.limit), total: nativeRows.length, offset: params.offset, limit: params.limit, publication: { candidates: nativeRows }, artifacts: [{ path: 'samples.jsonl', download_url: '/api/files/download/samples.jsonl' }] };
+        }
         else if (url === '/api/jobs') data = { jobs: [job], total: 1 };
         else if (url.endsWith('/workflow-results')) data = { job, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: {}, artifacts: [], counts: { persisted_design_rows: zero ? 0 : 1 } };
         else if (url.endsWith('/selection-context')) data = { source_job_id: 'parent', targets: [], candidate_documents: { exact: [doc] } };
@@ -70,7 +75,7 @@ it.each([['boltzgen', 'protein_binder'], ['boltzgen', 'nanobody_binder'], ['bolt
     const job = { ...baseJob, model_id, mode }; transport(job, true, true);
     await mount(<table><tbody><JobDetailsPanel job={job as Job} onClose={() => {}} /></tbody></table>);
     expect(text(mounted!.root)).toContain('published zero-yield result');
-    expect(calls.filter(call => call.url.endsWith('/generation-results'))).toEqual([expect.objectContaining({ url: '/api/jobs/parent/generation-results', params: { offset: 0, limit: 100 } })]);
+    expect(calls.filter(call => call.url.endsWith('/generation-results'))).toEqual([expect.objectContaining({ url: '/api/jobs/parent/generation-results', params: { offset: 0, limit: 1000 } })]);
     expect(mounted!.root.findByType(NativeBinderGenerationResults)).toBeDefined();
 });
 
@@ -84,13 +89,13 @@ it('Results mounts zero-yield publication even when its generic query fails', as
 
 it('pages and reopens published native metrics with exact native document navigation, without a worker request', async () => {
     transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
-    expect(mounted!.root.findAllByType('th').map(text)).toContain('native_zero');
+    expect(mounted!.root.findByProps({ 'aria-label': 'Sort by native_zero' })).toBeDefined();
     expect(mounted!.root.findAllByType('td').map(text)).toContain('0');
     expect(text(mounted!.root)).toContain('Explicit null');
     expect(mounted!.root.findAllByType('a').map(a => a.props.href)).toContain('/designs/parent?design_id=exact&artifact_id=alternate&target_state=state+B');
     await act(async () => button('Next native records').props.onClick()); await flush();
     expect(text(mounted!.root)).toContain('page-two');
-    expect(calls.at(-1)?.params.offset).toBe(100);
+    expect(calls.filter(call => call.url.endsWith('/generation-results'))).toHaveLength(1); // Table pages do not refetch the publication.
     await act(async () => mounted!.unmount()); client.clear();
     await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
     expect(text(mounted!.root)).toContain('producer-key');
@@ -156,6 +161,20 @@ it('real selected workspace browses native files, binds author masks and shares 
     }
 });
 
+it('keeps chart axes and cohort filters when drilling into a structure and returning', async () => {
+    transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
+    const field = (label: string) => mounted!.root.findByProps({ 'aria-label': label });
+    await act(async () => field('X metric').props.onChange({ target: { value: 'native_zero' } }));
+    await act(async () => field('Search candidates').props.onChange({ target: { value: 'producer-key' } }));
+    await act(async () => button('producer-key').props.onClick());
+    expect(button('Structure').props['aria-selected']).toBe(true);
+    expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(doc.download_url);
+    await act(async () => button('Analytics').props.onClick());
+    expect(field('X metric').props.value).toBe('native_zero');
+    expect(field('Search candidates').props.value).toBe('producer-key');
+    expect(mounted!.root.findByProps({ 'aria-label': 'Candidate data table' }).findByType('tbody').findAllByType('tr')).toHaveLength(1);
+});
+
 it('historical unjoined BoltzGen rows retain native evidence without fabricated Design or document links', async () => {
     api.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: {
         receipt: { native_accounting: { retained: 1 } }, records: [{ candidate_key: 'historical', metrics: { native_rank: 0, missing: null } }],
@@ -163,9 +182,9 @@ it('historical unjoined BoltzGen rows retain native evidence without fabricated 
     } });
     await mount(<NativeBinderGenerationResults jobId="historical-job" status="completed" />);
     expect(text(mounted!.root)).toContain('historical');
-    expect(mounted!.root.findAllByType('th').map(text)).toContain('native_rank');
+    expect(mounted!.root.findByProps({ 'aria-label': 'Sort by native_rank' })).toBeDefined();
     expect(mounted!.root.findAllByType('td').map(text)).toContain('0');
-    expect(mounted!.root.findAllByType('a').filter(node => !node.props.href.startsWith('data:'))).toHaveLength(0);
+    expect(mounted!.root.findAllByType('a').filter(node => String(node.props.href).startsWith('/designs/') || String(node.props.href).startsWith('/api/files/'))).toHaveLength(0);
     expect(text(mounted!.root)).not.toContain('Selection unavailable');
 });
 
