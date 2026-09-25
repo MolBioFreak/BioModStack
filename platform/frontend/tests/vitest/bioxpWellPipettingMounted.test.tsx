@@ -104,6 +104,25 @@ it('manual physical controls preserve explicit flags and expose structured measu
     expect(host.textContent).not.toContain('DO_NOT_RENDER_RAW'); expect(host.querySelector('pre')).toBeNull();
 });
 
+it('mounts the typed OEM fluid offset scan without confusing it with the diagnostic wizard', async () => {
+    await mount();
+    await change('Offset scan plate', 'RC'); await change('Detection speed', '280'); await change('Sample every N wells', '12');
+    await act(async () => (host.querySelector('[aria-label="Prefill scan plate"]') as HTMLInputElement).click());
+    await click('OEM fluid offset scan now');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.document.stages[0].actions).toMatchObject([
+        { kind: 'pipette_manual_physical', params: { operation: 'source_fluid_offset', plate: 'RC', speed: 280,
+            transfer_fluid: true, skip_steps: 12 } },
+    ]);
+    expect(host.textContent).toContain('not the multi-station Detect Fluid wizard');
+    await append('source_fluid_offset');
+    await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
+    expect((host.querySelector('[aria-label="Offset scan plate"]') as HTMLSelectElement).value).toBe('RC');
+    expect((host.querySelector('[aria-label="Sample every N wells"]') as HTMLInputElement).value).toBe('12');
+    await change('Sample every N wells', '0'); await click('OEM fluid offset scan now');
+    expect(requests).toHaveLength(1);
+});
+
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);

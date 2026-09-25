@@ -4,8 +4,8 @@ import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
 import { describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
 
 type Operation = BioXpManualStep['operation'];
-const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height'];
-const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation[0].toUpperCase() + operation.slice(1);
+const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset'];
+const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision }: {
@@ -16,6 +16,9 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const [overpress, setOverpress] = useState(false);
     const [liftZ, setLiftZ] = useState(false);
     const [detectionSpeed, setDetectionSpeed] = useState('300');
+    const [scanPlate, setScanPlate] = useState<'TC' | 'MS' | 'OC' | 'RC' | 'STRIP' | 'OCMS'>('TC');
+    const [scanPrefill, setScanPrefill] = useState(false);
+    const [scanSpacing, setScanSpacing] = useState('4');
     const [location, setLocation] = useState('');
     const [well, setWell] = useState('');
     const [flag, setFlag] = useState('');
@@ -52,6 +55,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const draft = (op: Operation): BioXpManualStep => {
         if (op === 'load_tip') return { operation: op, tray: number(tray, 'tip tray'), well: tipWell, overpress, lift_z: liftZ };
         if (op === 'measure_fluid_height') return { operation: op, speed: number(detectionSpeed, 'detection speed') };
+        if (op === 'source_fluid_offset') return { operation: op, plate: scanPlate, speed: number(detectionSpeed, 'detection speed'), transfer_fluid: scanPrefill, skip_steps: number(scanSpacing, 'sample spacing') };
         if (op === 'move') {
             if (!flag) throw new Error('Select the move Z position.');
             return { operation: op, location_id: number(location, 'locationID'), well, position_flag: Number(flag) as 0 | 1 | 2 };
@@ -99,6 +103,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         const step = steps[index]; setOperation(step.operation);
         if (step.operation === 'load_tip') { setTray(String(step.tray)); setTipWell(step.well); setOverpress(step.overpress); setLiftZ(step.lift_z); }
         if (step.operation === 'measure_fluid_height') setDetectionSpeed(String(step.speed));
+        if (step.operation === 'source_fluid_offset') { setScanPlate(step.plate); setDetectionSpeed(String(step.speed)); setScanPrefill(step.transfer_fluid); setScanSpacing(String(step.skip_steps)); }
         if ('location_id' in step) setLocation(String(step.location_id));
         if (step.operation === 'move') { setWell(String(step.well)); setFlag(String(step.position_flag)); }
         if (step.operation === 'lift') { setLiftMode(step.height_steps === null ? 'high' : 'height'); setHeight(step.height_steps === null ? '' : String(step.height_steps)); }
@@ -143,7 +148,10 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <label><input aria-label="Overpress" type="checkbox" checked={overpress} onChange={e => setOverpress(e.target.checked)} />Overpress</label>
             <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
             <label>Detection speed<input aria-label="Detection speed" type="number" step="1" value={detectionSpeed} onChange={e => setDetectionSpeed(e.target.value)} /></label>
-            <p className="text-xs">Load tip performs native XY/Z pickup and query, not software tip assignment. Measure fluid height acts at the current well without XY movement; it is not the multi-station Detect Fluid wizard and does not save calibration.</p>
+            <label>Offset scan plate<select aria-label="Offset scan plate" value={scanPlate} onChange={e => setScanPlate(e.target.value as typeof scanPlate)}>{(['TC', 'MS', 'OC', 'RC', 'STRIP', 'OCMS'] as const).map(plate => <option key={plate}>{plate}</option>)}</select></label>
+            <label><input aria-label="Prefill scan plate" type="checkbox" checked={scanPrefill} onChange={e => setScanPrefill(e.target.checked)} />Prefill from trough (OEM)</label>
+            <label>Sample every N wells<input aria-label="Sample every N wells" type="number" min="1" step="1" value={scanSpacing} onChange={e => setScanSpacing(e.target.value)} /></label>
+            <p className="text-xs">Load tip performs native XY/Z pickup and query. Measure fluid height acts at the current well. OEM fluid offset scan moves the head, samples the chosen plate and may transfer liquid when Prefill is selected. It is not the multi-station Detect Fluid wizard and does not save calibration.</p>
         </fieldset>
         <fieldset><legend>Liquid plunger channels only</legend><div className="flex flex-wrap gap-4">
             {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Plunger {channel + 1} (ID {channel})</label>)}
@@ -152,7 +160,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             {([['Volume (µL)', volume, setVolume], ['Aspirate speed', aspirateSpeed, setAspirateSpeed], ['Dispense speed', dispenseSpeed, setDispenseSpeed], ['Mix cycles', cycles, setCycles]] as const).map(([name, value, setter]) =>
                 <label key={name}>{name}<input aria-label={name} className="block w-full bg-slate-950 p-2" type="number" step={name === 'Mix cycles' ? '1' : 'any'} value={value} onChange={e => setter(e.target.value)} /></label>)}
         </div>
-        <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. No automatic initialization, tip loading, fluid detection, piercing, cleanup, lid movement or Park.</p>
+        <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. Basic moves and strokes have no implicit lifecycle; the OEM fluid offset scan runs its own source-native tip/measurement sequence.</p>
         <div className="flex flex-wrap gap-2">{operations.map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
         <fieldset className="space-y-2 rounded border border-slate-700 p-3"><legend>Ordered well-to-well program</legend>
             <p className="text-sm">Author each step explicitly. For a transfer: Move → Lower → Aspirate → Lift, then select the destination and add Move → Lower → Dispense → Lift. Adding, copying and reordering do not move hardware.</p>
