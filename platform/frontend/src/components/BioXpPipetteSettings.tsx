@@ -41,7 +41,7 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
                 const result = await setManualTipTray(generation, tray);
                 committed = true;
                 if (epoch.current !== token) return;
-                setMeasurement(typeof result.measured_z === 'number' ? result.measured_z : null);
+                setMeasurement(result.measured_z_steps);
                 const readback = await readCalibrationSettings(generation);
                 if (epoch.current !== token) return;
                 setCalibration(readback);
@@ -80,7 +80,7 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
         <h4>Pipette operation flags</h4>
         <p>Only source-consumed pipette flags; unrelated operation parameters are not edited here.</p>
         {pipetteFlags.map(flag => <label key={flag} className="block"><input type="checkbox" aria-label={flag} disabled={pending || !parameters}
-            checked={draft[flag] ?? (parameters?.operation_parameters?.[flag] === true)}
+            checked={draft[flag] ?? (parameters?.runtime_values?.[flag] === true)}
             onChange={e => setDraft(previous => ({ ...previous, [flag]: e.target.checked }))} />{flag}</label>)}
         <button type="button" disabled={!connected || pending || !parameters} onClick={() => void run('flags')}>Save pipette flags</button>
         <button type="button" disabled={!connected || pending} onClick={() => void refresh()}>Read pipette settings</button>

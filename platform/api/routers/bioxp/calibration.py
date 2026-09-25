@@ -26,7 +26,6 @@ class OperationParametersRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
     CheckForStaticTipLoss: StrictBool | None = None
-    CheckSnapTips: StrictBool | None = None
     LogPressure: StrictBool | None = None
 
     @model_validator(mode="after")

@@ -35,8 +35,8 @@ it('mounted manual Set sends typed tray to fixed robot endpoint and displays mea
     const select = host.querySelector('[aria-label="Tip tray for manual Set"]') as HTMLSelectElement;
     await act(async () => { select.value = '3'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     await click('Set current Z for selected tray pair');
-    const request = calls.find(c => c.robot_requests[0].path.endsWith('manual_tip_set'));
-    expect(request.robot_requests[0]).toEqual({ method: 'POST', path: '/motion/oem/calibration_settings/manual_tip_set', body: { tray: 3 } });
+    const request = calls.find(c => c.robot_requests[0].path.endsWith('tip_tray_set'));
+    expect(request.robot_requests[0]).toEqual({ method: 'POST', path: '/motion/oem/pipette/tip_tray_set', body: { tray: 3 } });
     expect(calls.at(-1).robot_requests[0].path).toBe('/motion/oem/calibration_settings');
     expect(host.textContent).toContain('Measured current Z: 0');
     expect(host.textContent).toContain('TECANRACK3, TECANRACK4');
@@ -52,9 +52,9 @@ it('mounted flags save explicit false and true through real relay, then read bac
     await act(async () => { pressure.click(); staticLoss.click(); });
     await click('Save pipette flags');
     const patch = calls.find(c => c.robot_requests[0].method === 'PATCH');
-    expect(patch.robot_requests[0]).toEqual({ method: 'PATCH', path: '/liquid/oem/operation_parameters',
+    expect(patch.robot_requests[0]).toEqual({ method: 'PATCH', path: '/liquid/pipette/settings',
         body: { LogPressure: false, CheckForStaticTipLoss: true } });
     expect((host.querySelector('[aria-label="LogPressure"]') as HTMLInputElement).checked).toBe(false);
-    expect((host.querySelector('[aria-label="CheckSnapTips"]') as HTMLInputElement).checked).toBe(true);
+    expect(host.querySelector('[aria-label="CheckSnapTips"]')).toBeNull();
     expect(host.textContent).toContain('saved and read back');
 }, 30000);

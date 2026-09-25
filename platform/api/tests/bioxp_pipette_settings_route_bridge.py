@@ -10,7 +10,7 @@ from services.bioxp.target_policy import ValidatedBioXpTarget
 from test_bioxp_operator_controls import make_client
 from bioxp_calibration_route_bridge import FIXTURE
 
-FLAGS = {"CheckForStaticTipLoss": False, "CheckSnapTips": True, "LogPressure": True}
+FLAGS = {"CheckForStaticTipLoss": False, "LogPressure": True}
 
 def relay_pipette(method="get", resource="flags", request=None, saved=False, error_status=None):
     calls = []
@@ -20,7 +20,7 @@ def relay_pipette(method="get", resource="flags", request=None, saved=False, err
         if error_status:
             return httpx.Response(error_status, json={"detail": "robot failed"})
         if resource == "set":
-            return httpx.Response(200, json={"measured_z": 0, "committed_revision_id": FIXTURE["after"]["saved_revision_id"]})
+            return httpx.Response(200, json={"measured_z_steps": 0, "committed_revision_id": FIXTURE["after"]["saved_revision_id"]})
         if resource == "calibration":
             return httpx.Response(200, json=FIXTURE["after" if saved else "before"])
         values = dict(FLAGS)
@@ -28,7 +28,8 @@ def relay_pipette(method="get", resource="flags", request=None, saved=False, err
             values.update({"CheckForStaticTipLoss": True, "LogPressure": False})
         if body:
             values.update(body)
-        return httpx.Response(200, json={"operation_parameters": {**values, "Mode": "WebMode"}})
+        return httpx.Response(200, json={"schema_version": "bioxp.pipette_operation_settings.v1",
+            "runtime_values": values, "application_semantics": "committed Operation_parameters.xml projection"})
     target = ValidatedBioXpTarget(api_url="http://offline-fixture:8123", scheme="http", hostname="offline-fixture",
         port=8123, resolved_addresses=(ip_address("192.0.2.1"),))
     robot = BioXpRobotClient(target, transport=httpx.MockTransport(transport))

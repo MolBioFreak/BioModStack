@@ -35,29 +35,31 @@ native-contract excerpt with captured XML/provenance removed, not hardware
 acceptance. Set `BIOXP_NATIVE_CONTRACTS` to the externally generated native
 contract file to verify full baseline/save responses losslessly without
 committing captured provenance. No deployment or physical robot tests are
-implied. Full OEM auto-calibration and scientific recipe support are out of scope.
+implied. Full OEM auto-calibration is separate from these settings controls;
+scientific recipe authoring is outside this panel.
 
 ## Manual tip-tray Set and pipette operation flags (offline candidate)
 
 The cockpit also mounts a typed tray 1–4 selector. Its Set button sends
 `POST /api/bioxp/calibration-settings/manual-tip-set` with a BMS connection
 generation; the fixed robot path is
-`POST /motion/oem/calibration_settings/manual_tip_set` with `{ "tray": 1..4 }`.
+`POST /motion/oem/pipette/tip_tray_set` with `{ "tray": 1..4 }`.
 The robot owns the current-Z measurement and atomic paired zLow save: tray 1/2
 selects TECANRACK1/2, tray 3/4 selects TECANRACK3/4. The UI displays returned
-`measured_z`, then independently GETs calibration settings for paired saved and
+`measured_z_steps`, then independently GETs calibration settings for paired saved and
 active zLow and revisions. It does not claim live application, physical
 accuracy or tip pickup. A differing `committed_revision_id` and saved readback
 revision is reported, not hidden.
 
 `GET/PATCH /api/bioxp/operation-parameters` relay the fixed robot
-`/liquid/oem/operation_parameters` path. GET returns an `operation_parameters`
+`/liquid/pipette/settings` path. GET returns a `runtime_values`
 object; PATCH accepts an omitted-or-strict-Boolean subset of
-`CheckForStaticTipLoss`, `CheckSnapTips`, `LogPressure` only. Explicit false is
+`CheckForStaticTipLoss` and `LogPressure` only. Explicit false is
 preserved; unrelated settings are not editable here. The UI reads back after
-saving. These three flags have source consumers in OEM initialization/inspection
-and pipette liquid paths. The existing advanced catalog remains the diagnostic
+saving. `CheckSnapTips` is a source-consumed, nonpersisted OEM UI state, not an
+Operation_parameters field and cannot be represented by this saved settings
+writer. The existing advanced catalog remains the diagnostic
 command owner; no raw JSON/CAN control is added. Both BMS routes retain mutation
 authorization and generation leases. Mock-HTTP qualification does not establish
-a deployed robot endpoint or physical result; robot implementation must match
+a deployed robot endpoint or physical result; the paired robot candidate owns
 these paths and response keys.

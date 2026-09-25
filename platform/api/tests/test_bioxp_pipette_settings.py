@@ -7,8 +7,8 @@ def test_manual_tip_set_fixed_path_and_readback():
     result = relay_pipette("post", "set", {"expected_connection_generation": 77, "tray": 4})
     after = relay_pipette(resource="calibration", saved=True)
     assert result["status"] == 200
-    assert result["robot_requests"] == [{"method": "POST", "path": "/motion/oem/calibration_settings/manual_tip_set", "body": {"tray": 4}}]
-    assert result["data"]["measured_z"] == 0
+    assert result["robot_requests"] == [{"method": "POST", "path": "/motion/oem/pipette/tip_tray_set", "body": {"tray": 4}}]
+    assert result["data"]["measured_z_steps"] == 0
     assert after["robot_requests"][0]["path"] == "/motion/oem/calibration_settings"
     assert after["data"]["active_positions"] == before["data"]["active_positions"]
     assert after["data"]["pending_restart"] is True
@@ -25,15 +25,15 @@ def test_flags_relay_preserves_explicit_false_and_unchanged_fields():
     before = relay_pipette()
     saved = relay_pipette("patch", request={"expected_connection_generation": 77, "LogPressure": False, "CheckForStaticTipLoss": True})
     after = relay_pipette(saved=True)
-    assert before["robot_requests"][0]["path"] == "/liquid/oem/operation_parameters"
+    assert before["robot_requests"][0]["path"] == "/liquid/pipette/settings"
     assert saved["status"] == 200
-    assert saved["robot_requests"] == [{"method": "PATCH", "path": "/liquid/oem/operation_parameters",
+    assert saved["robot_requests"] == [{"method": "PATCH", "path": "/liquid/pipette/settings",
         "body": {"LogPressure": False, "CheckForStaticTipLoss": True}}]
-    assert after["data"]["operation_parameters"]["LogPressure"] is False
-    assert after["data"]["operation_parameters"]["CheckSnapTips"] is True
+    assert after["data"]["runtime_values"]["LogPressure"] is False
+    assert after["data"]["runtime_values"]["CheckForStaticTipLoss"] is True
 
 
-@pytest.mark.parametrize("change", [{}, {"LogPressure": None}, {"LogPressure": 0}, {"LogPressure": "false"}, {"Mode": "Other"}])
+@pytest.mark.parametrize("change", [{}, {"LogPressure": None}, {"LogPressure": 0}, {"LogPressure": "false"}, {"Mode": "Other"}, {"CheckSnapTips": True}])
 def test_flags_reject_untyped_or_unrelated_changes(change):
     result = relay_pipette("patch", request={"expected_connection_generation": 77, **change})
     assert result["status"] == 422
