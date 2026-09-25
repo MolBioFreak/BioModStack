@@ -13,7 +13,9 @@ import { NativeBinderGenerationResults } from '../../src/components/NativeBinder
 import { ParamField } from '../../src/components/ModelParameterField';
 import { EpitopeSelector } from '../../src/components/EpitopeSelector';
 import { readBinderCandidateDocuments } from '../../src/lib/binderContinuation';
+import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-native-canvas /> }));
+vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-native-canvas data-structure-url={props.structureUrl} /> }));
 vi.mock('../../src/components/EpitopeMolstarViewerImpl', () => ({ default: () => <div data-source-canvas /> }));
 const original = api.defaults.adapter;
 let mounted: ReactTestRenderer | undefined;
@@ -76,12 +78,14 @@ it('Results mounts zero-yield publication even when its generic query fails', as
     transport(baseJob, true, true);
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent');
     expect(text(mounted!.root)).toContain('published zero-yield result');
-    expect(text(mounted!.root)).toContain('Results could not be loaded');
+    expect(text(mounted!.root)).not.toContain('Results could not be loaded');
+    expect(button('Overview')).toBeUndefined();
 });
 
 it('pages and reopens published native metrics with exact native document navigation, without a worker request', async () => {
     transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
-    expect(text(mounted!.root)).toContain('native_zero0');
+    expect(mounted!.root.findAllByType('th').map(text)).toContain('native_zero');
+    expect(mounted!.root.findAllByType('td').map(text)).toContain('0');
     expect(text(mounted!.root)).toContain('Explicit null');
     expect(mounted!.root.findAllByType('a').map(a => a.props.href)).toContain('/designs/parent?design_id=exact&artifact_id=alternate&target_state=state+B');
     await act(async () => button('Next native records').props.onClick()); await flush();
@@ -100,7 +104,8 @@ it('exact native URL restores selection and destination, never loads primary doc
     const selected = mounted!.root.findByType(BinderSelectedControls);
     expect(selected.props.selectedDesignIds).toContain('exact');
     expect(selected.props.launchContextId).toBe('destination');
-    expect(text(mounted!.root)).toContain('The Design primary structure is not substituted');
+    expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(doc.download_url);
+    expect(mounted!.root.findByType(StructureWorkbench).props.alphafoldView).toBe(false);
     expect(fetcher.mock.calls.map(call => call[0])).toEqual(['/api/files/download/exact.pdb']);
     await act(async () => button('Run selected operation').props.onClick());
     const request = calls.find(call => call.url === '/api/binder-continuation/selected')!.body;
@@ -158,7 +163,46 @@ it('historical unjoined BoltzGen rows retain native evidence without fabricated 
     } });
     await mount(<NativeBinderGenerationResults jobId="historical-job" status="completed" />);
     expect(text(mounted!.root)).toContain('historical');
-    expect(text(mounted!.root)).toContain('native_rank0');
-    expect(mounted!.root.findAllByType('a')).toHaveLength(0);
+    expect(mounted!.root.findAllByType('th').map(text)).toContain('native_rank');
+    expect(mounted!.root.findAllByType('td').map(text)).toContain('0');
+    expect(mounted!.root.findAllByType('a').filter(node => !node.props.href.startsWith('data:'))).toHaveLength(0);
     expect(text(mounted!.root)).not.toContain('Selection unavailable');
+});
+
+it.each(['ppiflow', 'boltzgen'])('Results %s uses the native workbench and shares all seven selections without generic capability flags', async model_id => {
+    const job = { ...baseJob, model_id, design_count: 7 };
+    transport(job);
+    const fallback = api.defaults.adapter as (config: any) => Promise<any>;
+    const rows = Array.from({ length: 7 }, (_, index) => ({
+        candidate_key: `source:0/sample:${index}`, design_id: `candidate-${index}`,
+        metrics: { seq_length: 50 + index, dsasa: 700 + index, num_ca_ca_clashes: 0 },
+        structures: [{ artifact_id: `artifact-${index}`, primary: true, logical_path: `sample-${index}.pdb`, download_url: `/api/files/download/sample-${index}.pdb` }],
+    }));
+    const designs = rows.map(row => ({ ...design, id: row.design_id, viewer_capabilities: [], result_contract_source: 'unsupported_persisted' }));
+    api.defaults.adapter = async config => {
+        const url = String(config.url);
+        let data: any;
+        if (url.endsWith('/generation-results')) data = { receipt: { emitted_samples: 7 }, records: rows, total: 7, offset: 0, limit: 100, publication: {}, artifacts: [] };
+        else if (url === '/api/designs') data = { designs: [...designs].reverse(), total: 7, model_counts: {} };
+        else if (url.startsWith('/api/designs/candidate-')) data = designs.find(row => url.endsWith(row.id));
+        else return fallback(config);
+        return { config, data, status: 200, statusText: 'OK', headers: {} };
+    };
+    await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent?launch_context_id=destination');
+    expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(rows[0].structures[0].download_url);
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toEqual([]);
+    expect(button('Overview')).toBeUndefined();
+    expect(text(mounted!.root)).not.toContain('Average pLDDT');
+    expect(mounted!.root.findAllByType('details').filter(node => ['Native receipt and accounting', 'Native files and provenance', 'Selected record: complete native readback', 'Selected candidate operations (0)'].includes(text(node.findAllByType('summary')[0]))).every(node => !node.props.open)).toBe(true);
+    expect(mounted!.root.findByType(StructureWorkbench).props.workbenchCollapsed).toBe(true);
+    const native = () => mounted!.root.findByType(NativeBinderGenerationResults);
+    await act(async () => native().props.onInspectDocument(rows[6])); await flush();
+    expect(mounted!.root.findByType(StructureWorkbench).props.structureUrl).toBe(rows[6].structures[0].download_url);
+    expect(mounted!.root.findAllByType('span').find(node => node.props['data-location'])?.props['data-location']).toBe('/designs/parent?design_id=candidate-6&launch_context_id=destination');
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toEqual([]);
+    await act(async () => native().props.onSelectedDesignIdsChange(rows.map(row => row.design_id))); await flush();
+    expect(mounted!.root.findByType(BinderSelectedControls).props.selectedDesignIds).toEqual(rows.map(row => row.design_id));
+    expect(mounted!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(rows.map(row => row.design_id));
+    expect(native().props.selectedDesignIds).toHaveLength(7);
+    expect(mounted!.root.findByType(BinderSelectedControls).props.launchContextId).toBe('destination');
 });

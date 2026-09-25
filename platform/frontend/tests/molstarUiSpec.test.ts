@@ -33,3 +33,8 @@ test('full viewers expose Molstar settings while compact viewers can explicitly 
     assert.match(paneSource, /<StructureWorkbench[\s\S]*?mode="standard"[\s\S]*?height="100%"/);
     assert.doesNotMatch(paneSource, /<StructureWorkbench[\s\S]{0,500}?mode="standard"[\s\S]{0,500}?hideControls/);
 });
+
+test('embedded controls and sequence stay inside the clipped viewer bounds', () => {
+    assert.match(source, /controlsDisplay:\s*'landscape'/);
+    assert.match(source, /regionState:\s*\{ left: 'collapsed', top: 'full', right: 'hidden', bottom: 'hidden' \}/);
+});

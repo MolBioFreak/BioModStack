@@ -49,6 +49,10 @@ export function createBmsMolstarUiSpec({
                 ...defaults.layout?.initial,
                 isExpanded: false,
                 showControls: !hideControls,
+                // Embedded viewers clip their own bounds; Mol*'s outside layout
+                // otherwise puts sequence and structure controls beyond them.
+                controlsDisplay: 'landscape',
+                regionState: { left: 'collapsed', top: 'full', right: 'hidden', bottom: 'hidden' },
             },
         },
         components: {

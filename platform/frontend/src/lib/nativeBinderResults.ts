@@ -4,7 +4,7 @@ export const isNativeBinderGeneration = (job: { model_id: string; mode: string }
     (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder'].includes(job.mode))
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {
-    artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean;
+    artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
 }
 export interface NativeGenerationRecord extends Record<string, unknown> {
     candidate_key?: string; design_id?: string; structures?: NativeGenerationDocument[];

@@ -98,9 +98,10 @@ interface ScatterProps {
     yLabel: string;
     title: string;
     height?: number;
+    onPointSelect?: (id: string) => void;
 }
 
-export function MetricScatter({ data, xLabel, yLabel, title, height = 300 }: ScatterProps) {
+export function MetricScatter({ data, xLabel, yLabel, title, height = 300, onPointSelect }: ScatterProps) {
     return (
         <div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/40 backdrop-blur-sm">
             <h3 className="text-slate-300 text-sm font-semibold tracking-wide mb-6 flex items-center gap-2">
@@ -149,6 +150,8 @@ export function MetricScatter({ data, xLabel, yLabel, title, height = 300 }: Sca
                         <Scatter
                             name="Designs"
                             data={data}
+                            onClick={onPointSelect ? (point) => { if (typeof point?.payload?.id === 'string') onPointSelect(point.payload.id); } : undefined}
+                            cursor={onPointSelect ? 'pointer' : undefined}
                             fill="#8b5cf6"
                             shape="circle"
                             fillOpacity={0.6}

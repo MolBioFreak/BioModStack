@@ -65,7 +65,7 @@ import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
 import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
-import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
+import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
@@ -5173,7 +5173,7 @@ export function ResultsViewer() {
         && !resultModelHierarchy.some(item => item.modelId === resultSurface)) {
         return <div role="alert">Requested model {resultSurface} is unavailable in this Job lineage. {resultModelSelector}</div>;
     }
-    if (requestedDesignId && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
+    if (requestedDesignId && !isNativeBinderGeneration(activeJob) && (selectedDesignError || (!selectedDesignLoading && !selectedDesign)
         || (scopedModelId && selectedDesign && selectedDesign.provenance?.producer_model_id !== scopedModelId))) {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
@@ -5204,6 +5204,27 @@ export function ResultsViewer() {
         </div>;
     }
 
+    const selectedCandidateControls = activeJob && <>
+        <BinderSelectedControls key={`binder-${activeJob.id}`}
+            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
+            launchContextId={destinationLaunchContextId}
+            candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
+            inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
+            onOpenJob={handleSelectJob}
+            onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />
+        {!((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+            || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
+            key={activeJob.id}
+            sourceJobId={activeJob.id}
+            launchContextId={destinationLaunchContextId}
+            sourceModelId={activeJob.model_id}
+            sourceParams={activeJob.params}
+            selectedDesignIds={selectedDesignIds}
+            resultJob={activeJob}
+            onOpenJob={handleSelectJob}
+        />}
+    </>;
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
             {/* Background */}
@@ -5223,7 +5244,7 @@ export function ResultsViewer() {
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {selectedDesign && activeJob.status === 'completed' && (
+                                {selectedDesign && activeJob.status === 'completed' && (!isNativeBinderGeneration(activeJob) || requestedDesignId === selectedDesign.id) && (
                                     <button
                                         type="button"
                                         onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}
@@ -5257,8 +5278,8 @@ export function ResultsViewer() {
                     </div>
 
                     {/* Smart Job Selector */}
-                    <div className="flex w-full items-center gap-3 md:w-auto">
-                        <div className="relative w-full md:w-auto" ref={jobSelectorRef}>
+                    <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
+                        <div className="relative min-w-0 w-full md:w-auto" ref={jobSelectorRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowJobSelectorMenu((current) => !current)}
@@ -5391,7 +5412,7 @@ export function ResultsViewer() {
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
-                {isNativeBinderGeneration(activeJob) && <NativeBinderGenerationResults key={selectedJobId} jobId={selectedJobId} status={activeJob?.status} launchContextId={destinationLaunchContextId} />}
+
                 {activeJob?.model_id === 'bindcraft2' && (
                     <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} launchContextId={destinationLaunchContextId} />
                 )}
@@ -5402,7 +5423,24 @@ export function ResultsViewer() {
                             sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
-                    isRFD3GenerationResultJob(activeJob) ? (
+                    isNativeBinderGeneration(activeJob) ? (
+                        <>
+                            <NativeBinderGenerationResults key={selectedJobId}
+                                jobId={selectedJobId} status={activeJob.status}
+                                launchContextId={destinationLaunchContextId}
+                                selectedDesignId={requestedDesignId}
+                                selectedDesignIds={selectedDesignIds}
+                                onSelectedDesignIdsChange={setSelectedDesignIds}
+                                artifactId={exactArtifactId} targetState={exactTargetState}
+                                onInspectDocument={(row, document) => {
+                                    if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true });
+                                }} />
+                            <details className="my-4 rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+                                <summary className="cursor-pointer text-sm font-semibold text-slate-200">Selected candidate operations ({selectedDesignIds.length})</summary>
+                                <div className="mt-4">{selectedCandidateControls}</div>
+                            </details>
+                        </>
+                    ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
@@ -5568,25 +5606,7 @@ export function ResultsViewer() {
                             </div>
                         )}
 
-                        {activeJob && <BinderSelectedControls key={`binder-${activeJob.id}`}
-                            sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds}
-                            launchContextId={destinationLaunchContextId}
-                            candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
-                            inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
-                            onOpenJob={handleSelectJob}
-                            onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />}
-
-                        {activeJob && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
-                            || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
-                            key={activeJob.id}
-                            sourceJobId={activeJob.id}
-                            launchContextId={destinationLaunchContextId}
-                            sourceModelId={activeJob.model_id}
-                            sourceParams={activeJob.params}
-                            selectedDesignIds={selectedDesignIds}
-                            resultJob={activeJob}
-                            onOpenJob={handleSelectJob}
-                        />}
+                        {selectedCandidateControls}
 
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
