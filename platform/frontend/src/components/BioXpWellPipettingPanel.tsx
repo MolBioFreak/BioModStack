@@ -4,8 +4,8 @@ import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
 import { describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
 
 type Operation = BioXpManualStep['operation'];
-const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset'];
-const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation[0].toUpperCase() + operation.slice(1);
+const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid'];
+const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision }: {
@@ -56,6 +56,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         if (op === 'load_tip') return { operation: op, tray: number(tray, 'tip tray'), well: tipWell, overpress, lift_z: liftZ };
         if (op === 'measure_fluid_height') return { operation: op, speed: number(detectionSpeed, 'detection speed') };
         if (op === 'source_fluid_offset') return { operation: op, plate: scanPlate, speed: number(detectionSpeed, 'detection speed'), transfer_fluid: scanPrefill, skip_steps: number(scanSpacing, 'sample spacing') };
+        if (op === 'diagnostic_detect_fluid') return { operation: op };
         if (op === 'move') {
             if (!flag) throw new Error('Select the move Z position.');
             return { operation: op, location_id: number(location, 'locationID'), well, position_flag: Number(flag) as 0 | 1 | 2 };
@@ -151,7 +152,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <label>Offset scan plate<select aria-label="Offset scan plate" value={scanPlate} onChange={e => setScanPlate(e.target.value as typeof scanPlate)}>{(['TC', 'MS', 'OC', 'RC', 'STRIP', 'OCMS'] as const).map(plate => <option key={plate}>{plate}</option>)}</select></label>
             <label><input aria-label="Prefill scan plate" type="checkbox" checked={scanPrefill} onChange={e => setScanPrefill(e.target.checked)} />Prefill from trough (OEM)</label>
             <label>Sample every N wells<input aria-label="Sample every N wells" type="number" min="1" step="1" value={scanSpacing} onChange={e => setScanSpacing(e.target.value)} /></label>
-            <p className="text-xs">Load tip performs native XY/Z pickup and query. Measure fluid height acts at the current well. OEM fluid offset scan moves the head, samples the chosen plate and may transfer liquid when Prefill is selected. It is not the multi-station Detect Fluid wizard and does not save calibration.</p>
+            <p className="text-xs">Load tip performs native XY/Z pickup and query. Measure fluid height acts at the current well. OEM fluid offset scan samples one chosen plate and may transfer liquid when Prefill is selected. OEM Detect Fluid moves the pool plate, scans five stations and Parks on success. Neither diagnostic saves calibration.</p>
         </fieldset>
         <fieldset><legend>Liquid plunger channels only</legend><div className="flex flex-wrap gap-4">
             {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Plunger {channel + 1} (ID {channel})</label>)}
@@ -160,7 +161,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             {([['Volume (µL)', volume, setVolume], ['Aspirate speed', aspirateSpeed, setAspirateSpeed], ['Dispense speed', dispenseSpeed, setDispenseSpeed], ['Mix cycles', cycles, setCycles]] as const).map(([name, value, setter]) =>
                 <label key={name}>{name}<input aria-label={name} className="block w-full bg-slate-950 p-2" type="number" step={name === 'Mix cycles' ? '1' : 'any'} value={value} onChange={e => setter(e.target.value)} /></label>)}
         </div>
-        <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. Basic moves and strokes have no implicit lifecycle; the OEM fluid offset scan runs its own source-native tip/measurement sequence.</p>
+        <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. Basic moves and strokes have no implicit lifecycle; OEM scans run their source-native sequences.</p>
         <div className="flex flex-wrap gap-2">{operations.map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
         <fieldset className="space-y-2 rounded border border-slate-700 p-3"><legend>Ordered well-to-well program</legend>
             <p className="text-sm">Author each step explicitly. For a transfer: Move → Lower → Aspirate → Lift, then select the destination and add Move → Lower → Dispense → Lift. Adding, copying and reordering do not move hardware.</p>
@@ -183,14 +184,17 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
             {job.execution?.runtime_state.action_results?.map((result, index) => {
                 const value = result as Record<string, unknown>;
-                const child = Array.isArray(value.source_children) ? value.source_children[0] as { result?: { source_return?: unknown; samples?: unknown } } | undefined : undefined;
+                const children = Array.isArray(value.completed_children) ? value.completed_children : value.source_children;
+                const child = Array.isArray(children) ? children[0] as { result?: { source_return?: unknown; samples?: unknown; scans?: unknown } } | undefined : undefined;
                 const scan = child?.result;
                 const scanned = Array.isArray(scan?.samples) && typeof scan?.source_return === 'number';
-                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number' && !scanned) return null;
+                const diagnostic = Array.isArray(scan?.scans) ? scan.scans as { plate: string; measured_raw_z: number }[] : null;
+                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number' && !scanned && !diagnostic) return null;
                 return <dl key={index} className="text-sm" aria-label={`Measurement ${index + 1}`}>
                     {typeof value.position_steps === 'number' && <><dt>Measured fluid height (Z steps)</dt><dd>{value.position_steps}</dd></>}
                     {typeof value.lost_steps === 'number' && <><dt>Pickup lost steps</dt><dd>{value.lost_steps}{value.lost_steps_warning === true ? ' · source warning' : ''}</dd></>}
                     {scanned && <><dt>OEM fluid offset (Z steps)</dt><dd>{scan!.source_return as number}</dd><dt>Sampled wells</dt><dd>{(scan!.samples as { well: string }[]).map(sample => sample.well).join(', ')}</dd></>}
+                    {diagnostic && <><dt>OEM Detect Fluid (raw Z steps)</dt><dd>{diagnostic.map(row => `${row.plate}: ${row.measured_raw_z}`).join(' · ')}</dd></>}
                     <dt>Calibration saved</dt><dd>No</dd>
                 </dl>;
             })}</>}

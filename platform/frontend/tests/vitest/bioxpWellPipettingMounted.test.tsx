@@ -116,19 +116,36 @@ it('mounts the typed OEM fluid offset scan without confusing it with the diagnos
     ]);
     exports.push({ name: 'fluid-offset-scan', request: requests[0].request });
     job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state,
-        action_results: [{ kind: 'pipette_manual_physical', source_children: [{ result: {
+        action_results: [{ kind: 'pipette_manual_physical', completed_children: [{ result: {
             source_return: 88000, samples: [{ well: 'A1' }, { well: 'B1' }] } }] }] } } };
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
     expect(host.textContent).toContain('OEM fluid offset (Z steps)');
     expect(host.textContent).toContain('88000');
     expect(host.textContent).toContain('A1, B1');
-    expect(host.textContent).toContain('not the multi-station Detect Fluid wizard');
+    expect(host.textContent).toContain('Neither diagnostic saves calibration');
     await append('source_fluid_offset');
     await act(async () => (host.querySelector('[aria-label="Copy step 1 to editor"]') as HTMLButtonElement).click());
     expect((host.querySelector('[aria-label="Offset scan plate"]') as HTMLSelectElement).value).toBe('RC');
     expect((host.querySelector('[aria-label="Sample every N wells"]') as HTMLInputElement).value).toBe('12');
     await change('Sample every N wells', '0'); await click('OEM fluid offset scan now');
     expect(requests).toHaveLength(1);
+});
+
+it('exposes the distinct five-station OEM Detect Fluid caller and its measured results', async () => {
+    await mount(); await click('OEM Detect Fluid now');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.document.stages[0].actions).toMatchObject([
+        { kind: 'pipette_manual_physical', params: { operation: 'diagnostic_detect_fluid' } },
+    ]);
+    exports.push({ name: 'detect-fluid', request: requests[0].request });
+    job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state,
+        action_results: [{ kind: 'pipette_manual_physical', completed_children: [{ result: {
+            completed: true, scans: [{ plate: 'TC', measured_raw_z: 88210 }, { plate: 'STRIP', measured_raw_z: 87990 }] } }] }] } } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
+    expect(host.textContent).toContain('OEM Detect Fluid (raw Z steps)');
+    expect(host.textContent).toContain('TC: 88210');
+    expect(host.textContent).toContain('STRIP: 87990');
+    expect(host.textContent).toContain('Calibration savedNo');
 });
 
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
