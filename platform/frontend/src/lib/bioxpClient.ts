@@ -824,6 +824,31 @@ export interface BioXpOperatorAdmission {
     dependencies: BioXpOperatorDependency[];
 }
 
+/** Robot-published, locally resolved JSON Schema for structured input controls. */
+export interface BioXpOperatorJsonSchema {
+    type?: string | string[];
+    title?: string;
+    description?: string;
+    default?: unknown;
+    enum?: unknown[];
+    const?: unknown;
+    properties?: Record<string, BioXpOperatorJsonSchema>;
+    required?: string[];
+    items?: BioXpOperatorJsonSchema;
+    additionalProperties?: boolean | BioXpOperatorJsonSchema;
+    anyOf?: BioXpOperatorJsonSchema[];
+    oneOf?: BioXpOperatorJsonSchema[];
+    minimum?: number;
+    maximum?: number;
+    exclusiveMinimum?: number;
+    exclusiveMaximum?: number;
+    minLength?: number;
+    maxLength?: number;
+    minItems?: number;
+    maxItems?: number;
+    [key: string]: unknown;
+}
+
 export interface BioXpOperatorInputSpec {
     name: string;
     wire_name: string | null;
@@ -839,6 +864,7 @@ export interface BioXpOperatorInputSpec {
     exclusive_minimum: number | null;
     exclusive_maximum: number | null;
     default: unknown;
+    json_schema?: BioXpOperatorJsonSchema | null;
 }
 
 export interface BioXpOperatorActionSpec {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { BioXpOperatorInput, initialOperatorInputs as initialInputs, normalizeOperatorInputs as normalizeInput } from './BioXpOperatorInput';
 
 import {
 
@@ -77,40 +78,6 @@ function isDedicatedYMutation(action: BioXpOperatorActionSpec): boolean {
     return action.action_id.startsWith('oem.y.')
         || action.action_id.startsWith('oem.xy.')
         || retiredGenericYMutationPaths.has(action.informational_path);
-}
-
-function initialInputs(action: BioXpOperatorActionSpec | undefined): Record<string, unknown> {
-    if (!action) return {};
-    return Object.fromEntries(action.inputs.flatMap((input) => input.default === null || input.default === undefined
-        ? []
-        : [[input.name, input.default]]));
-}
-
-function normalizeInput(action: BioXpOperatorActionSpec, values: Record<string, unknown>): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
-    for (const input of action.inputs) {
-        const value = values[input.name];
-        if (value === '' || value === undefined || value === null) {
-            if (input.required) throw new Error(`${input.label} is required.`);
-            continue;
-        }
-        if (input.value_type === 'integer') {
-            const parsed = Number(value);
-            if (!Number.isSafeInteger(parsed)) throw new Error(`${input.label} must be an integer.`);
-            result[input.name] = parsed;
-        } else if (input.value_type === 'number') {
-            const parsed = Number(value);
-            if (!Number.isFinite(parsed)) throw new Error(`${input.label} must be a finite number.`);
-            result[input.name] = parsed;
-        } else if (input.value_type === 'boolean') {
-            result[input.name] = value === true;
-        } else if (input.value_type === 'json') {
-            result[input.name] = typeof value === 'string' ? JSON.parse(value) : value;
-        } else {
-            result[input.name] = String(value);
-        }
-    }
-    return result;
 }
 
 function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprintInput): string {
@@ -508,22 +475,12 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
                             {selected.stages.length > 0 && <p className="mt-2 text-xs text-slate-400">Stages: {selected.stages.join(' → ')}</p>}
                             <div className="mt-4 grid gap-3 md:grid-cols-2">
                                 {selected.inputs.map((input) => (
-                                    <label key={input.name} className="text-sm">
-                                        <span className="block text-slate-300">{input.label}{input.required ? ' *' : ''}{input.unit ? ` (${input.unit})` : ''}</span>
-                                        {input.value_type === 'boolean' ? (
-                                            <input type="checkbox" checked={inputs[input.name] === true} onChange={(event) => setInputs((current) => ({ ...current, [input.name]: event.target.checked }))} />
-                                        ) : input.value_type === 'enum' ? (
-                                            <select value={String(inputs[input.name] ?? '')} onChange={(event) => setInputs((current) => ({ ...current, [input.name]: event.target.value }))} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2">
-                                                <option value="">Select…</option>{input.enum_values.map((value) => <option key={value} value={value}>{value}</option>)}
-                                            </select>
-                                        ) : input.value_type === 'json' ? (
-                                            <textarea value={typeof inputs[input.name] === 'string' ? String(inputs[input.name]) : JSON.stringify(inputs[input.name] ?? {}, null, 2)} onChange={(event) => setInputs((current) => ({ ...current, [input.name]: event.target.value }))} rows={8} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2 font-mono text-xs" />
-                                        ) : (
-                                            <input type={input.value_type === 'string' ? 'text' : 'number'} value={String(inputs[input.name] ?? '')} min={input.minimum ?? input.exclusive_minimum ?? undefined} max={input.maximum ?? input.exclusive_maximum ?? undefined} step={input.value_type === 'integer' ? 1 : input.value_type === 'number' ? 'any' : undefined} onChange={(event) => setInputs((current) => ({ ...current, [input.name]: event.target.value }))} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2" />
-                                        )}
-                                        {(input.minimum !== null || input.maximum !== null || input.exclusive_minimum !== null || input.exclusive_maximum !== null) && <span className="mt-1 block text-xs text-slate-500">Allowed: {input.minimum !== null ? `≥ ${input.minimum}` : input.exclusive_minimum !== null ? `> ${input.exclusive_minimum}` : 'unbounded'} to {input.maximum !== null ? `≤ ${input.maximum}` : input.exclusive_maximum !== null ? `< ${input.exclusive_maximum}` : 'unbounded'}</span>}
-                                        {input.description && <span className="mt-1 block text-xs text-slate-500">{input.description}</span>}
-                                    </label>
+                                    <BioXpOperatorInput key={input.name} action={selected} input={input} value={inputs[input.name]}
+                                        onChange={(value) => setInputs((current) => {
+                                            const next = { ...current };
+                                            if (value === undefined) delete next[input.name]; else next[input.name] = value;
+                                            return next;
+                                        })} />
                                 ))}
                             </div>
                             {dependencies.length > 0 && (

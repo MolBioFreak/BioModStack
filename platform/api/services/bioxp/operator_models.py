@@ -40,6 +40,7 @@ class OperatorInputSpec(BaseModel):
     exclusive_minimum: StrictFloat | StrictInt | None = None
     exclusive_maximum: StrictFloat | StrictInt | None = None
     default: Any = None
+    json_schema: dict[str, Any] | None = None
 
 
 class OperatorDependency(BaseModel):
