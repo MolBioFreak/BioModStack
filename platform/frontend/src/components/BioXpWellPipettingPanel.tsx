@@ -4,13 +4,18 @@ import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
 import { describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
 
 type Operation = BioXpManualStep['operation'];
-const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'];
-const label = (operation: Operation) => operation[0].toUpperCase() + operation.slice(1);
+const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height'];
+const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision }: {
     generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
 }) {
+    const [tray, setTray] = useState('1');
+    const [tipWell, setTipWell] = useState('A1');
+    const [overpress, setOverpress] = useState(false);
+    const [liftZ, setLiftZ] = useState(false);
+    const [detectionSpeed, setDetectionSpeed] = useState('300');
     const [location, setLocation] = useState('');
     const [well, setWell] = useState('');
     const [flag, setFlag] = useState('');
@@ -45,6 +50,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         return Number(value);
     };
     const draft = (op: Operation): BioXpManualStep => {
+        if (op === 'load_tip') return { operation: op, tray: number(tray, 'tip tray'), well: tipWell, overpress, lift_z: liftZ };
+        if (op === 'measure_fluid_height') return { operation: op, speed: number(detectionSpeed, 'detection speed') };
         if (op === 'move') {
             if (!flag) throw new Error('Select the move Z position.');
             return { operation: op, location_id: number(location, 'locationID'), well, position_flag: Number(flag) as 0 | 1 | 2 };
@@ -90,6 +97,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     });
     const edit = (index: number) => {
         const step = steps[index]; setOperation(step.operation);
+        if (step.operation === 'load_tip') { setTray(String(step.tray)); setTipWell(step.well); setOverpress(step.overpress); setLiftZ(step.lift_z); }
+        if (step.operation === 'measure_fluid_height') setDetectionSpeed(String(step.speed));
         if ('location_id' in step) setLocation(String(step.location_id));
         if (step.operation === 'move') { setWell(String(step.well)); setFlag(String(step.position_flag)); }
         if (step.operation === 'lift') { setLiftMode(step.height_steps === null ? 'high' : 'height'); setHeight(step.height_steps === null ? '' : String(step.height_steps)); }
@@ -128,6 +137,14 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             {liftMode === 'height' && <label>Lift height (steps)<input aria-label="Lift height (steps)" type="number" step="1" value={height} onChange={e => setHeight(e.target.value)} className="block w-full bg-slate-950 p-2" /></label>}
             <p className="text-sm">Lower uses calibrated zLow at the selected locationID. Lift and Lower do not reposition XY.</p>
         </div>
+        <fieldset className="space-y-2"><legend>Manual physical pipette actions</legend>
+            <label>Tip tray<select aria-label="Tip tray" value={tray} onChange={e => setTray(e.target.value)}>{[1,2,3,4,5].map(n => <option key={n}>{n}</option>)}</select></label>
+            <label>Tip well<select aria-label="Tip well" value={tipWell} onChange={e => setTipWell(e.target.value)}>{wells.filter(w => /^[AB]/.test(w)).map(w => <option key={w}>{w}</option>)}</select></label>
+            <label><input aria-label="Overpress" type="checkbox" checked={overpress} onChange={e => setOverpress(e.target.checked)} />Overpress</label>
+            <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
+            <label>Detection speed<input aria-label="Detection speed" type="number" step="1" value={detectionSpeed} onChange={e => setDetectionSpeed(e.target.value)} /></label>
+            <p className="text-xs">Load tip performs native XY/Z pickup and query, not software tip assignment. Measure fluid height acts at the current well without XY movement; it is not the multi-station Detect Fluid wizard and does not save calibration.</p>
+        </fieldset>
         <fieldset><legend>Liquid plunger channels only</legend><div className="flex flex-wrap gap-4">
             {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Plunger {channel + 1} (ID {channel})</label>)}
         </div></fieldset>
@@ -156,8 +173,15 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {mismatch && <p role="alert">Job identity mismatch; check robot status.</p>}
         {query.error && <p role="alert">Job readback unavailable: {bioXpErrorText(query.error)}</p>}
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
-            {job.execution?.runtime_state.action_results?.map((result, index) => <p key={index} className="break-all text-xs">Action {index + 1}: {JSON.stringify(result)}</p>)}
-            <details><summary>Native execution details</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap">{JSON.stringify(job.execution, null, 2)}</pre></details></>}
+            {job.execution?.runtime_state.action_results?.map((result, index) => {
+                const value = result as Record<string, unknown>;
+                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number') return null;
+                return <dl key={index} className="text-sm" aria-label={`Measurement ${index + 1}`}>
+                    {typeof value.position_steps === 'number' && <><dt>Measured fluid height (Z steps)</dt><dd>{value.position_steps}</dd></>}
+                    {typeof value.lost_steps === 'number' && <><dt>Pickup lost steps</dt><dd>{value.lost_steps}{value.lost_steps_warning === true ? ' · source warning' : ''}</dd></>}
+                    <dt>Calibration saved</dt><dd>No</dd>
+                </dl>;
+            })}</>}
         {error && <p role="alert">{error}</p>}
     </section>;
 }

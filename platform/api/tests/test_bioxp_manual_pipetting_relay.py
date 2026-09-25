@@ -9,6 +9,8 @@ from services.bioxp.protocol_models import ProtocolJob, ProtocolSubmission
 @pytest.mark.parametrize("kind,params", [
     ("pipette_position", {"operation": "move", "location_id": 4, "well": "C3", "position_flag": 1}),
     ("pipette_position", {"operation": "lower", "location_id": 4}),
+    ("pipette_manual_physical", {"operation": "load_tip", "tray": 5, "well": "B12", "overpress": False, "lift_z": False}),
+    ("pipette_manual_physical", {"operation": "measure_fluid_height", "speed": 300}),
     ("pipette_position", {"operation": "lift", "location_id": 4, "height_steps": None}),
     ("pipette_position", {"operation": "lift", "location_id": 2, "height_steps": 0}),
     ("pipette_aspirate", {"channels": [1], "volume_ul": 12.5, "speed": 80}),

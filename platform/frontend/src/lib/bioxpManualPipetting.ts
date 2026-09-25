@@ -5,12 +5,14 @@ export type BioXpManualPosition =
     | { operation: 'lower'; location_id: number }
     | { operation: 'lift'; location_id: number; height_steps: number | null };
 export type BioXpManualStep = BioXpManualPosition
+    | { operation: 'load_tip'; tray: number; well: string; overpress: boolean; lift_z: boolean }
+    | { operation: 'measure_fluid_height'; speed: number }
     | { operation: 'aspirate' | 'dispense'; channels: number[]; volume_ul: number; speed: number }
     | { operation: 'mix'; channels: number[]; volume_ul: number; aspirate_speed: number; dispense_speed: number; cycles: number };
 export type BioXpManualRequest = { protocol_id: string; steps: BioXpManualStep[] };
 export type BioXpManualAction = {
     action_id: string; stage_id: 'manual';
-    kind: 'pipette_position' | 'pipette_aspirate' | 'pipette_dispense';
+    kind: 'pipette_manual_physical' | 'pipette_position' | 'pipette_aspirate' | 'pipette_dispense';
     params: Record<string, unknown>; metadata: { manual_step: number };
 };
 
@@ -29,7 +31,12 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
         add(operation === 'aspirate' ? 'pipette_aspirate' : 'pipette_dispense', { channels: [...channels], volume_ul, speed }, index);
     };
     steps.forEach((step, index) => {
-        if ('location_id' in step) {
+        if (step.operation === 'load_tip' || step.operation === 'measure_fluid_height') {
+            if (step.operation === 'load_tip' && (!Number.isInteger(step.tray) || step.tray < 1 || step.tray > 5 || !/^[AB](?:[1-9]|1[0-2])$/.test(step.well)))
+                throw new Error('Select tip tray 1–5 and tip well A1–B12.');
+            if (step.operation === 'measure_fluid_height' && !Number.isSafeInteger(step.speed)) throw new Error('Enter integer detection speed.');
+            add('pipette_manual_physical', { ...step }, index);
+        } else if ('location_id' in step) {
             if (!Number.isSafeInteger(step.location_id)) throw new Error('Enter the canonical integer locationID.');
             if (step.operation === 'move') {
                 if (!(typeof step.well === 'string' ? /^[A-H](?:[1-9]|1[0-2])$/.test(step.well) : Number.isInteger(step.well) && step.well >= 0 && step.well < 96))
@@ -52,6 +59,8 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
 }
 
 export function describeManualStep(step: BioXpManualStep): string {
+    if (step.operation === 'load_tip') return `Load tip · tray ${step.tray} · ${step.well} · overpress ${step.overpress} · lift Z ${step.lift_z}`;
+    if (step.operation === 'measure_fluid_height') return `Measure fluid height · current location · speed ${step.speed}`;
     if (step.operation === 'move') return `Move · locationID ${step.location_id} · ${step.well} · flag ${step.position_flag}`;
     if (step.operation === 'lower') return `Lower in place · locationID ${step.location_id} · calibrated zLow`;
     if (step.operation === 'lift') return `Lift in place · locationID ${step.location_id} · ${step.height_steps === null ? 'calibrated zHigh' : `zLow − ${step.height_steps} steps`}`;

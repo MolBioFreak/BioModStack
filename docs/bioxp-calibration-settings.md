@@ -1,0 +1,38 @@
+# BioXP calibration settings and manual physical actions
+
+The cockpit includes manual native `load_tip` (tray 1–5, well A1–B12,
+explicit overpress/lift_z) and `measure_fluid_height` (integer speed, source
+default 300). Both compile to `pipette_manual_physical` in an ordinary native
+protocol, alone or in an ordered program. Pickup is physical XY/Z/query, never
+software-only `/liquid/tip` assignment. Height measurement acts at the current
+location, without automatic XY; it is not the full Detect Fluid wizard and
+never writes calibration. No historical receipt or missing-observation locks
+are added. Existing robot admission and OEM/controller interlocks remain.
+
+`GET/PATCH /api/bioxp/calibration-settings` relay only the fixed robot path
+`/motion/oem/calibration_settings`, with existing mutation authorization and
+connection-generation leases. PATCH has a closed native mirror schema:
+`positions: [{name, x?, y?, zLow?, zDelta?, inc_factor?}]`, strict signed Int32,
+no null, duplicate names or empty rows. `expected_connection_generation` is
+BMS-only and stripped before robot transport. The parity test compares the
+schema with the source-generated schema. Responses are deliberately lossless:
+no generic invoke output truncation, source provenance removal or second
+calibration projection in the relay.
+
+The station selector exposes every saved row and all five fields. Drafts
+survive station switching and submit as one batch. Unchanged fields are omitted;
+explicit zero/negative values survive. Readback follows save. Active and saved
+raw values and native loader projections are distinct, including derived
+read-only zHigh, TECAN zDelta=53000 and shared XY/height adjustments. These are
+saved projections, not previews of unsaved edits. The robot SQLite owner stores
+final values and consumes them only at next ordinary startup; the BMS editor
+never restarts, homes, rebinds or claims physical accuracy. Raw measurements
+must not be treated as final OEM offsets.
+
+Offline qualification: mounted React/Axios tests, actual FastAPI routes and
+BioXpRobotClient with HTTP MockTransport. The committed fixture is a compact
+native-contract excerpt with captured XML/provenance removed, not hardware
+acceptance. Set `BIOXP_NATIVE_CONTRACTS` to the externally generated native
+contract file to verify full baseline/save responses losslessly without
+committing captured provenance. No deployment or physical robot tests are
+implied. Full OEM auto-calibration and scientific recipe support are out of scope.

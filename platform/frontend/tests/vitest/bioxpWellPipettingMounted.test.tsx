@@ -89,6 +89,21 @@ it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('moun
     exports.push({ name: op, authoring: { protocol_id: 'bms-manual-pipetting', steps: [expected[op]] }, request });
 });
 
+it('manual physical controls preserve explicit flags and expose structured measurement without logs', async () => {
+    await mount(); await change('Tip tray', '5'); await change('Tip well', 'B12');
+    await act(async () => (host.querySelector('[aria-label="Overpress"]') as HTMLInputElement).click());
+    await act(async () => (host.querySelector('[aria-label="Lift Z after pickup"]') as HTMLInputElement).click());
+    await click('Load tip now');
+    expect(requests[0].request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 5, well: 'B12', overpress: true, lift_z: true } });
+    await change('Detection speed', '0'); await click('Measure fluid height now');
+    expect(requests[1].request.document.stages[0].actions[0].params).toEqual({ operation: 'measure_fluid_height', speed: 0 });
+    job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state, action_results: [{ kind: 'pipette_manual_physical', position_steps: 78000, lost_steps: -110, lost_steps_warning: true, raw_debug: 'DO_NOT_RENDER_RAW' }] } } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
+    expect(host.textContent).toContain('Measured fluid height (Z steps)');
+    expect(host.textContent).toContain('78000'); expect(host.textContent).toContain('-110');
+    expect(host.textContent).not.toContain('DO_NOT_RENDER_RAW'); expect(host.querySelector('pre')).toBeNull();
+});
+
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);
@@ -168,10 +183,17 @@ it.each(['completed', 'failed', 'denied'])('mounted submission traverses real BM
     await mount(); await fields(); await append('move'); await append('lower'); await append('aspirate'); await append('lift');
     await change('Block', '2'); await well('B7');
     await append('move'); await append('lower'); await append('dispense'); await append('lift');
+    await change('Tip tray', '5'); await change('Tip well', 'B12');
+    await append('load_tip'); await append('measure_fluid_height');
     await click('Run ordered steps');
     expect(requests).toHaveLength(1);
     expect(bridged.robot_requests[0].body.document).toEqual(requests[0].request.document);
     expect(bridged.robot_requests[0].path).toBe('/protocol/execute');
+    expect(bridged.robot_requests[0].body.document.stages[0].actions.slice(-2)).toMatchObject([
+        { kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 5, well: 'B12', overpress: false, lift_z: false } },
+        { kind: 'pipette_manual_physical', params: { operation: 'measure_fluid_height', speed: 300 } },
+    ]);
+    expect(host.querySelector('pre')).toBeNull();
     expect(host.textContent).toContain(status === 'denied' ? 'OEM door interlock denied' : `Robot job: ${status}`);
     expect(button('Run ordered steps').disabled).toBe(false);
     exports.push({ name: `bms-route-${status}`, request: requests[0].request, relay: bridged });

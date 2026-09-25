@@ -938,6 +938,7 @@ describe('primary cockpit query ownership', () => {
         vi.mocked(api.get).mockReset();
         vi.mocked(api.post).mockReset();
         vi.mocked(api.get).mockImplementation(async (url) => {
+            if (url === '/api/bioxp/calibration-settings') throw new Error('offline calibration fixture unavailable');
             expect(url).toBe('/api/bioxp/operator-controls/v2/catalog');
             return { data: structuredClone(bmsMetadata.catalog) };
         });
@@ -965,7 +966,8 @@ describe('primary cockpit query ownership', () => {
                 expect(button().disabled).toBe(false);
                 expect(state.xyReceipt.data).toEqual(bmsMetadata.compact);
             }
-            expect(api.get).toHaveBeenCalledTimes(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/operator-controls/v2/catalog')).toHaveLength(3);
+            expect(vi.mocked(api.get).mock.calls.filter(([url]) => url === '/api/bioxp/calibration-settings')).toHaveLength(1);
             await advance(6000);
             expect(button().disabled).toBe(true); // same old producer observation expires
             expect(panel().textContent).toContain('Move timeout reported');
