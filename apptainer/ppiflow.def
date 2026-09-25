@@ -41,6 +41,8 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
     uv pip install --compile pytorch-lightning==2.5.0.post0 lightning==2.5.0.post0
     uv pip install --compile wandb==0.19.8
     uv pip install --compile mdtraj==1.10.3
+    # Native binder metrics imports, pinned by the upstream environment.yml.
+    uv pip install --compile tmtools==0.2.0 freesasa==2.2.1
     uv pip install --compile fair-esm==2.0.0
     uv pip install --compile rdkit==2023.3.1
     uv pip install --compile scikit-learn==1.2.2
@@ -98,19 +100,22 @@ PY
         cp /app/ppiflow/test/4dn4_ccl2/config.yaml /app/ppiflow/configs/test_antibody.yaml
     fi
 
-    # Fail the build if the packaged partial-flow runtime cannot import.
+    # Exercise initial binder generation as well as the partial-flow runtime.
     export PYTHONPATH="/app/ppiflow:$PYTHONPATH"
     python - <<'PY'
 from pathlib import Path
 import tree
 import optree
 import deepspeed
+import tmtools
+import freesasa
+import sample_binder
 from experiments.inference_antibody_partial import Experiment
 from models.layer_norm.layer_norm import FusedLayerNorm
 
 assert Path("/app/ppiflow/configs/test_antibody.yaml").exists()
 assert Path("/app/ppiflow/models/layer_norm/fastfold_layer_norm_cuda.so").exists()
-print("PPIFlow partial-flow runtime imports OK")
+print("PPIFlow initial binder and partial-flow runtime imports OK")
 PY
     
     # Generate lockfile for reproducibility
