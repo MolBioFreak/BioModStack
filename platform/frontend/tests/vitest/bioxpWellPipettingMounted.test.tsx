@@ -167,6 +167,25 @@ it('exposes OEM fluid calibration as its own save-producing native action', asyn
     expect(host.textContent).toContain('comparison/restore dialog is not yet bound');
 });
 
+it.each([
+    ['source_fluid_offset', 'OEM fluid offset scan now'],
+    ['diagnostic_detect_fluid', 'OEM Detect Fluid now'],
+    ['source_calwith_fluid', 'OEM calibrate with fluid now'],
+] as const)('routes %s through the real BMS submit relay', async (operation, control) => {
+    await mount(); await click(control);
+    const request = requests[0].request;
+    const python = process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python';
+    const result = spawnSync(python, ['tests/bioxp_manual_route_bridge.py'], { cwd: '../api', encoding: 'utf8',
+        env: { ...process.env, PYTHONPATH: '.:tests' },
+        input: JSON.stringify({ request, status: 'dispatched' }) });
+    expect(result.status, result.stderr).toBe(0);
+    const relayed = JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+    expect(relayed.status).toBe(202);
+    expect(relayed.robot_requests[0].body.document.stages[0].actions[0]).toMatchObject({
+        kind: 'pipette_manual_physical', params: { operation },
+    });
+}, 30000);
+
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {
     await mount(); await fields();
     for (const op of ['move', 'lower', 'aspirate', 'lift']) await append(op);
