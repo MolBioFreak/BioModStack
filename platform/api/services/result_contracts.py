@@ -170,8 +170,8 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
     ),
     ResultContractDefinition(
         contract_id="de_novo_generation_v1",
-        model_ids=["boltzgen", "rfd3", "rf3", "rfdiffusion3", "rfdiffusionaa"],
-        stage_families=["boltzgen", "rfd3", "rf3", "rfdiffusion3", "rfdiffusionaa"],
+        model_ids=["boltzgen", "rfd3", "rf3", "rfdiffusion3", "rfdiffusionaa", "protein_cad_experimental"],
+        stage_families=["boltzgen", "rfd3", "rf3", "rfdiffusion3", "rfdiffusionaa", "protein_cad_experimental"],
         stage_modes=["backbone_generation", "de_novo", "generation"],
         artifact_classes=["generated_backbone", "generated_complex"],
         result_sets=["de_novo_backbones"],

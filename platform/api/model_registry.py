@@ -162,10 +162,12 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
         if weights:
             refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
     # Both designers ship their default checkpoints inside their images.
-    for peer in ('fampnn', 'proteinmpnn', 'boltz2', 'esmfold2'):
+    for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
         refs.extend(model_runtime_dependencies(peer))
     refs.extend(model_image_dependencies('protenix'))
-    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina', 'RunShapeProtenixValidator'):
+    refs.extend(model_image_dependencies('boltz2'))
+    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina',
+                    'RunShapeBoltzValidator', 'RunShapeProtenixValidator'):
         dependencies, _ = native_checkpoint_dependencies(process, {})
         refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
                     for dep in dependencies)
@@ -243,6 +245,20 @@ def native_checkpoint_dependencies(process: str, params: dict):
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
+    elif process in {'RunBoltz', 'RunShapeBoltzValidator'}:
+        owner = 'boltz/main.py:download_boltz2'
+        # RunBoltz accepts opaque native CLI overrides (including --model).
+        # Keep that historical closure rather than guessing their asset needs.
+        if process == 'RunBoltz' and params.get('boltz_extra_config'):
+            dependencies.append(SelectedDependency('weights:boltz', 'weights',
+                'boltz', owner, selector='boltz_models'))
+        else:
+            # Native initialization checks both checkpoints even without affinity
+            # prediction. Existing mols/ bypasses the download-only mols.tar.
+            for member in ('boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'):
+                dependencies.append(SelectedDependency('weights:boltz:' + member,
+                    'weights', 'boltz/' + member, owner,
+                    selector='boltz_models', selector_subpath=member))
     elif process == 'RunLaProteina':
         from paths import get_weights_root
 
@@ -1107,6 +1123,10 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     generator_family = ({'nanobody_binder': 'boltzgen',
                          'generator_backbone_refine': 'ppiflow'}.get(mode)
                         if model_id == 'antibody_denovo' else None)
+    if workflow == 'protein_cad_experimental':
+        # Both native CAD producers publish this generator_family. Do not grant
+        # the parent model's other tasks a generation result contract.
+        generator_family = 'protein_cad_experimental'
     result = resolve_result_contract(model_type=model_id, stage_mode=mode,
                                      stage_family=generator_family)
     result_payload = result.model_dump()

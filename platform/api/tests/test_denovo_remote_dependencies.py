@@ -68,7 +68,8 @@ def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(
     protenix, blockers = native_checkpoint_dependencies('RunShapeProtenixValidator', {})
     assert not blockers
     assert {r.relative_path for r in refs if r.kind == 'weights'} == {
-        'foundry/checkpoints/rfd3_latest.ckpt', 'disco', 'laproteina', 'boltz', 'esmfold2',
+        'foundry/checkpoints/rfd3_latest.ckpt', 'disco', 'laproteina', 'esmfold2',
+        'boltz/boltz2_conf.ckpt', 'boltz/boltz2_aff.ckpt', 'boltz/mols',
         *(d.relative_path for d in protenix),
     }
     assert len(refs) == len(set(refs))
@@ -307,3 +308,62 @@ async def test_family_cold_install_and_warm_reuse(assets, tmp_path, local_transp
                 obj = Path(connection.remote_root) / 'cache/artifacts/v1/objects/sha256' / entry.sha256[:2] / entry.sha256
             assert hashlib.sha256(obj.read_bytes()).hexdigest() == entry.sha256
     assert not (Path(connection.remote_root) / 'attempts').exists()
+
+
+@pytest.mark.parametrize('shape', [False, True])
+@pytest.mark.parametrize('custom', [False, True])
+def test_boltz_selected_bundle_and_family_manifest_native_closure(assets, shape, custom):
+    from services.remote_execution import managed_inventory
+
+    for ref in model_runtime_dependencies(MODEL):
+        root = assets['containers' if ref.kind == 'image' else 'weights']
+        path = root / ref.relative_path
+        leaf(path if ref.kind == 'image' or '.' in path.name else path / 'fixture.bin')
+    root = assets['data'] / 'custom-boltz' if custom else assets['weights'] / 'boltz'
+    members = ('boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols/fixture.bin')
+    extras = ('boltz/boltz2_conf.ckpt', 'boltz/mols/old.pkl', 'mols.tar',
+              'home/.cache/torch/jit.bin')
+    for member in (*members, *extras):
+        leaf(root / member)
+        leaf(assets['weights'] / 'boltz' / member)
+    params: dict = ({'shape_request': {'sequence_policy': 'auto', 'sequences_per_backbone': 1,
+                                     'sequence_engine': 'fampnn',
+                               'validator_suite': ['boltz2']}} if shape else
+              {'plr_seq_method': 'fampnn', 'plr_structure_validators': ['boltz2']})
+    if custom:
+        params['boltz_models'] = str(root)
+    kwargs = ({'mode': 'shape_blueprint', 'entrypoint': 'shape_blueprint_design'} if shape else
+              {'mode': 'region_redesign', 'entrypoint': 'protein_local_redesign'})
+    selected = plan(params, **kwargs)
+    deps = [d for d in selected.dependencies if d.logical_id.startswith('weights:boltz')]
+    assert {d.selector_subpath for d in deps} == {'boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'}
+    records = [record for source, name in runtime(params, **kwargs)
+               if name.startswith('weights/boltz/')
+               for record in bundle._records_for_source(source, name, 'runtime')]
+    expected = {'weights/boltz/' + member for member in members}
+    assert {record.relative_path for record in records} == expected
+    selection = ProvisionSelection(kind='model', model_id=MODEL)
+    manifest = managed_inventory.manifest_for(selection, cache.independent_plan(selection),
+                                              ('a' * 40, 'b' * 40))
+    assert {row['name'] for row in manifest['artifacts']
+            if row['name'].startswith('weights/boltz/')} == expected
+    assert all((root / member).exists() for member in extras)
+    assert {source for source, name in runtime(params, **kwargs)
+            if name.startswith('weights/boltz/')} == {
+                root / 'boltz2_conf.ckpt', root / 'boltz2_aff.ckpt', root / 'mols'}
+    (root / 'boltz2_aff.ckpt').unlink()
+    with pytest.raises(bundle.RemoteBundleError, match='Required runtime asset is unavailable'):
+        runtime(params, **kwargs)
+
+
+def test_boltz_native_cli_override_preserves_historical_closure():
+    dependencies, blockers = native_checkpoint_dependencies('RunBoltz',
+        {'boltz_extra_config': '--model boltz1', 'boltz_models': '/custom/cache'})
+    assert not blockers
+    assert [(d.relative_path, d.selector, d.selector_subpath) for d in dependencies] == [
+        ('boltz', 'boltz_models', None)]
+    # Shape does not forward this free-form setting to the native CLI.
+    dependencies, blockers = native_checkpoint_dependencies('RunShapeBoltzValidator',
+        {'boltz_extra_config': '--model boltz1'})
+    assert not blockers
+    assert {d.selector_subpath for d in dependencies} == {'boltz2_conf.ckpt', 'boltz2_aff.ckpt', 'mols'}

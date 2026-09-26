@@ -22,6 +22,10 @@ def roots(tmp_path, monkeypatch):
              ('data', 'inputs', 'results', 'weights', 'containers', 'repo')}
     for root in roots.values():
         root.mkdir()
+    for engine in ('disco', 'laproteina'):
+        (roots['containers'] / f'{engine}.sif').write_bytes(b'inert runtime fixture')
+        (roots['weights'] / engine).mkdir()
+        (roots['weights'] / engine / 'checkpoint.bin').write_bytes(b'inert weight fixture')
     for getter, key in [('get_data_root', 'data'), ('get_inputs_dir', 'inputs'),
                         ('get_results_dir', 'results'), ('get_weights_root', 'weights'),
                         ('get_container_dir', 'containers')]:
@@ -57,11 +61,16 @@ def place(roots, tmp_path, monkeypatch, invocation):
     # Exercise the actual input inventory, records and binding writer. Runtime
     # installation/source archive are intentionally outside this input-only test.
     refs = []
-    # The baseline CAD selected plan is incomplete (owned by model metadata).
-    # Do not fabricate plan completeness here: exercise its real native params
-    # directly at the input owner, with only scratch system roots classified as
-    # runtime. Full compile_remote_dependencies integration belongs to that fix.
-    assets = bundle._input_assets(invocation.native_parameters,
+    # Use the real integrated selected plan, rather than the baseline lane's
+    # input-only bypass. No model completeness or compilation is mocked.
+    _, placed_params = bundle.compile_remote_dependencies(
+        invocation.model_id, invocation.mode, list(invocation.command),
+        native_invocation=invocation)
+    runtime = bundle._runtime_assets(invocation.model_id, invocation.mode,
+        placed_params, selected_plan=invocation.execution_plan,
+        only_kinds=frozenset({'image', 'weights', 'runtime_data'}))
+    assert runtime
+    assets = bundle._input_assets(placed_params,
         native_invocation=invocation, repo_root=roots['repo'], runtime_paths={roots['weights']},
         output_dir=roots['results'] / 'job', references=refs)
     worker = tmp_path / 'worker'

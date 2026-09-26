@@ -461,7 +461,7 @@ class _NativeAnnotations:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights and native_name != 'RunPPIFlowGeneration':
+                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
