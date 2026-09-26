@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { BioXpPipetteResults } from './BioXpPipetteResults';
+import { BioXpCalibrationRun } from './BioXpCalibrationRun';
+import { pipetteResults } from '../lib/bioxpPipetteResults';
 import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
     type BioXpDeckDestinationV1, type BioXpWorkflowJob } from '../lib/bioxpClient';
 import { describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
@@ -153,7 +156,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <label><input aria-label="Prefill scan plate" type="checkbox" checked={scanPrefill} onChange={e => setScanPrefill(e.target.checked)} />Prefill from trough (OEM)</label>
             <label>Sample every N wells<input aria-label="Sample every N wells" type="number" min="1" step="1" value={scanSpacing} onChange={e => setScanSpacing(e.target.value)} /></label>
             <p className="text-xs">Load tip performs native XY/Z pickup and query. Measure fluid height acts at the current well. OEM fluid offset scan samples one chosen plate and may transfer liquid when Prefill is selected. OEM Detect Fluid moves the pool plate, scans five stations and Parks on success. Neither diagnostic saves calibration.</p>
-            <p className="text-xs">OEM calibrate with fluid runs the five-station calibration, writes each station’s offset, and leaves new settings pending restart. For an already-calibrated machine, the OEM comparison/restore dialog is not yet bound; inspect the saved results before restarting.</p>
+            <p className="text-xs">OEM calibrate with fluid saves and applies station calibration in-process through the robot owner, including partial saves. Compare the run below; acceptance is separate from source-body completion. Reject restores the FULL pre-run calibration, replacing any later calibration edits. No restart or home is requested by these controls.</p>
         </fieldset>
         <fieldset><legend>Liquid plunger channels only</legend><div className="flex flex-wrap gap-4">
             {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Plunger {channel + 1} (ID {channel})</label>)}
@@ -183,24 +186,13 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         {mismatch && <p role="alert">Job identity mismatch; check robot status.</p>}
         {query.error && <p role="alert">Job readback unavailable: {bioXpErrorText(query.error)}</p>}
         {job && <><p role="status">Robot job: {job.command?.status ?? job.status} · {job.execution?.runtime_state.workflow?.phase ?? 'phase unavailable'}. Job acceptance is not physical proof.</p>
-            {job.execution?.runtime_state.action_results?.map((result, index) => {
-                const value = result as Record<string, unknown>;
-                const children = Array.isArray(value.completed_children) ? value.completed_children : value.source_children;
-                const child = Array.isArray(children) ? children[0] as { result?: { source_return?: unknown; samples?: unknown; scans?: unknown; measurements?: unknown; saved_revision_id?: unknown; pending_restart?: unknown } } | undefined : undefined;
-                const scan = child?.result;
-                const scanned = Array.isArray(scan?.samples) && typeof scan?.source_return === 'number';
-                const diagnostic = Array.isArray(scan?.scans) ? scan.scans as { plate: string; measured_raw_z: number }[] : null;
-                const calibration = Array.isArray(scan?.measurements) ? scan.measurements as { plate: string; measured_raw_z: number }[] : null;
-                if (typeof value.position_steps !== 'number' && typeof value.lost_steps !== 'number' && !scanned && !diagnostic && !calibration) return null;
-                return <dl key={index} className="text-sm" aria-label={`Measurement ${index + 1}`}>
-                    {typeof value.position_steps === 'number' && <><dt>Measured fluid height (Z steps)</dt><dd>{value.position_steps}</dd></>}
-                    {typeof value.lost_steps === 'number' && <><dt>Pickup lost steps</dt><dd>{value.lost_steps}{value.lost_steps_warning === true ? ' · source warning' : ''}</dd></>}
-                    {scanned && <><dt>OEM fluid offset (Z steps)</dt><dd>{scan!.source_return as number}</dd><dt>Sampled wells</dt><dd>{(scan!.samples as { well: string }[]).map(sample => sample.well).join(', ')}</dd></>}
-                    {diagnostic && <><dt>OEM Detect Fluid (raw Z steps)</dt><dd>{diagnostic.map(row => `${row.plate}: ${row.measured_raw_z}`).join(' · ')}</dd></>}
-                    {calibration && <><dt>OEM fluid calibration (raw Z steps)</dt><dd>{calibration.map(row => `${row.plate}: ${row.measured_raw_z}`).join(' · ')}</dd></>}
-                    <dt>Calibration saved</dt><dd>{typeof scan?.saved_revision_id === 'string' ? `Yes · revision ${scan.saved_revision_id}${scan.pending_restart === true ? ' · pending restart' : ''}` : 'No'}</dd>
-                </dl>;
-            })}</>}
+            {job.execution?.runtime_state.action_results?.map((result, index) =>
+                <BioXpPipetteResults key={index} value={result} />)}</>}
+        {[...new Set((job?.execution?.runtime_state.action_results ?? []).flatMap(result =>
+            pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
+            <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}
+                generation={attempt?.generation ?? generation} connected={connected && sameConnection} />)}
+        <BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} />
         {error && <p role="alert">{error}</p>}
     </section>;
 }

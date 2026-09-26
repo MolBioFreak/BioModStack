@@ -145,7 +145,7 @@ it('exposes the distinct five-station OEM Detect Fluid caller and its measured r
     expect(host.textContent).toContain('OEM Detect Fluid (raw Z steps)');
     expect(host.textContent).toContain('TC: 88210');
     expect(host.textContent).toContain('STRIP: 87990');
-    expect(host.textContent).toContain('Calibration savedNo');
+    expect(host.textContent).toContain('Calibration savedNot reported');
 });
 
 it('exposes OEM fluid calibration as its own save-producing native action', async () => {
@@ -164,7 +164,7 @@ it('exposes OEM fluid calibration as its own save-producing native action', asyn
     expect(host.textContent).toContain('TC: 88210');
     expect(host.textContent).toContain('STRIP: 87990');
     expect(host.textContent).toContain('revision fluid-rev · pending restart');
-    expect(host.textContent).toContain('comparison/restore dialog is not yet bound');
+    expect(host.textContent).toContain('Reject restores the FULL pre-run calibration');
 });
 
 it.each([
@@ -184,6 +184,39 @@ it.each([
     expect(relayed.robot_requests[0].body.document.stages[0].actions[0]).toMatchObject({
         kind: 'pipette_manual_physical', params: { operation },
     });
+}, 30000);
+
+it.each(['completed', 'failed'] as const)('renders compact %s calibration replies through actual protocol relay and discovers its exact run', async status => {
+    const outcome = { kind: 'source_calwith_fluid', run_id: 'run-from-native-result', body_completed: status === 'completed',
+        measurements: [{ plate: 'TC', measured_raw_z: 70000, saved_revision_id: 'station-1' },
+            { plate: 'MS', measured_raw_z: 71000, saved_revision_id: 'station-2' }],
+        saved_revision_id: 'station-2', active_revision_id: 'station-2', pending_restart: false,
+        comparison_choice: null, error: status === 'failed' ? 'third-station-failure' : null, finalization_error: 'Park-failure' };
+    const reads: string[] = [];
+    api.defaults.adapter = async config => {
+        if (config.method === 'get') { reads.push(config.url!); throw new Error('passive read unavailable'); }
+        const request = JSON.parse(config.data);
+        const result = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['tests/bioxp_manual_route_bridge.py'], {
+            cwd: '../api', encoding: 'utf8', env: { ...process.env, PYTHONPATH: '.:tests' },
+            input: JSON.stringify({ request, status, action_results: [{ action_id: 'calibrate-1', pipette_result: outcome }] }),
+        });
+        expect(result.status, result.stderr).toBe(0);
+        const relay = JSON.parse(result.stdout.trim().split('\n').at(-1)!);
+        expect(relay.data.execution.runtime_state.action_results[0].pipette_result).toEqual(outcome);
+        requests.push({ url: config.url, request });
+        return { data: relay.data, status: relay.status, statusText: 'fixture', config, headers: {} };
+    };
+    await mount(); await click('OEM calibrate with fluid now');
+    expect(host.textContent).toContain('Action IDcalibrate-1');
+    expect(host.textContent).toContain('TC: 70000'); expect(host.textContent).toContain('station-2');
+    expect(host.textContent).toContain('Park-failure');
+    if (status === 'failed') expect(host.textContent).toContain('third-station-failure');
+    expect(reads).toContain('/api/bioxp/calibration-settings/runs/run-from-native-result');
+    expect(button('Accept calibration').disabled).toBe(false);
+    await mount(78);
+    expect(button('Accept calibration').disabled).toBe(true);
+    expect(button('OEM calibrate with fluid now').disabled).toBe(false);
+    expect(reads.filter(url => url.endsWith('/runs/run-from-native-result'))).toHaveLength(1);
 }, 30000);
 
 it('authors an ordered source/destination transfer with immutable per-step wells and no hidden lifecycle', async () => {

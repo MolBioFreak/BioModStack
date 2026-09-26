@@ -1,4 +1,25 @@
 import { api } from './api';
+import type { PipetteResult } from './bioxpPipetteResults';
+
+export type CalibrationSnapshot = {
+    positions: ({ name: string } & CalibrationValues)[];
+    liquid_calibration: Record<string, unknown>;
+    revision_id: string | null;
+};
+export type CalibrationRun = PipetteResult & {
+    run_id: string; before: CalibrationSnapshot; after: CalibrationSnapshot;
+    decision: 'accept' | 'restore' | null; body_completed: boolean;
+    measurements: Record<string, unknown>[];
+    saved_revision_id: string | null; active_revision_id: string | null;
+};
+export async function readCalibrationRun(generation: number, runId: string) {
+    return (await api.get<CalibrationRun>(`/api/bioxp/calibration-settings/runs/${encodeURIComponent(runId)}`,
+        { params: { expected_connection_generation: generation } })).data;
+}
+export async function decideCalibrationRun(generation: number, runId: string, decision: 'accept' | 'restore') {
+    return (await api.post<CalibrationRun>(`/api/bioxp/calibration-settings/runs/${encodeURIComponent(runId)}/decision`,
+        { expected_connection_generation: generation, decision })).data;
+}
 
 // Wire mirror of oem_calibration_settings.PositionCalibrationPatch.
 export const calibrationFields = ['x', 'y', 'zLow', 'zDelta', 'inc_factor'] as const;

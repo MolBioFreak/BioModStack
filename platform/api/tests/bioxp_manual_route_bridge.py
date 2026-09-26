@@ -20,7 +20,7 @@ from test_bioxp_operator_controls import make_client
 from test_bioxp_protocol_relay import bundle
 
 
-def relay_manual_request(request: dict, status: str = "dispatched", error_status: int | None = None) -> dict:
+def relay_manual_request(request: dict, status: str = "dispatched", error_status: int | None = None, action_results: list[dict] | None = None) -> dict:
     calls = []
     job_id = "protocol-live-" + sha256(request["idempotency_key"].encode()).hexdigest()
     payload = bundle(status)
@@ -31,7 +31,7 @@ def relay_manual_request(request: dict, status: str = "dispatched", error_status
     state = payload["execution"]["runtime_state"]
     state.update(job_id=job_id, protocol_id=request["document"]["protocol_id"])
     state["workflow"].update(command_id=job_id, child_command_ids=[], phase="executing" if status == "dispatched" else "terminal")
-    state["action_results"] = [{"kind": "pipette_position", "ok": status != "failed",
+    state["action_results"] = action_results if action_results is not None else [{"kind": "pipette_position", "ok": status != "failed",
         "physical_effect_verified": False, "error": "source lower refused" if status == "failed" else None}]
 
     async def transport(req: httpx.Request) -> httpx.Response:

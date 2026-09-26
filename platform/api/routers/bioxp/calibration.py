@@ -10,6 +10,39 @@ from .operator_controls import _translate_robot_error
 
 router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
 
+class CalibrationDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    decision: Literal["accept", "restore"]
+
+
+@router.get("/calibration-settings/runs/{run_id}")
+async def read_calibration_run(
+    run_id: str, expected_connection_generation: int = Query(ge=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+):
+    try:
+        return await runtime.connection.request_active_v2_query(
+            "calibration_run", expected_generation=expected_connection_generation,
+            path_params={"run_id": run_id})
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.post("/calibration-settings/runs/{run_id}/decision")
+async def decide_calibration_run(
+    run_id: str, request: CalibrationDecisionRequest,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+):
+    try:
+        return await runtime.connection.request_active(
+            "calibration_run_decision", expected_generation=request.expected_connection_generation,
+            require_fresh=False, path_params={"run_id": run_id},
+            json_data={"decision": request.decision})
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
 class ManualTipSetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]

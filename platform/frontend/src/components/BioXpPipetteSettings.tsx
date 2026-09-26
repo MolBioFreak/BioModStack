@@ -46,8 +46,8 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
                 if (epoch.current !== token) return;
                 setCalibration(readback);
                 setMessage(result.committed_revision_id && result.committed_revision_id !== readback.saved_revision_id
-                    ? `Manual Set returned revision ${result.committed_revision_id}; latest saved revision ${readback.saved_revision_id ?? 'unavailable'} differs. No live application; next ordinary startup.`
-                    : `Manual Set returned; saved revision ${readback.saved_revision_id ?? 'unavailable'} read back. No live application; next ordinary startup.`);
+                    ? `Manual Set returned revision ${result.committed_revision_id}; latest saved revision ${readback.saved_revision_id ?? 'unavailable'} differs. Active revision: ${readback.active_revision_id ?? 'baseline'}.`
+                    : `Manual Set returned; saved revision ${readback.saved_revision_id ?? 'unavailable'} read back. Active revision: ${readback.active_revision_id ?? 'baseline'}.`);
             } else {
                 if (!Object.keys(draft).length) { setError('Change a pipette flag before saving.'); return; }
                 await saveOperationParameters(generation, draft);
@@ -64,7 +64,7 @@ export function BioXpPipetteSettings({ generation, connected }: { generation: nu
     const names = tray <= 2 ? ['TECANRACK1', 'TECANRACK2'] : ['TECANRACK3', 'TECANRACK4'];
     return <section aria-label="Pipette settings" className="mt-4 space-y-3 rounded border border-slate-700 p-4">
         <h3>Manual tip-tray Set and pipette settings</h3>
-        <p>Manual Set reads the current Z and saves the same zLow to both selected rack rows. It does not pick up a tip or apply geometry live.</p>
+        <p>Manual Set reads the current Z and saves the same zLow to both selected rack rows. The existing robot owner applies the paired calibration in-process. It does not pick up a tip, restart or home.</p>
         <label>Tip tray<select aria-label="Tip tray for manual Set" value={tray} disabled={pending}
             onChange={e => { setTray(Number(e.target.value) as TipTray); setMeasurement(null); }}>
             {([1, 2, 3, 4] as const).map(value => <option key={value} value={value}>Tray {value}</option>)}

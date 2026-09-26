@@ -17,9 +17,9 @@ if os.environ.get("BIOXP_NATIVE_CONTRACTS"):
     FIXTURE = {"before": native["calibration_initial_response"], "after": native["calibration_save_response"],
                "schema": native["calibration_patch_schema"]}
 
-def relay_calibration(method="get", request=None, saved=False, error_status=None, mutations=True):
+def relay_calibration(method="get", request=None, saved=False, error_status=None, mutations=True, run_id=None, run_payload=None):
     calls = []
-    payload = FIXTURE["after" if saved or method == "patch" else "before"]
+    payload = run_payload if run_id is not None else FIXTURE["after" if saved or method == "patch" else "before"]
     async def transport(req):
         calls.append({"method": req.method, "path": req.url.path, "body": json.loads(req.content) if req.content else None})
         return httpx.Response(error_status or 200, json={"detail": "settings storage failed"} if error_status else payload)
@@ -29,7 +29,12 @@ def relay_calibration(method="get", request=None, saved=False, error_status=None
     with pytest.MonkeyPatch.context() as patch:
         client, runtime = make_client(patch, mutations=mutations)
         runtime.connection.client = robot
-        if method == "patch":
+        if run_id is not None:
+            from urllib.parse import quote
+            path = f"/api/bioxp/calibration-settings/runs/{quote(run_id, safe='')}"
+            response = (client.post(path + "/decision", json=request) if method == "post" else
+                        client.get(path, params=request or {"expected_connection_generation": 77}))
+        elif method == "patch":
             response = client.patch("/api/bioxp/calibration-settings", json=request)
         else:
             response = client.get("/api/bioxp/calibration-settings", params=request or {"expected_connection_generation": 77})
