@@ -7,6 +7,9 @@ import { completeCurrentLaunchContext, submitJob, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
+import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
+import { LaProteinaMotifInput, type LaProteinaMotifInspection } from './LaProteinaMotifInput';
+import { DeNovoContextInput } from './DeNovoContextInput';
 import { DE_NOVO_MODIFICATION_MODE_CARDS, type ModificationMode } from './proteinModificationModes';
 
 export interface DeNovoNavigationState {
@@ -109,6 +112,15 @@ export function ProteinModificationTemplate({
     }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, savedMode]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
+        // Only shared intent seeds an untouched engine draft. Never translate
+        // length ranges, structural roles or model-native conditions by guessing.
+        const nextKey = draftKey(next);
+        if (!Object.hasOwn(drafts.current, nextKey)) {
+            const current = drafts.current[activeKey] ?? {};
+            drafts.current[nextKey] = Object.fromEntries(
+                ['job_name', 'num_designs'].filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]),
+            );
+        }
         setNavigation(next);
         callbacks.current.onNavigationChange?.(next);
     };
@@ -186,6 +198,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const backend: DeNovoBackend = generator === 'laproteina' ? 'laproteina' : 'disco';
+    const inputSection = designTask === 'unconditional' ? 'Design' : 'Source and regions';
+    const [section, setSection] = useState(inputSection);
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
     const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));
@@ -198,6 +212,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [laproteinaSteps, setLaproteinaSteps] = useState(initialNumber(initialValues, 'laproteina_num_steps', 400));
     const [motifTaskName, setMotifTaskName] = useState(initialString(initialValues, 'laproteina_motif_task_name', ''));
     const [motifPdb, setMotifPdb] = useState(initialString(initialValues, 'laproteina_motif_pdb', ''));
+    const [motifInspection, setMotifInspection] = useState(initialValues.laproteina_motif_inspection as LaProteinaMotifInspection | undefined);
     const [motifContig, setMotifContig] = useState(initialString(initialValues, 'laproteina_contig_string', ''));
     const [motifSegmentOrder, setMotifSegmentOrder] = useState(initialString(initialValues, 'laproteina_segment_order', ''));
     const [motifAtomSelectionMode, setMotifAtomSelectionMode] = useState(initialString(initialValues, 'laproteina_atom_selection_mode', 'all_atom'));
@@ -207,6 +222,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [discoEffort, setDiscoEffort] = useState(initialString(initialValues, 'disco_effort', 'fast'));
     const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState(initialNumber(initialValues, 'disco_num_inference_seeds', 8));
     const [discoSeeds, setDiscoSeeds] = useState(initialString(initialValues, 'disco_seeds', ''));
+    const [discoAttention, setDiscoAttention] = useState(initialValues.disco_use_deepspeed_evo_attention === true);
     const [discoInputJson, setDiscoInputJson] = useState(initialString(initialValues, 'disco_input_json_path', ''));
     const [ligandSdf, setLigandSdf] = useState(initialString(initialValues, 'disco_ligand_sdf', ''));
     const [ligandName, setLigandName] = useState(initialString(initialValues, 'disco_ligand_name', ''));
@@ -214,6 +230,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [error, setError] = useState<string | null>(null);
 
     const draftJson = JSON.stringify({
+        ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
         job_name: jobName,
         num_designs: numDesigns,
         min_length: minLength,
@@ -226,6 +243,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         laproteina_num_steps: laproteinaSteps,
         laproteina_motif_task_name: motifTaskName,
         laproteina_motif_pdb: motifPdb,
+        laproteina_motif_inspection: motifInspection,
         laproteina_contig_string: motifContig,
         laproteina_segment_order: motifSegmentOrder,
         laproteina_atom_selection_mode: motifAtomSelectionMode,
@@ -235,6 +253,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         disco_effort: discoEffort,
         disco_num_inference_seeds: discoInferenceSeeds,
         disco_seeds: discoSeeds,
+        disco_use_deepspeed_evo_attention: discoAttention,
         disco_input_json_path: discoInputJson,
         disco_ligand_sdf: ligandSdf,
         disco_ligand_name: ligandName,
@@ -263,6 +282,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 num_designs: numDesigns,
                 target_lengths: targetLengths,
                 ...(backend === 'laproteina' ? {
+                    ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
                     laproteina_preset: laproteinaPreset,
                     laproteina_samples_per_length: laproteinaSamples,
                     laproteina_num_steps: laproteinaSteps,
@@ -274,10 +294,12 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     laproteina_motif_min_length: motifMinLength || undefined,
                     laproteina_motif_max_length: motifMaxLength || undefined,
                 } : {
+                    ...Object.fromEntries(['disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
                     disco_experiment: discoExperiment,
                     disco_effort: discoEffort,
                     disco_num_inference_seeds: discoInferenceSeeds,
                     disco_seeds: discoSeeds || undefined,
+                    disco_use_deepspeed_evo_attention: discoAttention,
                     disco_input_json_path: discoInputJson || undefined,
                     disco_ligand_sdf: ligandSdf || undefined,
                     disco_ligand_name: ligandName || undefined,
@@ -362,167 +384,167 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         : (jobName.trim() && numDesigns >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
     const workflowRequestJson = JSON.stringify(workflowRequest);
     const stableWorkflowRequest = useMemo(() => JSON.parse(workflowRequestJson) as typeof workflowRequest, [workflowRequestJson]);
+    const isMotif = backend === 'laproteina' && designTask === 'motif_scaffolding';
+    const contextTask = ['ligand_conditioned', 'dna_conditioned', 'rna_conditioned', 'custom_json'].includes(designTask)
+        ? designTask as 'ligand_conditioned' | 'dna_conditioned' | 'rna_conditioned' | 'custom_json' : null;
+    const engineName = generator === 'rfd3' ? 'RFD3' : backend === 'laproteina' ? 'La-Proteina' : 'DISCO';
+    const updateContext = (patch: { ligandPath?: string; ligandName?: string; nativeJsonPath?: string; sequence?: string }) => {
+        if (patch.ligandPath !== undefined) setLigandSdf(patch.ligandPath);
+        if (patch.ligandName !== undefined) setLigandName(patch.ligandName);
+        if (patch.nativeJsonPath !== undefined) setDiscoInputJson(patch.nativeJsonPath);
+        if (patch.sequence !== undefined) setNucleicSequence(patch.sequence);
+    };
+    const countHelp = generator === 'rfd3' ? 'Exact number of native RFD3 candidates.'
+        : backend === 'laproteina' ? isMotif ? 'Motif sampling uses the requested design count.'
+            : 'Samples per length controls generation. Requested design count is retained, not a combined sampling total.'
+        : 'Exact seeds override inference seed count. Requested design count is retained, not the native output total.';
+    const nativePresets = isMotif
+        ? [['motif_idx_aa', 'Motif indexed all-atom'], ['motif_idx_tip', 'Motif indexed tip-atoms'], ['motif_uidx_aa', 'Motif unindexed all-atom'], ['motif_uidx_tip', 'Motif unindexed tip-atoms']]
+        : [['ucond_tri', 'Unconditional (triangular)'], ['ucond_notri', 'Unconditional'], ['ucond_notri_long', 'Unconditional long']];
+    const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {generator === 'rfd3' ? <>
+            <label className={labelClass}>Minimum length
+                <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={event => setMinLength(Number(event.target.value))} />
+            </label>
+            <label className={labelClass}>Maximum length
+                <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={event => setMaxLength(Number(event.target.value))} />
+            </label>
+            <label className={labelClass}>Number of designs
+                <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(Number(event.target.value))} />
+            </label>
+        </> : <>
+            <label className={labelClass}>Target lengths
+                <input className={fieldClass} value={targetLengths} onChange={event => setTargetLengths(event.target.value)} placeholder="100,150,200" />
+            </label>
+            <label className={labelClass}>Requested design count
+                <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(Number(event.target.value))} />
+            </label>
+            {backend === 'laproteina' && <label className={labelClass}>Samples per length
+                <input className={fieldClass} type="number" min={1} max={512} value={laproteinaSamples} onChange={event => setLaproteinaSamples(Number(event.target.value))} />
+                {isMotif && <span className="block text-xs text-[var(--text-secondary)]">Retained for unconditional sampling; not used for motifs.</span>}
+            </label>}
+        </>}
+    </div>;
     return (
-        <div className="space-y-5">
-            <p className="text-sm text-[var(--text-secondary)]">{generator === 'rfd3'
-                ? 'Generate new protein candidates without a target.'
-                : 'Experimental generation using the selected engine’s existing native inputs. Generated candidates are design hypotheses, not evidence of measured activity.'}</p>
-            {generator === 'rfd3' ? <>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <label className={labelClass}>Minimum length
-                    <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={(event) => setMinLength(Number(event.target.value))} />
-                </label>
-                <label className={labelClass}>Maximum length
-                    <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={(event) => setMaxLength(Number(event.target.value))} />
-                </label>
-                <label className={labelClass}>Number of designs
-                    <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={(event) => setNumDesigns(Number(event.target.value))} />
-                </label>
+        <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
+            <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling']} active={section} onChange={setSection} />
+            {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
+            <div hidden={section !== inputSection} className="space-y-5">
+                {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates without a source structure.">
+                    {generationControls}
+                    <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
+                </ProteinDesignPanel> : isMotif ? <>
+                    <LaProteinaMotifInput path={motifPdb} contig={motifContig} segmentOrder={motifSegmentOrder}
+                        initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
+                        if (patch.path !== undefined) setMotifPdb(patch.path);
+                        if (patch.contig !== undefined) setMotifContig(patch.contig);
+                        if (patch.segmentOrder !== undefined) setMotifSegmentOrder(patch.segmentOrder);
+                    }} />
+                    <ProteinDesignPanel title="Motif conditioning">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                            <label className={labelClass}>Atom selection
+                                <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => setMotifAtomSelectionMode(event.target.value)}>
+                                    <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
+                                    <option value="backbone">Backbone</option><option value="sidechain">Sidechain</option>
+                                    <option value="ca_only">Cα only</option><option value="random">Random</option>
+                                </select>
+                            </label>
+                            <label className={labelClass}>Motif minimum length
+                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={event => setMotifMinLength(event.target.value)} placeholder="From target lengths" />
+                            </label>
+                            <label className={labelClass}>Motif maximum length
+                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={event => setMotifMaxLength(event.target.value)} placeholder="From target lengths" />
+                            </label>
+                        </div>
+                        <details className="rounded-lg border p-3" style={themedInsetStyle}>
+                            <summary className="cursor-pointer text-sm font-medium">Named upstream motif task</summary>
+                            <label className={`${labelClass} mt-3 block`}>Upstream motif task
+                                <input className={fieldClass} value={motifTaskName} onChange={event => setMotifTaskName(event.target.value)} placeholder="La-Proteina motif_dict key" />
+                            </label>
+                            <p className="mt-2 text-xs text-[var(--text-secondary)]">Alternative to a custom motif. A supplied motif structure and contig take precedence.</p>
+                        </details>
+                    </ProteinDesignPanel>
+                </> : contextTask && <ProteinDesignPanel title={contextTask === 'custom_json' ? 'Native design input' : 'Molecular context'}
+                    description={contextTask === 'dna_conditioned' ? 'DNA context; preparation includes the reverse-complement strand.'
+                        : contextTask === 'rna_conditioned' ? 'RNA context; preparation uses the supplied single strand.'
+                            : contextTask === 'ligand_conditioned' ? 'Use the ligand’s existing SDF structure.' : 'Use an existing native DISCO input document.'}>
+                    <DeNovoContextInput task={contextTask} ligandPath={ligandSdf} ligandName={ligandName} nativeJsonPath={discoInputJson} sequence={nucleicSequence} onChange={updateContext} />
+                </ProteinDesignPanel>}
             </div>
-            <details className="rounded-xl border border-[var(--border-primary)] p-4">
-                <summary className="cursor-pointer font-medium">Sampling and outputs</summary>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className={labelClass}>Seed
-                    <input className={fieldClass} type="number" min={0} value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
-                </label>
-                <label className="flex items-center gap-3 text-sm font-medium text-[var(--text-primary)]">
-                    <input type="checkbox" checked={dumpTrajectories} onChange={(event) => setDumpTrajectories(event.target.checked)} />
-                    Dump trajectories
-                </label>
-                </div>
-            </details>
-            </> : <>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {backend === 'laproteina' && designTask === 'motif_scaffolding' && (
-                            <>
-                                <label className={labelClass}>Upstream motif task
-                                    <input className={fieldClass} value={motifTaskName} onChange={(event) => setMotifTaskName(event.target.value)} placeholder="Optional La-Proteina motif_dict key" />
-                                </label>
-                                <label className={labelClass}>Motif PDB path
-                                    <input className={fieldClass} value={motifPdb} onChange={(event) => setMotifPdb(event.target.value)} />
-                                </label>
-                                <label className={labelClass}>Motif contig
-                                    <input className={fieldClass} value={motifContig} onChange={(event) => setMotifContig(event.target.value)} />
-                                </label>
-                                <label className={labelClass}>Segment order
-                                    <input className={fieldClass} value={motifSegmentOrder} onChange={(event) => setMotifSegmentOrder(event.target.value)} placeholder="A;B;C" />
-                                </label>
-                                <label className={labelClass}>Atom selection
-                                    <select className={fieldClass} value={motifAtomSelectionMode} onChange={(event) => setMotifAtomSelectionMode(event.target.value)}>
-                                        <option value="all_atom">All atom</option>
-                                        <option value="tip_atoms">Tip atoms</option>
-                                        <option value="backbone">Backbone</option>
-                                        <option value="sidechain">Sidechain</option>
-                                        <option value="ca_only">Cα only</option>
-                                        <option value="random">Random</option>
-                                    </select>
-                                </label>
-                                <label className={labelClass}>Motif minimum length
-                                    <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={(event) => setMotifMinLength(event.target.value)} />
-                                </label>
-                                <label className={labelClass}>Motif maximum length
-                                    <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={(event) => setMotifMaxLength(event.target.value)} />
-                                </label>
-                            </>
-                        )}
-                        {backend === 'disco' && designTask === 'custom_json' && (
-                            <label className={labelClass}>Native input JSON path
-                                <input className={fieldClass} value={discoInputJson} onChange={(event) => setDiscoInputJson(event.target.value)} />
-                            </label>
-                        )}
-                        {backend === 'disco' && designTask === 'ligand_conditioned' && (
-                            <>
-                                <label className={labelClass}>Ligand SDF path
-                                    <input className={fieldClass} value={ligandSdf} onChange={(event) => setLigandSdf(event.target.value)} />
-                                </label>
-                                <label className={labelClass}>Ligand name
-                                    <input className={fieldClass} value={ligandName} onChange={(event) => setLigandName(event.target.value)} />
-                                </label>
-                            </>
-                        )}
-                        {backend === 'disco' && (designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && (
-                            <label className={labelClass}>DNA/RNA sequence
-                                <textarea className={fieldClass} rows={3} value={nucleicSequence} onChange={(event) => setNucleicSequence(event.target.value)} />
-                            </label>
-                        )}
-                <label className={labelClass}>Requested design count
-                    <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={(event) => setNumDesigns(Number(event.target.value))} />
-                </label>
-                <label className={labelClass}>Target lengths
-                    <input className={fieldClass} value={targetLengths} onChange={(event) => setTargetLengths(event.target.value)} placeholder="100,150,200" />
-                </label>
-
-                {backend === 'laproteina' ? (
-                    <>
-                        <label className={labelClass}>Preset
-                            <select className={fieldClass} value={laproteinaPreset} onChange={(event) => setLaproteinaPreset(event.target.value)}>
-                                <option value="ucond_tri">Unconditional (triangular)</option>
-                                <option value="ucond_notri">Unconditional</option>
-                                <option value="ucond_notri_long">Unconditional long</option>
-                                <option value="motif_idx_aa">Motif indexed all-atom</option>
-                                <option value="motif_idx_tip">Motif indexed tip-atoms</option>
-                                <option value="motif_uidx_aa">Motif unindexed all-atom</option>
-                                <option value="motif_uidx_tip">Motif unindexed tip-atoms</option>
-                            </select>
+            <div hidden={section !== 'Sampling'} className="space-y-5">
+                {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
+                <ProteinDesignPanel title={`${engineName} sampling`}>
+                    {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
+                        <label className={labelClass}>Seed
+                            <input className={fieldClass} type="number" min={0} value={seed} onChange={event => setSeed(Number(event.target.value))} />
                         </label>
-                        <label className={labelClass}>Samples per length
-                            <input className={fieldClass} type="number" min={1} max={512} value={laproteinaSamples} onChange={(event) => setLaproteinaSamples(Number(event.target.value))} />
+                        <label className="flex items-center gap-3 text-sm font-medium">
+                            <input type="checkbox" checked={dumpTrajectories} onChange={event => setDumpTrajectories(event.target.checked)} />Dump trajectories
+                        </label>
+                    </div> : backend === 'laproteina' ? <div className="grid gap-4 sm:grid-cols-2">
+                        <label className={labelClass}>Preset
+                            <select className={fieldClass} value={laproteinaPreset} onChange={event => setLaproteinaPreset(event.target.value)}>
+                                {!nativePresets.some(([value]) => value === laproteinaPreset) && <option value={laproteinaPreset}>
+                                    {laproteinaPreset} · native fallback: {isMotif ? 'motif indexed all-atom' : 'unconditional triangular'}
+                                </option>}
+                                {nativePresets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                            </select>
                         </label>
                         <label className={labelClass}>Sampling steps
-                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={(event) => setLaproteinaSteps(Number(event.target.value))} />
+                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(Number(event.target.value))} />
                         </label>
-
-                    </>
-                ) : (
-                    <>
-                        <label className={labelClass}>DISCO experiment
-                            <select className={fieldClass} value={discoExperiment} onChange={(event) => setDiscoExperiment(event.target.value)}>
-                                <option value="designable">Designable</option>
-                                <option value="diverse">Diverse</option>
-                            </select>
-                        </label>
-                        <label className={labelClass}>Inference effort
-                            <select className={fieldClass} value={discoEffort} onChange={(event) => setDiscoEffort(event.target.value)}>
-                                <option value="fast">Fast</option>
-                                <option value="max">Max</option>
-                            </select>
-                        </label>
-                        <label className={labelClass}>Inference seed count
-                            <input className={fieldClass} type="number" min={1} max={512} value={discoInferenceSeeds} onChange={(event) => setDiscoInferenceSeeds(Number(event.target.value))} />
-                        </label>
-                        <label className={labelClass}>Exact seeds
-                            <input className={fieldClass} value={discoSeeds} onChange={(event) => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
-                        </label>
-
-
-
-                    </>
-                )}
+                    </div> : <>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <label className={labelClass}>DISCO experiment
+                                <select className={fieldClass} value={discoExperiment} onChange={event => setDiscoExperiment(event.target.value)}>
+                                    <option value="designable">Designable</option><option value="diverse">Diverse</option>
+                                </select>
+                            </label>
+                            <label className={labelClass}>Inference effort
+                                <select className={fieldClass} value={discoEffort} onChange={event => setDiscoEffort(event.target.value)}>
+                                    <option value="fast">Fast</option><option value="max">Max</option>
+                                    {!['fast', 'max'].includes(discoEffort) && <option value={discoEffort}>{discoEffort} (saved)</option>}
+                                </select>
+                            </label>
+                            <label className={labelClass}>Inference seed count
+                                <input className={fieldClass} type="number" min={1} max={1024} value={discoInferenceSeeds} onChange={event => setDiscoInferenceSeeds(Number(event.target.value))} />
+                            </label>
+                            <label className={labelClass}>Exact seeds
+                                <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
+                            </label>
+                        </div>
+                        {['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'].includes(designTask) && <p className="text-sm text-[var(--text-secondary)]">For conditional generation, preparation uses Max inference effort even when Fast is requested.</p>}
+                        <details className="rounded-lg border p-3" style={themedInsetStyle}>
+                            <summary className="cursor-pointer text-sm font-medium">Advanced inference</summary>
+                            <label className="mt-3 flex items-center gap-3 text-sm">
+                                <input type="checkbox" checked={discoAttention} onChange={event => setDiscoAttention(event.target.checked)} />DeepSpeed Evoformer attention
+                            </label>
+                            <p className="mt-2 text-xs text-[var(--text-secondary)]">Uses the managed CUTLASS runtime when enabled.</p>
+                        </details>
+                        {designTask !== 'custom_json' && <details open={Boolean(discoInputJson)} className="rounded-lg border p-3" style={themedInsetStyle}>
+                            <summary className="cursor-pointer text-sm font-medium">Native input override{discoInputJson ? ' · active' : ''}</summary>
+                            <p className="my-3 text-sm text-[var(--text-secondary)]">A selected native JSON overrides the compiled task inputs. Clear it to use this workflow’s molecular context.</p>
+                            <DeNovoContextInput task="custom_json" ligandPath={ligandSdf} ligandName={ligandName} nativeJsonPath={discoInputJson} sequence={nucleicSequence} onChange={updateContext} />
+                        </details>}
+                    </>}
+                </ProteinDesignPanel>
+                <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
-            <p className="text-sm text-[var(--text-secondary)]">{backend === 'laproteina'
-                ? designTask === 'motif_scaffolding'
-                    ? 'Motif sampling uses the requested design count. Samples per length applies to unconditional sampling, not motif sampling.'
-                    : 'Unconditional sampling uses samples per length for each target length. The requested design count is retained in the request, not used as a combined sampling total.'
-                : 'DISCO uses exact seeds when supplied, otherwise the inference seed count. The requested design count is retained in the request; it does not control the native output total.'}</p>
-            {(designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && <p className="text-sm text-[var(--text-secondary)]">
-                This sequence supplies nucleic-acid context, not a protein coding sequence. For conditional generation, preparation uses Max inference effort even when Fast is requested.
-            </p>}
-            {designTask === 'ligand_conditioned' && <p className="text-sm text-[var(--text-secondary)]">For conditional generation, preparation uses Max inference effort even when Fast is requested.</p>}
-            </>}
-            <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
-            <section aria-label="Run" className="space-y-4 border-t border-[var(--border-primary)] pt-4">
-                <label className={labelClass}>Job name
-                    <input className={fieldClass} value={jobName} onChange={event => setJobName(event.target.value)} />
-                </label>
+            <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
+                <summary className="cursor-pointer text-sm font-medium">Run details</summary>
+                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                    <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
+                    {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}
+                </dl>
+            </details>
+            <ProteinDesignRun jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
+                onSubmit={() => { void (generator === 'rfd3' ? submitDeNovo() : submitAlternative()); }} submitLabel="Generate candidates">
                 {runDetails}
                 <ExecutionTargetPicker workflowRequest={stableWorkflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                 {error && <div role="alert" className="text-sm text-[var(--text-primary)]">{error}</div>}
-                <button type="button" onClick={generator === 'rfd3' ? submitDeNovo : submitAlternative}
-                    disabled={submitMutation.isPending}
-                    className="rounded-lg bg-[var(--accent-primary)] px-5 py-2.5 font-semibold text-[var(--text-on-accent)] disabled:opacity-50">
-                    {submitMutation.isPending ? 'Submitting…' : 'Generate candidates'}
-                </button>
-            </section>
+            </ProteinDesignRun>
         </div>
     );
 }

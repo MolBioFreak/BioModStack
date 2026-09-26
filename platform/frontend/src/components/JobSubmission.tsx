@@ -13,7 +13,7 @@ import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRe
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchModelById, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
+import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchModelById, submitJob, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -53,121 +53,7 @@ import {
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
 
-interface FileBrowserProps {
-    onSelect: (path: string) => void;
-    onCancel: () => void;
-}
-
-function FileBrowser({ onSelect, onCancel }: FileBrowserProps) {
-    const [path, setPath] = useState('/');
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const queryClient = useQueryClient();
-
-    const { data: files } = useQuery({
-        queryKey: ['files', path],
-        queryFn: () => fetchFiles(path),
-    });
-
-    const uploadMutation = useMutation({
-        mutationFn: (file: File) => uploadFile(path === '/' ? 'inputs' : path, file),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['files', path] });
-        },
-    });
-
-    const handleNavigate = (newPath: string) => {
-        setPath(newPath);
-    };
-
-    const handleUp = () => {
-        const parts = path.split('/').filter(p => p);
-        parts.pop();
-        setPath('/' + parts.join('/'));
-    };
-
-    const handleUploadClick = () => {
-        if (fileInputRef.current) {
-            fileInputRef.current.click();
-        }
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            uploadMutation.mutate(e.target.files[0]);
-        }
-        // Reset input
-        e.target.value = '';
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl h-[80vh] flex flex-col shadow-2xl">
-                <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 rounded-t-xl">
-                    <h3 className="font-semibold text-slate-200">Select File</h3>
-                    <div className="flex gap-3 items-center">
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            onChange={handleFileChange}
-                            className="hidden"
-                        />
-                        <button
-                            onClick={handleUploadClick}
-                            disabled={uploadMutation.isPending}
-                            className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-700"
-                        >
-                            {uploadMutation.isPending ? 'Uploading...' : 'Upload'}
-                        </button>
-                        <button onClick={onCancel} className="text-slate-400 hover:text-white">✕</button>
-                    </div>
-                </div>
-
-                <div className="p-2 border-b border-slate-700 bg-slate-800/30 flex items-center gap-2">
-                    <button
-                        onClick={handleUp}
-                        className="rounded border border-slate-600 bg-slate-800 px-2.5 py-1 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                        disabled={path === '/'}
-                    >
-                        Up
-                    </button>
-                    <input
-                        type="text"
-                        value={path}
-                        readOnly
-                        className="flex-1 bg-transparent text-sm text-slate-400 outline-none"
-                    />
-                </div>
-
-                <div className="flex-1 overflow-auto p-2">
-                    {files?.data.entries.map((entry: UntypedApiValue) => (
-                        <div
-                            key={entry.path}
-                            onClick={() => entry.is_directory ? handleNavigate(entry.path) : onSelect(entry.path)}
-                            className={`flex items-center gap-3 p-2 rounded cursor-pointer ${entry.is_directory
-                                ? 'text-blue-400 hover:bg-blue-500/10'
-                                : 'text-slate-300 hover:bg-slate-700'
-                                }`}
-                        >
-                            <span className={`inline-flex h-7 min-w-10 items-center justify-center rounded border text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                entry.is_directory
-                                    ? 'border-blue-500/30 bg-blue-500/10 text-blue-300'
-                                    : 'border-slate-600 bg-slate-800 text-slate-300'
-                            }`}>
-                                {entry.is_directory ? 'Dir' : 'File'}
-                            </span>
-                            <span className="flex-1 truncate">{entry.name}</span>
-                            {!entry.is_directory && (
-                                <span className="text-xs text-slate-500">
-                                    {(entry.size_bytes / 1024).toFixed(1)} KB
-                                </span>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-}
+import { FileBrowser } from './FileBrowser';
 
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
     'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',

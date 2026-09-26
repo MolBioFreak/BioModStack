@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_payload: any) => ({ data: {} })) }));
-vi.mock('../../src/lib/api', () => ({ submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
+vi.mock('../../src/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('../../src/lib/api')>(), submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/ModelDocumentationLinks', () => ({ ModelDocumentationLinks: () => null }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ workflowRequest }: any) => <output data-execution>{JSON.stringify(workflowRequest)}</output> }));
 // These doubles exercise parent snapshot ownership, not source/geometry behavior (covered by child suites).
@@ -17,6 +17,8 @@ function Child({ initialValues, onDraftChange, embedded, runDetails, kind, submi
 vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLocalRedesignTemplate: (props: any) => <Child {...props} kind="redesign" /> }));
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: (props: any) => <Child {...props} kind="shape" /> }));
 import { ProteinModificationTemplate, type DeNovoNavigationState } from '../../src/components/ProteinModificationTemplate';
+import { api } from '../../src/lib/api';
+vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <output data-low-level-viewer data-url={props.structureUrl} /> }));
 
 let root: Root;
 let client: QueryClient;
@@ -29,6 +31,8 @@ async function render(props: Partial<React.ComponentProps<typeof ProteinModifica
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} {...props} /></MemoryRouter></QueryClientProvider>));
 }
 function control(name: string): HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement {
+    const direct = document.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[aria-label="${name}"]`);
+    if (direct) return direct;
     const label = [...document.querySelectorAll('label')].find(el => [...el.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join('').trim() === name);
     const input = label?.querySelector('input, select, textarea'); expect(input, name).toBeTruthy();
     return input as ReturnType<typeof control>;
@@ -49,10 +53,11 @@ const latest = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0];
 it('defaults to one RFD3 editor and one run area after scientific inputs', async () => {
     await render({ runDetails: <div data-policy>Execution details</div> });
     expect(control('Engine').value).toBe('rfd3');
-    expect([...document.querySelectorAll('nav button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Shape']);
+    expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Shape']);
+    expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling']);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    expect(document.querySelectorAll('h2')).toHaveLength(1);
+    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'De Novo Protein Design')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('backup');
     expect(control('Minimum length').compareDocumentPosition(document.querySelector('[data-execution]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await click('Generate candidates');
@@ -160,4 +165,60 @@ it('does not republish child drafts indefinitely when the external callback iden
     await render();
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><Owner /></MemoryRouter></QueryClientProvider>));
     expect(draft).toHaveBeenCalledOnce();
+});
+
+it('retains the real source/residue workbench through sections, engine switches and JSON saved reopen', async () => {
+    const pdb = [1, 2, 3].map(n => `ATOM      1  CA  ALA A${String(n).padStart(4)}       7.000   2.000   3.000  1.00 20.00           C  `).join('\n') + '\nEND\n';
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: [{ id: 'local', name: 'Local structure', path: 'inputs/source.pdb', category: 'Test', description: '' }] });
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { path: 'inputs/exact-motif.pdb' } });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => pdb })));
+    const wait = async (ready: () => boolean) => {
+        for (let i = 0; i < 100; i++) {
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+            if (ready()) return;
+        }
+        throw new Error('Workbench did not settle');
+    };
+    try {
+        const draft = vi.fn();
+        await render({ initialValues: { generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_contig_string: '5/A1/2/A3/5', laproteina_segment_order: 'A', laproteina_checkpoint_dir: '/retained/custom' }, onDraftChange: draft });
+        await click('Presets');
+        await wait(() => [...document.querySelectorAll('button')].some(e => e.textContent === 'Local structure'));
+        await click('Local structure');
+        await wait(() => !!document.querySelector('[title="A3 (ALA)"]'));
+        for (const n of [1, 3]) await act(async () => (document.querySelector(`[title="A${n} (ALA)"]`) as HTMLButtonElement).click());
+        await wait(() => !!document.querySelector('[data-low-level-viewer]'));
+        const viewer = document.querySelector('[data-low-level-viewer]');
+        await click('Sampling'); await click('Source and regions');
+        expect(document.querySelector('[data-low-level-viewer]')).toBe(viewer);
+        expect(document.body.textContent).toContain('2 residues selected');
+        await click('Use selected residues');
+        await wait(() => control('Motif PDB path').value === 'inputs/exact-motif.pdb');
+        await edit('Goal', 'unconditional'); await edit('Engine', 'disco'); await edit('Goal', 'motif_scaffolding');
+        await wait(() => document.body.textContent?.includes('2 residues selected') === true);
+        expect(control('Motif PDB path').value).toBe('inputs/exact-motif.pdb');
+        expect([...document.querySelectorAll('summary')].some(e => e.textContent?.includes('Local structure'))).toBe(true);
+        const saved = JSON.parse(JSON.stringify(latest(draft)));
+        await act(async () => root.unmount()); document.body.replaceChildren();
+        await render({ initialValues: saved });
+        await wait(() => document.body.textContent?.includes('2 residues selected') === true);
+        await click('Generate candidates');
+        expect(latest(mocks.submit).params).toMatchObject({ generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_motif_pdb: 'inputs/exact-motif.pdb', laproteina_contig_string: '5/A1/2/A3/5', laproteina_segment_order: 'A', laproteina_checkpoint_dir: '/retained/custom' });
+        expect(latest(mocks.submit).params).not.toHaveProperty('laproteina_motif_inspection');
+    } finally { get.mockRestore(); post.mockRestore(); vi.unstubAllGlobals(); }
+});
+
+it('shares job intent only with untouched engine drafts and preserves explicit native false/paths on replay', async () => {
+    const draft = vi.fn();
+    await render({ onDraftChange: draft });
+    await edit('Job name', 'Shared name'); await edit('Number of designs', '6'); await edit('Engine', 'disco');
+    expect(control('Job name').value).toBe('Shared name'); expect(control('Requested design count').value).toBe('6');
+    await edit('Job name', ''); await edit('Engine', 'rfd3'); await edit('Job name', 'Changed RFD3'); await edit('Engine', 'disco');
+    expect(control('Job name').value).toBe('');
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    saved.de_novo_drafts['de_novo_design:disco:unconditional'].disco_checkpoint_path = '/retained/checkpoint.pt';
+    saved.de_novo_drafts['de_novo_design:disco:unconditional'].disco_use_deepspeed_evo_attention = false;
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved }); await edit('Job name', 'Native replay'); await click('Generate candidates');
+    expect(latest(mocks.submit).params).toMatchObject({ disco_checkpoint_path: '/retained/checkpoint.pt', disco_use_deepspeed_evo_attention: false });
 });

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ProteinDesignSections, ProteinDesignRun, themedPanelStyle, themedInsetStyle, themedMutedInsetStyle, themedSelectedStyle, themedInputStyle } from './ProteinDesignWorkflow';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides } from './FampnnAnalysisControls';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -46,36 +47,6 @@ type SourcePredictor = 'boltz' | 'all';
 type ChainType = ProteinLocalChainType;
 type ReviewPauseStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
 
-const themedPanelStyle: CSSProperties = {
-    backgroundColor: 'var(--bg-secondary)',
-    borderColor: 'var(--border-primary)',
-    color: 'var(--text-primary)',
-};
-
-const themedInsetStyle: CSSProperties = {
-    backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 58%, transparent)',
-    borderColor: 'var(--border-primary)',
-    color: 'var(--text-primary)',
-};
-
-const themedMutedInsetStyle: CSSProperties = {
-    backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 42%, transparent)',
-    borderColor: 'var(--border-primary)',
-    color: 'var(--text-secondary)',
-};
-
-const themedSelectedStyle = (accent: string): CSSProperties => ({
-    backgroundColor: `color-mix(in srgb, ${accent} 14%, transparent)`,
-    borderColor: `color-mix(in srgb, ${accent} 72%, var(--border-primary))`,
-    color: 'var(--text-primary)',
-});
-
-const themedInputStyle: CSSProperties = {
-    backgroundColor: 'var(--bg-tertiary)',
-    borderColor: 'var(--border-primary)',
-    color: 'var(--text-primary)',
-    caretColor: 'var(--accent-primary)',
-};
 
 const getChainTypeAccent = (type: ChainType): string => {
     switch (type) {
@@ -1134,11 +1105,7 @@ export function ProteinLocalRedesignTemplate({
                 <button type="button" onClick={onBack} className="rounded-lg border px-3 py-2 text-sm" style={themedInsetStyle}>Back</button>
                 <h1 className="text-2xl font-semibold">Redesign structure</h1>
             </header>}
-            <nav aria-label="Redesign sections" className="flex flex-wrap gap-2">
-                {['Source and regions', 'Sampling', 'Optional next steps'].map((item) => <button key={item} type="button"
-                    aria-pressed={section === item} onClick={() => setSection(item)} className="rounded-lg border px-3 py-2 text-sm"
-                    style={section === item ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}>{item}</button>)}
-            </nav>
+            <ProteinDesignSections label="Redesign sections" sections={['Source and regions', 'Sampling', 'Optional next steps']} active={section} onChange={setSection} />
             {(error || structureError) && (
                 <div
                     className="rounded-xl border px-4 py-3 text-sm"
@@ -2167,46 +2134,16 @@ export function ProteinLocalRedesignTemplate({
                                 </dd>
                             </div>
                         </dl>
-                    </details>                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Job Name</div>
-                                        <input
-                                            aria-label="Job name"
-                                            value={jobName}
-                                            onChange={(event) => setJobName(event.target.value)}
-                                            className="mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                            style={themedInputStyle}
-                                            placeholder="tDT_selectivity_redesign"
-                                        />
-                                    </div>
-
-            {runDetails}
-            <ExecutionTargetPicker workflowRequest={workflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
-            <div className="flex justify-end gap-3">
-                {!embedded && <button
-                    onClick={onBack}
-                    className="rounded-lg border px-5 py-3 text-sm font-medium transition-colors"
-                    style={themedInsetStyle}
-                >
-                    Cancel
-                </button>}
-                <button
-                    onClick={() => void handleSubmit()}
-                    disabled={(effectiveSeqMethod === 'fampnn' && Boolean(fampnnError)) || submitMutation.isPending || (
-                        isNativeLocalRedesign && (
-                            gpuCatalogLoading
-                            || gpuCatalogError
-                            || effectiveNativePinnedGpu === null
-                            || !gpuOptions.some((gpu) => gpu.index === effectiveNativePinnedGpu)
-                        )
-                    )}
-                    className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    style={themedSelectedStyle('var(--accent-primary)')}
-                >
-                    {submitMutation.isPending
-                        ? 'Submitting…'
-                        : isNativeLocalRedesign ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'}
-                </button>
-            </div>
+                    </details>
+            <ProteinDesignRun jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
+                onSubmit={() => void handleSubmit()} onCancel={embedded ? undefined : onBack}
+                disabled={(effectiveSeqMethod === 'fampnn' && Boolean(fampnnError)) || (isNativeLocalRedesign && (
+                    gpuCatalogLoading || Boolean(gpuCatalogError) || effectiveNativePinnedGpu === null
+                    || !gpuOptions.some(gpu => gpu.index === effectiveNativePinnedGpu)))}
+                submitLabel={isNativeLocalRedesign ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'}>
+                {runDetails}
+                <ExecutionTargetPicker workflowRequest={workflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
+            </ProteinDesignRun>
         </div>
     );
 }
