@@ -5962,6 +5962,9 @@ class OperatorReportListenerV1(BaseModel):
 
     host: str | None
     port: StrictInt | None
+    owner_pid: StrictInt | None = None
+    owner_cgroup_sha256: str | None = None
+    socket_inode: StrictInt | None = None
 
 
 class OperatorReportReleaseBindingV1(BaseModel):
