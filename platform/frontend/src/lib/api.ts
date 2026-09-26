@@ -457,6 +457,10 @@ export interface CatalogProvisionSelection {
     kind: 'model' | 'image';
     model_id: string;
 }
+export interface WorkflowPackSelection {
+    kind: 'workflow_pack';
+    workflow_id: 'structure_prediction';
+}
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
     intent: MolecularDynamicsLaunchIntent;
@@ -466,13 +470,13 @@ export type NativeWorkflowProvisionRequest =
     | { workflow_type: 'conformational_mapping'; request: CmSubmitRequest }
     | { workflow_type: 'molecular_dynamics'; request: MdLaunchPreviewRequest };
 export type WorkflowProvisionRequest = Partial<Job> | NativeWorkflowProvisionRequest;
-export type ProvisionSelection = CatalogProvisionSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
+export type ProvisionSelection = CatalogProvisionSelection | WorkflowPackSelection | { kind: 'workflow'; workflow_request: WorkflowProvisionRequest };
 export interface WorkflowRuntimeSelection { kind: 'workflow'; model_id: string; }
 export const provisionSelectionLabel = (selection: ProvisionSelection | CriticalRuntimeSelection | WorkflowRuntimeSelection): string =>
     'workflow_request' in selection
         ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
             : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
-        : selection.model_id;
+        : 'workflow_id' in selection ? selection.workflow_id : selection.model_id;
 
 export interface CachedArtifactReceipt {
     name: string;
@@ -633,8 +637,8 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     return response.data;
 };
 
-export const fetchProvisionCatalog = async (): Promise<CatalogProvisionSelection[]> =>
-    (await api.get<CatalogProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
+export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackSelection>> =>
+    (await api.get<Array<CatalogProvisionSelection | WorkflowPackSelection>>('/api/execution-targets/provision/catalog')).data;
 
 export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
     (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;

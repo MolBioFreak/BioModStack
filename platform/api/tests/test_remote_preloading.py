@@ -97,7 +97,7 @@ def test_prewarm_plan_rejects_invocation_source_before_assets(tmp_path, monkeypa
     def forbidden(*args, **kwargs):
         pytest.fail('Source mismatch must fail before dependency or asset work')
     monkeypatch.setattr(cache, 'compile_remote_dependencies', forbidden)
-    monkeypatch.setattr(cache.subprocess, 'run', forbidden)
+    monkeypatch.setattr(cache, '_staged_source_archive', forbidden)
     invocation = replace(saved_invocation(), source_identity=identity)
     with pytest.raises(ValueError, match='source identity'):
         cache._prewarm_plan(SimpleNamespace(model_id='boltz2', mode='predict'),
@@ -511,7 +511,7 @@ async def test_native_controller_authorizes_before_preview_and_reuses_plan_on_ru
         mutation = WorkflowProvisionRequest(**selection.model_dump(), preview_sha256=approved.preview_sha256)
         response = await controller.start(session, 'vast:1', mutation, http_request=request)
     await asyncio.gather(*tuple(controller.tasks.values()))
-    assert len(plans) == 2 and previews[-2] is previews[-1] is plans[-1]
+    assert len(plans) == len(previews) == 2 and previews[-1] is plans[-1]
     async with store() as session:
         target = await session.get(ExecutionTarget, 'vast:1')
         assert target.provider_metadata['preload']['phase'] == 'failed'
@@ -520,7 +520,7 @@ async def test_native_controller_authorizes_before_preview_and_reuses_plan_on_ru
         response = await controller.start(session, 'vast:1', mutation,
             retry_operation_id=response.preload.operation_id, http_request=request)
     await asyncio.gather(*tuple(controller.tasks.values()))
-    assert len(plans) == 3 and previews[-2] is previews[-1] is plans[-1]
+    assert len(plans) == len(previews) == 3 and previews[-1] is plans[-1]
     async with store() as session:
         stale = mutation.model_copy(update={'preview_sha256': 'e'*64})
         with pytest.raises(ExecutionTargetError, match='preview changed'):

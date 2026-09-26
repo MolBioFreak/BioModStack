@@ -17,10 +17,10 @@ from sqlalchemy import func, select, update
 from database import ExecutionTarget, Job
 from .bundle import current_source_identity
 from .contracts import (PreloadProgress, ProvisionRequest, ProvisionSelection, CachedArtifactReceipt,
-    WorkflowProvisionRequest, WorkflowProvisionSelection)
+    WorkflowProvisionRequest, WorkflowProvisionSelection, WorkflowPackRequest, WorkflowPackSelection)
 from .progress import PRELOAD_ACTIVE_PHASES, preload_idle_clause
 from .targets import (ExecutionTargetError, INVENTORY_MAX_AGE_SECONDS, get_target,
-    inventory_fresh, _target_response, _has_nonterminal_jobs)
+    inventory_fresh, _target_response, _has_preparation_conflicts)
 from .transport import RemoteConnection, RemoteHelperError
 
 
@@ -72,6 +72,17 @@ def compile_recipe(job, *, native_invocations=None) -> list[str]:
 
 def endpoint(target):
     return (target.host, target.port, target.username, target.remote_root, target.host_key_sha256)
+
+
+def entry_source_identities(entries):
+    """Cheap mutation check for the start-approved, immutable artifact plan.
+
+    This does not certify bytes: hashes come from preview and the existing worker
+    ingest/probe owners still verify those exact hashes before activation.
+    """
+    return tuple((info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                  info.st_mtime_ns, info.st_ctime_ns)
+                 for entry in entries for info in (entry.source.lstat(),))
 
 
 @dataclass(frozen=True)
@@ -188,26 +199,36 @@ class PreloadController:
                         or previous.get("recovery_required")):
                     raise ExecutionTargetError("Provision recovery requires confirmed remote quiescence before retry")
             if (not target.active or target.state != "ready" or not inventory_fresh(target)
-                    or target.leased_job_id or await _has_nonterminal_jobs(session, target_id)):
+                    or target.leased_job_id or await _has_preparation_conflicts(session, target_id)):
                 raise ExecutionTargetError("Preload requires an idle attached worker with current inventory")
             target = TargetSnapshot.capture(target)
-            independent = isinstance(request, (ProvisionRequest, WorkflowProvisionRequest))
-            selection = (WorkflowProvisionSelection(kind="workflow", workflow_request=request.workflow_request)
+            independent = isinstance(request, (ProvisionRequest, WorkflowProvisionRequest, WorkflowPackRequest))
+            selection = (WorkflowPackSelection(kind="workflow_pack", workflow_id=request.workflow_id)
+                if isinstance(request, WorkflowPackRequest) else
+                WorkflowProvisionSelection(kind="workflow", workflow_request=request.workflow_request)
                 if isinstance(request, WorkflowProvisionRequest) else
-                ProvisionSelection(kind=request.kind, model_id=request.model_id) if independent else None)
+                ProvisionSelection(kind=request.kind, model_id=request.model_id)
+                if isinstance(request, ProvisionRequest) else None)
+            admitted_plan = None
             snapshot, command = None, None
             native_invocation = None
             compiled_plan = None
             if independent:
                 compiled_plan = await self._compile_native(selection, http_request, session)
                 await session.rollback()
-                preview, _ = await self._preview(selection, target, compiled_plan=compiled_plan)
+                revision, tree = await asyncio.to_thread(current_source_identity)
+                preview, entries = await self._preview(selection, target, compiled_plan=compiled_plan)
                 if preview.preview_sha256 != request.preview_sha256:
                     raise ExecutionTargetError("Provision preview changed; preview again")
                 if preview.blockers:
                     raise ExecutionTargetError("Provision preview has unresolved dependency blockers")
                 digest = preview.preview_sha256
-                revision, tree = await asyncio.to_thread(current_source_identity)
+                if await asyncio.to_thread(current_source_identity) != (revision, tree):
+                    raise ExecutionTargetError("Source identity changed during preload")
+                # Retain this exact admitted plan, not a third full hash scan in
+                # _run. Mutation checks and worker byte verification remain.
+                entries = tuple(entries)
+                admitted_plan = (digest, entries, await asyncio.to_thread(entry_source_identities, entries))
             else:
                 job = await session.get(Job, request.job_id)
                 if job is None:
@@ -254,7 +275,8 @@ class PreloadController:
             expected_endpoint = endpoint(target)
             self.tasks[operation_id] = asyncio.create_task(self._run(target_id, progress, snapshot,
                 command, connection, expected_endpoint,
-                native_invocation=native_invocation, compiled_plan=compiled_plan), name=f"preload-{operation_id}")
+                native_invocation=native_invocation, compiled_plan=compiled_plan,
+                admitted_plan=admitted_plan), name=f"preload-{operation_id}")
             response = _target_response(await get_target(session, target_id))
             await session.rollback()
             return response
@@ -293,7 +315,7 @@ class PreloadController:
             raise ExecutionTargetError("Preload operation was superseded")
 
     async def _run(self, target_id, progress, snapshot, command, connection, expected_endpoint,
-                   *, native_invocation=None, compiled_plan=None):
+                   *, native_invocation=None, compiled_plan=None, admitted_plan=None):
         remote_started = False
         try:
             connection = replace(connection, provision_operation_id=progress.operation_id)
@@ -340,15 +362,34 @@ class PreloadController:
                     current_target = await get_target(session, target_id)
                     target = TargetSnapshot.capture(current_target)
                     manifests = saved_manifests(current_target)
-                preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
-                if preview.preview_sha256 != progress.request_sha256:
+                if admitted_plan is None:
+                    preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
+                    digest = preview.preview_sha256
+                else:
+                    digest, entries, source_identities = admitted_plan
+                    try:
+                        unchanged = await asyncio.to_thread(entry_source_identities, entries) == source_identities
+                    except OSError:
+                        unchanged = False
+                    if not unchanged:
+                        # Metadata is only an invalidation hint, never a new
+                        # refusal gate (a same-byte touch must remain valid).
+                        preview, entries = await self._preview(progress.selection, target, compiled_plan=compiled_plan)
+                        digest = preview.preview_sha256
+                if digest != progress.request_sha256:
                     raise ExecutionTargetError("Provision preview changed; preview again")
                 remote_started = True
                 boot = (await helper_call(connection, {'action': 'boot'}, check_fence))['boot_id']
                 manifest = manifest_for(progress.selection, entries, (progress.source_revision, progress.source_tree))
                 await helper_call(connection, dict(action='admit', manifest=manifest, boot_id=boot), check_fence)
-                artifacts = await provision_cache(connection=connection, entries=entries,
-                    operation_id=progress.operation_id, progress=publish, check_fence=check_fence)
+                pack_options = (dict(selection=progress.selection,
+                    source_identity=(progress.source_revision, progress.source_tree),
+                    backend=(target.capabilities or {}).get('critical_runtime_binding', {})
+                        .get('environment', {}).get('BMS_CONTAINER_BACKEND'))
+                    if progress.selection.kind == 'workflow_pack' else {})
+                prepared = await provision_cache(connection=connection, entries=entries,
+                    operation_id=progress.operation_id, progress=publish, check_fence=check_fence,
+                    **pack_options)
                 await activate_release(connection, manifest, check_fence, publish, boot)
                 manifests = [m for m in manifests if m['selection'] != manifest['selection']] + [manifest]
                 observed = await observe_releases(connection, manifests, check_fence)
@@ -364,7 +405,9 @@ class PreloadController:
                 managed = dict(manifests=manifests, observation=observed.model_dump(mode='json'),
                                endpoint_sha256=endpoint_digest(target))
                 receipt = dict(source_revision=progress.source_revision, source_tree=progress.source_tree,
-                    artifacts=artifacts)
+                    artifacts=prepared['artifacts'] if pack_options else prepared)
+                if pack_options:
+                    receipt['preparation'] = prepared['preparation']
             else:
                 prewarm = self.prewarm
                 if prewarm is None:
@@ -386,6 +429,11 @@ class PreloadController:
             progress.message = "Source and cacheable runtime downloads verified; launch still prepares support Python and verifies scientific readiness"
             if progress.selection is not None:
                 progress.message = "Selected managed assets activated and inventory refreshed; scientific readiness remains unverified"
+            if preparation := receipt.get('preparation'):
+                images = ('runtime images prepared' if preparation['images'] == 'ready' else
+                    'shared image preparation deferred: attached backend is unknown')
+                progress.message = (f"Workflow assets activated; source cached and {preparation['weight_layouts']} "
+                    f"shared weight layouts prepared; {images}; scientific readiness remains unverified")
             progress.updated_at = datetime.utcnow()
             async with self.session_factory() as session:
                 await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint, managed=managed)
@@ -486,7 +534,7 @@ class PreloadController:
             manifests = deepcopy(saved_manifests(target))
             operation = (target.provider_metadata or {}).get('preload', {}).get('operation_id')
             if (not target.active or target.state != 'ready' or not inventory_fresh(target)
-                    or target.leased_job_id or await _has_nonterminal_jobs(session, target_id)
+                    or target.leased_job_id or await _has_preparation_conflicts(session, target_id)
                     or (target.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
                 raise ExecutionTargetError('Inventory refresh requires an idle attached worker with current provider inventory')
             target = TargetSnapshot.capture(target)

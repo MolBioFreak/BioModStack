@@ -8,7 +8,7 @@ from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
     PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
-    WorkflowProvisionSelection, WorkflowProvisionRequest,
+    WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
     HFAssetLinkStatus,
@@ -122,17 +122,18 @@ async def preload_execution_target(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/provision/catalog", response_model=list[ProvisionSelection])
+@router.get("/provision/catalog", response_model=list[ProvisionSelection | WorkflowPackSelection])
 async def provision_catalog():
     from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry
     return [ProvisionSelection(kind=kind, model_id=model_id)
         for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
         for model_id in sorted(models)
-        if get_registry().get_model(model_id) is not None]
+        if get_registry().get_model(model_id) is not None] + [
+            WorkflowPackSelection(kind="workflow_pack", workflow_id="structure_prediction")]
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)
-async def preview_provision(execution_target_id: str, request: ProvisionSelection | WorkflowProvisionSelection,
+async def preview_provision(execution_target_id: str, request: ProvisionSelection | WorkflowProvisionSelection | WorkflowPackSelection,
                             http_request: Request, session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, "preload_controller", None)
     if controller is None:
@@ -144,7 +145,7 @@ async def preview_provision(execution_target_id: str, request: ProvisionSelectio
 
 
 @router.post("/{execution_target_id}/provision", response_model=ExecutionTargetResponse, status_code=202)
-async def provision_execution_target(execution_target_id: str, request: ProvisionRequest | WorkflowProvisionRequest,
+async def provision_execution_target(execution_target_id: str, request: ProvisionRequest | WorkflowProvisionRequest | WorkflowPackRequest,
                                       http_request: Request, session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, "preload_controller", None)
     if controller is None:
@@ -169,7 +170,7 @@ async def cancel_provision(execution_target_id: str, operation_id: str, http_req
 
 @router.post("/{execution_target_id}/provision/{operation_id}/retry", response_model=ExecutionTargetResponse, status_code=202)
 async def retry_provision(execution_target_id: str, operation_id: str,
-                          request: ProvisionRequest | WorkflowProvisionRequest, http_request: Request,
+                          request: ProvisionRequest | WorkflowProvisionRequest | WorkflowPackRequest, http_request: Request,
                           session: AsyncSession = Depends(get_session)):
     controller = getattr(http_request.app.state, "preload_controller", None)
     if controller is None:

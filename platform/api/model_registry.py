@@ -176,6 +176,54 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
     return tuple(dict.fromkeys(refs))
 
 
+def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
+    """Input-free consumer layouts; preparation never selects scientific settings.
+
+    ESMFold fast/full share the managed tree (including its HF assets). Protenix
+    uses native member metadata for ordinary, anchored and template consumers.
+    FrustraMPNN checkpoints are image-owned and add no shared weight members.
+    """
+    if workflow_id != 'structure_prediction':
+        raise ValueError('Workflow pack binding is not available')
+    boltz, _ = native_checkpoint_dependencies('RunBoltz', {})
+    native_boltz = tuple(d.relative_path for d in boltz)
+    groups = {'boltz': ('boltz',), 'fold_cp': ('boltz',),
+              'boltz_native': native_boltz,
+              'esmfold2_fast': ('esmfold2',), 'esmfold2_full': ('esmfold2',)}
+    for name, process, settings in (
+        ('protenix', 'ProtenixPredict', {}),
+        ('protenix_anchored', 'ProtenixFromComplex', {'protenix_anchor_target': True}),
+        ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
+    ):
+        dependencies, _ = native_checkpoint_dependencies(process, settings)
+        members = tuple(d.relative_path for d in dependencies)
+        groups[name] = members
+        groups['boltz_' + name] = ('boltz', *members)
+        groups['boltz_native_' + name] = (*native_boltz, *members)
+    return groups
+
+
+def workflow_pack_dependencies(workflow_id: str):
+    """All supported Structure assets, not a synthetic scientific request.
+
+    Reuse public predictor/image bindings and the trusted embedded FrustraMPNN
+    binding. Boltz API is an external service: no image, credentials or MSA
+    acquisition belongs to this pack. Shared references are deduplicated before
+    filesystem inventory, not after hashing the same tree for each predictor.
+    """
+    workflow_pack_weight_groups(workflow_id)  # closed supported workflow identity
+    refs = []
+    for model_id in ('boltz2', 'protenix', 'esmfold2'):
+        refs.extend(ref for ref in model_runtime_dependencies(model_id)
+                    if not (model_id == 'protenix' and ref.kind == 'weights'))
+    refs.extend(model_image_dependencies('boltz_cp_experimental'))
+    refs.extend(model_runtime_dependencies('frustrampnn', internal=True))
+    # The template-capable set contains the ordinary and anchored members.
+    members, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
+    refs.extend(members)
+    return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
+
+
 def _native_metadata_bytes(root, relative):
     """Read one bounded managed text member without following links or SDK imports."""
     import stat

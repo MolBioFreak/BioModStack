@@ -18,7 +18,7 @@ from pathlib import Path
 from .shared_runtime_images import (
     SharedRuntimeImageError as Error, _absolute, _digest, _directory, _file,
     _check_file, _check_directory, _hash, _same, _identity, _member,
-    _DIRECTORY_FLAGS, _FILE_FLAGS, verify_image,
+    _DIRECTORY_FLAGS, _FILE_FLAGS,
 )
 from . import runtime_image_lifecycle as lifecycle
 
@@ -310,8 +310,12 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
                 if row["kind"] in {"file", "directory"}:
                     row["mode"] = (row["mode"] & ~0o222) | (
                         0o400 if row["kind"] == "file" else 0o500)
-            if verify_image(lifecycle.object_path(root, digest), digest) != identity:
-                raise Error("source image changed during extraction")
+            # The lifecycle caller already verified these exact bytes. The
+            # retained FD and full no-follow inode/ctime check reject changes
+            # during extraction without a second whole-SIF read.
+            image = lifecycle.object_path(root, digest)
+            with _file(image) as (_, image_parent, before):
+                _check_leased_source(image, image_fd, image_parent, before, identity)
             manifest = {"schema_version": 1, "source": identity, "original": original, "frozen": frozen}
             lifecycle.atomic_write(stage / "manifest.json", json.dumps(manifest, sort_keys=True))
             with _file(stage / "manifest.json") as (fd, _, _):
@@ -384,6 +388,76 @@ def _clone(source, destination, manifest):
             os.chmod(destination if rel == "." else destination / rel, row["mode"], follow_symlinks=False)
 
 
+def sif_partition_offset(fd, read=None):
+    """Shared SIF metadata reader for preparation, execution and inspection."""
+    import subprocess
+    command = ['apptainer', 'sif', 'list', f'/proc/self/fd/{fd}']
+    listing = (read(command) if read is not None else
+               subprocess.check_output(command, text=True, pass_fds=(fd,)))
+    rows = [line.split('|') for line in listing.splitlines()
+            if 'FS (Squashfs/*System/amd64)' in line]
+    if len(rows) != 1 or len(rows[0]) < 4:
+        raise ValueError('image has no unique x86_64 Squashfs system partition')
+    offset = rows[0][3].strip().split('-')[0].strip()
+    if not offset.isdigit():
+        raise ValueError('invalid SIF system partition offset')
+    return offset
+
+
+def extract_sif(image_fd, destination):
+    """Extract data only; shared by preload and the execution-view owner.
+
+    No engine or image program is started. Children are synchronously reaped by
+    subprocess before the preparation lease can be released.
+    """
+    import subprocess
+    import sys
+    source = f'/proc/self/fd/{image_fd}'
+    offset = sif_partition_offset(image_fd)
+    subprocess.run(['unsquashfs', '-no-progress', '-processors', str(parallel_workers()),
+                    '-d', str(destination), '-o', offset, source],
+                   check=True, pass_fds=(image_fd,), stdout=sys.stderr)
+
+
+def _check_leased_source(image, image_fd, image_parent, before, identity):
+    _check_file(image, image_fd, image_parent, before)
+    # The lifecycle owner already hashed this immutable generation. Recheck
+    # exact inode/mode/ctime rather than rereading it within the same operation.
+    if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
+            or stat.S_IMODE(os.fstat(image_parent).st_mode) != 0o500
+            or (before.st_dev, before.st_ino, before.st_size,
+                before.st_mtime_ns, before.st_ctime_ns) !=
+               (identity['device'], identity['inode'], identity['size'],
+                identity['mtime_ns'], identity['ctime_ns'])):
+        raise Error('executing image identity changed')
+
+
+def prepare_image(store_root, digest, extract=None, *, owner=None, expected_size=None):
+    """Prepare the reusable rootfs only; no workspace, CoW clone or execution.
+
+    Return {rootfs: Path, image: Path, identity: dict}. The caller owns process
+    cancellation/quiescence as for other cache operations. Abrupt process death
+    retains the durable lease for explicit recovery, never time-based release.
+    """
+    root, digest = _absolute(store_root), _digest(digest)
+    owner = owner or 'prepare-image:' + uuid.uuid4().hex
+    image = lifecycle.object_path(root, digest)
+    token, identities = lifecycle.acquire_lease(root, [digest], owner=owner)
+    identity = identities[digest]
+    try:
+        if expected_size is not None and identity['size'] != expected_size:
+            raise Error('runtime_image_size_mismatch')
+        with _file(image) as (image_fd, image_parent, before):
+            _check_leased_source(image, image_fd, image_parent, before, identity)
+            with lifecycle.transaction(root):
+                derived, _ = _derive(root, digest, image_fd, identity,
+                                     extract if extract is not None else extract_sif)
+            _check_leased_source(image, image_fd, image_parent, before, identity)
+            return {'rootfs': derived / 'rootfs', 'image': image, 'identity': identity}
+    finally:
+        lifecycle.release_lease(root, token, owner=owner)
+
+
 @contextmanager
 def private_image_view(store_root, digest, workspace_root, extract):
     """Yield {rootfs, image, image_fd, identity}; retain source FD and lease.
@@ -402,17 +476,7 @@ def private_image_view(store_root, digest, workspace_root, extract):
     try:
         with _file(image) as (image_fd, image_parent, before):
             def check_source():
-                _check_file(image, image_fd, image_parent, before)
-                # acquire_lease already hashed this exact immutable generation.
-                # ctime catches writes even if bytes/mtime are restored. Never
-                # reuse this observation across launches or persist a new cache.
-                if (stat.S_IMODE(before.st_mode) != 0o400 or before.st_nlink != 1
-                        or stat.S_IMODE(os.fstat(image_parent).st_mode) != 0o500
-                        or (before.st_dev, before.st_ino, before.st_size,
-                            before.st_mtime_ns, before.st_ctime_ns) !=
-                           (identity['device'], identity['inode'], identity['size'],
-                            identity['mtime_ns'], identity['ctime_ns'])):
-                    raise Error("executing image identity changed")
+                _check_leased_source(image, image_fd, image_parent, before, identity)
             check_source()
             verification = {}
             with lifecycle.transaction(root):

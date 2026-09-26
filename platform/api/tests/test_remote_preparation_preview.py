@@ -85,7 +85,7 @@ async def test_scoped_image_catalog_is_not_composed_model_closure(assets, monkey
         assert entries[0].remote_destination == 'containers/' + image
         blocked, entries = cache.independent_preview(ProvisionSelection(kind='model', model_id=model), target)
         assert blocked.blockers[0].startswith('binding_unavailable:') and not entries
-    assert not any(r['model_id'] in {'diffdock', 'oligo_design', 'antibody_child'} for r in catalog)
+    assert not any(r.get('model_id') in {'diffdock', 'oligo_design', 'antibody_child'} for r in catalog)
 
 
 @pytest.mark.asyncio

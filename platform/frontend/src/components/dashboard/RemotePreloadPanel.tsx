@@ -13,6 +13,9 @@ interface Props {
 /** Cache preparation is operator initiated; polling never sends a POST. */
 export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   const [jobId, setJobId] = useState('');
+  // A closed optional menu must not fetch catalogs/inventory for every worker.
+  // Retain the chooser after first opening so collapsing preserves its draft.
+  const [preparationOpened, setPreparationOpened] = useState(false);
   const queryClient = useQueryClient();
   const mutationKey = ['remote-preload', target.id];
   const activePreloads = useIsMutating({ mutationKey });
@@ -34,12 +37,12 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     mutation.mutate(jobId);
   }
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
-    <details>
+    <details onToggle={event => { if (event.currentTarget.open) setPreparationOpened(true); }}>
       <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
         Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase}` : ''}</span>
       </summary>
       <div className="mt-3 space-y-3">
-    <IndependentProvisionPanel target={target} onChanged={onChanged} />
+    {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} />}
     <h4 className="font-medium">Preload source and runtime files</h4>
     <p className="text-xs text-[var(--text-muted)]">Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.</p>
     <label className="block text-sm">Saved Job recipe

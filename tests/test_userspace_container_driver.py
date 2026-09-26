@@ -14,6 +14,11 @@ sys.modules[spec.name] = driver
 spec.loader.exec_module(driver)
 
 
+def test_preparation_and_execution_share_the_sif_extractor():
+    assert driver.extract_sif is driver.views.extract_sif
+    assert driver.sif_partition_offset is driver.views.sif_partition_offset
+
+
 def test_execution_flags_preserve_scientific_arguments(tmp_path):
     value = driver.parse_exec(['--nv', '--writable-tmpfs', '--cleanenv', '--no-home',
         '--bind', f'{tmp_path}:/bms/input:ro', '--env', 'CUDA_VISIBLE_DEVICES=0,1,OMP_NUM_THREADS=2',

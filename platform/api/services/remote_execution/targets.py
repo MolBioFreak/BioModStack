@@ -292,6 +292,27 @@ async def _has_nonterminal_jobs(session: AsyncSession, execution_target_id: str)
     return job_id is not None
 
 
+async def _has_preparation_conflicts(session: AsyncSession, execution_target_id: str) -> bool:
+    """Preparation may coexist with queued work, never with an owned attempt.
+
+    Keep deactivation's broad nonterminal protection separate. Pausing a pristine
+    queued Job does not give it worker ownership, and preparation must not change
+    that pause or the Job's existing launch approval.
+    """
+    unclaimed = (
+        (Job.status == "queued") & (Job.queue_status == "queued")
+        & Job.started_at.is_(None) & Job.nextflow_run_id.is_(None)
+        & Job.remote_attempt_id.is_(None) & Job.assigned_gpu.is_(None)
+        & func.coalesce(Job.remote_state, "").in_(("", "queued", "waiting_target",
+            "waiting_remote_worker", "waiting_remote_capacity", "waiting_remote_gpu", "waiting_remote_telemetry"))
+        & Job.provenance["remote_execution_assignment"].as_string().is_(None)
+    )
+    return await session.scalar(select(Job.id).where(
+        Job.execution_target_id == execution_target_id,
+        blocking_job_clause(), ~unclaimed,
+    ).limit(1)) is not None
+
+
 async def refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInventoryResponse:
     # Fetch and publication are one ordered operation shared by Discover/attach/lifespan.
     async with _inventory_refresh_lock:

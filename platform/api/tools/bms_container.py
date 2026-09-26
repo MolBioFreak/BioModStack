@@ -156,27 +156,9 @@ def canonical_image(value, store):
     return path, relative.parts[2]
 
 
-def sif_partition_offset(fd, read=None):
-    command = ['apptainer', 'sif', 'list', f'/proc/self/fd/{fd}']
-    listing = (read(command) if read is not None else
-               subprocess.check_output(command, text=True, pass_fds=(fd,)))
-    rows = [line.split('|') for line in listing.splitlines() if 'FS (Squashfs/*System/amd64)' in line]
-    if len(rows) != 1 or len(rows[0]) < 4:
-        raise ValueError('image has no unique x86_64 Squashfs system partition')
-    offset = rows[0][3].strip().split('-')[0].strip()
-    if not offset.isdigit():
-        raise ValueError('invalid SIF system partition offset')
-    return offset
-
-
-def extract_sif(fd, destination):
-    source = f'/proc/self/fd/{fd}'
-    offset = sif_partition_offset(fd)
-    # An image extraction is the slowest single pass of a first execution. Use the
-    # host's own share of cores (80%) instead of a hardcoded 2.
-    workers = str(views.parallel_workers())
-    subprocess.run(['unsquashfs', '-no-progress', '-processors', workers, '-d', str(destination), '-o', offset, source],
-                   check=True, pass_fds=(fd,), stdout=sys.stderr)
+# One extraction/partition implementation serves preload and normal execution.
+sif_partition_offset = views.sif_partition_offset
+extract_sif = views.extract_sif
 
 
 # Finite inspection policy, independent of image size and scientific settings.

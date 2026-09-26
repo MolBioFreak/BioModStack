@@ -21,7 +21,7 @@ vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLoc
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }];
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
 const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
@@ -59,7 +59,61 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
+it('prepares the entire workflow from one explicit click using its fresh digest, without a Job', async () => {
+  await render();
+  await select('Preparation workflow', 'structure_prediction');
+  expect(posts).toEqual([]);
+  expect(button('Prepare entire workflow')).toBeTruthy();
+  expect(container.querySelector('a[href*="template=structure_prediction"]')).toBeNull();
+  await click('Prepare entire workflow', true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'workflow_pack', workflow_id: 'structure_prediction' } },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) } },
+  ]);
+  expect(button('Prepare entire workflow').disabled).toBe(true);
+  await act(async () => { await client.invalidateQueries(); await settle(); });
+  expect(posts).toHaveLength(2);
+});
+
+it('keeps whole-workflow missing-asset details visible without starting an incomplete pack', async () => {
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  const pack = { kind: 'workflow_pack', workflow_id: 'structure_prediction' } as const;
+  vi.spyOn(api, 'post').mockResolvedValueOnce(response({ ...preview(pack), blockers: ['host_asset_unavailable: weights/boltz'], estimates_complete: false }));
+  await click('Prepare entire workflow');
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.textContent).toContain('host_asset_unavailable: weights/boltz');
+  expect(container.textContent).toContain('Dependency bytes unknown');
+  expect(posts).toEqual([]);
+});
+
+it.each(['selection', 'worker'])('does not auto-start a late pack preview after changing the %s', async change => {
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  let finish!: (value: ReturnType<typeof response>) => void;
+  const pending = new Promise<ReturnType<typeof response>>(resolve => { finish = resolve; });
+  const post = vi.spyOn(api, 'post').mockReturnValueOnce(pending);
+  await click('Prepare entire workflow');
+  if (change === 'selection') await select('Preparation workflow', 'antibody_denovo');
+  else { target = { ...target, id: 'vast:456', provider_instance_id: '456' }; await render(); }
+  await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction' }))); await settle(); });
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(posts).toEqual([]);
+});
+
+it('retries whole-workflow preparation explicitly with a fresh preview after an error', async () => {
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('Preview failed'));
+  await click('Prepare entire workflow');
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('Preview failed');
+  expect(posts).toEqual([]);
+  await click('Prepare entire workflow');
+  expect(posts.map(post => post.url)).toEqual([
+    '/api/execution-targets/vast%3A123/provision/preview', '/api/execution-targets/vast%3A123/provision',
+  ]);
+});
+
 it('keeps optional preparation closed on load and polling, retaining a form choice when reopened', async () => {
+  const get = vi.spyOn(api, 'get');
   const mount = async () => { await act(async () => {
     root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[]} onChanged={changed} /></QueryClientProvider>);
     await settle();
@@ -70,8 +124,11 @@ it('keeps optional preparation closed on load and polling, retaining a form choi
   expect(details.querySelector('summary')?.textContent).toContain('optional dependency downloads');
   await mount();
   expect(details.open).toBe(false);
+  expect(container.querySelector('[aria-label="Independent worker provisioning"]')).toBeNull();
+  expect(get).not.toHaveBeenCalled();
   await act(async () => { details.querySelector('summary')!.click(); await settle(); });
   await select('Provision model', 'protenix');
+  expect(get.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(['/api/models', '/api/templates', '/api/execution-targets/provision/catalog']));
   await act(async () => { details.querySelector('summary')!.click(); await settle(); });
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(details.open).toBe(false);

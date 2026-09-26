@@ -63,11 +63,9 @@ Ubuntu 22.04's default Python 3.10 is below the worker's Python 3.11 floor. On o
 
 Vast's [edit-template documentation](https://docs.vast.ai/api-reference/templates/edit-template) specifies the 4048-character On-start limit. The live API also enforces a 4096-character `env` limit. Check both **after** preserving the existing environment. VM environment variables may be exported or written into `/etc/environment`; the bootstrap reads only its three closed keys without executing that file. A configuration save must preserve existing VM image, filters, SSH options, resource choices and README. Despite documented partial-update behavior, an observed update without `readme` cleared its hash: include the preserved/updated README and verify its receipt explicitly.
 
-The cache helper is the same protocol consumed by `cache.stage_cached_bundle` and `cache.prewarm_cache`. Regular runtime leaves and the immutable source archive use shared content-addressed storage. Warm probes/materializations are batched; destination-dependent support Python remains launch-prepared and explicitly excluded from preload readiness. Inputs, results and credentials are never cache objects. The cache has no automatic eviction or cross-rental persistence promise.
+The cache helper is the same protocol consumed by `cache.stage_cached_bundle` and `cache.prewarm_cache`. Regular runtime leaves and the immutable source archive use shared content-addressed storage. Warm probes/materializations are batched. Managed attachment installs the critical runtime, including support Python and Nextflow; legacy targets without that binding still prepare destination-dependent support Python at launch. Inputs, results and credentials are never cache objects. The cache has no automatic eviction or cross-rental persistence promise.
 
 `POST /api/execution-targets/{id}/preload` accepts the typed body `{ "job_id": "<saved-job-id>" }`. The saved job is a recipe for exact current-source settings; the call does not submit or alter scientific work. Progress is persisted in the execution-target response. A historical recipe bound to a different source is rejected rather than silently upgraded.
-
-Independent preparation uses the existing provision catalog, `POST /api/execution-targets/{id}/provision/preview`, and `POST /api/execution-targets/{id}/provision`. Start binds the returned preview digest. Model/image selections do not need a saved Job; configured workflow selections retain the actual scientific request and select only its dependencies.
 
 ### De Novo Design preparation
 
@@ -77,9 +75,33 @@ This full-family selection includes RFD3, DISCO, La-Proteina, Shape, the existin
 
 The host must have the selected runtime assets available through the existing managed installation owners. The HF broker mirrors their immutable identities rather than selecting a model revision or building an image. Exact BMS workflow source/config travels through the existing source-archive launch/saved-Job preload owner, not a second family manifest. Preparation reports asset installation, not GPU inference acceptance. Missing runtime builds or unexercised model presets remain explicit delivery limitations; this feature adds no scientific readiness gate.
 
-## Known workflow coverage boundary
+Independent preparation uses the existing `/provision/catalog`, `/provision/preview` and `/provision` routes. Image scope selects an image; model scope selects its reviewed asset binding; configured `workflow` scope derives dependencies from the typed scientific request. These remain distinct from an input-free whole-workflow pack.
+
+### Whole Structure workflow preparation
+
+The preload menu offers **Prepare entire workflow** for Structure Prediction. One deliberate click previews the server-owned asset set and starts the existing operation with that fresh preview digest. Opening the menu, polling, and switching selections do not start preparation. A late preview cannot start work on a worker or selection the operator has left.
+
+The shared browser/API request is:
+
+```json
+{"kind":"workflow_pack","workflow_id":"structure_prediction"}
+```
+
+Send it to `/provision/preview`; send the same fields plus the returned `preview_sha256` to `/provision`. This request contains no sequence, Job, arbitrary path, acquisition URL, or scientific configuration. Unsupported workflow identities remain outside this closed pack catalog; their existing configured preparation routes are unchanged.
+
+The pack references the existing Boltz-2, Fold-CP, Protenix V2, ESMFold2 and embedded FrustraMPNN asset bindings. It includes the supported ESMFold variants and Protenix ordinary, anchored and template-capable weight members. Shared assets are inventoried and transferred once; preparing an optional asset does not enable the corresponding scientific stage. FrustraMPNN remains an internal workflow component, not an independently enabled model. Boltz API and input-specific MSA calls are services, not predictor downloads, and are not invoked by preparation.
+
+The runtime-preparation owner reuses the job's source archive, content store, packed-weight acquisition, exact per-consumer shared weight layouts, and backend image derivation. It does not construct a disposable union-only weight tree or per-execution private container view. When the attached backend is unknown, assets and weight layouts still install, and the final status reports image preparation as deferred rather than ready. Backend-specific cold preparation remains separate from native inference and input-dependent compilation; software checks do not establish scientific readiness.
+
+Pristine queued jobs may coexist with preparation. Existing active attempts and leases retain their protection. The existing scheduler waits while preparation is active and may claim an eligible queued job afterward; preparation does not create a Job, change approval or paused state, or implement another dispatch/resume path. Deactivation retains its broader nonterminal-job protection.
+
+This path prepares approved assets already installed on the controller. Missing host assets are reported through the existing managed-setup/acquisition mechanism. A native download URL is not an approved acquisition manifest, and a whole-workflow button does not cure missing upstream acquisition metadata or licensing requirements. Unknown runtime observations remain evidence, not new launch prerequisites.
+
+## Workflow coverage boundary
 
 Remote coverage belongs to the selected native execution plan and its actual process graph, not a blanket model-family label. De Novo RFD3 generation, native redesign, validated region redesign, CAD generation and Shape have selected-plan descriptors and existing remote bundle/result owners. Their installed runtime assets, optional stage combinations and live request-to-result behavior must be qualified separately. A connected descriptor or successful preload is not proof of native execution. Other workflow families retain their existing coverage and admission behavior; this De Novo repair neither certifies them nor adds new refusals.
+
+A pack describes reusable assets, not a new scientific execution route. Structure and complex prediction and Fold-CP retain their existing compiler, stage selection, result publication and remote placement behavior. Other workflow families retain their own configured preparation and execution contracts; the Structure pack does not claim their asset coverage or enable them. Verify actual native local/remote execution separately from metadata, fixture installs, or menu availability.
 
 ## Visible lifecycle
 

@@ -264,6 +264,33 @@ class Cache:
             raise ValueError('runtime_image_size_mismatch')
         return self.image_path(item)
 
+    def prepare_runtime_image(self, value, backend, operation_id):
+        """Warm the backend's shared image representation, never execute it.
+
+        Invoked inside the controller's existing owned preload operation; its
+        process group and cancellation fence also own the extractor children.
+        """
+        item = artifact(value)
+        if item.get('kind') != 'runtime_image':
+            raise ValueError('runtime_image_required')
+        if backend not in {'udocker', 'apptainer'}:
+            raise ValueError('unsupported_container_backend')
+        if str(uuid.UUID(operation_id)) != operation_id:
+            raise ValueError('invalid_operation_identity')
+        if backend == 'apptainer':
+            # Apptainer consumes the canonical SIF directly: no rootfs tooling,
+            # extraction, workspace or CoW filesystem requirement.
+            self.verify_runtime(item)
+            return {**item, 'state': 'ready', 'backend': backend, 'rootfs': None}
+        import importlib
+        authority = runtime_lifecycle()
+        views = importlib.import_module('.runtime_image_views', package=authority.__package__)
+        prepared = views.prepare_image(self.image_store, item['sha256'],
+            owner='preload:' + operation_id + ':image:' + item['sha256'],
+            expected_size=item['size_bytes'])
+        return {**item, 'state': 'ready', 'backend': backend,
+                'rootfs': str(prepared['rootfs'])}
+
     def probe_runtime(self, item):
         # Only absence of the digest DIRECTORY means missing. Incomplete/corrupt
         # published objects must fail, never trigger replacement of runnable bytes.
@@ -1096,6 +1123,8 @@ def main():
         result = {'state': 'ready', 'schema': 'bms.artifact-cache.v1'}
     elif action == 'probe':
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
+    elif action == 'prepare_runtime_image':
+        result = cache.prepare_runtime_image(request['artifact'], request['backend'], request['operation_id'])
     elif action == 'prepare_incoming':
         result = {'source': str(cache.incoming_batch(request['operation_id'], request['batch_id'], create=True))}
     elif action == 'acquire_hf':

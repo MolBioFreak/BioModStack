@@ -7,7 +7,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import {
   fetchModels, fetchTemplates, fetchProvisionCatalog, previewExecutionTargetProvision, provisionExecutionTarget,
   cancelExecutionTargetProvision, retryExecutionTargetProvision,
-  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection,
+  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
   type CachedArtifactReceipt, type ExecutionTarget, type ProvisionSelection,
 } from '../../lib/api';
 
@@ -93,7 +93,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
   const models = useQuery({ queryKey: ['models'], queryFn: () => fetchModels(), retry: false });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => fetchTemplates(), retry: false });
-  const selections = catalog.isError ? [] : (catalog.data ?? []).filter(item => item.kind === kind);
+  const selections = catalog.isError ? [] : (catalog.data ?? []).filter((item): item is CatalogProvisionSelection => item.kind === kind);
   const modelEntries = models.isError ? [] : (models.data?.data ?? []);
   const workflows = [...new Map([
     ...visibleLauncherTemplates(templates.isError ? [] : templates.data?.data ?? [], Boolean((window as Window & { __DEBUG_MODE__?: boolean }).__DEBUG_MODE__)),
@@ -104,12 +104,14 @@ function ProvisionChooser({ target, onChanged }: Props) {
     && selections.some(item => item.model_id === modelId);
   const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
   const familySelection = !catalog.isError && selectedWorkflow?.id === DE_NOVO_PRELOAD_SELECTION.model_id
-    ? catalog.data?.find(item => item.kind === 'model' && item.model_id === selectedWorkflow.id) : undefined;
+    ? catalog.data?.find((item): item is CatalogProvisionSelection => item.kind === 'model' && item.model_id === selectedWorkflow.id) : undefined;
+  const pack = catalog.data?.find((item): item is WorkflowPackSelection =>
+    item.kind === 'workflow_pack' && item.workflow_id === modelId);
   const operation = target.preload;
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
     <h4 className="font-medium">Worker preparation</h4>
-    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Configure a workflow for exact dependencies; model and image scopes prepare only the reviewed assets listed for that scope.</p>
+    <p className="text-xs text-[var(--text-muted)]">{PREPARATION_CAVEAT} Prepare a whole workflow here, or use its configured form for only the selected dependencies. Model and image scopes remain separate.</p>
     {live && <PreparationStatus target={target} onChanged={onChanged} />}
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
@@ -130,9 +132,14 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {kind !== 'workflow' && modelId && !valid && <p role="status">Model scope needs reviewed managed assets for this model in this deployment, and {modelId} has none. Use Container image only, or a configured workflow's dependency preview.</p>}
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
+      {pack ? <>
+        <p>Downloads and installs the workflow’s supported local predictors and shared assets, including optional analysis assets. Jobs keep their own settings; inputs and MSA requests stay with each job.</p>
+        <ProvisionActions key={JSON.stringify(pack)} target={target} onChanged={onChanged} selection={pack} prepareInOneClick />
+      </> : <>
       {familySelection && <CatalogProvisionPanel target={target} onChanged={onChanged} selection={familySelection} showStatus={false} />}
       <p>For current-request dependencies, open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
+      </>}
     </div>}
     {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
     {!live && <PreparationStatus target={target} onChanged={onChanged} />}
@@ -166,7 +173,7 @@ export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: P
 }
 export const DE_NOVO_PRELOAD_SELECTION: CatalogProvisionSelection = { kind: 'model', model_id: 'protein_modification_experimental' };
 
-type ProvisionActionsProps = Props & { selection: ProvisionSelection | null; retryOperationId?: string };
+type ProvisionActionsProps = Props & { selection: ProvisionSelection | null; retryOperationId?: string; prepareInOneClick?: boolean };
 
 // Keep invalidation at the shared action boundary, including for independent callers.
 export function ProvisionActions(props: ProvisionActionsProps) {
@@ -188,13 +195,15 @@ export function CatalogProvisionPanel({ target, onChanged, selection, showStatus
   </section>;
 }
 
-function BoundProvisionActions({ target, onChanged, selection, retryOperationId }: ProvisionActionsProps) {
+function BoundProvisionActions({ target, onChanged, selection, retryOperationId, prepareInOneClick = false }: ProvisionActionsProps) {
   const client = useQueryClient();
   // Shared with saved-Job preloading: neither can enqueue over the other.
   const mutationKey = ['remote-preload', target.id];
   const active = useIsMutating({ mutationKey });
   const lock = useRef(false);
   const [consumed, setConsumed] = useState(false);
+  const current = useRef(true);
+  useEffect(() => { current.current = true; return () => { current.current = false; }; }, []);
   const preview = useMutation({ mutationFn: () => previewExecutionTargetProvision(target.id, selection!), retry: false });
   const provision = useMutation({
     mutationKey, mutationFn: (digest: string) => retryOperationId
@@ -206,9 +215,13 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId 
   const allowed = target.active && target.state === 'ready' && !target.progress && !busy;
   // The keyed boundary binds the entire request, including every scientific setting.
   // Server-normalized workflow selections may contain additional schema defaults.
-  const matchesSelection = preview.data?.selection.kind === selection?.kind
-    && (selection?.kind === 'workflow' || (preview.data?.selection.kind !== 'workflow' && preview.data?.selection.model_id === selection?.model_id));
-  const data = !consumed && preview.data?.scope === 'managed_asset_activation' && matchesSelection ? preview.data : undefined;
+  function matchesSelection(observed?: ProvisionSelection) {
+    if (!selection || !observed || observed.kind !== selection.kind) return false;
+    if (selection.kind === 'workflow_pack') return observed.kind === 'workflow_pack' && observed.workflow_id === selection.workflow_id;
+    if (selection.kind === 'workflow') return true;
+    return 'model_id' in observed && observed.model_id === selection.model_id;
+  }
+  const data = !consumed && preview.data?.scope === 'managed_asset_activation' && matchesSelection(preview.data.selection) ? preview.data : undefined;
   async function requestPreview() {
     if (lock.current || !allowed || !selection || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;
@@ -216,6 +229,23 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId 
     preview.reset();
     provision.reset();
     try { await preview.mutateAsync(); } catch { /* Render the API error; retry is explicit. */ }
+    finally { lock.current = false; }
+  }
+  async function prepareWorkflow() {
+    if (lock.current || !allowed || !selection || client.isMutating({ mutationKey }) > 0) return;
+    lock.current = true;
+    setConsumed(false);
+    preview.reset();
+    provision.reset();
+    try {
+      const fresh = await preview.mutateAsync();
+      // One explicit click keeps the existing preview-bound start. Switching
+      // worker/selection or beginning another operation must not start late.
+      if (!current.current || client.isMutating({ mutationKey }) > 0
+        || fresh.scope !== 'managed_asset_activation' || !matchesSelection(fresh.selection) || fresh.blockers?.length) return;
+      setConsumed(true);
+      await provision.mutateAsync(fresh.preview_sha256);
+    } catch { /* Existing error and dependency details remain visible. */ }
     finally { lock.current = false; }
   }
   async function start() {
@@ -227,8 +257,12 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId 
   }
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2">
+      {prepareInOneClick ? <button type="button" className={buttonClass}
+        disabled={!allowed || !selection || preview.isPending || provision.isPending || (consumed && provision.isSuccess)}
+        onClick={() => void prepareWorkflow()}>{preview.isPending ? 'Checking workflow assets…' : provision.isPending ? 'Starting preparation…' : 'Prepare entire workflow'}</button> : <>
       <button type="button" className={buttonClass} disabled={!allowed || !selection || preview.isPending} onClick={() => void requestPreview()}>{preview.isPending ? 'Hashing preview…' : 'Preview artifact downloads'}</button>
       <button type="button" className={buttonClass} disabled={!allowed || !data || !!data.blockers?.length || preview.isPending} onClick={() => void start()}>{provision.isPending ? 'Starting provision…' : retryOperationId ? 'Retry provision with fresh preview' : 'Start provision'}</button>
+      </>}
     </div>
     {!allowed && <p className="text-xs text-[var(--text-muted)]">Provisioning requires an attached, ready, idle worker with no active preload.</p>}
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}
