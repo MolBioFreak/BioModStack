@@ -7,7 +7,7 @@ import { NativeBinderGeneration } from './NativeBinderGeneration';
 import { BindCraft2LifecycleDraft } from './BindCraft2Campaign';
 import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchModels, fetchModelById, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
@@ -21,6 +21,7 @@ import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 
 import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { ProteinModificationTemplate } from './ProteinModificationTemplate';
+import { DE_NOVO_TEMPLATE, DE_NOVO_ROUTE_KEYS, deNovoSavedValues, deNovoRouteValues, deNovoNavigation, deNovoSearch, isDeNovoModel, type DeNovoNavigationState } from './deNovoWorkflowRoute';
 
 import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
 import {
@@ -248,6 +249,7 @@ export function JobSubmission() {
     const [initialReturnPolicy] = useState(initialExecutionPolicy);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
     const projectSetup = useProjectWorkflowSetup();
     const mdHandoff = useMemo(() => {
@@ -273,12 +275,12 @@ export function JobSubmission() {
             if (returnUri) navigate(returnUri);
         });
     }, [launchContextQuery.data?.recovery_job_id, navigate]);
-    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>(() => searchParams.has('model') ? 'manual' : 'templates');
+    const [wizardMode, setWizardMode] = useState<'templates' | 'experimental' | 'manual'>(() => searchParams.has('model') && !isDeNovoModel(searchParams.get('model')) ? 'manual' : 'templates');
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
-    const routeTemplateId = urlTemplate === 'protein_local_redesign'
-        ? 'protein_modification_experimental'
+    const routeTemplateId = isDeNovoModel(urlTemplate) || isDeNovoModel(searchParams.get('model'))
+        ? DE_NOVO_TEMPLATE
         : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
     const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
     const [engineChooserOpen, setEngineChooserOpen] = useState(false);
@@ -297,6 +299,7 @@ export function JobSubmission() {
             next.delete('template');
         }
         next.delete('model'); next.delete('mode'); next.delete('engine');
+        if (canonicalId !== DE_NOVO_TEMPLATE) DE_NOVO_ROUTE_KEYS.forEach(key => next.delete(key));
         setSearchParams(next, { replace: true });
     }, [searchParams, setSearchParams]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(() => searchParams.get('model'));
@@ -336,6 +339,16 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const deNovoDraftRef = useRef<Record<string, unknown> | undefined>(undefined);
+    const deNovoRoute = useMemo(() => deNovoRouteValues(searchParams), [searchParams]);
+    const deNovoNavigationState = useMemo(() => deNovoNavigation(deNovoRoute), [deNovoRoute]);
+    const deNovoInitialValues = useMemo(() => ({ ...deNovoRoute, ...clonedValues }), [deNovoRoute, clonedValues]);
+    const navigateDeNovo = useCallback((state: DeNovoNavigationState, replace = false) => {
+        const next = deNovoSearch(searchParams, state);
+        if (next.toString() !== searchParams.toString()) {
+            navigate({ pathname: location.pathname, search: `?${next}`, hash: location.hash }, { replace });
+        }
+    }, [searchParams, navigate, location.pathname, location.hash]);
     const binderDraftRef = useRef<Record<string, UntypedApiValue> | undefined>(undefined);
     const [binderInitialDraft, setBinderInitialDraft] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
     const binderNativeDrafts = useRef<Record<string, Record<string, UntypedApiValue>>>({});
@@ -348,6 +361,10 @@ export function JobSubmission() {
     const hydratedProjectSetup = useRef<string | null>(null);
     const [projectActionError, setProjectActionError] = useState<string | null>(null);
     const [projectActionBusy, setProjectActionBusy] = useState(false);
+    const reportDeNovoDraft = useCallback((draft: Record<string, unknown>) => {
+        deNovoDraftRef.current = draft;
+        if (projectSetup.active) setProjectDraftValues(draft);
+    }, [projectSetup.active]);
     useEffect(() => {
         if (!projectSetup.active || !projectSetup.setup) { hydratedProjectSetup.current = null; return; }
         const identity = `${projectSetup.setup.project_id}:${projectSetup.setup.setup_context_id}`;
@@ -457,9 +474,16 @@ export function JobSubmission() {
     };
 
     const handleTemplateCardSelect = (templateId: string) => {
-        setClonedValues(getDedicatedTemplateInitialValues(templateId));
+        const retainedDeNovo = templateId === DE_NOVO_TEMPLATE ? deNovoDraftRef.current : undefined;
+        setClonedValues(retainedDeNovo ?? getDedicatedTemplateInitialValues(templateId));
         if (isDedicatedLauncherTemplate(templateId)) {
             setDedicatedTemplateVersion((prev) => prev + 1);
+        }
+        if (retainedDeNovo) {
+            pendingTemplateRoute.current = DE_NOVO_TEMPLATE;
+            setSelectedTemplateIdInternal(DE_NOVO_TEMPLATE);
+            navigateDeNovo(deNovoNavigation(retainedDeNovo), true);
+            return;
         }
         setSelectedTemplateId(templateId);
     };
@@ -573,21 +597,18 @@ export function JobSubmission() {
                     });
                     setJobName(data.name || 'Conformational mapping');
                 }
-                else if (data.model_id === 'protein_local_redesign' || data.params?.template_model_id === 'protein_local_redesign') {
-                    setWizardMode('experimental');
-                    setSelectedTemplateId('protein_modification_experimental');
-                    setClonedValues({
-                        ...data.params,
-                        pinned_gpu: data.pinned_gpu,
-                        name: data.name,
-                        modification_mode: 'rfd3_local_redesign',
-                        template_model_id: 'protein_local_redesign',
+                else if (isDeNovoModel(data.model_id) || isDeNovoModel(data.params?.template_model_id) || data.mode === 'shape_blueprint' || data.params?.modification_mode === 'shape_blueprint') {
+                    const draft = deNovoSavedValues(data.model_id, data.mode, {
+                        ...data.params, pinned_gpu: data.pinned_gpu,
+                        name: data.name, job_name: data.name,
                     });
-                }
-                else if (data.mode === 'shape_blueprint' || data.params?.modification_mode === 'shape_blueprint') {
-                    setWizardMode('experimental');
-                    setSelectedTemplateId('protein_modification_experimental');
-                    setClonedValues({ ...data.params, name: data.name, modification_mode: 'shape_blueprint' });
+                    setWizardMode('templates');
+                    pendingTemplateRoute.current = DE_NOVO_TEMPLATE;
+                    setSelectedTemplateIdInternal(DE_NOVO_TEMPLATE);
+                    setSelectedModelId(null); setSelectedModeId(null);
+                    setClonedValues(draft);
+                    setDedicatedTemplateVersion(version => version + 1);
+                    navigateDeNovo(deNovoNavigation(draft), true);
                 }
                 // 7. Manual Mode
                 else {
@@ -672,6 +693,20 @@ export function JobSubmission() {
     }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
+        if (isDeNovoModel(template.model_id) || isDeNovoModel(template.base_template_id)) {
+            const draft = deNovoSavedValues(template.model_id ?? template.base_template_id, template.mode, {
+                ...template.params,
+                job_name: template.params?.job_name ?? template.params?.name ?? template.name ?? '',
+            });
+            setWizardMode('templates');
+            pendingTemplateRoute.current = DE_NOVO_TEMPLATE;
+            setSelectedTemplateIdInternal(DE_NOVO_TEMPLATE);
+            setSelectedModelId(null); setSelectedModeId(null);
+            setClonedValues(draft);
+            setDedicatedTemplateVersion(version => version + 1);
+            navigateDeNovo(deNovoNavigation(draft), true);
+            return;
+        }
         // Historical generic BoltzGen templates can carry the old antibody card
         // identity. The explicit native model/mode remains the scientific owner.
         if (template.model_id === 'boltzgen' && template.mode && template.mode !== 'nanobody_binder') {
@@ -1473,7 +1508,7 @@ export function JobSubmission() {
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
             {!isNativeBinderGeneration && !(isTemplateMode && ['structure_prediction', 'mutagenesis', 'antibody_denovo', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics'].includes(selectedTemplateId ?? '')) && <ExecutionTargetPicker workflowRequest={workflowRequest} />}
-            {!isNativeBinderGeneration && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
+            {!isNativeBinderGeneration && selectedTemplateId !== DE_NOVO_TEMPLATE && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />}
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
@@ -1650,10 +1685,15 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
                                 <ProteinModificationTemplate
+                                    key={`de-novo:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
+                                    initialValues={deNovoInitialValues}
+                                    navigationState={deNovoNavigationState}
+                                    onNavigationChange={navigateDeNovo}
+                                    onOpenTemplateManager={openTemplateManager}
                                     requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
-                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
+                                    onDraftChange={reportDeNovoDraft}
+                                    runDetails={<details className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3"><summary className="cursor-pointer text-sm text-[var(--text-secondary)]">Transfer policy</summary><ExecutionPolicyControl initialPolicy={initialReturnPolicy} /></details>}
                                 />
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (

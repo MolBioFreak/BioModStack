@@ -9,6 +9,9 @@ import { api, type ExecutionTarget, type ProvisionPreview, type ProvisionSelecti
 
 import { MemoryRouter } from 'react-router-dom';
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
+// Compile the real lazy approval UI before test timing/act scopes begin.
+// submitJob still opens and awaits the unmocked approval dialog below.
+import '../../src/components/ExecutionPlanApproval';
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { ExecutionPolicyControl } from '../../src/components/ExecutionPolicyControl';
 import { EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
@@ -343,7 +346,7 @@ it('the real de-novo typed form provisions the same unsaved request as launch an
   const approved = posts.at(-1)!.body as unknown as { workflow_request: Record<string, unknown> };
   expect(approved.workflow_request).toMatchObject({ params: { min_length: 120 } });
   expect(posts.every(post => post.url.endsWith('/provision/preview'))).toBe(true);
-  const launch = [...container.querySelectorAll('button')].find(item => item.textContent?.includes('Launch') && item.textContent?.includes('RFD3'))!;
+  const launch = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === 'Generate candidates')!;
   expect(launch).toBeTruthy();
   await act(async () => { launch.click(); await settle(); });
   expect(posts.find(post => post.url === '/api/jobs')?.body).toBeUndefined();
@@ -416,7 +419,7 @@ it('discovers the shared launcher workflows and full model registry without gran
   await select('Provision model', 'unsupported');
   expect(button('Preview artifact downloads').disabled).toBe(true);
   await select('Provision scope', 'workflow');
-  expect(container.textContent).toContain('De Novo Nanobody Toolkit');
+  expect(container.textContent).toContain('De Novo Binder Design');
   expect(container.textContent).toContain('De Novo Design');
   expect(container.textContent).toContain('Molecular Dynamics');
   await select('Preparation workflow', 'antibody_denovo');

@@ -28,6 +28,8 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
+    embedded?: boolean;
+    runDetails?: React.ReactNode;
     initialValues?: Record<string, unknown>;
     submissionModelId?: string;
     requiredPinnedGpu?: number | null;
@@ -64,12 +66,6 @@ const themedMutedInsetStyle: CSSProperties = {
 const themedSelectedStyle = (accent: string): CSSProperties => ({
     backgroundColor: `color-mix(in srgb, ${accent} 14%, transparent)`,
     borderColor: `color-mix(in srgb, ${accent} 72%, var(--border-primary))`,
-    color: 'var(--text-primary)',
-});
-
-const themedTagStyle = (accent: string): CSSProperties => ({
-    backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`,
-    borderColor: `color-mix(in srgb, ${accent} 56%, var(--border-primary))`,
     color: 'var(--text-primary)',
 });
 
@@ -305,11 +301,16 @@ const buildSourceComplexComponents = (
 
 export function ProteinLocalRedesignTemplate({
     onBack,
+    embedded = false,
+    runDetails,
     initialValues,
     submissionModelId = 'protein_local_redesign',
     requiredPinnedGpu = null,
     onDraftChange,
 }: ProteinLocalRedesignTemplateProps) {
+    const [section, setSection] = useState('Source and regions');
+    const [hydratedValues, setHydratedValues] = useState<Record<string, unknown> | undefined | null>(null);
+    const [sourceText, setSourceText] = useState('');
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const {
@@ -401,12 +402,12 @@ export function ProteinLocalRedesignTemplate({
     const [error, setError] = useState<string | null>(null);
     const effectiveSeqMethod: SequenceMethod = isNativeLocalRedesign ? 'skip' : seqMethod;
     const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, effectiveSeqMethod);
-    const workflowSteps = ['Source Complex', 'Mol* + Residue Roles', 'RFD3', isNativeLocalRedesign ? 'Native Results' : 'Sequence + Validation'];
 
     useEffect(() => {
+        setHydratedValues(initialValues);
         if (!initialValues) return;
         setFampnnOverrides(initialValues.fampnn_analysis_overrides);
-        if (typeof initialValues.job_name === 'string' && initialValues.job_name.trim()) setJobName(initialValues.job_name);
+        if (typeof initialValues.job_name === 'string') setJobName(initialValues.job_name);
         const initialSourcePath = resolveProteinLocalRedesignSourcePath(initialValues);
         if (initialSourcePath) {
             setSourcePath(initialSourcePath);
@@ -426,8 +427,20 @@ export function ProteinLocalRedesignTemplate({
                 });
             }
         }
+        if (initialValues._redesign_source && typeof initialValues._redesign_source === 'object') {
+            const descriptor = initialValues._redesign_source as Rfd3SelectedSource;
+            const text = typeof initialValues._redesign_source_text === 'string' ? initialValues._redesign_source_text : '';
+            setSourceText(text);
+            setSelectedTarget({ ...descriptor,
+                ...(text ? { file: new File([text], descriptor.name || 'source.pdb') } : {}),
+                modelNumber: typeof initialValues.model_number === 'number' ? initialValues.model_number : undefined,
+                designChainId: Array.isArray(initialValues.design_chains) ? initialValues.design_chains.join(',') : initialValues.design_chains as string,
+                contextChainIds: Array.isArray(initialValues.context_chains) ? initialValues.context_chains as string[] : normalizeChainList(initialValues.context_chains),
+            });
+        }
+        if (initialValues.execution_depth === 'native' || initialValues.execution_depth === 'validated') setExecutionDepth(initialValues.execution_depth);
         if (typeof initialValues.model_number === 'number') setSelectedModelNumber(initialValues.model_number);
-        if (typeof initialValues.design_chains === 'string' && initialValues.design_chains.trim()) setDesignChain(initialValues.design_chains.trim());
+        if (typeof initialValues.design_chains === 'string') setDesignChain(initialValues.design_chains.trim());
         if (Array.isArray(initialValues.design_chains)) setDesignChain(initialValues.design_chains.filter((value): value is string => typeof value === 'string').join(','));
         if (typeof initialValues.context_chains === 'string') setContextChains(normalizeChainList(initialValues.context_chains));
         if (Array.isArray(initialValues.context_chains)) setContextChains(initialValues.context_chains.filter((value): value is string => typeof value === 'string'));
@@ -467,26 +480,39 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.partial_t === 'number') setNativePartialT(initialValues.partial_t);
 
         if (typeof initialValues.insertion_anchor === 'string') setNativeInsertionAnchor(initialValues.insertion_anchor);
-        if (typeof initialValues.insertion_min_length === 'number') setNativeInsertionMinLength(String(initialValues.insertion_min_length));
-        if (typeof initialValues.insertion_max_length === 'number') setNativeInsertionMaxLength(String(initialValues.insertion_max_length));
+        if (initialValues.insertion_min_length === null || typeof initialValues.insertion_min_length === 'number' || typeof initialValues.insertion_min_length === 'string') setNativeInsertionMinLength(String(initialValues.insertion_min_length ?? ''));
+        if (initialValues.insertion_max_length === null || typeof initialValues.insertion_max_length === 'number' || typeof initialValues.insertion_max_length === 'string') setNativeInsertionMaxLength(String(initialValues.insertion_max_length ?? ''));
 
         if (typeof initialValues.ligand === 'string') setNativeLigand(initialValues.ligand);
         setNativeHotspots(initialValues.select_hotspots ?? '');
         setNativeHbondDonors(initialValues.select_hbond_donor ?? '');
         setNativeHbondAcceptors(initialValues.select_hbond_acceptor ?? '');
-        if (typeof initialValues.seed === 'number') setNativeSeed(String(initialValues.seed));
+        if ('seed' in initialValues) setNativeSeed(initialValues.seed == null ? '' : String(initialValues.seed));
         if (typeof initialValues.dump_trajectories === 'boolean') setNativeDumpTrajectories(initialValues.dump_trajectories);
         const initialPinnedGpu = parseExplicitGpuPin(initialValues.pinned_gpu);
-        if (initialPinnedGpu !== null) setNativePinnedGpu(initialPinnedGpu);
+        if ('pinned_gpu' in initialValues) setNativePinnedGpu(initialPinnedGpu);
 
-        if (typeof initialValues.rfd_min_helices === 'number') setRfdMinHelices(String(initialValues.rfd_min_helices));
-        if (typeof initialValues.rfd_max_helices === 'number') setRfdMaxHelices(String(initialValues.rfd_max_helices));
-        if (typeof initialValues.rfd_min_strands === 'number') setRfdMinStrands(String(initialValues.rfd_min_strands));
-        if (typeof initialValues.rfd_max_strands === 'number') setRfdMaxStrands(String(initialValues.rfd_max_strands));
-        if (typeof initialValues.rfd_min_ss === 'number') setRfdMinSs(String(initialValues.rfd_min_ss));
-        if (typeof initialValues.rfd_max_ss === 'number') setRfdMaxSs(String(initialValues.rfd_max_ss));
-        if (typeof initialValues.rfd_min_rog === 'number') setRfdMinRog(String(initialValues.rfd_min_rog));
-        if (typeof initialValues.rfd_max_rog === 'number') setRfdMaxRog(String(initialValues.rfd_max_rog));
+        if ((typeof initialValues.rfd_min_helices === 'number' || typeof initialValues.rfd_min_helices === 'string')) setRfdMinHelices(String(initialValues.rfd_min_helices));
+        if ((typeof initialValues.rfd_max_helices === 'number' || typeof initialValues.rfd_max_helices === 'string')) setRfdMaxHelices(String(initialValues.rfd_max_helices));
+        if ((typeof initialValues.rfd_min_strands === 'number' || typeof initialValues.rfd_min_strands === 'string')) setRfdMinStrands(String(initialValues.rfd_min_strands));
+        if ((typeof initialValues.rfd_max_strands === 'number' || typeof initialValues.rfd_max_strands === 'string')) setRfdMaxStrands(String(initialValues.rfd_max_strands));
+        if ((typeof initialValues.rfd_min_ss === 'number' || typeof initialValues.rfd_min_ss === 'string')) setRfdMinSs(String(initialValues.rfd_min_ss));
+        if ((typeof initialValues.rfd_max_ss === 'number' || typeof initialValues.rfd_max_ss === 'string')) setRfdMaxSs(String(initialValues.rfd_max_ss));
+        if ((typeof initialValues.rfd_min_rog === 'number' || typeof initialValues.rfd_min_rog === 'string')) setRfdMinRog(String(initialValues.rfd_min_rog));
+        if ((typeof initialValues.rfd_max_rog === 'number' || typeof initialValues.rfd_max_rog === 'string')) setRfdMaxRog(String(initialValues.rfd_max_rog));
+        if (typeof initialValues.source_simulation_job_name === 'string') setSourceSimulationJobName(initialValues.source_simulation_job_name);
+        if (typeof initialValues.source_sequence === 'string') setSourceSequence(initialValues.source_sequence);
+        if (typeof initialValues.source_sequence_name === 'string') setSourceSequenceName(initialValues.source_sequence_name);
+        if (typeof initialValues.source_primary_chain_id === 'string') setSourcePrimaryChainId(initialValues.source_primary_chain_id);
+        if (typeof initialValues.source_num_parallel_jobs === 'number') setSourceNumParallelJobs(initialValues.source_num_parallel_jobs);
+        if (typeof initialValues.source_boltz_use_msa === 'boolean') setSourceBoltzUseMsa(initialValues.source_boltz_use_msa);
+        if (typeof initialValues.source_boltz_recycling_steps === 'number') setSourceBoltzRecyclingSteps(initialValues.source_boltz_recycling_steps);
+        if (typeof initialValues.source_boltz_sampling_steps === 'number') setSourceBoltzSamplingSteps(initialValues.source_boltz_sampling_steps);
+        if (typeof initialValues.source_boltz_num_samples === 'number') setSourceBoltzNumSamples(initialValues.source_boltz_num_samples);
+        if (typeof initialValues.source_boltz_max_parallel_samples === 'number') setSourceBoltzMaxParallelSamples(initialValues.source_boltz_max_parallel_samples);
+        if (typeof initialValues.source_simulation_job_id === 'string') setSourceSimulationJobId(initialValues.source_simulation_job_id);
+        if (Array.isArray(initialValues.source_ligands)) setSourceLigands(initialValues.source_ligands as LigandEntry[]);
+        if (initialValues.source_predictor === 'boltz' || initialValues.source_predictor === 'all') setSourcePredictor(initialValues.source_predictor);
     }, [initialValues]);
 
 
@@ -524,9 +550,11 @@ export function ProteinLocalRedesignTemplate({
                     throw new Error('No source structure file was available for preview.');
                 }
 
+                const text = await sourceFile.text();
                 const parsed = await parseStructureFile(sourceFile);
                 if (cancelled) return;
 
+                setSourceText(text);
                 setParsedStructure(parsed);
                 const requestedModelNumber = selectedTarget.modelNumber;
                 if (requestedModelNumber != null && !parsed.models.some((model) => model.modelNumber === requestedModelNumber)) {
@@ -548,12 +576,7 @@ export function ProteinLocalRedesignTemplate({
                 if (selectedTarget.contextChainIds?.some((id) => !chainSummaries.some((chain) => chain.id === id))) {
                     throw new Error('A saved context chain is unavailable in the selected source model.');
                 }
-                const nextDesignChain = (
-                    requestedDesignChain
-                    && chainSummaries.some((chain) => chain.id === requestedDesignChain && chain.type === 'protein')
-                )
-                    ? requestedDesignChain
-                    : chainSummaries.find((chain) => chain.type === 'protein')?.id || '';
+                const nextDesignChain = requestedDesignChain ?? chainSummaries.find((chain) => chain.type === 'protein')?.id ?? '';
                 setDesignChain(nextDesignChain);
                 setContextChains(selectedTarget.contextChainIds ?? chainSummaries.filter((chain) => chain.id !== nextDesignChain).map((chain) => chain.id));
             } catch (err: unknown) {
@@ -712,17 +735,36 @@ export function ProteinLocalRedesignTemplate({
             : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
         select_unfixed_sequence: roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges,
         insertion_anchor: nativeInsertionAnchor.trim(),
-        insertion_min_length: Number.parseInt(nativeInsertionMinLength, 10),
-        insertion_max_length: Number.parseInt(nativeInsertionMaxLength, 10),
+        insertion_min_length: nativeInsertionMinLength,
+        insertion_max_length: nativeInsertionMaxLength,
         select_hotspots: nativeHotspots, select_hbond_donor: nativeHbondDonors, select_hbond_acceptor: nativeHbondAcceptors,
         partial_t: nativePartialT, ligand: nativeLigand.trim(), num_designs: numDesigns,
-        seed: parseOptionalIntegerInput(nativeSeed) ?? 0,
+        seed: parseOptionalIntegerInput(nativeSeed) ?? null,
         dump_trajectories: nativeDumpTrajectories, write_full_json: true,
         profile_id: nativeProfileId,
+        job_name: jobName, execution_depth: executionDepth, model_number: selectedModelNumber,
+        pinned_gpu: nativePinnedGpu, region_mode: regionMode, interface_cutoff: interfaceCutoff, region_padding: regionPadding,
+        seq_method: seqMethod, seqs_per_design: seqsPerDesign, fix_fixed_sidechains: fixFixedSidechains,
+        structure_validators: selectedValidators, boltz_sampling_steps: boltzSamplingSteps, boltz_recycling_steps: boltzRecyclingSteps,
+        interactive_gating: interactiveGating, interactive_gate_stage: interactiveGateStage,
+        rfd3_batches_per_design: rfd3BatchesPerDesign, rfd3_extra_config: rfd3ExtraConfig,
+        rfd_min_helices: rfdMinHelices, rfd_max_helices: rfdMaxHelices,
+        rfd_min_strands: rfdMinStrands, rfd_max_strands: rfdMaxStrands,
+        rfd_min_ss: rfdMinSs, rfd_max_ss: rfdMaxSs, rfd_min_rog: rfdMinRog, rfd_max_rog: rfdMaxRog,
+        _redesign_source: selectedTarget ? { ...selectedTarget, file: undefined,
+            url: selectedTarget.url?.startsWith('blob:') ? undefined : selectedTarget.url } : null,
+        _redesign_source_text: sourceText,
+        source_simulation_job_name: sourceSimulationJobName, source_sequence: sourceSequence,
+        source_sequence_name: sourceSequenceName, source_primary_chain_id: sourcePrimaryChainId,
+        source_ligands: sourceLigands, source_predictor: sourcePredictor, source_num_parallel_jobs: sourceNumParallelJobs,
+        source_boltz_use_msa: sourceBoltzUseMsa, source_boltz_recycling_steps: sourceBoltzRecyclingSteps,
+        source_boltz_sampling_steps: sourceBoltzSamplingSteps, source_boltz_num_samples: sourceBoltzNumSamples,
+        source_boltz_max_parallel_samples: sourceBoltzMaxParallelSamples, source_simulation_job_id: sourceSimulationJobId,
     });
     useEffect(() => {
+        if (hydratedValues !== initialValues) return;
         onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
-    }, [onDraftChange, projectDraftJson]);
+    }, [onDraftChange, projectDraftJson, hydratedValues, initialValues]);
 
     const handleResidueRoleSelectionChange = (residues: Set<string>) => {
         setRoleTextIsManual(false);
@@ -1086,52 +1128,309 @@ export function ProteinLocalRedesignTemplate({
     })();
 
     return (
-        <div className="w-full space-y-6 text-[var(--text-primary)]" data-bms-rfd3-layout="wide" data-bms-rfd3-iteration-workbench="unified">
-            <ExecutionTargetPicker workflowRequest={workflowRequest} />
-            <div className="space-y-4 rounded-xl border p-5" style={themedPanelStyle}>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={onBack}
-                            className="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors"
-                            style={themedMutedInsetStyle}
-                        >
-                            Back
-                        </button>
-                        <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
-                            RFD3 Iteration Workbench
-                        </span>
-                        <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
-                            Experimental Alpha
-                        </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                        {workflowSteps.map((step, index) => (
-                            <span
-                                key={step}
-                                className="rounded-full border px-2.5 py-1"
-                                style={index === 1 ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
-                            >
-                                {step}
-                            </span>
-                        ))}
-                    </div>
+        <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-rfd3-layout="wide" data-bms-rfd3-iteration-workbench="unified">
+            {!embedded && <header className="flex flex-wrap items-center gap-3">
+                <button type="button" onClick={onBack} className="rounded-lg border px-3 py-2 text-sm" style={themedInsetStyle}>Back</button>
+                <h1 className="text-2xl font-semibold">Redesign structure</h1>
+            </header>}
+            <nav aria-label="Redesign sections" className="flex flex-wrap gap-2">
+                {['Source and regions', 'Sampling', 'Optional next steps'].map((item) => <button key={item} type="button"
+                    aria-pressed={section === item} onClick={() => setSection(item)} className="rounded-lg border px-3 py-2 text-sm"
+                    style={section === item ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}>{item}</button>)}
+            </nav>
+            {(error || structureError) && (
+                <div
+                    className="rounded-xl border px-4 py-3 text-sm"
+                    style={{
+                        backgroundColor: 'color-mix(in srgb, var(--danger) 14%, transparent)',
+                        borderColor: 'color-mix(in srgb, var(--danger) 42%, var(--border-primary))',
+                        color: 'var(--text-primary)',
+                    }}
+                >
+                    {error || structureError}
                 </div>
-                <div>
-                    <h1 className="text-3xl font-semibold">RFD3 Iteration Workbench</h1>
-                    <div className="mt-4 rounded-xl border p-4" style={themedInsetStyle}>
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">Execution Depth</div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <button type="button" onClick={() => setExecutionDepth('native')} className="rounded-lg border p-3 text-left" style={isNativeLocalRedesign ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
-                                <span className="block text-sm font-semibold">Native RFD3 only</span>
-                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">RFD3 coordinate remodeling with explicit amino-acid hold or recall roles.</span>
-                            </button>
-                            <button type="button" onClick={() => setExecutionDepth('validated')} className="rounded-lg border p-3 text-left" style={!isNativeLocalRedesign ? themedSelectedStyle('var(--link)') : themedMutedInsetStyle}>
-                                <span className="block text-sm font-semibold">Continue through sequence design and validation</span>
-                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">Use the same source and region, then run FA-MPNN or ProteinMPNN and selected structure validators.</span>
-                            </button>
+            )}
+
+                <div hidden={section !== 'Source and regions'}>
+                    <div className="grid items-start gap-5 xl:grid-cols-2">
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h2 className="text-lg font-semibold">Source Complex</h2>
+                                <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                    Upload, reuse a run, choose a preset, or fetch RCSB—no manual path typing.
+                                </p>
+                            </div>
+                            <div className="rounded-lg border px-3 py-2 text-xs" style={themedInsetStyle}>
+                                <div className="uppercase tracking-[0.18em] text-[var(--text-secondary)]">Selected</div>
+                                <div className="mt-1 font-medium">{getSelectionName(selectedTarget) || (sourcePath ?? 'No structure selected')}</div>
+                            </div>
                         </div>
-                    </div>
+
+                        <Rfd3SourceSelector
+                            selectedSource={selectedTarget}
+                            onSelect={(target) => {
+                                setSourceText('');
+                                setSelectedTarget(target);
+                                setSourcePath(target?.path || null);
+                                setParsedStructure(null);
+                                setSelectedModelNumber(null);
+                                setDesignChain('');
+                                setContextChains([]);
+                                setSelectedEditableResidues(new Set());
+                                setSelectedSequenceRecallResidues(new Set());
+                            }}
+                        />
+
+                        {sourcePath && <details className="rounded-lg border px-3 py-2 text-xs" style={themedInsetStyle}>
+                            <summary>Source details</summary><p className="break-all font-mono">{sourcePath}</p>
+                        </details>}
+
+                        {structureLoading && (
+                            <div className="rounded-lg border px-4 py-6 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
+                                Parsing structure and building the visual chain map…
+                            </div>
+                        )}
+
+                        {parsedStructure && (
+                            <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="text-sm font-medium">Structure Preview</div>
+                                        <div className="flex gap-2">
+                                            {parsedStructure.models.length > 1 && (
+                                                <select
+                                                    value={selectedModelNumber ?? parsedStructure.models[0]?.modelNumber ?? 1}
+                                                    onChange={(event) => setSelectedModelNumber(Number(event.target.value))}
+                                                    className="rounded-lg border px-3 py-2 text-sm outline-none"
+                                                    style={themedInputStyle}
+                                                >
+                                                    {parsedStructure.models.map((model) => (
+                                                        <option key={model.modelNumber} value={model.modelNumber}>
+                                                            {model.label}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowStructureViewer((current) => !current)}
+                                                className="rounded-lg border px-3 py-2 text-xs transition-colors"
+                                                style={showStructureViewer ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                            >
+                                                {showStructureViewer ? 'Hide 3D' : 'Show 3D'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div hidden={!showStructureViewer}>
+                                        <EpitopeMolstarViewer
+                                            structureUrl={viewerStructureUrl || undefined}
+                                            height={420}
+                                            selectedResidues={regionMode === 'manual_ranges' ? selectedEditableResidues : new Set<string>()}
+                                            onResidueClick={regionMode === 'manual_ranges' ? handleViewerResidueClick : undefined}
+                                        />
+                                    </div>
+
+                                    <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedInsetStyle}>
+                                        {regionMode === 'manual_ranges'
+                                            ? 'Click residues on the design chain in 3D, or use the residue grid below, to define the redesign window.'
+                                            : 'Viewer stays in sync with the selected model while interface-shell mode derives the region from the chosen context chains.'}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Design Chain</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {designableProteinChains.map((chain) => (
+                                                <button
+                                                    key={chain.id}
+                                                    type="button"
+                                                    onClick={() => setDesignChain(chain.id)}
+                                                    className="rounded-lg border px-3 py-2 text-sm transition-all"
+                                                    style={designChain === chain.id ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
+                                                >
+                                                    Chain {chain.id} ({chain.residueCount} aa)
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="text-xs text-[var(--text-secondary)]">
+                                            Only protein chains are designable. The residue selector below follows this chain.
+                                        </p>
+                                    </div>
+
+                                    <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Context Chains</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {allChainSummaries
+                                                .filter((chain) => chain.id !== designChain)
+                                                .map((chain) => {
+                                                    const accent = getChainTypeAccent(chain.type);
+                                                    const selected = contextChains.includes(chain.id);
+                                                    return (
+                                                        <button
+                                                            key={chain.id}
+                                                            type="button"
+                                                            onClick={() => toggleContextChain(chain.id)}
+                                                            className="rounded-lg border px-3 py-2 text-sm transition-all"
+                                                            style={selected ? themedSelectedStyle(accent) : themedMutedInsetStyle}
+                                                        >
+                                                            <span className="font-medium">Chain {chain.id}</span>
+                                                            <span className="ml-2 text-xs uppercase tracking-[0.14em] text-[var(--text-secondary)]">{chain.type}</span>
+                                                            <span className="ml-2 text-xs text-[var(--text-secondary)]">{chain.residueCount} residues</span>
+                                                        </button>
+                                                    );
+                                                })}
+                                        </div>
+                                        <p className="text-xs text-[var(--text-secondary)]">
+                                            These chains define the structural context for interface-shell mode. Include DNA or RNA partners here when relevant.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </section>
+
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h2 className="text-lg font-semibold">Editable Region</h2>
+                                <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                    Manual mode is fully visual. Interface-shell mode derives the redesign window from the selected context chains and cutoff.
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setRegionMode('manual_ranges')}
+                                    className="rounded-lg border px-3 py-2 text-xs transition-colors"
+                                    style={regionMode === 'manual_ranges' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                >
+                                    Visual Manual Selection
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setRegionMode('interface_shell')}
+                                    className="rounded-lg border px-3 py-2 text-xs transition-colors"
+                                    style={regionMode === 'interface_shell' ? themedSelectedStyle('var(--link)') : themedInsetStyle}
+                                >
+                                    Interface Shell
+                                </button>
+                            </div>
+                        </div>
+
+                        {regionMode === 'manual_ranges' && (
+                            <div className="grid gap-3 md:grid-cols-3" aria-label="Residue role assignment">
+                                <button type="button" onClick={() => setActiveResidueRole('static')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'static' ? themedSelectedStyle('var(--text-secondary)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">Hold structure and amino acid</span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">Assign selected residues to the fixed scaffold.</span>
+                                </button>
+                                <button type="button" onClick={() => setActiveResidueRole('coordinate')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'coordinate' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">Remodel coordinates, hold amino acid</span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedEditableResidues.size - selectedSequenceRecallResidues.size} residues</span>
+                                </button>
+                                <button type="button" onClick={() => setActiveResidueRole('recall')} disabled={isNativeLocalRedesign && nativeRedesignMode === 'minimal_insertion'} className="rounded-lg border p-3 text-left disabled:opacity-40" style={activeResidueRole === 'recall' ? themedSelectedStyle('var(--warning)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">
+                                        {isNativeLocalRedesign
+                                            ? 'Remodel coordinates and recall amino acid with RFD3'
+                                            : 'Remodel coordinates and redesign amino acid downstream'}
+                                    </span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedSequenceRecallResidues.size} residues</span>
+                                </button>
+                            </div>
+                        )}
+
+                        {regionMode === 'manual_ranges' ? (
+                            <div className="space-y-4">
+                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                    <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Current Selection</div>
+                                    <div className="mt-1 text-sm">{selectionSummary}</div>
+                                    <div className="mt-3">
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Range String</label>
+                                        <input
+                                            aria-label="Range string"
+                                            value={manualRangesText}
+                                            onChange={(event) => { setRoleTextIsManual(true); setManualRangesText(event.target.value); setPendingRoleHydration({ editable: event.target.value, recall: recallRangesText }); }}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none"
+                                            style={themedInputStyle}
+                                            placeholder="A45-58,A83-91"
+                                        />
+                                        <label className="mt-2 block text-xs">Sequence-recall ranges</label>
+                                        <input aria-label="Sequence-recall ranges" value={recallRangesText} style={themedInputStyle} onChange={event => {
+                                            setRoleTextIsManual(true);
+                                            setRecallRangesText(event.target.value);
+                                            setPendingRoleHydration({ editable: manualRangesText, recall: event.target.value });
+                                        }} />
+                                        {roleHydrationError && <p role="alert" className="text-red-400">{roleHydrationError}</p>}
+                                        <p className="mt-2 text-xs text-[var(--text-secondary)]">
+                                            This field is auto-filled from the visual selector and remains editable if you want to refine the exact range string manually.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {activeDesignChain ? (
+                                    <EpitopeSelector
+                                        chains={activeProteinChains}
+                                        activeChain={designChain}
+                                        selectedResidues={activeRoleResidues}
+                                        onSelectionChange={handleResidueRoleSelectionChange}
+                                        selectedLabel={
+                                            activeResidueRole === 'static'
+                                                ? 'Fixed scaffold residues'
+                                                : activeResidueRole === 'recall'
+                                                    ? 'RFD3 sequence-recall residues'
+                                                    : 'Coordinate-only redesign residues'
+                                        }
+                                    />
+                                ) : (
+                                    <div className="rounded-lg border px-4 py-8 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
+                                        Choose a source structure and design chain to enable residue picking.
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                    <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Interface Cutoff (A)</label>
+                                    <input
+                                        type="number"
+                                        min={2}
+                                        max={15}
+                                        step={0.5}
+                                        value={interfaceCutoff}
+                                        onChange={(event) => setInterfaceCutoff(Number(event.target.value))}
+                                        className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                        style={themedInputStyle}
+                                    />
+                                </div>
+                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                    <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Region Padding</label>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={12}
+                                        value={regionPadding}
+                                        onChange={(event) => setRegionPadding(Number(event.target.value))}
+                                        className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                        style={themedInputStyle}
+                                    />
+                                </div>
+                                <div className="md:col-span-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                    <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Derived Region Plan</div>
+                                    <div className="mt-1 text-sm">
+                                        {contextChains.length > 0
+                                            ? `Chain ${designChain || '—'} vs ${contextChains.join(', ')} · ${interfaceCutoff.toFixed(1)} Å shell · +${regionPadding} residues.`
+                                            : 'Select at least one context chain.'}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </section>
+                </div>
+                </div>
+
+            <div hidden={section !== 'Sampling'} className="space-y-4">
                     {isNativeLocalRedesign && (
                         <div className="mt-4 space-y-4 rounded-xl border p-4" style={themedInsetStyle}>
                             <div>
@@ -1251,39 +1550,292 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
                     )}
-                    {!isNativeLocalRedesign && (
-                        <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
-                            Visual region pick → RFD3 remodeling → sequence redesign → ESMFold2 and Protenix validation.
-                        </p>
-                    )}
-                    <div className="mt-4 max-w-4xl space-y-3 rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
-                        <div className="flex flex-wrap items-center gap-3 text-sm">
-                            <span className="rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]" style={themedTagStyle('var(--warning)')}>
-                                Active alpha
-                            </span>
-                            <span className="text-[var(--text-secondary)]">Real structure-driven loop; inspect outputs before reuse.</span>
-                        </div>
-                        <ModelDocumentationLinks
-                            topics={['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']}
-                            summary="Method background and upstream references are linked out; the launcher stays focused on source, region, and validation controls."
-                            compact
-                        />
-                    </div>
-                </div>
-            </div>
 
-            {(error || structureError) && (
-                <div
-                    className="rounded-xl border px-4 py-3 text-sm"
-                    style={{
-                        backgroundColor: 'color-mix(in srgb, var(--danger) 14%, transparent)',
-                        borderColor: 'color-mix(in srgb, var(--danger) 42%, var(--border-primary))',
-                        color: 'var(--text-primary)',
-                    }}
-                >
-                    {error || structureError}
-                </div>
-            )}
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div>
+                            <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                {isNativeLocalRedesign
+                                    ? 'Native RFD3 holds or recalls amino acids from the residue roles assigned above. No separate sequence model runs.'
+                                    : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                {effectiveSeqMethod === 'fampnn' && <FampnnAnalysisControls value={fampnnOverrides} onChange={setFampnnOverrides} summaryDefault="Sequence-redesign region selected above" />}
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequence Method</label>
+                                <select
+                                    value={effectiveSeqMethod}
+                                    onChange={(event) => setSeqMethod(event.target.value as SequenceMethod)}
+                                    disabled={isNativeLocalRedesign}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                    style={themedInputStyle}
+                                >
+                                    {isNativeLocalRedesign ? (
+                                        <option value="skip">Native RFD3 hold / recall roles</option>
+                                    ) : (
+                                        <>
+                                            <option value="fampnn">FA-MPNN</option>
+                                            <option value="mpnn">ProteinMPNN</option>
+                                        </>
+                                    )}
+                                </select>
+                            </div>
+
+                            {(isNativeLocalRedesign || proteinLocalRedesignUiState.showSequenceSampling) && <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Backbone Designs</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={128}
+                                    value={numDesigns}
+                                    onChange={(event) => setNumDesigns(Number(event.target.value))}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                    style={themedInputStyle}
+                                />
+                            </div>}
+
+                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequences Per Backbone</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={64}
+                                    value={seqsPerDesign}
+                                    onChange={(event) => setSeqsPerDesign(Number(event.target.value))}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                    style={themedInputStyle}
+                                />
+                            </div>}
+
+                            {proteinLocalRedesignUiState.showSequenceSampling && <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
+                                <input
+                                    type="checkbox"
+                                    checked={fixFixedSidechains}
+                                    onChange={(event) => setFixFixedSidechains(event.target.checked)}
+                                    className="mt-0.5"
+                                />
+                                <span>Keep sidechains fixed outside the selected sequence-redesign residues.</span>
+                            </label>}
+
+                            {!proteinLocalRedesignUiState.showSequenceSampling && (
+                                <div className="rounded-lg border p-3 text-sm text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
+                                    No separate sequence model runs. Native RFD3 uses the amino-acid hold and recall roles assigned above.
+                                </div>
+                            )}
+                        </div>
+                    </section>
+
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div>
+                            <h2 className="text-lg font-semibold">RFD3 Controls</h2>
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                Expose the local-remodel settings instead of pinning everything to hidden defaults.
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Batches Per Design</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={16}
+                                    value={rfd3BatchesPerDesign}
+                                    onChange={(event) => setRfd3BatchesPerDesign(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                    style={themedInputStyle}
+                                />
+                            </div>
+
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Extra Config</label>
+                                <textarea
+                                    value={rfd3ExtraConfig}
+                                    onChange={(event) => setRfd3ExtraConfig(event.target.value)}
+                                    rows={4}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none"
+                                    style={themedInputStyle}
+                                    placeholder="Optional raw RFdiffusion3 overrides"
+                                />
+                            </div>
+                        </div>
+                    </section>
+                    )}
+
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div>
+                            <h2 className="text-lg font-semibold">Backbone Filters</h2>
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                Optional post-RFD3 structure filters. Leave blank to keep the default permissive path.
+                            </p>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min Helices</label>
+                                <input value={rfdMinHelices} onChange={(event) => setRfdMinHelices(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max Helices</label>
+                                <input value={rfdMaxHelices} onChange={(event) => setRfdMaxHelices(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min Strands</label>
+                                <input value={rfdMinStrands} onChange={(event) => setRfdMinStrands(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max Strands</label>
+                                <input value={rfdMaxStrands} onChange={(event) => setRfdMaxStrands(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min SS Elements</label>
+                                <input value={rfdMinSs} onChange={(event) => setRfdMinSs(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max SS Elements</label>
+                                <input value={rfdMaxSs} onChange={(event) => setRfdMaxSs(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min RoG</label>
+                                <input value={rfdMinRog} onChange={(event) => setRfdMinRog(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max RoG</label>
+                                <input value={rfdMaxRog} onChange={(event) => setRfdMaxRog(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
+                            </div>
+                        </div>
+                    </section>
+                    )}
+
+            </div>
+            <div hidden={section !== 'Optional next steps'} className="space-y-4">
+                    <div className="mt-4 rounded-xl border p-4" style={themedInsetStyle}>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">Execution Depth</div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                            <button type="button" onClick={() => setExecutionDepth('native')} className="rounded-lg border p-3 text-left" style={isNativeLocalRedesign ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
+                                <span className="block text-sm font-semibold">Native RFD3 only</span>
+                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">RFD3 coordinate remodeling with explicit amino-acid hold or recall roles.</span>
+                            </button>
+                            <button type="button" onClick={() => setExecutionDepth('validated')} className="rounded-lg border p-3 text-left" style={!isNativeLocalRedesign ? themedSelectedStyle('var(--link)') : themedMutedInsetStyle}>
+                                <span className="block text-sm font-semibold">Continue through sequence design and validation</span>
+                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">Use the same source and region, then run FA-MPNN or ProteinMPNN and selected structure validators.</span>
+                            </button>
+                        </div>
+                    </div>
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div>
+                            <h2 className="text-lg font-semibold">Review Gates</h2>
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                Pause at checkpoints, filter in Results, then continue that subset.
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
+                                <input
+                                    type="checkbox"
+                                    checked={interactiveGating}
+                                    onChange={(event) => setInteractiveGating(event.target.checked)}
+                                    className="mt-0.5"
+                                />
+                                <span>Pause the workflow for interactive review before the next major stage.</span>
+                            </label>
+
+                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Pause After</label>
+                                <select
+                                    value={interactiveGateStage}
+                                    onChange={(event) => setInteractiveGateStage(event.target.value as ReviewPauseStage)}
+                                    disabled={!interactiveGating}
+                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
+                                    style={themedInputStyle}
+                                >
+                                    <option value="post_rfantibody">RFD3 Remodel Backbones</option>
+                                    <option value="post_fampnn">Sequence Redesign</option>
+                                    <option value="post_structure_validation">
+                                        Structure Validation
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                    </section>
+                    )}
+
+                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
+                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <div>
+                            <h2 className="text-lg font-semibold">Validation</h2>
+                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                                Select one, two, or all three peer validators. Every selected validator receives the same redesigned candidates.
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="grid gap-3 md:grid-cols-3">
+                                {PROTEIN_LOCAL_VALIDATORS.map((validator) => {
+                                    const labels: Record<ProteinLocalValidator, string> = {
+                                        boltz2: 'Boltz-2',
+                                        esmfold2: 'ESMFold2',
+                                        protenix_v2: 'Protenix V2',
+                                    };
+                                    return (
+                                        <label
+                                            key={validator}
+                                            className="flex items-start gap-3 rounded-lg border p-3 text-sm"
+                                            style={selectedValidators.includes(validator) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedValidators.includes(validator)}
+                                                onChange={() => setSelectedValidators((current) => toggleProteinLocalValidator(current, validator))}
+                                                className="mt-0.5"
+                                            />
+                                            <span>{labels[validator]}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                At least one validator is required. Protenix V2 is selected by default.
+                            </p>
+
+                            {selectedValidators.includes('boltz2') && (
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={50}
+                                            max={1000}
+                                            value={boltzSamplingSteps}
+                                            onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={12}
+                                            value={boltzRecyclingSteps}
+                                            onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                    )}
 
             <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1306,7 +1858,6 @@ export function ProteinLocalRedesignTemplate({
                 {showSourceSimulation && (
                     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
                         <div className="space-y-4">
-                            <ExecutionTargetPicker workflowRequest={buildSourceSimulationRequest()} submissionOptions={{ launchContext: false }} />
                             <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <div className="grid gap-4 md:grid-cols-2">
                                     <div>
@@ -1461,6 +2012,7 @@ export function ProteinLocalRedesignTemplate({
                             </div>
 
                             <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                <ExecutionTargetPicker workflowRequest={buildSourceSimulationRequest()} submissionOptions={{ launchContext: false }} />
                                 <div className="mb-3 text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Launch And Reuse</div>
                                 <button
                                     type="button"
@@ -1530,569 +2082,10 @@ export function ProteinLocalRedesignTemplate({
                 )}
             </section>
 
-            <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.55fr)] 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(20rem,0.75fr)]">
-                <div className="space-y-6 2xl:contents">
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                                <h2 className="text-lg font-semibold">Source Complex</h2>
-                                <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                    Upload, reuse a run, choose a preset, or fetch RCSB—no manual path typing.
-                                </p>
-                            </div>
-                            <div className="rounded-lg border px-3 py-2 text-xs" style={themedInsetStyle}>
-                                <div className="uppercase tracking-[0.18em] text-[var(--text-secondary)]">Selected</div>
-                                <div className="mt-1 font-medium">{getSelectionName(selectedTarget) || (sourcePath ?? 'No structure selected')}</div>
-                            </div>
-                        </div>
-
-                        <Rfd3SourceSelector
-                            selectedSource={selectedTarget}
-                            onSelect={(target) => {
-                                setSelectedTarget(target);
-                                setSourcePath(target?.path || null);
-                                setParsedStructure(null);
-                                setSelectedModelNumber(null);
-                                setDesignChain('');
-                                setContextChains([]);
-                                setSelectedEditableResidues(new Set());
-                                setSelectedSequenceRecallResidues(new Set());
-                            }}
-                        />
-
-                        {sourcePath && (
-                            <div className="rounded-lg border px-3 py-2 text-xs font-mono" style={themedInsetStyle}>
-                                {sourcePath}
-                            </div>
-                        )}
-
-                        {structureLoading && (
-                            <div className="rounded-lg border px-4 py-6 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
-                                Parsing structure and building the visual chain map…
-                            </div>
-                        )}
-
-                        {parsedStructure && (
-                            <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-                                <div className="space-y-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div className="text-sm font-medium">Structure Preview</div>
-                                        <div className="flex gap-2">
-                                            {parsedStructure.models.length > 1 && (
-                                                <select
-                                                    value={selectedModelNumber ?? parsedStructure.models[0]?.modelNumber ?? 1}
-                                                    onChange={(event) => setSelectedModelNumber(Number(event.target.value))}
-                                                    className="rounded-lg border px-3 py-2 text-sm outline-none"
-                                                    style={themedInputStyle}
-                                                >
-                                                    {parsedStructure.models.map((model) => (
-                                                        <option key={model.modelNumber} value={model.modelNumber}>
-                                                            {model.label}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            )}
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowStructureViewer((current) => !current)}
-                                                className="rounded-lg border px-3 py-2 text-xs transition-colors"
-                                                style={showStructureViewer ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
-                                            >
-                                                {showStructureViewer ? 'Hide 3D' : 'Show 3D'}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {showStructureViewer && (
-                                        <EpitopeMolstarViewer
-                                            structureUrl={viewerStructureUrl || undefined}
-                                            height={420}
-                                            selectedResidues={regionMode === 'manual_ranges' ? selectedEditableResidues : new Set<string>()}
-                                            onResidueClick={regionMode === 'manual_ranges' ? handleViewerResidueClick : undefined}
-                                        />
-                                    )}
-
-                                    <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedInsetStyle}>
-                                        {regionMode === 'manual_ranges'
-                                            ? 'Click residues on the design chain in 3D, or use the residue grid below, to define the redesign window.'
-                                            : 'Viewer stays in sync with the selected model while interface-shell mode derives the region from the chosen context chains.'}
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Job Name</div>
-                                        <input
-                                            value={jobName}
-                                            onChange={(event) => setJobName(event.target.value)}
-                                            className="mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                            style={themedInputStyle}
-                                            placeholder="tDT_selectivity_redesign"
-                                        />
-                                    </div>
-
-                                    <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
-                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Design Chain</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {designableProteinChains.map((chain) => (
-                                                <button
-                                                    key={chain.id}
-                                                    type="button"
-                                                    onClick={() => setDesignChain(chain.id)}
-                                                    className="rounded-lg border px-3 py-2 text-sm transition-all"
-                                                    style={designChain === chain.id ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
-                                                >
-                                                    Chain {chain.id} ({chain.residueCount} aa)
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <p className="text-xs text-[var(--text-secondary)]">
-                                            Only protein chains are designable. The residue selector below follows this chain.
-                                        </p>
-                                    </div>
-
-                                    <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
-                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Context Chains</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {allChainSummaries
-                                                .filter((chain) => chain.id !== designChain)
-                                                .map((chain) => {
-                                                    const accent = getChainTypeAccent(chain.type);
-                                                    const selected = contextChains.includes(chain.id);
-                                                    return (
-                                                        <button
-                                                            key={chain.id}
-                                                            type="button"
-                                                            onClick={() => toggleContextChain(chain.id)}
-                                                            className="rounded-lg border px-3 py-2 text-sm transition-all"
-                                                            style={selected ? themedSelectedStyle(accent) : themedMutedInsetStyle}
-                                                        >
-                                                            <span className="font-medium">Chain {chain.id}</span>
-                                                            <span className="ml-2 text-xs uppercase tracking-[0.14em] text-[var(--text-secondary)]">{chain.type}</span>
-                                                            <span className="ml-2 text-xs text-[var(--text-secondary)]">{chain.residueCount} residues</span>
-                                                        </button>
-                                                    );
-                                                })}
-                                        </div>
-                                        <p className="text-xs text-[var(--text-secondary)]">
-                                            These chains define the structural context for interface-shell mode. Include DNA or RNA partners here when relevant.
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </section>
-
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                                <h2 className="text-lg font-semibold">Editable Region</h2>
-                                <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                    Manual mode is fully visual. Interface-shell mode derives the redesign window from the selected context chains and cutoff.
-                                </p>
-                            </div>
-                            <div className="flex gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setRegionMode('manual_ranges')}
-                                    className="rounded-lg border px-3 py-2 text-xs transition-colors"
-                                    style={regionMode === 'manual_ranges' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
-                                >
-                                    Visual Manual Selection
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setRegionMode('interface_shell')}
-                                    className="rounded-lg border px-3 py-2 text-xs transition-colors"
-                                    style={regionMode === 'interface_shell' ? themedSelectedStyle('var(--link)') : themedInsetStyle}
-                                >
-                                    Interface Shell
-                                </button>
-                            </div>
-                        </div>
-
-                        {regionMode === 'manual_ranges' && (
-                            <div className="grid gap-3 md:grid-cols-3" aria-label="Residue role assignment">
-                                <button type="button" onClick={() => setActiveResidueRole('static')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'static' ? themedSelectedStyle('var(--text-secondary)') : themedMutedInsetStyle}>
-                                    <span className="block text-sm font-semibold">Hold structure and amino acid</span>
-                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">Assign selected residues to the fixed scaffold.</span>
-                                </button>
-                                <button type="button" onClick={() => setActiveResidueRole('coordinate')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'coordinate' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
-                                    <span className="block text-sm font-semibold">Remodel coordinates, hold amino acid</span>
-                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedEditableResidues.size - selectedSequenceRecallResidues.size} residues</span>
-                                </button>
-                                <button type="button" onClick={() => setActiveResidueRole('recall')} disabled={isNativeLocalRedesign && nativeRedesignMode === 'minimal_insertion'} className="rounded-lg border p-3 text-left disabled:opacity-40" style={activeResidueRole === 'recall' ? themedSelectedStyle('var(--warning)') : themedMutedInsetStyle}>
-                                    <span className="block text-sm font-semibold">
-                                        {isNativeLocalRedesign
-                                            ? 'Remodel coordinates and recall amino acid with RFD3'
-                                            : 'Remodel coordinates and redesign amino acid downstream'}
-                                    </span>
-                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedSequenceRecallResidues.size} residues</span>
-                                </button>
-                            </div>
-                        )}
-
-                        {regionMode === 'manual_ranges' ? (
-                            <div className="space-y-4">
-                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                    <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Current Selection</div>
-                                    <div className="mt-1 text-sm">{selectionSummary}</div>
-                                    <div className="mt-3">
-                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Range String</label>
-                                        <input
-                                            value={manualRangesText}
-                                            onChange={(event) => { setRoleTextIsManual(true); setManualRangesText(event.target.value); setPendingRoleHydration({ editable: event.target.value, recall: recallRangesText }); }}
-                                            className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none"
-                                            style={themedInputStyle}
-                                            placeholder="A45-58,A83-91"
-                                        />
-                                        <label className="mt-2 block text-xs">Sequence-recall ranges</label>
-                                        <input value={recallRangesText} style={themedInputStyle} onChange={event => {
-                                            setRoleTextIsManual(true);
-                                            setRecallRangesText(event.target.value);
-                                            setPendingRoleHydration({ editable: manualRangesText, recall: event.target.value });
-                                        }} />
-                                        {roleHydrationError && <p role="alert" className="text-red-400">{roleHydrationError}</p>}
-                                        <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                                            This field is auto-filled from the visual selector and remains editable if you want to refine the exact range string manually.
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {activeDesignChain ? (
-                                    <EpitopeSelector
-                                        chains={activeProteinChains}
-                                        activeChain={designChain}
-                                        selectedResidues={activeRoleResidues}
-                                        onSelectionChange={handleResidueRoleSelectionChange}
-                                        selectedLabel={
-                                            activeResidueRole === 'static'
-                                                ? 'Fixed scaffold residues'
-                                                : activeResidueRole === 'recall'
-                                                    ? 'RFD3 sequence-recall residues'
-                                                    : 'Coordinate-only redesign residues'
-                                        }
-                                    />
-                                ) : (
-                                    <div className="rounded-lg border px-4 py-8 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
-                                        Choose a source structure and design chain to enable residue picking.
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                    <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Interface Cutoff (A)</label>
-                                    <input
-                                        type="number"
-                                        min={2}
-                                        max={15}
-                                        step={0.5}
-                                        value={interfaceCutoff}
-                                        onChange={(event) => setInterfaceCutoff(Number(event.target.value))}
-                                        className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                        style={themedInputStyle}
-                                    />
-                                </div>
-                                <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                    <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Region Padding</label>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        max={12}
-                                        value={regionPadding}
-                                        onChange={(event) => setRegionPadding(Number(event.target.value))}
-                                        className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                        style={themedInputStyle}
-                                    />
-                                </div>
-                                <div className="md:col-span-2 rounded-lg border p-3" style={themedInsetStyle}>
-                                    <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Derived Region Plan</div>
-                                    <div className="mt-1 text-sm">
-                                        {contextChains.length > 0
-                                            ? `Chain ${designChain || '—'} vs ${contextChains.join(', ')} · ${interfaceCutoff.toFixed(1)} Å shell · +${regionPadding} residues.`
-                                            : 'Select at least one context chain.'}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </section>
-                </div>
-
-                <div className="space-y-6">
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div>
-                            <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                {isNativeLocalRedesign
-                                    ? 'Native RFD3 holds or recalls amino acids from the residue roles assigned above. No separate sequence model runs.'
-                                    : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
-                            </p>
-                        </div>
-
-                        <div className="space-y-4">
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                {effectiveSeqMethod === 'fampnn' && <FampnnAnalysisControls value={fampnnOverrides} onChange={setFampnnOverrides} summaryDefault="Sequence-redesign region selected above" />}
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequence Method</label>
-                                <select
-                                    value={effectiveSeqMethod}
-                                    onChange={(event) => setSeqMethod(event.target.value as SequenceMethod)}
-                                    disabled={isNativeLocalRedesign}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                    style={themedInputStyle}
-                                >
-                                    {isNativeLocalRedesign ? (
-                                        <option value="skip">Native RFD3 hold / recall roles</option>
-                                    ) : (
-                                        <>
-                                            <option value="fampnn">FA-MPNN</option>
-                                            <option value="mpnn">ProteinMPNN</option>
-                                        </>
-                                    )}
-                                </select>
-                            </div>
-
-                            {(isNativeLocalRedesign || proteinLocalRedesignUiState.showSequenceSampling) && <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Backbone Designs</label>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={128}
-                                    value={numDesigns}
-                                    onChange={(event) => setNumDesigns(Number(event.target.value))}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                    style={themedInputStyle}
-                                />
-                            </div>}
-
-                            {proteinLocalRedesignUiState.showSequenceSampling && <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequences Per Backbone</label>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={64}
-                                    value={seqsPerDesign}
-                                    onChange={(event) => setSeqsPerDesign(Number(event.target.value))}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                    style={themedInputStyle}
-                                />
-                            </div>}
-
-                            {proteinLocalRedesignUiState.showSequenceSampling && <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
-                                <input
-                                    type="checkbox"
-                                    checked={fixFixedSidechains}
-                                    onChange={(event) => setFixFixedSidechains(event.target.checked)}
-                                    className="mt-0.5"
-                                />
-                                <span>Keep sidechains fixed outside the selected sequence-redesign residues.</span>
-                            </label>}
-
-                            {!proteinLocalRedesignUiState.showSequenceSampling && (
-                                <div className="rounded-lg border p-3 text-sm text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
-                                    No separate sequence model runs. Native RFD3 uses the amino-acid hold and recall roles assigned above.
-                                </div>
-                            )}
-                        </div>
-                    </section>
-
-                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div>
-                            <h2 className="text-lg font-semibold">Review Gates</h2>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Pause at checkpoints, filter in Results, then continue that subset.
-                            </p>
-                        </div>
-
-                        <div className="space-y-4">
-                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
-                                <input
-                                    type="checkbox"
-                                    checked={interactiveGating}
-                                    onChange={(event) => setInteractiveGating(event.target.checked)}
-                                    className="mt-0.5"
-                                />
-                                <span>Pause the workflow for interactive review before the next major stage.</span>
-                            </label>
-
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Pause After</label>
-                                <select
-                                    value={interactiveGateStage}
-                                    onChange={(event) => setInteractiveGateStage(event.target.value as ReviewPauseStage)}
-                                    disabled={!interactiveGating}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
-                                    style={themedInputStyle}
-                                >
-                                    <option value="post_rfantibody">RFD3 Remodel Backbones</option>
-                                    <option value="post_fampnn">Sequence Redesign</option>
-                                    <option value="post_structure_validation">
-                                        Structure Validation
-                                    </option>
-                                </select>
-                            </div>
-                        </div>
-                    </section>
-                    )}
-
-                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div>
-                            <h2 className="text-lg font-semibold">RFD3 Controls</h2>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Expose the local-remodel settings instead of pinning everything to hidden defaults.
-                            </p>
-                        </div>
-
-                        <div className="space-y-4">
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Batches Per Design</label>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={16}
-                                    value={rfd3BatchesPerDesign}
-                                    onChange={(event) => setRfd3BatchesPerDesign(Math.max(1, Math.min(16, Number(event.target.value) || 1)))}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                    style={themedInputStyle}
-                                />
-                            </div>
-
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Extra Config</label>
-                                <textarea
-                                    value={rfd3ExtraConfig}
-                                    onChange={(event) => setRfd3ExtraConfig(event.target.value)}
-                                    rows={4}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none"
-                                    style={themedInputStyle}
-                                    placeholder="Optional raw RFdiffusion3 overrides"
-                                />
-                            </div>
-                        </div>
-                    </section>
-                    )}
-
-                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div>
-                            <h2 className="text-lg font-semibold">Backbone Filters</h2>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Optional post-RFD3 structure filters. Leave blank to keep the default permissive path.
-                            </p>
-                        </div>
-
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min Helices</label>
-                                <input value={rfdMinHelices} onChange={(event) => setRfdMinHelices(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max Helices</label>
-                                <input value={rfdMaxHelices} onChange={(event) => setRfdMaxHelices(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min Strands</label>
-                                <input value={rfdMinStrands} onChange={(event) => setRfdMinStrands(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max Strands</label>
-                                <input value={rfdMaxStrands} onChange={(event) => setRfdMaxStrands(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min SS Elements</label>
-                                <input value={rfdMinSs} onChange={(event) => setRfdMinSs(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max SS Elements</label>
-                                <input value={rfdMaxSs} onChange={(event) => setRfdMaxSs(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Min RoG</label>
-                                <input value={rfdMinRog} onChange={(event) => setRfdMinRog(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Max RoG</label>
-                                <input value={rfdMaxRog} onChange={(event) => setRfdMaxRog(event.target.value)} className="w-full rounded-lg border px-3 py-2 text-sm outline-none" style={themedInputStyle} placeholder="Optional" />
-                            </div>
-                        </div>
-                    </section>
-                    )}
-
-                    {proteinLocalRedesignUiState.showLegacyOptionalStages && (
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <div>
-                            <h2 className="text-lg font-semibold">Validation</h2>
-                            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Select one, two, or all three peer validators. Every selected validator receives the same redesigned candidates.
-                            </p>
-                        </div>
-
-                        <div className="space-y-4">
-                            <div className="grid gap-3 md:grid-cols-3">
-                                {PROTEIN_LOCAL_VALIDATORS.map((validator) => {
-                                    const labels: Record<ProteinLocalValidator, string> = {
-                                        boltz2: 'Boltz-2',
-                                        esmfold2: 'ESMFold2',
-                                        protenix_v2: 'Protenix V2',
-                                    };
-                                    return (
-                                        <label
-                                            key={validator}
-                                            className="flex items-start gap-3 rounded-lg border p-3 text-sm"
-                                            style={selectedValidators.includes(validator) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedValidators.includes(validator)}
-                                                onChange={() => setSelectedValidators((current) => toggleProteinLocalValidator(current, validator))}
-                                                className="mt-0.5"
-                                            />
-                                            <span>{labels[validator]}</span>
-                                        </label>
-                                    );
-                                })}
-                            </div>
-                            <p className="text-xs text-[var(--text-secondary)]">
-                                At least one validator is required. Protenix V2 is selected by default.
-                            </p>
-
-                            {selectedValidators.includes('boltz2') && (
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
-                                        <input
-                                            type="number"
-                                            min={50}
-                                            max={1000}
-                                            value={boltzSamplingSteps}
-                                            onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
-                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                            style={themedInputStyle}
-                                        />
-                                    </div>
-
-                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            max={12}
-                                            value={boltzRecyclingSteps}
-                                            onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
-                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                                            style={themedInputStyle}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </section>
-                    )}
-
-                    <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-                        <h2 className="text-lg font-semibold">Execution Summary</h2>
+                <ModelDocumentationLinks topics={['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']} summary="Experimental workflow · method references" compact />
+            </div>
+                    <details className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
+                        <summary className="cursor-pointer text-sm font-medium">Run details</summary>
                         <dl className="space-y-3 text-sm">
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Structure</dt>
@@ -2173,18 +2166,28 @@ export function ProteinLocalRedesignTemplate({
                                 </dd>
                             </div>
                         </dl>
-                    </section>
-                </div>
-            </div>
+                    </details>                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Job Name</div>
+                                        <input
+                                            aria-label="Job name"
+                                            value={jobName}
+                                            onChange={(event) => setJobName(event.target.value)}
+                                            className="mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                            placeholder="tDT_selectivity_redesign"
+                                        />
+                                    </div>
 
+            {runDetails}
+            <ExecutionTargetPicker workflowRequest={workflowRequest} />
             <div className="flex justify-end gap-3">
-                <button
+                {!embedded && <button
                     onClick={onBack}
                     className="rounded-lg border px-5 py-3 text-sm font-medium transition-colors"
                     style={themedInsetStyle}
                 >
                     Cancel
-                </button>
+                </button>}
                 <button
                     onClick={() => void handleSubmit()}
                     disabled={(effectiveSeqMethod === 'fampnn' && Boolean(fampnnError)) || submitMutation.isPending || (

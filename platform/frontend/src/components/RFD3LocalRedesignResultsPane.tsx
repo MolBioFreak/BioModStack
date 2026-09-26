@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchRFD3LocalRedesign } from '../lib/api';
 import type { RFD3LocalRedesignReadModel } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { NativeCandidatePagination } from './RFD3GenerationResultsPane';
 import { resolveRFD3LocalRedesignRequestView } from './rfd3LocalRedesignResultsView';
 
 interface RFD3LocalRedesignResultsPaneProps {
@@ -35,6 +36,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
     const result = resultQuery.data?.data;
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
     const [selectedTrajectoryRole, setSelectedTrajectoryRole] = useState<'denoised_trajectory' | 'noisy_trajectory'>('denoised_trajectory');
+    const [requestedPage, setPage] = useState(1);
     const requestView = resolveRFD3LocalRedesignRequestView(result);
     const request = requestView.request;
     const fixedAtoms = request?.rfd3 && typeof request.rfd3 === 'object'
@@ -55,16 +57,16 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
     if (resultQuery.isLoading) {
         return <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-6 text-sm text-slate-400">Loading the RFD3 local-redesign data plane…</div>;
     }
-    if (resultQuery.isError || !result) {
+    if (resultQuery.isError || !result || result.job_id !== jobId || result.schema !== 'bms.rfd3.local-redesign.read-model.v1') {
         return <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-100">The typed RFD3 local-redesign read model is not available yet.</div>;
     }
 
     const artifactUrl = (artifactId: string) => `/api/jobs/${jobId}/rfd3-local-redesign/artifacts/${artifactId}`;
     const rfd3 = request?.rfd3 && typeof request.rfd3 === 'object' ? request.rfd3 as Record<string, unknown> : {};
     const execution = request?.execution && typeof request.execution === 'object' ? request.execution as Record<string, unknown> : {};
-    const activeCandidateId = selectedCandidateId && result.candidates.some((candidate) => candidate.candidate_id === selectedCandidateId)
-        ? selectedCandidateId
-        : result.candidates[0]?.candidate_id;
+    const activeCandidateId = selectedCandidateId ?? result.candidates[0]?.candidate_id;
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(result.candidates.length / 10)));
+    const visibleCandidates = result.candidates.slice((page - 1) * 10, page * 10);
     const activeStructure = result.artifacts.find(
         (artifact) => artifact.candidate_id === activeCandidateId && artifact.role === 'structure',
     );
@@ -76,51 +78,47 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
 
     return (
         <div className="space-y-5">
-            <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 local redesign</div>
-                        <h2 className="mt-1 text-2xl font-semibold text-white">{request?.redesign_mode}</h2>
-                        <p className="mt-1 text-sm text-slate-300">Sequence policy: <span className="font-mono text-emerald-200">{request?.sequence_policy}</span></p>
-                    </div>
-                    <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-right text-xs text-slate-400">
-                        <div>Status: <span className="text-white">{requestView.status || '—'}</span></div>
-                        <div className="font-mono">Request {requestView.requestSha256 ? `${requestView.requestSha256.slice(0, 16)}…` : '—'}</div>
-                    </div>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-4">
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile</div><div className="mt-1 text-sm text-white">{requestView.profileId || '—'}</div></div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Designs</div><div className="mt-1 text-sm text-white">{formatValue(execution.num_designs)}</div></div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Seed</div><div className="mt-1 text-sm text-white">{formatValue(execution.seed)}</div></div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile registry</div><div className="mt-1 font-mono text-xs text-white">{requestView.profileRegistrySha256 ? `${requestView.profileRegistrySha256.slice(0, 16)}…` : '—'}</div></div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Candidates</div><div className="mt-1 text-sm text-white">{result.candidates.length}</div></div>
-                </div>
+            <section className="rounded-xl border border-slate-700 p-4">
+                <h2 className="text-lg font-semibold text-white">RFD3 local redesign</h2>
+                <p className="mt-2 text-sm text-slate-300">{result.candidates.length} published candidates · Requested: {formatValue(execution.num_designs)} · Status: {requestView.status || '—'}</p>
             </section>
 
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-lg font-semibold text-white">Producer input and fixed-coordinate map</h3>
-                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Sequence design not requested</span>
+                    <h3 className="text-lg font-semibold text-white">Candidate structure view</h3>
+                    <div className="flex flex-wrap gap-2">
+                        {visibleCandidates.map((candidate) => (
+                            <button
+                                key={candidate.candidate_id}
+                                type="button"
+                                aria-pressed={candidate.candidate_id === activeCandidateId}
+                                onClick={() => setSelectedCandidateId(candidate.candidate_id)}
+                                className={`rounded-lg border px-3 py-1.5 text-xs ${candidate.candidate_id === activeCandidateId ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-100' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                            >
+                                {candidate.candidate_id}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-                <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                    <div className="space-y-2 text-sm">
-                        <div><span className="text-slate-500">Input:</span> <span className="font-mono text-slate-200">{formatValue(request?.input)}</span></div>
-                        <div><span className="text-slate-500">Contig dialect:</span> <span className="font-mono text-slate-200">{formatValue(request?.contig_dialect)}</span></div>
-                        <div><span className="text-slate-500">Contig:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.contig)}</span></div>
-                        <div><span className="text-slate-500">Partial t:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.partial_t)}</span></div>
-                        <div><span className="text-slate-500">Ligand:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.ligand)}</span></div>
-                    </div>
-                    <div>
-                        <div className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-500">select_fixed_atoms</div>
-                        <pre className="max-h-48 overflow-auto rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-emerald-100">{formatValue(fixedAtoms)}</pre>
-                    </div>
+                <NativeCandidatePagination page={page} total={result.candidates.length} onPage={setPage} />
+                <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
+                    {activeStructure ? <MolstarViewer
+                        label={activeCandidateId}
+                        artifactJobId={jobId}
+                        structureUrl={activeStructure ? artifactUrl(activeStructure.artifact_id) : undefined}
+                        overlayStructures={sourceArtifact ? [{ id: 'source-input', structureUrl: artifactUrl(sourceArtifact.artifact_id), format: sourceFormat, label: 'Source input' }] : undefined}
+                        format="cif"
+                        height={560}
+                        showSequenceTrack
+                        showComplexWorkbench
+                    /> : <p role="status" className="p-4 text-sm text-slate-400">Selected candidate structure is unavailable. Choose another candidate.</p>}
                 </div>
             </section>
 
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
                 <div className="flex items-center justify-between gap-2"><h3 className="text-lg font-semibold text-white">Candidate metrics</h3><span className="text-xs text-slate-500">Source: native RFD3 metadata</span></div>
                 <div className="mt-4 grid gap-3 xl:grid-cols-2">
-                    {result.candidates.map((candidate) => {
+                    {result.candidates.filter((candidate) => candidate.candidate_id === activeCandidateId).map((candidate) => {
                         const candidateArtifacts = artifactsByCandidate.get(candidate.candidate_id) || [];
                         return (
                             <article key={candidate.candidate_id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -146,34 +144,6 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                             </article>
                         );
                     })}
-                </div>
-            </section>
-
-            <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-lg font-semibold text-white">Candidate structure view</h3>
-                    <div className="flex flex-wrap gap-2">
-                        {result.candidates.map((candidate) => (
-                            <button
-                                key={candidate.candidate_id}
-                                type="button"
-                                onClick={() => setSelectedCandidateId(candidate.candidate_id)}
-                                className={`rounded-lg border px-3 py-1.5 text-xs ${candidate.candidate_id === activeCandidateId ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-100' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
-                            >
-                                {candidate.candidate_id}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-                <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
-                    <MolstarViewer
-                        structureUrl={activeStructure ? artifactUrl(activeStructure.artifact_id) : undefined}
-                        overlayStructures={sourceArtifact ? [{ id: 'source-input', structureUrl: artifactUrl(sourceArtifact.artifact_id), format: sourceFormat, label: 'Source input' }] : undefined}
-                        format="cif"
-                        height={560}
-                        showSequenceTrack
-                        showComplexWorkbench
-                    />
                 </div>
             </section>
 
@@ -217,6 +187,49 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                 </section>
             )}
 
+            <details className="rounded-xl border border-slate-700 p-4">
+                <summary className="cursor-pointer text-sm text-slate-300">Run details and artifacts</summary>
+                <pre className="my-3 max-h-80 overflow-auto text-xs text-slate-400">{JSON.stringify(result.request, null, 2)}</pre>
+            <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 local redesign</div>
+                        <h2 className="mt-1 text-2xl font-semibold text-white">{request?.redesign_mode}</h2>
+                        <p className="mt-1 text-sm text-slate-300">Sequence policy: <span className="font-mono text-emerald-200">{request?.sequence_policy}</span></p>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-right text-xs text-slate-400">
+                        <div>Status: <span className="text-white">{requestView.status || '—'}</span></div>
+                        <div className="font-mono">Request {requestView.requestSha256 ? `${requestView.requestSha256.slice(0, 16)}…` : '—'}</div>
+                    </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile</div><div className="mt-1 text-sm text-white">{requestView.profileId || '—'}</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Designs</div><div className="mt-1 text-sm text-white">{formatValue(execution.num_designs)}</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Seed</div><div className="mt-1 text-sm text-white">{formatValue(execution.seed)}</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Profile registry</div><div className="mt-1 font-mono text-xs text-white">{requestView.profileRegistrySha256 ? `${requestView.profileRegistrySha256.slice(0, 16)}…` : '—'}</div></div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"><div className="text-[10px] uppercase text-slate-500">Candidates</div><div className="mt-1 text-sm text-white">{result.candidates.length}</div></div>
+                </div>
+            </section>
+            <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-lg font-semibold text-white">Producer input and fixed-coordinate map</h3>
+                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Sequence design not requested</span>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-2 text-sm">
+                        <div><span className="text-slate-500">Input:</span> <span className="font-mono text-slate-200">{formatValue(request?.input)}</span></div>
+                        <div><span className="text-slate-500">Contig dialect:</span> <span className="font-mono text-slate-200">{formatValue(request?.contig_dialect)}</span></div>
+                        <div><span className="text-slate-500">Contig:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.contig)}</span></div>
+                        <div><span className="text-slate-500">Partial t:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.partial_t)}</span></div>
+                        <div><span className="text-slate-500">Ligand:</span> <span className="font-mono text-slate-200">{formatValue(rfd3.ligand)}</span></div>
+                    </div>
+                    <div>
+                        <div className="mb-2 text-xs uppercase tracking-[0.16em] text-slate-500">select_fixed_atoms</div>
+                        <pre className="max-h-48 overflow-auto rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-emerald-100">{formatValue(fixedAtoms)}</pre>
+                    </div>
+                </div>
+            </section>
+
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
                 <h3 className="text-lg font-semibold text-white">Immutable artifacts</h3>
                 <div className="mt-3 space-y-2">
@@ -227,6 +240,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                     ))}
                 </div>
             </section>
+            </details>
         </div>
     );
 }

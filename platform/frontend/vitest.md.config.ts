@@ -60,6 +60,7 @@ export default defineConfig({
             './tests/vitest/mdResultsMolstarMounted.test.tsx',
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
             './tests/vitest/rfd3GenerationMounted.test.tsx',
+            './tests/vitest/deNovoV15*.test.tsx',
             './tests/vitest/mdFailedLaunchMounted.test.tsx',
             './tests/vitest/mdQueuePanel.test.tsx',
             './tests/vitest/remoteExecutionSurfaces.test.tsx',

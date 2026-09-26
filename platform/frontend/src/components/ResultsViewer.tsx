@@ -68,6 +68,7 @@ import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
+import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import {
     getRFD3LocalRedesignCandidateLabel,
@@ -2061,8 +2062,9 @@ export function ResultsViewer() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
                 const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
-                if (rfd3CandidateLabel) return rfd3CandidateLabel;
+                if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -3196,8 +3198,30 @@ export function ResultsViewer() {
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
     const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
-    const activeRFD3CandidateLabel = getRFD3LocalRedesignCandidateLabel(activeJob);
+    const nativeGenerationQuery = useQuery({
+        queryKey: ['rfd3-generation', activeJob?.id],
+        queryFn: () => fetchRFD3Generation(activeJob!.id),
+        enabled: isRFD3GenerationResultJob(activeJob),
+        retry: false,
+    });
+    const nativeGeneration = nativeGenerationQuery.data?.data;
+    const nativeGenerationCount = nativeGeneration?.schema === 'bms.rfd3.generation.read-model.v1'
+        && nativeGeneration.job_id === activeJob?.id ? nativeGeneration.counts.generated : undefined;
+    const isNativeGeneration = isRFD3GenerationResultJob(activeJob);
+    const nativeRedesignQuery = useQuery({
+        queryKey: ['rfd3-local-redesign', activeJob?.id],
+        queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),
+        enabled: isRFD3LocalRedesignResultJob(activeJob),
+        retry: false,
+    });
+    const nativeRedesign = nativeRedesignQuery.data?.data;
+    const nativeRedesignCount = nativeRedesign?.schema === 'bms.rfd3.local-redesign.read-model.v1'
+        && nativeRedesign.job_id === activeJob?.id ? nativeRedesign.candidates.length : undefined;
+    const activeRFD3CandidateLabel = isRFD3LocalRedesignResultJob(activeJob)
+        ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
+        : null;
     const activeBadgeLabel = useMemo(() => {
+        if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
@@ -3209,7 +3233,7 @@ export function ResultsViewer() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'

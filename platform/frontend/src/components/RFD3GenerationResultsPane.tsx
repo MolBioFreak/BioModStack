@@ -22,8 +22,24 @@ const SummaryCard = ({ label, value, detail }: { label: string; value: string | 
     </div>
 );
 
+// Same bounded first/previous/next/last pattern as the results table.
+export function NativeCandidatePagination({ page, total, onPage }: { page: number; total: number; onPage: (page: number) => void }) {
+    const pages = Math.max(1, Math.ceil(total / 10));
+    return <nav aria-label="Candidate pages" className="flex flex-wrap items-center gap-3 p-3 text-sm text-slate-300">
+        <span>{total === 0 ? 0 : (page - 1) * 10 + 1}–{Math.min(page * 10, total)} of {total} candidates</span>
+        <button type="button" disabled={page === 1} onClick={() => onPage(1)}>First</button>
+        <button type="button" disabled={page === 1} onClick={() => onPage(page - 1)}>Previous</button>
+        <span>Page {page} / {pages}</span>
+        <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+        <button type="button" disabled={page >= pages} onClick={() => onPage(pages)}>Last</button>
+    </nav>;
+}
+
 export function RFD3GenerationResultsContent({ result }: { result: RFD3GenerationReadModel }) {
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+    const [requestedPage, setPage] = useState(1);
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(result.candidates.length / 10)));
+    const visibleCandidates = result.candidates.slice((page - 1) * 10, page * 10);
     const selectedCandidate = selectedCandidateId === null ? result.candidates[0]
         : result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
     return (
@@ -36,30 +52,23 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                     <SummaryCard label="Generated" value={result.counts.generated} />
                     <SummaryCard label="Accepted" value={result.counts.accepted} />
                 </div>
+                <p className="mt-3 text-xs text-slate-400">Accepted is the producer’s status: by default it checks requested length bounds; a supplied accepted-candidate set may use different criteria. It does not establish folding or binding validation.</p>
             </section>
 
-            <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
-                <h3 className="text-lg font-semibold text-white">Producer aggregate metrics</h3>
-                <p className="mt-1 text-xs text-slate-500">Minimum / mean / maximum across the complete generated set.</p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <SummaryCard label="Length" value={formatRange(result.aggregates.length, ' residues')} />
-                    <SummaryCard label="Radius" value={formatRange(result.aggregates.radius, ' Å')} />
-                    <SummaryCard label="Helix" value={formatRange(result.aggregates.helix)} />
-                    <SummaryCard label="Strand" value={formatRange(result.aggregates.strand)} />
-                </div>
-            </section>
+
 
             <section className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/50">
                 <div className="border-b border-slate-800 p-5">
                     <h3 className="text-lg font-semibold text-white">Candidates</h3>
                 </div>
-                <div className="overflow-x-auto">
+                <NativeCandidatePagination page={page} total={result.candidates.length} onPage={setPage} />
+                <div className="max-h-80 overflow-auto">
                     <table className="w-full min-w-[760px] text-left text-sm">
                         <thead className="bg-slate-950/60 text-xs uppercase text-slate-500">
                             <tr><th className="px-4 py-3">Candidate</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Length</th><th className="px-4 py-3">Radius (Å)</th><th className="px-4 py-3">Helix</th><th className="px-4 py-3">Strand</th><th className="px-4 py-3">Structure</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800">
-                            {result.candidates.map((candidate) => (
+                            {visibleCandidates.map((candidate) => (
                                 <tr key={candidate.candidate_id} className="text-slate-300">
                                     <td className="px-4 py-3 font-mono text-emerald-200"><button type="button" aria-pressed={candidate === selectedCandidate} onClick={() => setSelectedCandidateId(candidate.candidate_id)}>{candidate.candidate_id}</button></td>
                                     <td className="px-4 py-3">{candidate.status}</td>
@@ -80,6 +89,21 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                 {selectedCandidateId !== null && !selectedCandidate && <p role="alert" className="p-6 text-sm text-amber-200">Selected candidate is unavailable. Choose another candidate.</p>}
                 {result.candidates.length === 0 && <div className="p-6 text-sm text-slate-400">No generated candidates are available.</div>}
             </section>
+            <details className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
+                <summary className="cursor-pointer text-lg font-semibold text-white">Producer aggregate metrics</summary>
+                <p className="mt-1 text-xs text-slate-500">Minimum / mean / maximum across the complete generated set.</p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <SummaryCard label="Length" value={formatRange(result.aggregates.length, ' residues')} />
+                    <SummaryCard label="Radius" value={formatRange(result.aggregates.radius, ' Å')} />
+                    <SummaryCard label="Helix" value={formatRange(result.aggregates.helix)} />
+                    <SummaryCard label="Strand" value={formatRange(result.aggregates.strand)} />
+                </div>
+            </details>
+            <details className="rounded-xl border border-slate-700 p-4">
+                <summary className="cursor-pointer text-sm text-slate-300">Run details</summary>
+                <p className="mt-3 break-all font-mono text-xs text-slate-400">Result manifest: {result.result_manifest_sha256}</p>
+                <pre className="mt-3 max-h-80 overflow-auto text-xs text-slate-400">{JSON.stringify(result.request, null, 2)}</pre>
+            </details>
         </div>
     );
 }
