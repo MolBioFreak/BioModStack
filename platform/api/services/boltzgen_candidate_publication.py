@@ -3,6 +3,7 @@
 Callers: boltzgen / boltzgen_child; modules/boltzgen.nf publishes the exact
 filtered directory. No fallback to raw outputs, CSV rows or requested counts.
 """
+import copy
 import json
 import uuid
 from pathlib import Path
@@ -292,6 +293,14 @@ async def _generation_publication(job, output, session, *, publish=False, offset
                   'stage_family': 'boltzgen', 'stage_mode': job.mode,
                   'provenance': {'schema': 'boltzgen.candidate-lineage.v1', 'candidate_key': design.name,
                                  'primary_artifact_id': artifact.id, 'validation_state': 'unvalidated'}}
+        mapping = prepared[design.name]['payload'].get('target_residue_mapping')
+        if isinstance(mapping, str):
+            try:
+                mapping = json.loads(mapping)
+            except (ValueError, TypeError):
+                mapping = None
+        if isinstance(mapping, (dict, list)) and mapping:
+            fields['provenance']['target_residue_mapping'] = copy.deepcopy(mapping)
         if previous is None:
             for key, value in fields.items():
                 setattr(design, key, value)

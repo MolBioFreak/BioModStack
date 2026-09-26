@@ -287,7 +287,32 @@ def run_with_native_identity(command, *, reuse=False):
     """Observe installed source around the existing invocation, not a version stamp."""
     from lib.boltzgen_native import observe_source, unavailable_identity
     before = observe_source()
-    code = os.system(command)
+    # Activate an in-memory, pinned import hook in native CLI subprocesses.
+    # Unsupported source runs unchanged; this never adds an execution gate.
+    import shlex
+    import tempfile
+    hook, observed = None, command
+    try:
+        tokens = shlex.split(command)
+        if not reuse and '--output' in tokens:
+            directory = Path(tokens[tokens.index('--output') + 1]) / 'source_correspondence'
+            hook = tempfile.TemporaryDirectory(prefix='boltzgen-observer-')
+            Path(hook.name, 'sitecustomize.py').write_text(
+                'import boltzgen_source_correspondence as _bms\n_bms.install()\n')
+            pythonpath = os.pathsep.join([hook.name, str(Path(__file__).resolve().parent),
+                                         os.environ.get('PYTHONPATH', '')])
+            observed = ('BMS_BOLTZGEN_CORRESPONDENCE_DIR=' + shlex.quote(str(directory.resolve()))
+                        + ' PYTHONPATH=' + shlex.quote(pythonpath) + ' ' + command)
+    except (OSError, ValueError, IndexError):
+        observed = command
+    try:
+        code = os.system(observed)
+    finally:
+        if hook is not None:
+            try:
+                hook.cleanup()
+            except OSError:
+                pass
     after = observe_source()
     if reuse or code != 0 or before != after:
         return code, unavailable_identity('reused_failed_or_changed_producer')
@@ -539,6 +564,13 @@ def main():
                 print(f"Converted: {cif.name} -> {pdb_name}")
                 cif_converted += 1
                 converted_design_ids.add(unique_stem)
+                if args.core_protein_scientific_contract == 1:
+                    try:
+                        from boltzgen_source_correspondence import retain_converted
+                    except ImportError:
+                        pass  # Historical/staged runtimes without the observer still run.
+                    else:
+                        retain_converted(batch_dir / 'source_correspondence', cif, pdb_path, unique_stem)
     
     if cif_converted == 0:
         print("Warning: No CIF files converted to PDB")
@@ -589,6 +621,8 @@ def main():
                 if args.core_protein_scientific_contract == 1:
                     from lib.filtering.evidence import metric_evidence, CORE
                     metadata.update(core_protein_scientific_contract=1, metric_evidence={k: metric_evidence(k, None) for k in CORE})
+                    from lib.filtering.evidence import correspondence_metadata
+                    metadata.update(correspondence_metadata(designs_dir, pdb.stem))
                 json.dump(metadata, f, allow_nan=False)
     
     report_stage("affinity", "complete", args.job_id, f"Processed {cif_converted} design metrics")

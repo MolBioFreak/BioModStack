@@ -128,6 +128,24 @@ def native_metadata(values, design_id, source_bytes, dialect):
     return values
 
 
+def correspondence_metadata(output_dir, identity):
+    """Optional producer join bound at the actual CIF-to-PDB conversion event."""
+    try:
+        root = Path(output_dir)
+        row = json.loads((root / f'{identity}.correspondence.json').read_text())
+        raw = (root / f'{identity}.pdb').read_bytes()
+        if row.get('candidate_key') == identity and row.get('structure_sha256') == hashlib.sha256(raw).hexdigest():
+            mapping = row.get('target_residue_mapping')
+            if isinstance(mapping, (dict, list)) and mapping:
+                # FilterBoltzGen intentionally retains only scalar metadata.
+                # A JSON string crosses that existing sealed metadata owner; the
+                # model publication decodes it back to the shared residue contract.
+                return {'target_residue_mapping': json.dumps(mapping, sort_keys=True, separators=(',', ':'))}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
 def csv_metadata(csv_path, output_dir, known_design_ids=None, batch_prefix='', producer_identity=None, filter_from_inverse_folded=None):
     raw = Path(csv_path).read_bytes()
     from lib.boltzgen_native import csv_candidate_identity
@@ -159,6 +177,7 @@ def csv_metadata(csv_path, output_dir, known_design_ids=None, batch_prefix='', p
                 except (ValueError, TypeError):
                     values[key] = value
         data = native_metadata(values, identity, raw, 'csv')
+        data.update(correspondence_metadata(output_dir, identity))
         from lib.boltzgen_native import retain_source
         data['native_scalar_source'] = retain_source(csv_path, output_dir, identity, 'csv', producer_identity, native_id=base)
         data['native_scalar_source']['filter_from_inverse_folded'] = filter_from_inverse_folded
@@ -196,6 +215,7 @@ def npz_metadata(batch_dir, output_dir, known_design_ids=None, batch_prefix='', 
                     else:
                         continue
                 data = native_metadata(values, identity, raw, 'npz')
+                data.update(correspondence_metadata(output_dir, identity))
                 from lib.boltzgen_native import retain_source
                 data['native_scalar_source'] = retain_source(path, output_dir, identity, 'npz', producer_identity)
             (Path(output_dir) / f'confidence_{identity}.json').write_text(json.dumps(data, allow_nan=False, indent=2))
