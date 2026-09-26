@@ -17,7 +17,8 @@ import { api } from '../../src/lib/api';
 import { BioXpOperatorControlTabs } from '../../src/components/BioXpOperatorControlTabs';
 import { liquidInputKind } from '../../src/components/BioXpOperatorInput';
 
-const catalog = JSON.parse(readFileSync('../api/tests/fixtures/bioxp_retained_catalog_v1.json', 'utf8'));
+const catalog = JSON.parse(readFileSync(process.env.BIOXP_NATIVE_LIQUID_CATALOG
+    ?? '../api/tests/fixtures/bioxp_retained_catalog_v1.json', 'utf8'));
 const liquidActions: BioXpOperatorActionSpec[] = catalog.actions.filter((action: BioXpOperatorActionSpec) => action.informational_path?.startsWith('/liquid/'));
 let container: HTMLDivElement;
 let root: Root;
@@ -117,7 +118,15 @@ describe('all retained published liquid action input types', () => {
         await mount('/liquid/dispense');
         await change('Volume Ul presence', 'value'); await change('Volume Ul', '5');
         await change(`${name} presence`, 'value'); await change(`${name}.location_id presence`, 'value'); await change(`${name}.location_id`, 'plate');
-        await change(`${name}.well_id presence`, 'null');
+        const presence = container.querySelector(`[aria-label="${name}.well_id presence"]`) as HTMLSelectElement;
+        if ([...presence.options].some(option => option.value === 'null')) {
+            await change(`${name}.well_id presence`, 'null');
+        } else {
+            // Current producer supplies the resolved nullable schema; its null
+            // variant is explicit, separate from the field's omission selector.
+            await change(`${name}.well_id presence`, 'value');
+            await change(`${name}.well_id variant`, '1');
+        }
         await change('Channels presence', 'value');
         const inputs = await run();
         expect(inputs).toEqual({ volume_ul: 5, pressure_profile: '1R', blow_out: false, dispense_type: 0, [name]: { location_id: 'plate', well_id: null }, channels: [] });
