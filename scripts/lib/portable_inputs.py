@@ -152,11 +152,11 @@ def native_reference_fields(document, format):
                 yield from field(entry, key, ("templates", i), "template")
     elif format == "protein-cad":
         for section, fields in {"laproteina": ("motif_pdb", "checkpoint_dir", "data_path"),
-                                "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "cutlass_path")}.items():
+                                "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "hf_cache_path", "cutlass_path")}.items():
             if document.get("backend") and section != document["backend"]:
                 continue
             for key in fields:
-                role = "runtime" if key in {"checkpoint_dir", "data_path", "checkpoint_path", "cutlass_path"} else "disco-json" if "json" in key else "input"
+                role = "runtime" if key in {"checkpoint_dir", "data_path", "checkpoint_path", "hf_cache_path", "cutlass_path"} else "disco-json" if "json" in key else "input"
                 yield from field(document.get(section, {}), key, (section,), role)
     elif format == "disco-json":
         for i, job in enumerate(document):

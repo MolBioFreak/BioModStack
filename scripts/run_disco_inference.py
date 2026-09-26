@@ -92,8 +92,10 @@ def main() -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(repo), env.get("PYTHONPATH"))))
     # Keep the selected native snapshot/refs cache separate from writable JIT data.
-    env["HF_HOME"] = str(checkpoint.parent / "huggingface")
-    env["HF_HUB_CACHE"] = str(checkpoint.parent / "huggingface" / "hub")
+    # Historical prepared requests omit the independent managed-cache field.
+    hf_cache = Path(disco.get("hf_cache_path") or checkpoint.parent / "huggingface")
+    env["HF_HOME"] = str(hf_cache)
+    env["HF_HUB_CACHE"] = str(hf_cache / "hub")
     # Preserve native network fallback and any explicit caller offline policy.
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
     cache_root = Path(env.get("XDG_CACHE_HOME") or work_dir / "cache")

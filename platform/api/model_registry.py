@@ -161,6 +161,8 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
         refs.append(RuntimeDependencyRef(kind='image', relative_path=image))
         if weights:
             refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
+    # Family preload retains the complete managed DISCO tree.
+    refs.append(RuntimeDependencyRef(kind='weights', relative_path='disco'))
     # Both designers ship their default checkpoints inside their images.
     for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
         refs.extend(model_runtime_dependencies(peer))
@@ -259,6 +261,17 @@ def native_checkpoint_dependencies(process: str, params: dict):
                 dependencies.append(SelectedDependency('weights:boltz:' + member,
                     'weights', 'boltz/' + member, owner,
                     selector='boltz_models', selector_subpath=member))
+    elif process == 'RunDISCO':
+        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        selector = ('pcad_disco_checkpoint_path' if params.get('pcad_disco_checkpoint_path')
+                    else 'disco_checkpoint_path')
+        selected = params.get(selector)
+        dependencies.append(SelectedDependency('weights:disco:checkpoint', 'weights',
+            'disco/DISCO.pt', owner, selector=selector if selected else 'weights_root',
+            selector_subpath=None if selected else 'disco/DISCO.pt'))
+        dependencies.append(SelectedDependency('weights:disco:huggingface', 'weights',
+            'disco/huggingface', owner, selector='weights_root',
+            selector_subpath='disco/huggingface'))
     elif process == 'RunLaProteina':
         from paths import get_weights_root
 

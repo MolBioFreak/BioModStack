@@ -291,7 +291,7 @@ LABEL_ASSETS = {
     'ShapeEvaluate': ('shape_rfd3.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
     'LaProteina': ('laproteina.sif', None, None, None),
-    'DISCO': ('disco.sif', None, 'disco', 'pcad_disco_checkpoint_path'),
+    'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
     'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
     'OpenMM': ('openmm.sif', None, None, None),

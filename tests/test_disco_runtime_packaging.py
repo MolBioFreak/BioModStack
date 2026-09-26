@@ -15,7 +15,8 @@ spec.loader.exec_module(wrapper)
 
 @pytest.mark.parametrize("effort,attention,seeds", [("fast", False, None), ("max", True, [4, 9])])
 @pytest.mark.parametrize("cache_mode", ["unset", "nextflow", "explicit"])
-def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_path, monkeypatch, effort, attention, seeds, cache_mode):
+@pytest.mark.parametrize("managed_cache", [False, True])
+def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_path, monkeypatch, effort, attention, seeds, cache_mode, managed_cache):
     source = tmp_path / "native"
     source.mkdir()
     checkpoint = tmp_path / "selected" / "DISCO.pt"
@@ -24,6 +25,7 @@ def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_p
     request = tmp_path / "request.json"
     request.write_text(json.dumps({"job_name": "packaging", "task": "unconditional", "disco": {
         "input_json_path": str(inputs), "checkpoint_path": str(checkpoint),
+        **({"hf_cache_path": str(tmp_path / "managed-hf")} if managed_cache else {}),
         "effort": effort, "use_deepspeed_evo_attention": attention, "seeds": seeds,
     }}))
     output = tmp_path / "output"
@@ -56,7 +58,9 @@ def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_p
         assert kwargs["cwd"] == output / "disco_work"
         (kwargs["cwd"] / "native-write-probe").write_text("ok")
         env = kwargs["env"]
-        assert env["HF_HUB_CACHE"] == str(checkpoint.parent / "huggingface/hub")
+        expected_hf = tmp_path / "managed-hf" if managed_cache else checkpoint.parent / "huggingface"
+        assert env["HF_HOME"] == str(expected_hf)
+        assert env["HF_HUB_CACHE"] == str(expected_hf / "hub")
         for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
             assert env.get(key) == ("1" if attention else None)
         for key in ("XDG_CACHE_HOME", "TRITON_CACHE_DIR", "TORCH_EXTENSIONS_DIR"):

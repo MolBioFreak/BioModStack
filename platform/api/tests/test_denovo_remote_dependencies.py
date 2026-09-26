@@ -143,8 +143,11 @@ def test_real_compiler_preserves_selected_cad_runtime_bindings(assets, tmp_path,
     from services.nextflow import compile_nextflow_invocation
     leaf(assets['containers'] / (backend + '.sif'))
     leaf(assets['weights'] / backend / 'fixture.bin')
+    if backend == 'disco':
+        leaf(assets['weights'] / 'disco/DISCO.pt')
+        leaf(assets['weights'] / 'disco/huggingface/hub/fixture.bin')
     params = {'generator': backend, 'backend': backend, 'design_task': 'unconditional',
-              'target_lengths': '100', 'num_designs': 1}
+              'target_lengths': '100', 'num_designs': 1, 'weights_root': str(assets['weights'])}
     custom = assets['data'] / 'custom'
     if override:
         leaf(custom / 'fixture.bin')
@@ -158,7 +161,9 @@ def test_real_compiler_preserves_selected_cad_runtime_bindings(assets, tmp_path,
     selected = bundle._runtime_assets(MODEL, 'de_novo_design', native,
         native_invocation=invocation, only_kinds=frozenset({'image', 'weights', 'runtime_data'}))
     assert {path for path, _ in selected} == {
-        assets['containers'] / (backend + '.sif'), assets['weights'] / backend,
+        assets['containers'] / (backend + '.sif'),
+        *([assets['weights'] / 'disco/DISCO.pt', assets['weights'] / 'disco/huggingface']
+          if backend == 'disco' else [assets['weights'] / backend]),
         *([custom] if override else [])}
 
 
@@ -198,6 +203,7 @@ def test_selected_cad_does_not_expand_to_family(assets, backend):
 def test_selected_disco_cutlass_only_when_explicit(assets, prefix):
     leaf(assets['containers'] / 'disco.sif')
     leaf(assets['weights'] / 'disco/DISCO.pt')
+    leaf(assets['weights'] / 'disco/huggingface/hub/fixture.bin')
     cutlass = assets['data'] / 'operator-cutlass'
     leaf(cutlass / 'include/cutlass.h')
     params = {'pcad_backend': 'disco'}
@@ -205,7 +211,7 @@ def test_selected_disco_cutlass_only_when_explicit(assets, prefix):
     params[prefix + 'disco_cutlass_path'] = str(cutlass)
     selected = runtime(params)
     assert cutlass in {path for path, _ in selected}
-    assert len(selected) == 3
+    assert len(selected) == 4
     assert any(d.selector == prefix + 'disco_cutlass_path' for d in plan(params).dependencies)
 
 

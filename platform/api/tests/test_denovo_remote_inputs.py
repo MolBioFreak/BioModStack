@@ -26,6 +26,10 @@ def roots(tmp_path, monkeypatch):
         (roots['containers'] / f'{engine}.sif').write_bytes(b'inert runtime fixture')
         (roots['weights'] / engine).mkdir()
         (roots['weights'] / engine / 'checkpoint.bin').write_bytes(b'inert weight fixture')
+    (roots['weights'] / 'disco' / 'DISCO.pt').write_bytes(b'inert weight fixture')
+    hf_cache = roots['weights'] / 'disco' / 'huggingface' / 'hub'
+    hf_cache.mkdir(parents=True)
+    (hf_cache / 'fixture.bin').write_bytes(b'inert cache fixture')
     for getter, key in [('get_data_root', 'data'), ('get_inputs_dir', 'inputs'),
                         ('get_results_dir', 'results'), ('get_weights_root', 'weights'),
                         ('get_container_dir', 'containers')]:

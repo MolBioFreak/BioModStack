@@ -127,6 +127,7 @@ def main() -> None:
     parser.add_argument("--disco-ligand-name", default="")
     parser.add_argument("--disco-na-sequence", default="")
     parser.add_argument("--disco-checkpoint-path", default="")
+    parser.add_argument("--disco-hf-cache-path", default="")
     parser.add_argument("--disco-use-deepspeed-evo-attention", type=_parse_bool, default=False)
     parser.add_argument("--disco-cutlass-path", default="")
     parser.add_argument("--output", required=True)
@@ -197,6 +198,7 @@ def main() -> None:
             "ligand_name": args.disco_ligand_name.strip(),
             "na_sequence": _normalize_sequence(args.disco_na_sequence),
             "checkpoint_path": args.disco_checkpoint_path.strip(),
+            "hf_cache_path": args.disco_hf_cache_path.strip(),
             "use_deepspeed_evo_attention": args.disco_use_deepspeed_evo_attention,
             "cutlass_path": args.disco_cutlass_path.strip(),
         },
