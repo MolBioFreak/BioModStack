@@ -35,7 +35,9 @@ beforeEach(() => {
         if (config.method === 'post') {
             if (delay) await delay();
             if (deny) throw { response: { status: 409, data: { detail: 'OEM owner denied decision' } } };
-            run = { ...run, decision: request.decision,
+            // Absence of an OEM comparison backup is distinct from a baseline
+            // pre-run revision. The former returns unchanged for either choice.
+            if (run.machine_calibrated !== false) run = { ...run, decision: request.decision,
                 saved_revision_id: request.decision === 'restore' ? run.before.revision_id : run.after.revision_id,
                 active_revision_id: request.decision === 'restore' ? run.before.revision_id : run.after.revision_id };
         } else if (unavailable) throw new Error('run read unavailable');
@@ -63,15 +65,31 @@ it.each(['accept', 'restore'] as const)('compares partial saves, submits %s, and
     expect(button('Accept calibration').disabled).toBe(false);
 });
 
-it('retains the OEM no-backup comparison source without fabricating operator acceptance', async () => {
+it.each(['accept', 'restore'] as const)('retains OEM no-backup semantics after requested %s without fabricating consent', async decision => {
     run = { ...run, before: snapshot(76000, null), decision: null, comparison_choice: true,
-        comparison_source: 'no_previous_values' };
+        machine_calibrated: false, decision_status: 'no_previous_values', comparison_source: 'no_previous_values' };
+    const originalRun = run;
     await mount();
     expect(host.textContent).toContain('No prior saved revision');
     expect(host.textContent).toContain('Recorded decision: Not decided');
     expect(host.textContent).toContain('Comparison choicetrue');
     expect(host.textContent).toContain('no_previous_values');
+    await click(decision === 'accept' ? 'Accept calibration' : restore);
+    expect(calls.map(call => call.method)).toEqual(['get', 'post', 'get']);
+    expect(calls[1].request).toEqual({ expected_connection_generation: 77, decision });
+    expect(run).toEqual(originalRun);
+    expect(host.textContent).toContain(`Requested ${decision}; readback decision is not recorded`);
+    expect(host.textContent).not.toContain('Decision read back:');
+    expect(host.textContent).toContain('Active revisionafter-2');
+    expect(button('Accept calibration').disabled).toBe(false);
+    expect(button(restore).disabled).toBe(false);
+});
+
+it('restores baseline when an OEM comparison backup exists without a prior saved revision', async () => {
+    run = { ...run, machine_calibrated: true, before: snapshot(76000, null) };
+    await mount();
     await click(restore);
+    expect(host.textContent).toContain('Decision read back: restore');
     expect(host.textContent).toContain('No saved revision');
     expect(host.textContent).toContain('Active revisionBaseline / no revision');
 });

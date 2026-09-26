@@ -71,6 +71,11 @@ describe.skipIf(!process.env.BIOXP_CALIBRATION_PRODUCERS)('real robot calibratio
                     method: config.method, request, run_id: currentRun.run_id, run_payload: currentRun,
                 });
                 expect(response.data).toEqual(currentRun);
+                expect(response.robot_requests).toEqual([{
+                    method: config.method!.toUpperCase(),
+                    path: `/motion/oem/calibration_settings/runs/${currentRun.run_id}${config.method === 'post' ? '/decision' : ''}`,
+                    body: config.method === 'post' ? { decision: request.decision } : null,
+                }]);
                 data = response.data;
             } else if (config.method === 'post') {
                 expect(url).toBe('/api/bioxp/protocols/submit');
@@ -106,9 +111,33 @@ describe.skipIf(!process.env.BIOXP_CALIBRATION_PRODUCERS)('real robot calibratio
         for (const decision of ['accept', 'restore'] as const) {
             const value = decision === 'accept' ? item.accept_run : item.restore_run;
             if (!value) continue;
+            const start = requests.length;
             await click(decision === 'accept' ? 'Accept calibration' : 'Reject / restore full pre-run calibration');
-            expect(host.textContent).toContain(`Decision read back: ${decision}`);
+            expect(requests.slice(start).filter(row => row.url.includes('/calibration-settings/runs/'))).toEqual([
+                { method: 'post', url: `/api/bioxp/calibration-settings/runs/${value.run_id}/decision`,
+                    request: { expected_connection_generation: 77, decision } },
+                { method: 'get', url: `/api/bioxp/calibration-settings/runs/${value.run_id}`,
+                    request: { expected_connection_generation: 77 } },
+            ]);
+            if (item.name === 'no_backup') {
+                // OEM resultComparison returns true before the dialog/history/restore
+                // branch when no backup exists. Neither POST fabricates consent.
+                expect(value).toEqual(item.run);
+                expect(value).toMatchObject({ machine_calibrated: false, decision: null,
+                    decision_status: 'no_previous_values', comparison_choice: true,
+                    comparison_source: 'no_previous_values', outcome: 'accepted_no_previous_values' });
+                expect(host.textContent).toContain(`Requested ${decision}; readback decision is not recorded`);
+                expect(host.textContent).toContain('Recorded decision: Not decided');
+                expect(host.textContent).toContain('no_previous_values');
+                expect(host.textContent).not.toContain('Decision read back:');
+            } else {
+                expect(value.decision).toBe(decision);
+                expect(host.textContent).toContain(`Decision read back: ${decision}`);
+            }
             expect(host.textContent).toContain(value.active_revision_id ?? 'Baseline / no revision');
+            for (const label of ['Accept calibration', 'Reject / restore full pre-run calibration']) {
+                expect([...host.querySelectorAll('button')].find(button => button.textContent === label)?.disabled).toBe(false);
+            }
         }
         expect(requests.filter(row => row.method === 'post' && row.url === '/api/bioxp/protocols/submit')).toHaveLength(1);
         expect(host.querySelector('pre')).toBeNull();

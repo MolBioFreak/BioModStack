@@ -3645,8 +3645,37 @@ class PipetteReadbackChannel(BaseModel):
     data: dict[str, JsonValue] | None
 
 
+class PipetteCollectionChannelStamp(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    actor: str | None
+    revision: StrictInt | None
+    reader: StrictInt
+    reader_generation: StrictInt | None
+
+
+class PipetteCollectionIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    owner: str
+    interrupt_epoch: StrictInt
+    channels: list[PipetteCollectionChannelStamp] = Field(min_length=4, max_length=4)
+
+
+class PipetteCollectionChannelObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tip_loaded: StrictBool | None
+    verified: StrictBool
+
+
+class PipetteCollectionSource(BaseModel):
+    """Producer observation provenance, not an admission or physical-proof gate."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    identity: PipetteCollectionIdentity
+    channels: list[PipetteCollectionChannelObservation] = Field(min_length=4, max_length=4)
+
+
 class PipetteReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    collection_source: PipetteCollectionSource | None = None
     hardware_truth_level: Literal["hardware_query"]
     ok: StrictBool
     semantic_ok: StrictBool

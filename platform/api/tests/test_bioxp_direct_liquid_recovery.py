@@ -168,7 +168,7 @@ def test_post_source_metadata_is_closed_and_never_reflected(semantic_value):
     client, _ = client_for({**result, **semantic, "source_identity": source})
     response = client.post(url, json={"include_data": False}, headers={"Idempotency-Key": KEY})
     assert response.status_code == 200, response.text
-    assert response.json() == result
+    assert response.json() == {**result, "collection_source": None}
     for invalid in [None, 0, 1, "true", "false", not semantic_value, "MISSING"]:
         payload = {**result, **semantic, "source_identity": source}
         if invalid == "MISSING":
@@ -193,7 +193,7 @@ def test_readback_preserves_producer_hardware_truth_level():
     response = client.post("/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
         json={"include_data": False}, headers={"Idempotency-Key": KEY})
     assert response.status_code == 200, response.text
-    assert response.json() == result
+    assert response.json() == {**result, "collection_source": None}
 
 
 @pytest.mark.parametrize("kind", ["readback", "application_plan"])
