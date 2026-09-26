@@ -93,7 +93,7 @@ def test_dorado_demux_terminal_outputs_are_inferred(tmp_path: Path):
     assert any(path.endswith("demux/demux/units") for path in outputs["dorado_demux"])
 
 
-def test_construct_screening_public_stage_route_plans_and_infers_fastq_assembly(tmp_path: Path):
+def test_construct_screening_stage_route_keeps_outputs_without_inventing_completion(tmp_path: Path):
     report = tmp_path / "assembly" / "wf_clone_out" / "wf-clone-validation-report.html"
     report.parent.mkdir(parents=True)
     report.write_text("<html>report</html>", encoding="utf-8")
@@ -130,8 +130,11 @@ def test_construct_screening_public_stage_route_plans_and_infers_fastq_assembly(
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["all_stages"] == ["fastq_align", "wf_clone_validation"]
-    assert "wf_clone_validation" in payload["completed_stages"]
+    assert payload["all_stages"] == ["nanopore"]
+    assert payload["completed_stages"] == []
+    assert payload["execution_stages"] == [
+        {"id": "nanopore", "label": "nanopore", "state": "unknown", "source": "model"}]
+    assert payload["can_resume"] is False
     assert any(
         path.endswith("assembly/wf_clone_out/wf-clone-validation-report.html")
         for path in payload["stage_outputs"]["wf_clone_validation"]

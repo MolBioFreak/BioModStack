@@ -6,6 +6,7 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/jobStageProgressMounted.test.tsx',
             './tests/vitest/foldCpPlacementMounted.test.tsx',
             './tests/vitest/installFeaturesMounted.test.tsx',
             './tests/vitest/msaProviderReadinessMounted.test.tsx',

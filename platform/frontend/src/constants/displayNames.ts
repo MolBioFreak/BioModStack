@@ -80,13 +80,20 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'oligo_design': 'Oligo Designer',
     'protein_local_redesign': 'Protein Local Redesign',
     'nanopore': 'Nanopore Sequencing',
-    'ppiflow': 'PPIFlow Seeded',
+    'ppiflow': 'PPIFlow',
+    'bindcraft2': 'BindCraft2',
+    'esmfold2': 'ESMFold2',
+    'molecular_dynamics': 'Molecular Dynamics',
+    'md': 'Molecular Dynamics',
     'caliby_experimental': 'Caliby Experimental',
     'caliby': 'Caliby',
 };
 
 // Pipeline stage display names
 export const STAGE_DISPLAY_NAMES: Record<string, string> = {
+    'runppiflowgeneration': 'PPIFlow Generation',
+    'runboltzgen': 'BoltzGen',
+    'runrfd3': 'RFdiffusion3',
     'rfantibody': 'RFantibody',
     'post_rfantibody': 'RFantibody Review',
     'boltzgen': 'BoltzGen',
@@ -115,6 +122,22 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',
     'pyrosetta_rebuild': 'PyRosetta Rebuild',
+    'doradobasecall': 'Dorado Basecall',
+    'doradoalign': 'Dorado Align',
+    'modkitpileup': 'modkit Pileup',
+    'modkitsummary': 'modkit Summary',
+    'dimer_analysis': 'Dimer Analysis',
+    'dimeranalysis': 'Dimer Analysis',
+    'fastqdimeranalysis': 'Dimer Analysis',
+    'fastqalign': 'FASTQ Align',
+    'runclonevalidation': 'wf-clone-validation',
+    'af2': 'AlphaFold2',
+    'rfd3': 'RFdiffusion3',
+    'rf3': 'RoseTTAFold3',
+    'esmfold2': 'ESMFold2',
+    'ppiflow_backbone': 'PPIFlow Backbone',
+    'ppiflow_maturation': 'PPIFlow Maturation',
+    'ppiflow_post_validation': 'PPIFlow Repair',
     'dorado': 'Dorado Basecall',
     'dorado_basecall': 'Dorado Basecall',
     'dorado_align': 'Dorado Align',
@@ -154,5 +177,6 @@ export function getModelDisplayName(modelId: string): string {
  */
 export function getStageDisplayName(stage: string): string {
     if (!stage) return 'Unknown';
-    return STAGE_DISPLAY_NAMES[stage] || stage;
+    return STAGE_DISPLAY_NAMES[stage.toLowerCase()] || MODEL_DISPLAY_NAMES[stage.toLowerCase()] ||
+        stage.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
 }

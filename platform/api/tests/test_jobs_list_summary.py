@@ -107,6 +107,12 @@ async def test_jobs_list_summary_omits_heavy_fields_but_keeps_rows_selectable(tm
     policy_projection = "json_extract(jobs.params, ?) as remote_result_policy"
     assert summary_job_query.count(policy_projection) == 1
     summary_without_policy = summary_job_query.replace(policy_projection, "remote_result_policy")
+    # Only the retained stage inventories/receipts are projected, never the
+    # complete provenance or heavyweight scientific params.
+    for alias in ('stage_plan_components', 'stage_assigned_components', 'stage_terminal_states'):
+        projection = f"json_quote(json_extract(jobs.provenance, ?)) as {alias}"
+        assert summary_without_policy.count(projection) == 1
+        summary_without_policy = summary_without_policy.replace(projection, alias)
     for forbidden_column in (
         "params",
         "provenance",

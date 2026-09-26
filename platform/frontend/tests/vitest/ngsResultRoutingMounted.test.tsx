@@ -145,6 +145,37 @@ afterEach(async () => {
     vi.useRealTimers();
 });
 
+describe('NGS authoritative stage presentation', () => {
+    for (const status of ['queued', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled']) {
+        it(`${status} list and selected run preserve planned versus recorded states`, async () => {
+            Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+            const execution_stages = [
+                { id: 'dorado_basecall', label: 'Dorado Basecall', state: 'completed', source: 'recorded' },
+                { id: 'modkit', label: 'Optional methylation', state: 'planned', source: 'plan' },
+                { id: 'future_step', label: 'Future native step', state: 'unknown', source: 'model' },
+            ];
+            const job = { id: 'job-123', name: 'Stages fixture', model_id: 'nanopore', mode: 'methylation_analysis',
+                status, execution_stages, params: {}, created_at: '2026-09-01T00:00:00Z', design_count: 0,
+                output_dir: null, all_stages: ['invented_old_stage'], completed_stages: ['invented_old_stage'] };
+            ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+            ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+            ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, execution_stages } });
+            await act(async () => root.render(
+                <QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}>
+                    <NGSToolkit />
+                </MemoryRouter></QueryClientProvider>,
+            ));
+            await waitUntil(() => expect(container.querySelectorAll('[aria-label="Job execution stages"]')).toHaveLength(2));
+            for (const view of container.querySelectorAll('[aria-label="Job execution stages"]')) {
+                expect([...view.querySelectorAll<HTMLElement>('[data-stage-id]')].map(b => [b.dataset.stageId, b.dataset.stageState]))
+                    .toEqual(execution_stages.map(s => [s.id, s.state]));
+                expect(view.textContent).not.toContain('invented_old_stage');
+                expect(view.querySelector('[data-stage-state="planned"]')?.className).not.toContain('emerald');
+            }
+        });
+    }
+});
+
 describe('preview-independent mounted locus loading', () => {
     it('keeps every NGS destination in a bounded wrapping navigation group', async () => {
         ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [], total: 0 } });

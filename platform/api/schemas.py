@@ -182,8 +182,34 @@ class CandidateResultSummary(BaseModel):
     dispositions: Optional[List[CandidateDisposition]] = None
 
 
+class ExecutionStageResponse(BaseModel):
+    """An observed or retained-plan stage, never inferred from job success."""
+
+    id: str
+    label: str
+    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'unknown']
+    source: Literal['plan', 'recorded', 'model']
+
+
 class JobResponse(BaseModel):
     """Response schema for a job."""
+
+    execution_stages: List[ExecutionStageResponse] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def project_stored_execution_stages(cls, value):
+        from services.job_stage_progress import project_execution_stages
+        if isinstance(value, dict):
+            if 'execution_stages' not in value:
+                value = {**value, 'execution_stages': project_execution_stages(value)}
+        else:
+            # ORM response paths retain evidence before public fields are trimmed.
+            value = {**{key: getattr(value, key) for key in cls.model_fields
+                        if hasattr(value, key)},
+                     'execution_stages': project_execution_stages(value)}
+        return value
+
     binder_round: BinderRoundRequest | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 

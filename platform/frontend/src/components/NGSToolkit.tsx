@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { JobStageProgress } from './JobStageProgress';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -2538,13 +2539,6 @@ export function NGSToolkit() {
     const stagePayload = stagesData?.data && stagesData.data.job_id === selectedJobId
         ? stagesData.data
         : null;
-    const allStages = stagePayload?.all_stages || selectedJob?.all_stages || [];
-    const completedStageKeySet = new Set(
-        (stagePayload?.completed_stages || selectedJob?.completed_stages || []).map((stage) => normalizeStageKey(stage))
-    );
-    const currentStage = stagePayload?.current_stage || selectedJob?.current_stage || null;
-    const currentStageKey = currentStage ? normalizeStageKey(currentStage) : '';
-    const forceCompleteByJobStatus = selectedJob?.status === 'completed';
     const stageOutputs = useMemo(
         () => (stagePayload?.stage_outputs || selectedJob?.stage_outputs || {}) as StageOutputsMap,
         [selectedJob?.stage_outputs, stagePayload?.stage_outputs],
@@ -4683,7 +4677,7 @@ export function NGSToolkit() {
                                                         {job.status}
                                                     </span>
                                                 </td>
-                                                <td className="px-4 py-2 text-[var(--text-secondary)]">{stageDisplayName(job.current_stage)}</td>
+                                                <td className="px-4 py-2 text-[var(--text-secondary)]"><JobStageProgress job={job} /></td>
                                                 <td className="px-4 py-2 text-[var(--text-secondary)]">
                                                     {new Date(job.created_at).toLocaleString()}
                                                 </td>
@@ -5568,29 +5562,10 @@ export function NGSToolkit() {
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Progress</h4>
                                     {stagesLoading ? (
                                         <p className="text-sm text-[var(--text-secondary)]">Loading stage state...</p>
-                                    ) : allStages.length === 0 ? (
-                                        <p className="text-sm text-[var(--text-secondary)]">No explicit stage plan available yet for this run.</p>
+                                    ) : selectedJob ? (
+                                        <JobStageProgress job={selectedJob} stagePayload={stagePayload} showState />
                                     ) : (
-                                        <div className="space-y-2">
-                                            {allStages.map((stage) => {
-                                                const stageKey = normalizeStageKey(stage);
-                                                const isComplete = forceCompleteByJobStatus || completedStageKeySet.has(stageKey);
-                                                const isCurrent = !isComplete && currentStageKey !== '' && currentStageKey === stageKey;
-                                                return (
-                                                    <div key={stage} className="flex items-center justify-between bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2">
-                                                        <div className="text-sm text-[var(--text-primary)]">{stageDisplayName(stage)}</div>
-                                                        <div className={`text-xs px-2 py-0.5 rounded ${isComplete
-                                                            ? 'bg-emerald-500/20 text-emerald-400'
-                                                            : isCurrent
-                                                                ? 'bg-blue-500/20 text-blue-400'
-                                                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
-                                                            }`}>
-                                                            {isComplete ? 'completed' : isCurrent ? 'running' : 'pending'}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
+                                        <p className="text-sm text-[var(--text-secondary)]">Stage history unavailable.</p>
                                     )}
                                 </div>
                                 )}

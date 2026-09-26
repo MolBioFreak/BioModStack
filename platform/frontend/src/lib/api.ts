@@ -125,6 +125,7 @@ export interface Job {
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
+    execution_stages?: ExecutionStage[];
     // Stage tracking for multi-stage pipelines
     current_stage?: string | null;
     completed_stages?: string[] | null;
@@ -1869,11 +1870,19 @@ export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
     return api.get<JobLogs>(`/api/jobs/${jobId}/logs`);
 };
 
+export interface ExecutionStage {
+    id: string;
+    label: string;
+    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown';
+    source: 'plan' | 'recorded' | 'model';
+}
+
 // Get job stages for progress display
 export const fetchJobStages = (jobId: string) => {
     return api.get<{
         job_id: string;
         mode: string;
+        execution_stages?: ExecutionStage[];
         all_stages: string[];
         current_stage: string | null;
         completed_stages: string[];

@@ -4,7 +4,8 @@ import type { Job } from '../../lib/api';
 import { isNgsJob, ngsResultHref } from '../../lib/ngsResultRouting';
 import { JobDetailsPanel } from '../JobDetailsPanel';
 import { RemoteResultsPrompt } from '../RemoteResultsPrompt';
-import { getModeDisplayName, getStageDisplayName } from '../../constants/displayNames';
+import { getModeDisplayName } from '../../constants/displayNames';
+import { JobStageProgress } from '../JobStageProgress';
 import {
     getBatchJobOutputSummary,
     getCompletedScientificResultStatus,
@@ -580,7 +581,7 @@ export function JobQueueTable({
                                         <span className="ml-2 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-200">MD</span>
                                     )}
                                 </div>
-                                <StageProgress job={job} />
+                                <JobStageProgress job={job} />
                                 {awaitingPrompt && (
                                     <div className="mt-1 max-w-3xl text-[11px] leading-snug text-amber-300">
                                         {awaitingPrompt}
@@ -671,7 +672,7 @@ export function JobQueueTable({
                 </button>
 
                 <div className="mt-2">
-                    <StageProgress job={job} />
+                    <JobStageProgress job={job} />
                 </div>
 
                 {awaitingPrompt && (
@@ -899,108 +900,6 @@ function StatusBadge({ status, errorMessage, acceptedResultCount }: { status: st
                     <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-600" />
                 </div>
             )}
-        </div>
-    );
-}
-
-function StageProgress({ job }: { job: Job }) {
-    const getStages = (mode: string) => {
-        if (mode.includes('antibody')) return ['rfantibody', 'fampnn', 'structure_validation'];
-        if (mode.includes('binder')) return ['rfdiffusion', 'proteinmpnn', 'boltz2'];
-        if (mode.includes('monomer')) return ['rfdiffusion', 'proteinmpnn', 'af2'];
-        if (mode.includes('oligo')) return ['rfdpoly', 'nampnn', 'pyrosetta_rebuild'];
-        return [];
-    };
-
-    const stages = (() => {
-        const baseStages = job.all_stages && job.all_stages.length > 0
-            ? [...job.all_stages]
-            : getStages(job.mode);
-        const ppiflowStageMode = String(job.params?.ppiflow_stage_mode || '').toLowerCase();
-        const hasBackbonePpiFlow =
-            job.params?.run_ppiflow_backbone_refine ||
-            ppiflowStageMode === 'post_rfantibody' ||
-            ppiflowStageMode === 'backbone_refine' ||
-            ppiflowStageMode === 'both';
-        const hasMaturationPpiFlow =
-            job.params?.run_ppiflow_maturation ||
-            job.params?.run_maturation ||
-            ppiflowStageMode === 'post_fampnn' ||
-            ppiflowStageMode === 'maturation' ||
-            ppiflowStageMode === 'both';
-        if (hasBackbonePpiFlow && !baseStages.includes('ppiflow_backbone')) {
-            baseStages.splice(Math.min(1, baseStages.length), 0, 'ppiflow_backbone');
-        }
-        if (hasMaturationPpiFlow && !baseStages.includes('ppiflow_maturation')) {
-            baseStages.splice(Math.min(3, baseStages.length), 0, 'ppiflow_maturation');
-        }
-        if ((job.params?.run_post_validation_maturation || job.params?.run_post_boltz_maturation) && !baseStages.includes('ppiflow_post_validation')) {
-            baseStages.push('ppiflow_post_validation');
-        }
-        if (job.awaiting_stage && !baseStages.includes(job.awaiting_stage)) {
-            baseStages.push(job.awaiting_stage);
-        }
-        return baseStages;
-    })();
-
-    if (stages.length === 0) return null;
-
-    const jobIsCompleted = job.status === 'completed';
-    const jobIsFailed = job.status === 'failed';
-    const jobIsCancelled = job.status === 'cancelled';
-    const jobIsAwaiting = job.status === 'awaiting_input';
-    const completed = job.completed_stages || [];
-    const rawCurrent = job.awaiting_stage || job.current_stage;
-    const current =
-        (rawCurrent === 'boltz2' || rawCurrent === 'protenix') && stages.includes('structure_validation')
-            ? 'structure_validation'
-            : (rawCurrent === 'maturation_post_boltz' || rawCurrent === 'maturation_post_validation') && stages.includes('ppiflow_post_validation')
-                ? 'ppiflow_post_validation'
-                : rawCurrent === 'backbone_refine' && stages.includes('ppiflow_backbone')
-                    ? 'ppiflow_backbone'
-                    : rawCurrent === 'maturation' && stages.includes('ppiflow_maturation')
-                        ? 'ppiflow_maturation'
-                        : rawCurrent;
-
-    return (
-        <div className="mt-1 flex items-center space-x-1 overflow-x-auto pb-1">
-            {stages.map((stage, idx) => {
-                const wasCompleted = completed.includes(stage);
-                const isCurrent = stage === current;
-                let stageClass = '';
-                let connectorClass = 'bg-slate-700';
-
-                if (jobIsCompleted) {
-                    stageClass = 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400';
-                    connectorClass = 'bg-emerald-500/30';
-                } else if (wasCompleted) {
-                    stageClass = 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400';
-                    connectorClass = 'bg-emerald-500/30';
-                } else if (isCurrent && jobIsFailed) {
-                    stageClass = 'bg-red-500/20 border-red-500/30 text-red-400';
-                } else if (isCurrent && jobIsAwaiting) {
-                    stageClass = 'bg-amber-500/20 border-amber-500/30 text-amber-400';
-                } else if (isCurrent && jobIsCancelled) {
-                    stageClass = 'bg-orange-500/20 border-orange-500/30 text-orange-400';
-                } else if (isCurrent) {
-                    stageClass = 'bg-blue-500/20 border-blue-500/30 text-blue-400 animate-pulse';
-                } else {
-                    stageClass = 'bg-slate-800/50 border-slate-700 text-slate-600';
-                }
-
-                return (
-                    <div key={stage} className="flex shrink-0 items-center">
-                        <div
-                            className={`rounded-[3px] border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${stageClass}`}
-                        >
-                            {getStageDisplayName(stage)}
-                        </div>
-                        {idx < stages.length - 1 && (
-                            <div className={`mx-0.5 h-px w-1 ${connectorClass}`} />
-                        )}
-                    </div>
-                );
-            })}
         </div>
     );
 }

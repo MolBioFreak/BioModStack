@@ -54,6 +54,7 @@ from database import (
 )
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentRunAttempt
+from services.job_stage_progress import project_execution_stages
 from services.result_contracts import build_review_artifact_manifest, resolve_result_contract
 from paths import (
     get_code_root,
@@ -5122,10 +5123,8 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
             else:
                 merged = outputs
             stage_outputs[stage] = merged
-            if merged and stage not in completed:
-                completed.append(stage)
 
-    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
+    _inferred_completed, stage_outputs = infer_antibody_stage_state(job, list(completed), stage_outputs)
 
     return completed, stage_outputs
 
@@ -5426,6 +5425,9 @@ async def list_jobs(
         Job.awaiting_stage,
         # Keep summary rows lightweight while preserving execution-policy parity.
         Job.params["remote_result_policy"].as_string().label("remote_result_policy"),
+        Job.provenance[("execution_plan_approval", "plan", "metadata", "static_components")].label("stage_plan_components"),
+        Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
+        Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
     )
     selected_entities = summary_columns if summary else (Job,)
     design_counts = (
@@ -5583,6 +5585,7 @@ async def list_jobs(
             execution_bundle_sha256=job.execution_bundle_sha256,
             remote_attempt_id=job.remote_attempt_id,
             remote_state=job.remote_state,
+            execution_stages=project_execution_stages(job),
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5694,6 +5697,7 @@ async def import_proteinbase_bundle_job(
         execution_bundle_sha256=job.execution_bundle_sha256,
         remote_attempt_id=job.remote_attempt_id,
         remote_state=job.remote_state,
+        execution_stages=project_execution_stages(job),
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -6651,6 +6655,7 @@ async def _create_job(
             )
             return JobResponse(
                 id=existing_child.id,
+                execution_stages=project_execution_stages(existing_child),
                 name=existing_child.name,
                 status=existing_child.status,
                 model_id=existing_child.model_id,
@@ -7423,6 +7428,7 @@ async def _create_job(
     
     return JobResponse(
         id=first_job.id,
+        execution_stages=project_execution_stages(first_job),
         name=first_job.name,
         status=first_job.status,
         model_id=first_job.model_id,
@@ -8890,6 +8896,7 @@ async def get_job(
         execution_bundle_sha256=job.execution_bundle_sha256,
         remote_attempt_id=job.remote_attempt_id,
         remote_state=job.remote_state,
+        execution_stages=project_execution_stages(job),
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -10306,97 +10313,15 @@ async def get_job_stages(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    display_stages = []
-    
-    if job.mode in ["antibody_denovo"] or is_antibody_pipeline_mode(job.mode):
-        # Dynamic stage construction for antibody workflow
-        display_stages.append("rfantibody")
-        
-        # Check params for sequence design steps (default to true if not present, matching nextflow logic)
-        params = _normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {}))
-        
-        # Note: In nextflow 'null' means true for these flags due to how they are processed
-        run_fampnn = params.get("seq_design_fampnn")
-        if run_fampnn is None or run_fampnn is True:
-            display_stages.append("fampnn")
-            
-        run_antifold = params.get("seq_design_antifold")
-        if run_antifold is None or run_antifold is True:
-            display_stages.append("antifold")
-            
-        run_proteinmpnn = params.get("seq_design_proteinmpnn")
-        if run_proteinmpnn is None or run_proteinmpnn is True:
-            display_stages.append("proteinmpnn")
-
-        run_caliby = params.get("seq_design_caliby")
-        if run_caliby is True:
-            display_stages.append("caliby")
-
-        if params.get("run_maturation") is True:
-            display_stages.append("maturation")
-            ppiflow_mode = str(params.get("ppiflow_stage_mode") or "").strip().lower()
-            iteration_action = str(params.get("iteration_action") or "").strip().lower()
-            if ppiflow_mode == "backbone_refine" or iteration_action == "ppiflow_backbone_refine":
-                display_stages.append("ppiflow_backbone_refine")
-            if ppiflow_mode == "maturation" or iteration_action == "ppiflow_maturation":
-                display_stages.append("ppiflow_maturation")
-            
-        # Validation stages
-        if params.get("run_structure_validation") is not False:
-            display_stages.append("structure_validation")
-
-        if params.get("run_post_validation_maturation") is True:
-            display_stages.append("maturation_post_validation")
-            
-        if params.get("run_immunogenicity_scoring") is not False:
-             display_stages.append("antiberty")
-             
-        if params.get("run_thermompnn") is not False:
-             display_stages.append("thermompnn")
-             
-    else:
-        # Nanopore stage inventory is dynamic across every typed ONT mode.
-        if _uses_nanopore_stage_response(job):
-            display_stages = _planned_nanopore_stages(job.params, mode=job.mode)
-        else:
-            # Fallback for other modes
-            all_stages_map = {
-                "binder_denovo": ["rfdiffusion", "proteinmpnn", "boltz2"],
-                "monomer_denovo": ["rfdiffusion", "proteinmpnn", "af2"],
-                "oligo_design": ["rfdpoly", "nampnn"],
-            }
-            display_stages = all_stages_map.get(job.mode, [])
-
-    all_stages = _dedupe_preserve_order(display_stages)
-    completed = _dedupe_preserve_order(list(job.completed_stages or []))
-    stage_outputs = dict(job.stage_outputs or {})
-    if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
-        all_stages.append(job.awaiting_stage)
-
-    if _uses_nanopore_stage_response(job):
-        stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
-        # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
-        for stage, outputs in inferred_outputs.items():
-            existing = stage_outputs.get(stage)
-            if isinstance(existing, list):
-                merged = _dedupe_preserve_order([*existing, *outputs])
-            else:
-                merged = outputs
-            stage_outputs[stage] = merged
-            if merged and stage not in completed:
-                completed.append(stage)
-
-        # If pipeline exited successfully, remaining planned stages are considered complete.
-        if job.status == JobStatus.COMPLETED.value:
-            completed = _dedupe_preserve_order([*completed, *all_stages])
-
-    completed, stage_outputs = infer_antibody_stage_state(job, completed, stage_outputs)
+    execution_stages = project_execution_stages(job)
+    all_stages = [stage['id'] for stage in execution_stages]
+    completed, stage_outputs = _resolve_stage_state_for_response(job)
 
     return {
         "job_id": job_id,
         "mode": job.mode,
         "all_stages": all_stages,
+        "execution_stages": execution_stages,
         "current_stage": job.awaiting_stage if job.awaiting_input and job.awaiting_stage else job.current_stage,
         "completed_stages": completed,
         "stage_outputs": stage_outputs,
