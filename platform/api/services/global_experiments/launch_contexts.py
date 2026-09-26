@@ -1217,6 +1217,25 @@ async def validate_bound_job(
             base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
             for key, value in expected_job_params.items()
         )
+        if not params_match:
+            # Job creation resolves MSA "auto" through the shared policy while
+            # retaining the operator request. Compare requested and effective
+            # values at their respective owners, without relaxing other fields.
+            requested = provenance.get("core_protein_requested_params")
+            if isinstance(requested, dict) and all(
+                key in requested and requested[key] == value
+                for key, value in expected_job_params.items()
+            ):
+                from services.msa_policy import apply_msa_policy
+                try:
+                    effective = apply_msa_policy(str(job.model_id), expected_job_params)
+                except ValueError:
+                    effective = None
+                if effective is not None:
+                    params_match = all(
+                        base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
+                        for key, value in effective.items()
+                    )
         if not params_match and job.model_id == "boltzgen":
             from services.boltzgen_request_compatibility import (
                 BOLTZGEN_GENERATION_PROTOCOLS, compile_boltzgen_settings,

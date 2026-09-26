@@ -188,6 +188,22 @@ async def test_project_child_uses_existing_destination_owner(selected, setup_sto
         context = await experiments.get(ExperimentLaunchContext, context_id)
         assert context.project_id == dest['project_id']
         assert context.run_attempt_id
+        if not remote:
+            from types import SimpleNamespace
+            from services.global_experiments.launch_contexts import validate_bound_job, LaunchContextError
+            assert child.params['protenix_msa_backend'] == 'colabfold_api'
+            assert child.provenance['core_protein_requested_params']['protenix_msa_backend'] == 'auto'
+            for field in ('effective_provider', 'requested_provider', 'scientific_setting'):
+                probe = SimpleNamespace(**{column.key: deepcopy(getattr(child, column.key))
+                                           for column in Job.__table__.columns})
+                if field == 'requested_provider':
+                    probe.provenance['core_protein_requested_params']['protenix_msa_backend'] = 'neurosnap'
+                elif field == 'effective_provider':
+                    probe.params['protenix_msa_backend'] = 'neurosnap'
+                else:
+                    probe.params['protenix_n_sample'] += 1
+                with pytest.raises(LaunchContextError):
+                    await validate_bound_job(experiments, context, probe)
         again = await rounds.reconcile_round(session, experiments, root.id)
         assert again['steps'] == result['steps']
 
