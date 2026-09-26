@@ -91,8 +91,39 @@ def test_prepared_identity_and_legacy_empty(tmp_path):
                             dict(sequence_design_mode='design', design_chain='A'), prepared)
 
 
+@pytest.mark.parametrize('source_state', ['unset', 'missing', 'incomplete'])
+def test_real_fa_writer_fixture_requires_native_source(tmp_path, monkeypatch, source_state):
+    monkeypatch.setenv('BMS_TEST_FA_REAL_WRITER', '1')
+    monkeypatch.delenv('BMS_G09_FAMPNN_SOURCE', raising=False)
+    if source_state != 'unset':
+        source = tmp_path / 'native'
+        if source_state == 'incomplete':
+            source.mkdir()
+        monkeypatch.setenv('BMS_G09_FAMPNN_SOURCE', str(source))
+    with pytest.raises(AssertionError, match='requires BMS_G09_FAMPNN_SOURCE'):
+        install_scientific_doubles(tmp_path)
+    assert not (tmp_path / 'bin').exists()
+
+
+def test_synthetic_fa_fixture_does_not_require_native_source(tmp_path, monkeypatch):
+    monkeypatch.delenv('BMS_TEST_FA_REAL_WRITER', raising=False)
+    monkeypatch.delenv('BMS_G09_FAMPNN_SOURCE', raising=False)
+    install_scientific_doubles(tmp_path)
+    assert (tmp_path / 'bin/python').is_file()
+
+
 def install_scientific_doubles(tmp_path):
     """Executables intercept only the named scientific engines, never prep."""
+    if os.environ.get('BMS_TEST_FA_REAL_WRITER'):
+        # Diagnose the fixture before launching a shell whose tee pipeline can
+        # conceal a native-helper exception behind already emitted placeholders.
+        source = os.environ.get('BMS_G09_FAMPNN_SOURCE')
+        required = ('fampnn/data/residue_constants.py', 'fampnn/data/protein.py',
+                    'fampnn/data/pdb_utils.py', 'fampnn/model/sd_model.py')
+        assert source and all((Path(source) / name).is_file() for name in required), (
+            'BMS_TEST_FA_REAL_WRITER requires BMS_G09_FAMPNN_SOURCE pointing to '
+            'the existing installed FA-MPNN source export; no models are downloaded'
+        )
     bin_dir = tmp_path / 'bin'; bin_dir.mkdir()
     (bin_dir/'micromamba').write_text('#!/bin/sh\nexit 0\n')
     (bin_dir/'micromamba').chmod(0o755)

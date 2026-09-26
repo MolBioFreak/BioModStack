@@ -60,6 +60,25 @@ def emit_native_fa(source, output, count, mutable_ids=None):
         native.capture_sample(pkl_path, path, context)
 
 
+@pytest.mark.parametrize('preexisting', [False, True])
+def test_fa_native_writer_replaces_placeholder_bytes(tmp_path, preexisting):
+    source = tmp_path / 'input.pdb'
+    source.write_text(atom(1, 'B', 91) + atom(2, 'Z', 10) +
+                      atom(3, 'A', 98) + atom(4, 'T', 30))
+    output = tmp_path / 'native'
+    (output / 'samples').mkdir(parents=True)
+    path = output / 'samples/input_sample0.pdb'
+    if preexisting:
+        path.write_bytes(source.read_bytes())
+    emit_native_fa(source, output, 1, [('Z', 10), ('T', 30)])
+    residues = [(line[21], int(line[22:26]), line[17:20])
+                for line in path.read_text().splitlines() if line.startswith('ATOM')]
+    assert residues == [('A', 91, 'ALA'), ('B', 10, 'GLY'),
+                        ('C', 98, 'ALA'), ('D', 30, 'GLY')]
+    assert path.read_bytes() != source.read_bytes()
+    assert path.with_name(path.name + '.fa_binding.json').is_file()
+
+
 def test_fa_actual_parser_writer_compiled_shell(tmp_path, monkeypatch):
     assert Path(os.environ['BMS_G09_FAMPNN_SOURCE']).is_dir()
     monkeypatch.setenv('BMS_TEST_FA_REAL_WRITER', '1')

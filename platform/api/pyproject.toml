@@ -48,6 +48,7 @@ constraint-dependencies = [
 
 [dependency-groups]
 dev = [
+    "gemmi==0.7.5",
     "jsonschema>=4.26.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
