@@ -4,7 +4,22 @@ export type BioXpManualPosition =
     | { operation: 'move'; location_id: number; well: string | number; position_flag: 0 | 1 | 2 }
     | { operation: 'lower'; location_id: number }
     | { operation: 'lift'; location_id: number; height_steps: number | null };
-export type BioXpManualStep = BioXpManualPosition
+export type BioXpDiagnostic =
+    | { action: 'aspirate' | 'dispense'; channels: number[]; volume_ul: number; speed: number }
+    | { action: 'eject'; channels: number[] }
+    | { action: 'plunger_up' | 'plunger_down'; steps: number }
+    | { action: 'dispense_all' | 'diagnoses' | 'initialize' | 'get_data' | 'last_error' };
+export type BioXpSourceStep =
+    | { operation: 'source_load_tips'; tip_type: 50 | 200; pipette: number; force_new_tip: boolean }
+    | { operation: 'source_mix'; volume_ul: number; air_ul: number; aspirate_speed: number; dispense_speed: number;
+        aspirate_delay_ms: number | null; dispense_delay_ms: number | null; cycles: number; mix_type: 'N' | 'H' | 'C'; tip_dip: boolean }
+    | { operation: 'source_aspirate_air' | 'source_dispense_air'; volume_ul: number }
+    | { operation: 'source_purge'; speed: number; amp: boolean; ntd: boolean }
+    | { operation: 'diagnostic_pipette'; diagnostic: BioXpDiagnostic };
+export function isSourceStep(step: BioXpManualStep): step is BioXpSourceStep {
+    return ['source_load_tips', 'source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge', 'diagnostic_pipette'].includes(step.operation);
+}
+export type BioXpManualStep = BioXpManualPosition | BioXpSourceStep
     | { operation: 'load_tip'; tray: number; well: string; overpress: boolean; lift_z: boolean }
     | { operation: 'measure_fluid_height'; speed: number }
     | { operation: 'source_fluid_offset'; plate: 'TC' | 'MS' | 'OC' | 'RC' | 'STRIP' | 'OCMS'; speed: number; transfer_fluid: boolean; skip_steps: number }
@@ -34,7 +49,18 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
         add(operation === 'aspirate' ? 'pipette_aspirate' : 'pipette_dispense', { channels: [...channels], volume_ul, speed }, index);
     };
     steps.forEach((step, index) => {
-        if (step.operation === 'load_tip' || step.operation === 'measure_fluid_height' || step.operation === 'source_fluid_offset' || step.operation === 'diagnostic_detect_fluid' || step.operation === 'source_calwith_fluid') {
+        if (isSourceStep(step)) {
+            for (const value of Object.values(step)) if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('Enter finite source values.');
+            if (step.operation === 'source_load_tips' && (![50, 200].includes(step.tip_type) || ![-1, 0, 1, 2, 3].includes(step.pipette))) throw new Error('Select source tip type and pipette.');
+            if (step.operation === 'source_mix' && (!Number.isInteger(step.cycles) || step.cycles < 0 || [step.aspirate_delay_ms, step.dispense_delay_ms].some(v => v !== null && !Number.isSafeInteger(v)))) throw new Error('Enter nonnegative integer cycles and integer delays or source default.');
+            if (step.operation === 'diagnostic_pipette') {
+                const d = step.diagnostic;
+                if ('channels' in d && (d.channels.some(c => !Number.isInteger(c) || c < 0 || c > 3) || new Set(d.channels).size !== d.channels.length)) throw new Error('Select distinct diagnostic channels 0–3.');
+                if ('volume_ul' in d && (!Number.isFinite(d.volume_ul) || d.volume_ul < 0 || !Number.isSafeInteger(d.speed) || d.speed <= 0)) throw new Error('Diagnostic volume must be nonnegative and speed a positive integer.');
+                if ('steps' in d && (!Number.isInteger(d.steps) || d.steps < 0 || d.steps > 2147483647)) throw new Error('Enter diagnostic Z steps 0–2147483647.');
+            }
+            add('pipette_manual_physical', { ...step }, index);
+        } else if (step.operation === 'load_tip' || step.operation === 'measure_fluid_height' || step.operation === 'source_fluid_offset' || step.operation === 'diagnostic_detect_fluid' || step.operation === 'source_calwith_fluid') {
             if (step.operation === 'load_tip' && (!Number.isInteger(step.tray) || step.tray < 1 || step.tray > 5 || !/^[AB](?:[1-9]|1[0-2])$/.test(step.well)))
                 throw new Error('Select tip tray 1–5 and tip well A1–B12.');
             if (step.operation === 'measure_fluid_height' && !Number.isSafeInteger(step.speed)) throw new Error('Enter integer detection speed.');
@@ -65,6 +91,16 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
 }
 
 export function describeManualStep(step: BioXpManualStep): string {
+    if (isSourceStep(step)) {
+        if (step.operation === 'source_load_tips') return `OEM selected tips · T${step.tip_type} · source pipette ${step.pipette} · force new ${step.force_new_tip}`;
+        if (step.operation === 'diagnostic_pipette') {
+            const d = step.diagnostic;
+            return `OEM diagnostic · ${d.action}${'channels' in d ? ` · source channels ${d.channels.join(', ') || 'none'}` : ''}${'volume_ul' in d ? ` · ${d.volume_ul} µL · speed ${d.speed}` : ''}${'steps' in d ? ` · ${d.steps} Z steps` : ''}`;
+        }
+        if (step.operation === 'source_mix') return `OEM source mix · ${step.volume_ul} µL · air ${step.air_ul} µL · speeds ${step.aspirate_speed}/${step.dispense_speed} · delays ${step.aspirate_delay_ms ?? 'default'}/${step.dispense_delay_ms ?? 'default'} ms · ${step.cycles} cycles · type ${step.mix_type} · tip dip ${step.tip_dip}`;
+        if (step.operation === 'source_purge') return `OEM source purge · speed ${step.speed} · AMP ${step.amp} · NTD ${step.ntd}`;
+        return `OEM ${step.operation.slice(7)} · ${step.volume_ul} µL`;
+    }
     if (step.operation === 'load_tip') return `Load tip · tray ${step.tray} · ${step.well} · overpress ${step.overpress} · lift Z ${step.lift_z}`;
     if (step.operation === 'measure_fluid_height') return `Measure fluid height · current location · speed ${step.speed}`;
     if (step.operation === 'source_fluid_offset') return `OEM fluid offset scan · ${step.plate} · speed ${step.speed} · ${step.transfer_fluid ? 'prefill' : 'scan only'} · every ${step.skip_steps} well(s)`;

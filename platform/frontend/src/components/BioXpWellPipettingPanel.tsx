@@ -4,16 +4,20 @@ import { BioXpCalibrationRun } from './BioXpCalibrationRun';
 import { pipetteResults } from '../lib/bioxpPipetteResults';
 import { bioXpErrorText, useBioXpWorkflowJob, useSubmitBioXpProtocol,
     type BioXpDeckDestinationV1, type BioXpWorkflowJob } from '../lib/bioxpClient';
-import { describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
+import { BioXpSourcePipettingEditor, sourceDefaults, sourceLabels } from './BioXpSourcePipettingEditor';
+import { isSourceStep, type BioXpSourceStep, describeManualStep, manualPipettingDocument, type BioXpManualStep } from '../lib/bioxpManualPipetting';
 
 type Operation = BioXpManualStep['operation'];
 const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix', 'load_tip', 'measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'];
-const label = (operation: Operation) => operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
+const allOperations: Operation[] = [...operations, ...Object.keys(sourceDefaults) as BioXpSourceStep['operation'][]];
+const label = (operation: Operation) => operation in sourceLabels ? sourceLabels[operation as BioXpSourceStep['operation']] : operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision }: {
     generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
 }) {
+    const [sourceDrafts, setSourceDrafts] = useState<Record<BioXpSourceStep['operation'], BioXpSourceStep>>(sourceDefaults);
+    const updateSource = (step: BioXpSourceStep) => setSourceDrafts(current => ({ ...current, [step.operation]: step }));
     const [tray, setTray] = useState('1');
     const [tipWell, setTipWell] = useState('A1');
     const [overpress, setOverpress] = useState(false);
@@ -56,6 +60,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         return Number(value);
     };
     const draft = (op: Operation): BioXpManualStep => {
+        if (op in sourceDefaults) return sourceDrafts[op as BioXpSourceStep['operation']];
         if (op === 'load_tip') return { operation: op, tray: number(tray, 'tip tray'), well: tipWell, overpress, lift_z: liftZ };
         if (op === 'measure_fluid_height') return { operation: op, speed: number(detectionSpeed, 'detection speed') };
         if (op === 'source_fluid_offset') return { operation: op, plate: scanPlate, speed: number(detectionSpeed, 'detection speed'), transfer_fluid: scanPrefill, skip_steps: number(scanSpacing, 'sample spacing') };
@@ -72,6 +77,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         const common = { channels: [...channels], volume_ul: number(volume, 'volume in µL') };
         if (op === 'mix') return { operation: op, ...common, aspirate_speed: number(aspirateSpeed, 'aspirate speed'),
             dispense_speed: number(dispenseSpeed, 'dispense speed'), cycles: number(cycles, 'mix cycles') };
+        if (op !== 'aspirate' && op !== 'dispense') throw new Error('Choose a supported operation.');
         return { operation: op, ...common, speed: number(op === 'aspirate' ? aspirateSpeed : dispenseSpeed, `${op} speed`) };
     };
     const append = () => {
@@ -105,6 +111,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     });
     const edit = (index: number) => {
         const step = steps[index]; setOperation(step.operation);
+        if (isSourceStep(step)) { updateSource(step); return; }
         if (step.operation === 'load_tip') { setTray(String(step.tray)); setTipWell(step.well); setOverpress(step.overpress); setLiftZ(step.lift_z); }
         if (step.operation === 'measure_fluid_height') setDetectionSpeed(String(step.speed));
         if (step.operation === 'source_fluid_offset') { setScanPlate(step.plate); setDetectionSpeed(String(step.speed)); setScanPrefill(step.transfer_fluid); setScanSpacing(String(step.skip_steps)); }
@@ -121,7 +128,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     return <section aria-label="Well pipetting" className="mt-4 space-y-3 rounded border border-cyan-700 p-4">
         <h3 className="font-semibold">Well pipetting</h3>
         <p className="text-sm">Move uses the selected block and well. Lower, Lift and liquid strokes act in place; changing a well does not move the head.</p>
-        <p className="text-sm text-amber-200">Alignment is owned by the robot’s actual source TipLocation, not the plunger checkboxes. With four tips, the well is the head reference and the other channels retain fixed spacing. Selecting one plunger does not realign it. Tip alignment/presence is not established by this panel.</p>
+        <p className="text-sm text-amber-200">Alignment is owned by the robot’s actual source TipLocation, not the plunger checkboxes. With four tips, the well is the head reference and the other channels retain fixed spacing. Selecting one plunger does not realign it. Tip alignment/presence is not established by this panel alone: source-selected loading below can establish robot-owned alignment; a matching-tip early return retains the previous alignment.</p>
         <p className="text-xs">Calibration: robot PositionTable {positionTableRevision ?? '(revision unavailable)'}. The grid is an address selector, not proof every well is usable at every station.</p>
         <div className="grid gap-3 sm:grid-cols-3">
             <label>Block<select aria-label="Block" className="block w-full bg-slate-950 p-2" value={destinations.some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
@@ -167,9 +174,10 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         </div>
         <p className="text-xs">Speeds are native explicit-channel speed values. Mix repeats the chosen aspiration/dispense strokes (1–50 cycles); it is not OEM scientific mmix/mixAll. Basic moves and strokes have no implicit lifecycle; OEM scans run their source-native sequences.</p>
         <div className="flex flex-wrap gap-2">{operations.map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
+        <BioXpSourcePipettingEditor drafts={sourceDrafts} onChange={updateSource} enabled={enabled} run={op => void run(op)} />
         <fieldset className="space-y-2 rounded border border-slate-700 p-3"><legend>Ordered well-to-well program</legend>
             <p className="text-sm">Author each step explicitly. For a transfer: Move → Lower → Aspirate → Lift, then select the destination and add Move → Lower → Dispense → Lift. Adding, copying and reordering do not move hardware.</p>
-            <label>Step to append<select aria-label="Step to append" value={operation} onChange={e => setOperation(e.target.value as Operation)} className="ml-2 bg-slate-950 p-2">{operations.map(op => <option key={op} value={op}>{label(op)}</option>)}</select></label>
+            <label>Step to append<select aria-label="Step to append" value={operation} onChange={e => setOperation(e.target.value as Operation)} className="ml-2 bg-slate-950 p-2">{allOperations.map(op => <option key={op} value={op}>{label(op)}</option>)}</select></label>
             <button type="button" onClick={append} className="ml-2 rounded border px-3 py-2">Append step</button>
             <ol className="space-y-2">{steps.map((step, index) => <li key={index} className="flex flex-wrap items-center gap-2" data-manual-step={index}>
                 <span>{index + 1}. {describeManualStep(step)}</span>

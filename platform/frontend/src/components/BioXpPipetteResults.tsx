@@ -15,6 +15,12 @@ export function PipetteValue({ value }: { value: unknown }) {
 export function PipetteOutcome({ result }: { result: PipetteResult }) {
     const body = result.body_completed ?? result.completed;
     return <dl className="text-sm space-y-1">
+        {result.action && <><dt>OEM diagnostic action</dt><dd>{result.action.replaceAll('_', ' ')}</dd></>}
+        {([['requested_pipette', 'Requested source pipette'], ['tip_location', 'Robot source TipLocation'], ['alignment_published', 'New alignment published'], ['already_matching_tip_type', 'Matching-tip early return'], ['selected_channels', 'Selected source channels'], ['lost_tip_channels', 'Lost-tip channels'], ['cached_tip_channels', 'Cached tipped channels'], ['ejected_channels', 'Ejected channels'], ['controller_outcome_ok', 'Controller outcome'], ['source_return_completed', 'Source caller returned'], ['physical_effect_verified', 'Physical effect verified']] as const).map(([key, label]) => result[key] !== undefined && <Fragment key={key}><dt>{label}</dt><dd><PipetteValue value={result[key]} /></dd></Fragment>)}
+        {result.already_matching_tip_type === true && <><dt>Alignment note</dt><dd>Existing alignment retained; requesting another pipette did not establish new alignment.</dd></>}
+        {result.channels && <><dt>Diagnostic channel results</dt><dd><PipetteValue value={result.channels.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => ['channel', 'part_number', 'revision', 'firmware', 'data', 'error', 'display', 'diagnosis'].includes(key))))} /></dd></>}
+        {result.tests && <><dt>Ordered diagnosis tests</dt><dd><PipetteValue value={result.tests.map(row => ({ number: row.number, label: row.label, channels: Array.isArray(row.channels) ? row.channels.map(channel => { const r = resultRecord(channel); return r ? { channel: r.channel, diagnosis: r.diagnosis, display: r.display } : channel; }) : row.channels }))} /></dd></>}
+        {result.attempts && <><dt>Initialize attempts</dt><dd>{result.attempts.length}</dd></>}
         {result.action_id && <><dt>Action ID</dt><dd>{result.action_id}</dd></>}
         {result.detail != null && <><dt>Action detail</dt><dd><PipetteValue value={result.detail} /></dd></>}
         {result.kind && <><dt>Result kind</dt><dd>{result.kind}</dd></>}
