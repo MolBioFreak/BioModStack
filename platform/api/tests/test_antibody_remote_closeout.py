@@ -419,6 +419,7 @@ else:
     deny.mkdir()
     (deny/'sitecustomize.py').write_text("import socket\ndef denied(*a,**k): raise RuntimeError('OUTBOUND_DENIED')\nsocket.socket.connect=denied\nsocket.socket.connect_ex=denied\nsocket.create_connection=denied\n")
     env = {**os.environ, 'PATH':str(shim)+':'+os.environ['PATH'], 'BMS_API_PYTHON':sys.executable,
+           'BMS_HOME': str(root),
            'BMS_COMPONENT_JOB_ID':'00000000-0000-0000-0000-000000000001', 'BMS_COMPONENT_OUTPUT_DIR':str(tmp_path/'parent-out'),
            'PYTHONPATH':str(deny)+':'+os.environ.get('PYTHONPATH',''),
            'JAVA_TOOL_OPTIONS':'--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED',
