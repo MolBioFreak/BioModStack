@@ -161,6 +161,69 @@ def test_eight_ranges_and_separate_publication(incoming, monkeypatch):
     assert "private" not in json.dumps([result, events])
 
 
+def test_rolling_window_starts_ninth_before_eighth_finishes(incoming, monkeypatch):
+    cache, operation, batch, path = incoming
+    monkeypatch.setattr(hf, "RANGE_BYTES", 3)
+    assert hf.PARALLEL_RANGES == 8
+    data = bytes(range(73))  # Generic bytes, including a short final range.
+    item = identity(data)
+    leaf = path / item["sha256"]
+    boundary = HTTPDouble(monkeypatch, data)
+    first_window = threading.Barrier(hf.PARALLEL_RANGES)
+    ninth_started, eighth_finished = threading.Event(), threading.Event()
+    lock = threading.Lock()
+    active = peak = 0
+    submitted = []
+    fetch = hf._fetch_range
+
+    class WindowExecutor(hf.ThreadPoolExecutor):
+        def __init__(self, *, max_workers):
+            assert max_workers == hf.PARALLEL_RANGES
+            super().__init__(max_workers=max_workers)
+
+        def submit(self, fn, /, *args, **kwargs):
+            url, expiry, start, end, size, deadline = args
+            # Includes running, queued AND completed-but-unwritten ranges.
+            prefix = leaf.read_bytes()
+            assert prefix == data[:len(prefix)]
+            assert end + 1 - len(prefix) <= hf.PARALLEL_RANGES * hf.RANGE_BYTES
+            submitted.append(start)
+            return super().submit(fn, url, expiry, start, end, size, deadline)
+
+    def controlled_fetch(url, expiry, start, end, size, deadline):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            if start < 8 * hf.RANGE_BYTES:
+                first_window.wait(timeout=5)
+            if start == 7 * hf.RANGE_BYTES:
+                # A fixed-batch scheduler cannot satisfy this dependency.
+                assert ninth_started.wait(5)
+            elif start == 8 * hf.RANGE_BYTES:
+                assert not eighth_finished.is_set()
+                ninth_started.set()
+            return fetch(url, expiry, start, end, size, deadline)
+        finally:
+            if start == 7 * hf.RANGE_BYTES:
+                eighth_finished.set()
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(hf, "ThreadPoolExecutor", WindowExecutor)
+    monkeypatch.setattr(hf, "_fetch_range", controlled_fetch)
+    result = cache.acquire_hf(item, operation, batch, source())
+    assert ninth_started.is_set() and eighth_finished.is_set()
+    assert active == 0 and peak == hf.PARALLEL_RANGES
+    assert submitted == list(range(0, len(data), hf.RANGE_BYTES))
+    assert len(boundary.calls) == len(submitted)
+    assert all(connection.closed for connection in boundary.connections)
+    assert result["received_bytes"] == len(data)
+    assert leaf.read_bytes() == data
+    assert cache.probe(item)["state"] == "missing"
+
+
 @pytest.mark.parametrize("status", [200, 301, 302, 307, 308, 401, 403, 404, 500])
 def test_http_errors_never_publish(incoming, monkeypatch, status):
     cache, operation, batch, path = incoming

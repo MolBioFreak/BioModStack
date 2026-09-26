@@ -251,17 +251,35 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             with tempfile.TemporaryDirectory(prefix='bms-cache-batch-') as temporary:
                 staging = Path(temporary)
                 await check_fence()
-                for entry in batch:
-                    info = entry.source.lstat()
-                    if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
-                        raise ValueError('Cache source size or type changed')
-                    destination = staging / entry.sha256
-                    try:
-                        os.link(entry.source, destination, follow_symlinks=False)
-                    except OSError:
-                        shutil.copyfile(entry.source, destination, follow_symlinks=False)
-                    if destination.is_symlink() or not destination.is_file():
-                        raise ValueError('Cache source is not a regular file')
+                def stage_files():
+                    for entry in batch:
+                        info = entry.source.lstat()
+                        if not stat.S_ISREG(info.st_mode) or info.st_size != entry.size_bytes:
+                            raise ValueError('Cache source size or type changed')
+                        destination = staging / entry.sha256
+                        try:
+                            os.link(entry.source, destination, follow_symlinks=False)
+                        except OSError:
+                            shutil.copyfile(entry.source, destination, follow_symlinks=False)
+                        if destination.is_symlink() or not destination.is_file():
+                            raise ValueError('Cache source is not a regular file')
+
+                staging_task = asyncio.create_task(asyncio.to_thread(stage_files))
+                try:
+                    await asyncio.shield(staging_task)
+                except asyncio.CancelledError:
+                    # A thread cannot be cancelled: retain ownership until it
+                    # stops writing, even if cancellation is requested again.
+                    while not staging_task.done():
+                        try:
+                            await asyncio.shield(staging_task)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if not staging_task.cancelled():
+                        staging_task.exception()
+                    raise
                 await check_fence()
                 await rsync_to_remote(connection, staging, incoming + '/', delete=False)
                 await check_fence()
@@ -348,7 +366,7 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
     return receipts
 
 
-def _weights_archive_artifact():
+def _weights_archive_artifact(artifacts=None):
     """The declared packed shared weight tree, or None when none is configured.
 
     It is published out of band, so there is no local source to publish from: an
@@ -358,11 +376,26 @@ def _weights_archive_artifact():
     if identity is None:
         return None
     digest, size = identity
+    if artifacts is not None:
+        # Advisory packing catalog only: it can avoid an irrelevant/oversized
+        # archive, never authenticate bytes or refuse a launch. Absent or stale
+        # catalogs preserve the existing configured archive route.
+        catalog = get_data_root() / 'remote-execution' / 'hf-archives' / digest / 'index.json'
+        try:
+            index = json.loads(catalog.read_bytes())
+            if index['archive'] == {'sha256': digest, 'size_bytes': size}:
+                sizes = index['digest_sizes']
+                matched = {e.sha256: e.size_bytes for e in artifacts
+                           if sizes.get(e.sha256) == e.size_bytes}
+                if not matched or (len(matched) <= BATCH_COUNT and sum(matched.values()) < size):
+                    return None  # The ordinary selected-object route is smaller.
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
     return SimpleNamespace(source=Path('/nonexistent-bms-weight-archive'), role='weights',
                            sha256=digest, size_bytes=size)
 
 
-async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence):
+async def _install_weight_archive(*, connection, helper, layout, operation_id, progress, check_fence, artifacts=None):
     """Obtain the shared weight tree as one object, then unpack it on the worker.
 
     Returns the digests the archive delivered into the worker content store, or
@@ -370,7 +403,7 @@ async def _install_weight_archive(*, connection, helper, layout, operation_id, p
     the controller: the worker verifies every member against the bundle's own
     authenticated weight layout, and only then publishes the shared view.
     """
-    archive = _weights_archive_artifact()
+    archive = _weights_archive_artifact(artifacts)
     if archive is None or hf_assets.configuration() is None:
         return None
     detail = {'sha256': archive.sha256, 'size_bytes': archive.size_bytes}
@@ -494,7 +527,8 @@ p.mkdir(mode=0o700,exist_ok=False)
             # The packed shared tree is one object the worker unpacks itself;
             # only the rows it does not carry keep the per-file relay path.
             delivered = await _install_weight_archive(connection=connection, helper=helper,
-                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence)
+                layout=layout, operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
+                artifacts=bundle.runtime_weights)
             pending = [entry for entry in bundle.runtime_weights
                        if delivered is None or entry.sha256 not in delivered]
             if pending:
@@ -766,21 +800,27 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
     # is download evidence, NOT a materialized runtime or scientific acceptance.
     tool = await _install_helper(connection, check_fence)
     objects = tuple({(e.role == 'image', e.sha256): e for e in entries}.values())
-    for offset in range(0, len(objects), BATCH_COUNT):
-        batch = objects[offset:offset + BATCH_COUNT]
-        await check_fence()
-        response = await run_remote(connection, ['python3', tool, '--root',
-            f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
-                'action': 'probe', 'artifacts': [dict(sha256=e.sha256, size_bytes=e.size_bytes,
-                    **({'kind': 'runtime_image'} if e.role == 'image' else {})) for e in batch]
-            }).encode(), timeout=3600)
-        await check_fence()
-        rows = json.loads(response.stdout)['artifacts']
-        expected = {(e.role == 'image', e.sha256, e.size_bytes) for e in batch}
-        observed = {(r.get('kind') == 'runtime_image', r['sha256'], r['size_bytes'])
-                    for r in rows if r['state'] == 'cache_hit'}
-        if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
-            raise ValueError('Cache source verification failed')
+    pages = [objects[offset:offset + BATCH_COUNT]
+             for offset in range(0, len(objects), BATCH_COUNT)]
+    probe_limit = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def verify_page(batch):
+        async with probe_limit:
+            await check_fence()
+            response = await run_remote(connection, ['python3', tool, '--root',
+                f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
+                    'action': 'probe', 'artifacts': [dict(sha256=e.sha256, size_bytes=e.size_bytes,
+                        **({'kind': 'runtime_image'} if e.role == 'image' else {})) for e in batch]
+                }).encode(), timeout=3600)
+            await check_fence()
+            rows = json.loads(response.stdout)['artifacts']
+            expected = {(e.role == 'image', e.sha256, e.size_bytes) for e in batch}
+            observed = {(r.get('kind') == 'runtime_image', r['sha256'], r['size_bytes'])
+                        for r in rows if r['state'] == 'cache_hit'}
+            if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
+                raise ValueError('Cache source verification failed')
+
+    await _bounded_group(pages, verify_page)
     await check_fence()
     return receipts
 

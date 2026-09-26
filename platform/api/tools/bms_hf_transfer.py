@@ -6,6 +6,7 @@ fence publication through the existing artifact cache owner.
 """
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.client
@@ -224,31 +225,38 @@ def download(fd, item, source):
         digest.update(data)
         remaining -= len(data)
     received = 0
-    # Batches bound queued and retained data to 8 x 8MiB. Results are written
-    # and hashed in order; failed later ranges never create sparse holes.
+    # A rolling window bounds queued and retained data to 8 x 8MiB. Refill
+    # after each contiguous write, not after the slowest range in a batch.
+    # Keep results in order so failed later ranges never create sparse holes.
     with ThreadPoolExecutor(max_workers=PARALLEL_RANGES) as executor:
-        while done < size:
-            _check_deadline(expiry, deadline)
-            ranges = [(start, min(size, start + RANGE_BYTES) - 1)
-                      for start in range(done, min(size, done + RANGE_BYTES * PARALLEL_RANGES), RANGE_BYTES)]
-            futures = [executor.submit(_fetch_range, url, expiry, start, end, size, deadline)
-                       for start, end in ranges]
-            try:
-                for future in futures:
-                    data = future.result(timeout=max(0.001, deadline - time.monotonic()))
+        futures = deque()
+        next_start = done
+        try:
+            while done < size:
+                _check_deadline(expiry, deadline)
+                while next_start < size and len(futures) < PARALLEL_RANGES:
                     _check_deadline(expiry, deadline)
-                    view = memoryview(data)
-                    while view:
-                        count = os.write(fd, view)
-                        if count <= 0:
-                            raise TransferError("hf_write_failed")
-                        view = view[count:]
-                    digest.update(data)
-                    done += len(data)
-                    received += len(data)
-            finally:
-                for future in futures:
-                    future.cancel()
+                    end = min(size, next_start + RANGE_BYTES) - 1
+                    futures.append(executor.submit(
+                        _fetch_range, url, expiry, next_start, end, size, deadline))
+                    next_start = end + 1
+                data = futures[0].result(timeout=max(0.001, deadline - time.monotonic()))
+                _check_deadline(expiry, deadline)
+                view = memoryview(data)
+                while view:
+                    count = os.write(fd, view)
+                    if count <= 0:
+                        raise TransferError("hf_write_failed")
+                    view = view[count:]
+                digest.update(data)
+                done += len(data)
+                received += len(data)
+                # Release the consumed result before admitting its replacement.
+                futures.popleft()
+                del data, view
+        finally:
+            for future in futures:
+                future.cancel()
     if done != size or digest.hexdigest() != item["sha256"]:
         # Corrupt prefixes cannot poison every fresh-link retry indefinitely.
         os.ftruncate(fd, 0)

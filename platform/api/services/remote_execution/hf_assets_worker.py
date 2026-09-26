@@ -79,7 +79,7 @@ def _hash(stream, size, digest):
     stream.seek(0)
 
 
-def _prepare(request, config, api, http, token):
+def _prepare(request, config, api, http, token, *, publisher_lock=None):
     import re
     role, digest, size = request.get('role'), request.get('sha256'), request.get('size_bytes')
     if (role not in DELIVERY_ROLES or not isinstance(digest, str)
@@ -91,6 +91,15 @@ def _prepare(request, config, api, http, token):
     if not _object(api, config, key, size):
         if not config.allow_publish:
             raise HFAssetError('HF artifact is absent and publishing is not authorized')
+        if publisher_lock is not None:
+            # Only publishing needs serialization. Re-read presence and quota
+            # under exclusive ownership: another publisher may have completed
+            # after the initial, lock-free cloud lookup.
+            fcntl.flock(publisher_lock, fcntl.LOCK_EX)
+            try:
+                return _prepare(request, config, api, http, token)
+            finally:
+                fcntl.flock(publisher_lock, fcntl.LOCK_UN)
         if info.size + size > config.max_bytes:
             raise HFAssetError('HF bucket exceeds configured byte limit')
         with os.fdopen(_open_regular(Path(request['path'])), 'rb') as stream:
@@ -112,7 +121,9 @@ def _prepare(request, config, api, http, token):
                     if code != 'failed':
                         raise HFAssetError(ERROR_MESSAGES[code]) from None
                     raise HFAssetError('HF upload outcome requires a fresh source check') from None
-            _hash(stream, size, digest)
+            # The pinned inode was fully hashed before upload. Check its exact
+            # generation after the SDK read instead of rereading the whole file;
+            # worker acquisition still hashes every byte it receives.
             if _identity(os.fstat(stream.fileno())) != before:
                 raise HFAssetError('HF local artifact identity changed')
             with os.fdopen(_open_regular(Path(request['path'])), 'rb') as current:
@@ -157,15 +168,15 @@ def _execute(request):
         set_client_factory(lambda: httpx.Client(timeout=60, follow_redirects=False, trust_env=False))
         api = HfApi(endpoint=ENDPOINT, token=token)
         with os.fdopen(_open_regular(config.token_file), 'rb') as lock:
-            # Serialize BMS publishers sharing this credential across API processes.
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            # Presence checks and signed reads do not mutate the bucket and
+            # must not wait behind an unrelated upload. _prepare locks misses.
             if request.get('action') == 'check':
                 _private_bucket(api, config)
                 return {'available': True}
             if request.get('action') != 'prepare':
                 raise HFAssetError('HF asset operation is invalid')
             with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as http:
-                return _prepare(request, config, api, http, token)
+                return _prepare(request, config, api, http, token, publisher_lock=lock.fileno())
 
 
 def main():
