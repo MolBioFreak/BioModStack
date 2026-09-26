@@ -115,6 +115,7 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
         # remains unchanged in the persisted compiler settings tested above.
         assert native['binder_chains'] == (sorted(order.split(',')) if model == 'proteinmpnn' else ['B', 'D'])
         assert native['target_chains'] == (['A', 'B'] if model == 'proteinmpnn' else ['A', 'C'])
+        assert set(native['target_chains']) <= native['chain_sequences'].keys(), native
         assert all(native['chain_sequences'][chain] == 'A' for chain in native['target_chains'])
         assert set(native['designed_chain_sequences']) == ({'T', 'Z'} if model == 'proteinmpnn' else {'B', 'D'})
         assert native['source_structure_sha256'] == hashlib.sha256(Path(typed.params['input_pdb']).read_bytes()).hexdigest()
@@ -148,8 +149,8 @@ async def test_round_input_owner_reaches_actual_normalizer_and_compiler(selected
     })
     typed = design_request(root, root, design, envelope, ['Z'], ['B'])
     normalized, invocation = compile_request(typed, tmp_path / 'compiled-round')
-    binder_key = 'design_chain' if model == 'fampnn' else 'binder_chains'
-    target_key = 'target_chain' if model == 'fampnn' else 'target_chains'
+    binder_key = 'design_chain' if model in {'fampnn', 'proteinmpnn'} else 'binder_chains'
+    target_key = 'target_chain' if model in {'fampnn', 'proteinmpnn'} else 'target_chains'
     assert invocation.native_parameters[binder_key] == normalized.params[binder_key] == 'Z'
     assert invocation.native_parameters[target_key] == normalized.params[target_key] == 'B'
 
