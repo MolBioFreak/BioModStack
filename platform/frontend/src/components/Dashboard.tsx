@@ -23,7 +23,6 @@ import {
     isStructureReorchestrateJob,
     type StructureReorchestrateSettings,
 } from './dashboard/reorchestrateStructureSettings';
-import { isNgsJob } from '../lib/ngsResultRouting';
 
 interface ResumeSettingsForm {
     rfantibodyNumDesigns: number;
@@ -177,6 +176,7 @@ export function Dashboard() {
     };
     const [resumeDialogMode, setResumeDialogMode] = useState<'resume' | 'reorchestrate'>('resume');
     const [resumeSettingsError, setResumeSettingsError] = useState<string | null>(null);
+    const [offset, setOffset] = useState(0);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [showNgsJobs, setShowNgsJobs] = useState(true);
@@ -196,9 +196,11 @@ export function Dashboard() {
         setResumeDialogMode('resume');
     };
 
-    const { data: jobsData, isLoading: jobsLoading } = useQuery({
-        queryKey: ['jobs', 'dashboard-summary'],
-        queryFn: ({ queryKey }) => fetchJobs({ limit: 100, summary: true }, queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey)),
+    const { data: jobsData, isLoading: jobsLoading, isError: jobsError, dataUpdatedAt: jobsUpdatedAt, refetch: retryJobs } = useQuery({
+        queryKey: ['jobs', 'dashboard-summary', search, statusFilter, showNgsJobs, offset],
+        queryFn: ({ queryKey, signal }) => fetchJobs({ limit: 100, offset, q: search || undefined,
+            status: statusFilter === 'all' ? undefined : statusFilter, exclude_ngs: !showNgsJobs, summary: true },
+            queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey), signal),
         refetchInterval: (query) => jobPollingInterval(3000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
@@ -939,30 +941,25 @@ export function Dashboard() {
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="text-xl font-semibold text-slate-200">Recent Jobs</h2>
                     <span className="text-sm text-slate-400">
-                        {jobsData?.data.total ?? 0} total jobs
+                        {jobsData ? `${jobsData.data.total} matching jobs` : 'Job count unavailable'}
                     </span>
                 </div>
 
                 <JobFilters
                     search={search}
-                    onSearchChange={setSearch}
+                    onSearchChange={value => { setSearch(value); setOffset(0); }}
                     status={statusFilter}
-                    onStatusChange={setStatusFilter}
+                    onStatusChange={value => { setStatusFilter(value); setOffset(0); }}
                     showNgsJobs={showNgsJobs}
-                    onShowNgsJobsChange={setShowNgsJobs}
+                    onShowNgsJobsChange={value => { setShowNgsJobs(value); setOffset(0); }}
                 />
 
-                {(() => {
-                    const filteredJobs = (jobsData?.data.jobs || []).filter((job: Job) => {
-                        const matchesSearch = search === '' ||
-                            job.name.toLowerCase().includes(search.toLowerCase()) ||
-                            job.id.includes(search);
-                        const matchesStatus = statusFilter === 'all' ||
-                            job.status === statusFilter ||
-                            (statusFilter === 'awaiting_input' && !!job.awaiting_input);
-                        const matchesNgs = showNgsJobs || !isNgsJob(job);
-                        return matchesSearch && matchesStatus && matchesNgs;
-                    });
+                {jobsError && <p role="alert" className="mb-3 text-amber-300">
+                    {jobsData ? `Jobs refresh failed. Showing last successful read from ${new Date(jobsUpdatedAt).toLocaleTimeString()}.` : 'Jobs unavailable. The jobs list could not be read.'}
+                    {' '}<button type="button" onClick={() => void retryJobs()}>Retry jobs</button>
+                </p>}
+                {(!jobsError || jobsData) && (() => {
+                    const filteredJobs = jobsData?.data.jobs ?? [];
 
                     return (
                         <div className="space-y-3">
@@ -983,10 +980,12 @@ export function Dashboard() {
                             />
                             <div className="flex items-center justify-between px-2 text-sm text-slate-400">
                                 <span>
-                                    Showing {filteredJobs.length} filtered jobs
+                                    Showing {filteredJobs.length ? offset + 1 : 0}–{offset + filteredJobs.length} of {jobsData?.data.total ?? "…"} matching jobs
                                 </span>
                                 <span>
-                                    Scroll inside the jobs panel to browse the full queue
+                                    <button type="button" disabled={offset === 0 || jobsLoading} onClick={() => setOffset(value => Math.max(0, value - 100))}>Previous jobs</button>
+                                    {' · '}
+                                    <button type="button" disabled={!jobsData || offset + 100 >= jobsData.data.total || jobsLoading} onClick={() => setOffset(value => value + 100)}>Next jobs</button>
                                 </span>
                             </div>
                         </div>

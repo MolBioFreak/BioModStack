@@ -1874,12 +1874,12 @@ export function ResultsViewer() {
         refetch: refetchJobs,
     } = useQuery({
         queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch],
-        queryFn: () => fetchJobs({
+        queryFn: ({ signal }) => fetchJobs({
             include_children: true,
             limit: 100,
             summary: true,
             q: debouncedJobSelectorSearch || undefined,
-        }),
+        }, undefined, signal),
     });
     const {
         data: routedJobData,

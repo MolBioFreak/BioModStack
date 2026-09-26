@@ -91,7 +91,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const [kind, setKind] = useState<CatalogProvisionSelection['kind'] | 'workflow'>('workflow');
   const [modelId, setModelId] = useState('');
   const catalog = useQuery({ queryKey: ['remote-provision-catalog'], queryFn: fetchProvisionCatalog, retry: false });
-  const models = useQuery({ queryKey: ['models'], queryFn: () => fetchModels(), retry: false });
+  const models = useQuery({ queryKey: ['models'], queryFn: ({ signal }) => fetchModels(undefined, signal), retry: false });
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => fetchTemplates(), retry: false });
   const selections = catalog.isError ? [] : (catalog.data ?? []).filter((item): item is CatalogProvisionSelection => item.kind === kind);
   const modelEntries = models.isError ? [] : (models.data?.data ?? []);

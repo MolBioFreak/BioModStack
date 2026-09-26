@@ -9,7 +9,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ project: null as any, models: [] as any[], inventory: {} as any, trace: [] as string[], save: vi.fn(), prepare: vi.fn(), reserve: vi.fn(), context: vi.fn(), submit: vi.fn(async (_request: any, _options?: any) => ({ data: { id: 'created-job' } })), library: null as any }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: state.submit,
-    fetchModelById: vi.fn(async (id: string) => ({ data: roundCatalogs.find((model: any) => model.id === id) ?? { id, params: [] } })),
+    fetchModelById: vi.fn(async (id: string) => ({ data: state.models.find(model => model.id === id) ?? roundCatalogs.find((model: any) => model.id === id) ?? { id, params: [], modes: [] } })),
     fetchModels: vi.fn(async () => ({ data: state.models })), fetchModel: vi.fn(async (id: string) => ({ data: state.models.find(m => m.id === id) })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchInputPresets: vi.fn(async () => ({ data: [{ id: 'fixture', name: 'Fixture target', path: 'inputs/fixture.pdb', category: 'test' }] })),
@@ -48,6 +48,7 @@ async function mount(route = '/submit?template=antibody_denovo&project_id=destin
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}><JobSubmission /><Location /></MemoryRouter></QueryClientProvider>)); await settle(); await settle();
+    await vi.waitFor(async () => { await settle(); expect(document.body.textContent).not.toContain('Loading selected editor'); expect(document.body.textContent).not.toContain('Loading Project workflow setup'); });
 }
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
 beforeEach(() => {

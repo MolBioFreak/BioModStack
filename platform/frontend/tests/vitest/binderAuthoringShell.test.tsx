@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ authoring: null as any, project: null as any, saveDraft: vi.fn(), submit: vi.fn(async () => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: mocks.submit,
-    fetchModelById: vi.fn(async (id: string) => ({ data: { id, params: [], modes: [] } })),
+    fetchModelById: vi.fn(async (_id: string) => ({ data: _id !== 'boltzgen' ? { id: _id, params: [], modes: [] } : { id: 'boltzgen', name: 'BoltzGen', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'peptide_binder', name: 'Peptide Binder Generation', params: ['target_pdb'] }, { id: 'nanobody_binder', name: 'Nanobody Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] } })),
     fetchModels: vi.fn(async () => ({ data: [{ id: 'boltzgen', name: 'BoltzGen', category: 'generative_design', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'peptide_binder', name: 'Peptide Binder Generation', params: ['target_pdb'] }, { id: 'nanobody_binder', name: 'Nanobody Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] }] })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchInputPresets: vi.fn(async () => ({ data: [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
@@ -90,12 +90,15 @@ it.each([undefined, { target_pdb: '' }])('native handoff inherits only untouched
     await mount();
     await act(async () => mocks.authoring.onOpenNativeRoute({ modelId: 'boltzgen', mode: 'protein_binder', initialDraft,
         sources: { target: { path: 'inputs/materialized-target.cif', name: 'Saved target', chain: 'a', residues: ['a42A'] } } }));
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(document.body.textContent).toContain('Protein Binder Generation'); });
     expect(document.querySelector('[data-authoring]')).toBeNull();
     expect(document.body.textContent).toContain('Protein Binder Generation');
     const target = document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]');
     expect(target).not.toBeNull();
-    expect(target!.value).toBe(initialDraft ? '' : 'inputs/materialized-target.cif');
+    await vi.waitFor(async () => {
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+        expect(document.querySelector<HTMLInputElement>('input[placeholder="Target structure"]')!.value).toBe(initialDraft ? '' : 'inputs/materialized-target.cif');
+    });
 });
 
 
@@ -122,8 +125,8 @@ it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('explicit PPIF
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
         expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')?.value).toBe('explicit PPIFlow draft');
     });
-    expect(fetchModelById).toHaveBeenCalledWith('ppiflow');
-    expect(fetchModels).toHaveBeenCalledWith();
+    expect(fetchModelById).toHaveBeenCalledWith('ppiflow', expect.any(AbortSignal));
+    expect(fetchModels).toHaveBeenCalledWith(undefined, expect.any(AbortSignal), true);
     expect(document.body.textContent).toContain(`Native ${mode}`);
     expect(document.querySelector('[data-route]')?.textContent).toBe(`?model=ppiflow&mode=${mode}`);
     expect(document.body.textContent).toContain('PPIFlow initial generation');

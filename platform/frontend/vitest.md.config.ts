@@ -8,6 +8,7 @@ export default defineConfig({
         include: [
             './tests/vitest/jobQuickSummaryMounted.test.tsx',
             './tests/vitest/jobStageProgressMounted.test.tsx',
+            './tests/vitest/coreSanity*.test.tsx',
             './tests/vitest/foldCpPlacementMounted.test.tsx',
             './tests/vitest/installFeaturesMounted.test.tsx',
             './tests/vitest/msaProviderReadinessMounted.test.tsx',

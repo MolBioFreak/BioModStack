@@ -18,6 +18,7 @@ vi.mock('../../src/lib/api', async original => ({ ...await original<typeof impor
     fetchInputPresets: vi.fn(async (type: string) => ({ data: type === 'pdb' ? mocks.presets : [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchModel: vi.fn(async (id: string) => ({ data: mocks.models.find(model => model.id === id) })),
+    fetchModelById: vi.fn(async (id: string) => ({ data: mocks.models.find(model => model.id === id) })),
 }));
 vi.mock('../../src/lib/projectManager', async original => ({ ...await original<typeof import('../../src/lib/projectManager')>(),
     getProjectWorkflowSetup: vi.fn(async () => mocks.project), saveProjectWorkflowSetupDraft: mocks.save,
@@ -64,7 +65,7 @@ async function mount(model: string, mode: string, params: Record<string, unknown
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[project ? '/submit?template=antibody_denovo&setup_context_id=setup&project_id=project' : '/submit']}><JobSubmission /></MemoryRouter></QueryClientProvider>));
-    await settle();
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Native binder job name"]')).not.toBeNull(); });
 }
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
 beforeEach(() => {

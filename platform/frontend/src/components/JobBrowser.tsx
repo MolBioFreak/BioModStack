@@ -27,13 +27,13 @@ export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId,
 
     const { data, isLoading, isError } = useQuery({
         queryKey: ['jobs', 'browser', debouncedSearch, page],
-        queryFn: () => fetchJobs({
+        queryFn: ({ signal }) => fetchJobs({
             q: debouncedSearch,
             limit: PAGE_SIZE,
             offset: page * PAGE_SIZE,
             status: 'completed', // Typically we want completed jobs for results
             summary: true,
-        })
+        }, undefined, signal)
     });
 
     const isSelected = (job: Job) => selectedJobId === job.id;

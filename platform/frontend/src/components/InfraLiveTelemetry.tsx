@@ -7,10 +7,7 @@ import {
     deactivateExecutionTarget,
     discoverHardware,
     EXECUTION_TARGET_STORAGE_KEY,
-    fetchFanControl,
     fetchExecutionTargets,
-    fetchPowerControl,
-    fetchSchedulerConfig,
     fetchSystemStatus,
     fetchTelemetryChartHistory,
     refreshVastExecutionTargets,
@@ -50,9 +47,8 @@ import type {
     WindowPreset,
 } from './infraTelemetryHistory';
 import { useSystemStatus } from '../lib/useSystemStatus';
-import { jobPollingInterval } from '../lib/queryPolling';
+import { usePowerControl, useFanControl, useSchedulerConfig } from '../lib/useControlState';
 
-const SHARED_CONTROL_POLL_INTERVAL_MS = 10000;
 const SHARED_SYSTEM_QUERY_KEY = ['system'];
 const SHARED_POWER_CONTROL_QUERY_KEY = ['powerControl'];
 const SHARED_FAN_CONTROL_QUERY_KEY = ['fanControl'];
@@ -1141,34 +1137,6 @@ function HistoricalTelemetryFallback({
 }
 
 
-export function InfraControlStateCollector() {
-    useQuery({
-        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
-        queryFn: fetchPowerControl,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    useQuery({
-        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
-        queryFn: fetchFanControl,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    useQuery({
-        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
-        queryFn: fetchSchedulerConfig,
-        refetchInterval: (query) => jobPollingInterval(SHARED_CONTROL_POLL_INTERVAL_MS, query),
-        refetchIntervalInBackground: false,
-        refetchOnWindowFocus: false,
-    });
-
-    return null;
-}
-
 function vastOperationErrorMessage(error: unknown): string {
     const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
     if (typeof detail === 'string' && detail.trim()) return detail;
@@ -1296,26 +1264,11 @@ export function InfraLiveTelemetry({
         bucketIntervalMs,
     );
 
-    const { data: powerControlData } = useQuery({
-        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
-        queryFn: fetchPowerControl,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: powerControlData } = usePowerControl();
 
-    const { data: fanControlData } = useQuery({
-        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
-        queryFn: fetchFanControl,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: fanControlData } = useFanControl();
 
-    const { data: schedulerConfigData } = useQuery({
-        queryKey: SHARED_SCHEDULER_CONFIG_QUERY_KEY,
-        queryFn: fetchSchedulerConfig,
-        enabled: false,
-        staleTime: Infinity,
-    });
+    const { data: schedulerConfigData } = useSchedulerConfig();
 
     const manualMutation = useMutation({
         mutationFn: ({ gpuIndex, limitWatts }: { gpuIndex: number; limitWatts: number }) =>

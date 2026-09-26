@@ -11,7 +11,6 @@ import { StructureViewerErrorBoundary } from '../structureViewer/StructureViewer
 import { BMS_CONTROL, BMS_CONTROL_GROUP, BMS_FULLSCREEN_FLUSH, BMS_PANEL_SURFACE, BMS_SMALL_CONTROL, BMS_VIEWER_WELL } from './ui/bmsStyle';
 import { fetchFullJob, fetchJobs } from '../lib/api';
 import type { Job } from '../lib/api';
-import { jobPollingInterval } from '../lib/queryPolling';
 import { isNgsJob } from '../lib/ngsResultRouting';
 import { getJobOutputSummary } from '../lib/jobOutputSummary';
 
@@ -145,11 +144,15 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
     };
 
     const queryClient = useQueryClient();
+    const [chooserOpen, setChooserOpen] = useState(false);
+    // Keep this completed-job scope independent of the Dashboard page.
+    // No periodic read: focus/open and job invalidations refresh the selector.
     // Fetch jobs
-    const { data: jobsData } = useQuery({
+    const { data: jobsData, isError: jobsError, refetch: retryJobs } = useQuery({
         queryKey: ['jobs', 'quick-viewer-summary'],
-        queryFn: ({ queryKey }) => fetchJobs({ status: 'completed', limit: 100, summary: true }, queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey)),
-        refetchInterval: (query) => jobPollingInterval(3000, query),
+        queryFn: ({ queryKey, signal }) => fetchJobs({ status: 'completed', limit: 100, summary: true }, queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey), signal),
+        enabled: chooserOpen,
+        refetchOnWindowFocus: false,
     });
     const { data: selectedJobData } = useQuery({
         queryKey: ['quick-viewer-selected-job', selectedJobId],
@@ -325,12 +328,17 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
 
             {/* Job Selector */}
             <div className="mb-3" style={{ position: 'relative', zIndex: 10 }}>
+                {jobsError && <p role="alert">Completed jobs {jobsData ? 'refresh failed; showing last successful choices.' : 'unavailable.'} <button type="button" onClick={() => void retryJobs()}>Retry completed jobs</button></p>}
                 <select
+                    aria-label="Quick Viewer job"
+                    onFocus={() => setChooserOpen(true)}
+                    onBlur={() => setChooserOpen(false)}
                     value={quickViewerJobId || ''}
                     onChange={(e) => setSelectedJobId(e.target.value || null)}
                     className={`w-full bg-slate-900/50 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-accent focus:border-transparent ${layout.selectorClass}`}
                 >
                     <option value="">Select a job...</option>
+                    {selectedJobData && !selectedJobIsExcluded && !completedJobs.some((job: Job) => job.id === selectedJobId) && <option value={selectedJobId!}>{selectedJobData.name}</option>}
                     {completedJobs.map((job: Job) => (
                         <option key={job.id} value={job.id}>
                             {job.name} ({getJobOutputSummary(job).label})

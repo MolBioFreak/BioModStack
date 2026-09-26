@@ -300,6 +300,8 @@ const fixtures = vi.hoisted(() => ({
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: fixtures.models })),
+    fetchModelById: vi.fn(async (id: string) => ({ data: fixtures.models.find(model => model.id === id) })),
+    fetchModelById: vi.fn(async (id: string) => ({ data: fixtures.models.find(model => model.id === id) })),
     fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchInputPresets: vi.fn(async () => ({ data: [] })),
     fetchExecutionTargets: fixtures.targets,

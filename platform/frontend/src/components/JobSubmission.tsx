@@ -1,14 +1,14 @@
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ParamField, compactUiCopy } from './ModelParameterField';
-import { CalibyNativeForm } from './CalibyNativeForm';
-import { LigandMPNNDesignForm } from './LigandMPNNDesignForm';
-import { NativeBinderGeneration } from './NativeBinderGeneration';
-import { BinderRoundSettings } from './BinderRoundSettings';
+const CalibyNativeForm = lazy(() => import('./CalibyNativeForm').then(m => ({ default: m.CalibyNativeForm })));
+const LigandMPNNDesignForm = lazy(() => import('./LigandMPNNDesignForm').then(m => ({ default: m.LigandMPNNDesignForm })));
+const NativeBinderGeneration = lazy(() => import('./NativeBinderGeneration').then(m => ({ default: m.NativeBinderGeneration })));
+const BinderRoundSettings = lazy(() => import('./BinderRoundSettings').then(m => ({ default: m.BinderRoundSettings })));
 import { hydrateBinderRound } from '../lib/binderRound';
-import { BindCraft2LifecycleDraft } from './BindCraft2Campaign';
+const BindCraft2LifecycleDraft = lazy(() => import('./BindCraft2Campaign').then(m => ({ default: m.BindCraft2LifecycleDraft })));
 import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -17,23 +17,24 @@ import { api, EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, fetchM
 import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { TemplateManagerModal } from './TemplateManagerModal';
-import { MutagenesisTemplate, buildMutagenesisWorkflowRequest } from './MutagenesisTemplate';
-import { AntibodyDenovoTemplate } from './AntibodyDenovoTemplate';
+import { buildMutagenesisWorkflowRequest } from '../lib/mutagenesisWorkflowRequest';
+const MutagenesisTemplate = lazy(() => import('./MutagenesisTemplate').then(m => ({ default: m.MutagenesisTemplate })));
+const AntibodyDenovoTemplate = lazy(() => import('./AntibodyDenovoTemplate').then(m => ({ default: m.AntibodyDenovoTemplate })));
 
-import { StructurePredictionTemplate } from './StructurePredictionTemplate';
+const StructurePredictionTemplate = lazy(() => import('./StructurePredictionTemplate').then(m => ({ default: m.StructurePredictionTemplate })));
 
 
-import { OligoDesignerTemplate } from './OligoDesignerTemplate';
-import { ProteinModificationTemplate } from './ProteinModificationTemplate';
+const OligoDesignerTemplate = lazy(() => import('./OligoDesignerTemplate').then(m => ({ default: m.OligoDesignerTemplate })));
+const ProteinModificationTemplate = lazy(() => import('./ProteinModificationTemplate').then(m => ({ default: m.ProteinModificationTemplate })));
 import { DE_NOVO_TEMPLATE, DE_NOVO_ROUTE_KEYS, deNovoSavedValues, deNovoRouteValues, deNovoNavigation, deNovoSearch, isDeNovoModel, type DeNovoNavigationState } from './deNovoWorkflowRoute';
 
-import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
+const MolecularDynamicsTemplate = lazy(() => import('./MolecularDynamicsTemplate').then(m => ({ default: m.MolecularDynamicsTemplate })));
 import {
     buildMolecularDynamicsHandoffInitialValues,
     loadMolecularDynamicsDraft,
     parseMolecularDynamicsHandoffRoute,
 } from './gen2StartingStructureState.js';
-import { ConformationalMappingLauncher } from './conformationalMapping/ConformationalMappingLauncher';
+const ConformationalMappingLauncher = lazy(() => import('./conformationalMapping/ConformationalMappingLauncher').then(m => ({ default: m.ConformationalMappingLauncher })));
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { ModelDocumentationLinks, getModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';
 import { getDedicatedTemplateInitialValues, isDedicatedLauncherTemplate } from './jobSubmissionTemplateState.js';
@@ -529,8 +530,8 @@ export function JobSubmission() {
     }, [params.run_frustrampnn, params.frustrampnn_settings]);
 
     const { data: modelsData } = useQuery({
-        queryKey: ['models'],
-        queryFn: () => fetchModels(),
+        queryKey: ['models', 'compact'],
+        queryFn: ({ signal }) => fetchModels(undefined, signal, true),
     });
 
     const { data: templatesData } = useQuery({
@@ -745,17 +746,16 @@ export function JobSubmission() {
     });
 
     const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
-    const listedSelectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '')
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
-    // The default model list omits experimental entries. Explicit binder
-    // handoffs resolve their own public definition, not a different model.
+    // Choices are metadata only; resolve complete settings for the selected
+    // model, including explicit experimental deep links omitted from the list.
     const selectedNativeModelQuery = useQuery({
-        queryKey: ['native-binder-model', selectedModelId],
-        queryFn: () => fetchModelById(selectedModelId!),
-        enabled: (isNativeBinderGeneration || selectedModelId === 'caliby_experimental') && !listedSelectedModel,
+        queryKey: ['model', selectedModelId],
+        queryFn: ({ signal }) => fetchModelById(selectedModelId!, signal),
+        enabled: wizardMode === 'manual' && !!selectedModelId,
     });
-    const selectedModel = listedSelectedModel ?? ((isNativeBinderGeneration || selectedModelId === 'caliby_experimental') ? selectedNativeModelQuery.data?.data : undefined);
+    const selectedModel = selectedNativeModelQuery.data?.data;
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
     const nativeGenerationQuery = useQuery({
         queryKey: ['native-generation-settings', selectedModelId, selectedModeId],
@@ -1082,7 +1082,7 @@ export function JobSubmission() {
     const nativeBinderModeMissing = wizardMode === 'manual' && ['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && !selectedMode;
     const isReady = !nativeBinderModeMissing && !fampnnError && frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
-        (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
+        (wizardMode === 'manual' && selectedModel && jobName && selectedModelId && selectedModeId)
     );
     const launchBlockedReason = nativeBinderModeMissing
         ? 'The selected native mode is not advertised by the current model registry.'
@@ -1396,6 +1396,7 @@ export function JobSubmission() {
     }
 
     return (
+        <Suspense fallback={<p role="status">Loading selected editor…</p>}>
         <div className="min-h-screen bg-slate-950 p-6">
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
                 setProjectActionBusy(true); setProjectActionError(null);
@@ -1454,6 +1455,12 @@ export function JobSubmission() {
                 ? 'max-w-none'
                 : 'max-w-[104rem]'} mx-auto space-y-8`}>
 
+                {wizardMode === 'manual' && selectedModelId && (!selectedModel || selectedNativeModelQuery.isError) && (
+                    <div role={selectedNativeModelQuery.isError ? 'alert' : 'status'}>
+                        {selectedNativeModelQuery.isError ? (selectedModel ? 'Selected model settings refresh failed. Retaining last successful settings.' : 'Selected model settings unavailable.') : `Loading ${models.find((model: UntypedApiValue) => model.id === selectedModelId)?.name ?? selectedModelId} settings…`}
+                        {selectedNativeModelQuery.isError && <button type="button" onClick={() => void selectedNativeModelQuery.refetch()}>Retry model settings</button>}
+                    </div>
+                )}
                 {/* 2. Mode Toggle: workflow cards only; the raw model-picker tab stays hidden for now. */}
                 <section>
                     <div className="flex gap-2 mb-4">
@@ -2001,5 +2008,6 @@ export function JobSubmission() {
                 baseTemplateId={templateManagerContext.baseTemplateId}
             />
         </div>
+        </Suspense>
     );
 }

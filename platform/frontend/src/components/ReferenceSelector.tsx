@@ -80,7 +80,7 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
     // Fetch jobs for "Your Runs" tab
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: () => fetchJobs({ limit: 500, summary: true }),
+        queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true }, undefined, signal),
     });
     const jobs = (jobsData as UntypedApiValue)?.data?.jobs ?? [];
     const completedJobs = jobs.filter((j: UntypedApiValue) => j.status === 'completed');

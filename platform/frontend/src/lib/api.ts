@@ -866,9 +866,11 @@ export const fetchJobs = async (params?: {
     offset?: number;
     include_children?: boolean;
     summary?: boolean;
-}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }) => {
+    exclude_ngs?: boolean;
+}, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }, signal?: AbortSignal) => {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
+        signal, timeout: 10_000,
         params: {
             ...params,
             limit: Math.min(500, Math.max(1, params?.limit ?? 100)),
@@ -1967,11 +1969,11 @@ export interface ModelIntegrationConfig {
     workflows: Record<string, ModelWorkflowIntegration>;
 }
 
-export const fetchModels = (category?: string) =>
-    api.get<UntypedApiValue[]>('/api/models', { params: { category } });
+export const fetchModels = (category?: string, signal?: AbortSignal, compact = false) =>
+    api.get<UntypedApiValue[]>('/api/models', { params: { category, ...(compact ? { compact: true } : {}) }, signal, timeout: 10_000 });
 
-export const fetchModelById = (id: string) =>
-    api.get<UntypedApiValue>(`/api/models/${id}`);
+export const fetchModelById = (id: string, signal?: AbortSignal) =>
+    api.get<UntypedApiValue>(`/api/models/${id}`, { signal, timeout: 10_000 });
 
 export const fetchModelIntegration = (id: string) =>
     api.get<ModelIntegrationConfig>(`/api/models/${id}/integration`);
@@ -3010,8 +3012,8 @@ export interface RemoteDiagnosticsRecord {
 export const pullRemoteJobDiagnostics = (jobId: string) =>
     api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-diagnostics/pull`);
 
-export const fetchQueue = (status?: string) =>
-    api.get<QueuedJob[]>('/api/queue', { params: { status } });
+export const fetchQueue = (status?: string, signal?: AbortSignal) =>
+    api.get<QueuedJob[]>('/api/queue', { params: { status }, signal, timeout: 10_000 });
 
 export const fetchQueueStats = () =>
     api.get<QueueStats>('/api/queue/stats');

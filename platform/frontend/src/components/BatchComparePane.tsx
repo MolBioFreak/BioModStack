@@ -17,7 +17,7 @@ export function BatchComparePane({ initialJobId }: BatchComparePaneProps) {
     // Fetch all jobs for the selector
     const { data: jobsData } = useQuery({
         queryKey: ['jobs'],
-        queryFn: () => fetchJobs({ limit: 500, summary: true }),
+        queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true }, undefined, signal),
     });
     const jobs = useMemo(
         () => (jobsData?.data.jobs ?? []).filter((j: Job) => !isNgsJob(j)),

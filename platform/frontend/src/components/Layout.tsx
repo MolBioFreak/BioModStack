@@ -35,7 +35,7 @@ import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
 import { DevIssueLedger } from './DevIssueLedger';
 import { buildIdentity } from '../lib/buildIdentity';
 
-import { InfraControlStateCollector } from './InfraLiveTelemetry';
+import { usePowerControl, useFanControl } from '../lib/useControlState';
 import {
     SHARED_FAN_CONTROL_QUERY_KEY,
     SHARED_POWER_CONTROL_QUERY_KEY,
@@ -499,7 +499,6 @@ export function Layout({ children }: LayoutProps) {
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
         >
-            <InfraControlStateCollector />
             {/* Top Navigation Bar */}
             <nav
                 className="backdrop-blur-sm border-b flex-shrink-0 z-50 transition-colors duration-300"
@@ -1216,21 +1215,9 @@ function PowerControlMenu() {
     const [draftFanModes, setDraftFanModes] = useState<Record<string, 'auto' | 'manual'>>({});
     const [message, setMessage] = useState<string | null>(null);
 
-    const { data: powerControlData } = useQuery({
-        queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
-        queryFn: fetchPowerControl,
-        enabled: false,
-        staleTime: Infinity,
-        refetchOnWindowFocus: false,
-    });
+    const { data: powerControlData } = usePowerControl(isOpen);
 
-    const { data: fanControlData } = useQuery({
-        queryKey: SHARED_FAN_CONTROL_QUERY_KEY,
-        queryFn: fetchFanControl,
-        enabled: false,
-        staleTime: Infinity,
-        refetchOnWindowFocus: false,
-    });
+    const { data: fanControlData } = useFanControl(isOpen);
 
     const syncFanDrafts = useCallback((nextFanState: FanControlState) => {
         const nextTargets: Record<string, number> = {};
@@ -1270,8 +1257,8 @@ function PowerControlMenu() {
     const refreshHardwareState = useCallback(async (syncDrafts: boolean) => {
         try {
             await Promise.all([
-                queryClient.invalidateQueries({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY }),
-                queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY }),
+                queryClient.fetchQuery({ queryKey: SHARED_POWER_CONTROL_QUERY_KEY, queryFn: fetchPowerControl, staleTime: 0 }),
+                queryClient.fetchQuery({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY, queryFn: fetchFanControl, staleTime: 0 }),
             ]);
             syncPowerFromCache(syncDrafts);
             syncFanFromCache(syncDrafts);

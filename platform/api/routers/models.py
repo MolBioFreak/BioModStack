@@ -296,7 +296,8 @@ def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
 @router.get("", response_model=List[dict])
 async def list_models(
     category: Optional[str] = None,
-    include_experimental: bool = False
+    include_experimental: bool = False,
+    compact: bool = False,
 ):
     """
     List all available models.
@@ -324,12 +325,14 @@ async def list_models(
                     "id": mode.id, 
                     "name": mode.name,
                     "description": mode.description,
-                    "params": mode.params,
-                    "parameter_schema": _native_parameter_schema(m.id, mode.id),
+                    **({} if compact else {
+                        "params": mode.params,
+                        "parameter_schema": _native_parameter_schema(m.id, mode.id),
+                    })
                 }
                 for mode in m.modes
             ],
-            "params": [
+            **({} if compact else {"params": [
                 {
                     "name": p.name,
                     "type": p.type,
@@ -344,7 +347,7 @@ async def list_models(
                     "file_type": getattr(p, 'file_type', None),
                 }
                 for p in m.params
-            ],
+            ]}),
             "enabled": m.enabled,
             "experimental": m.experimental,
             "ui_icon": m.ui_icon,

@@ -240,7 +240,7 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
                 </QueryClientProvider>,
             );
         });
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(`${producer} selected Design`)); });
+        await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); expect(container.textContent).toContain(`${producer} selected Design`); });
         expect(apiMocks.get.mock.calls.some(([url]) => String(url).includes('source-candidates'))).toBe(false);
         expect(apiMocks.post).toHaveBeenCalledTimes(1);
     });

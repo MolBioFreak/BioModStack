@@ -64,7 +64,7 @@ async function mount(entry = '/submit?template=protein_modification_experimental
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><JobSubmission /><RouteProbe /></MemoryRouter></QueryClientProvider>));
-    await settle();
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull(); });
 }
 const route = () => document.querySelector('[data-route]')!.textContent!;
 const visible = (e: Element) => !e.closest('[hidden]');

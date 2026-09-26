@@ -340,9 +340,9 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     }, []);
 
     // Fetch queue data
-    const { data: queueData, isLoading } = useQuery({
+    const { data: queueData, isLoading, isError, dataUpdatedAt, refetch } = useQuery({
         queryKey: ['queue'],
-        queryFn: () => fetchQueue(),
+        queryFn: ({ signal }) => fetchQueue(undefined, signal),
         refetchInterval: (query) => jobPollingInterval(2000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
@@ -502,6 +502,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
 
     return (
         <div className={`${BMS_PANEL_OVERFLOW} ${className}`.trim()}>
+            {isError && <p role="alert" className="px-4 py-2 text-sm text-amber-300">
+                {queueData ? `Queue refresh failed. Showing last successful read from ${new Date(dataUpdatedAt).toLocaleTimeString()}.` : 'Queue unavailable. The queue could not be read.'}
+                {' '}<button type="button" onClick={() => void refetch()}>Retry queue</button>
+            </p>}
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 hover:bg-slate-700/20">
                 <button
@@ -610,7 +614,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                         <div className="flex justify-center py-4">
                             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                         </div>
-                    ) : visibleQueue.length === 0 ? (
+                    ) : isError && !queueData ? null : visibleQueue.length === 0 ? (
                         <div className="text-center py-4 text-slate-500 text-sm">
                             No jobs in queue
                         </div>
