@@ -87,7 +87,6 @@ export default defineConfig({
             './tests/vitest/bioxpPipetteRealProducerMounted.test.tsx',
             './tests/vitest/bioxpCalibrationSettingsMounted.test.tsx',
             './tests/vitest/bioxpCalibrationRunMounted.test.tsx',
-            './tests/vitest/bioxpPipetteRealProducerMounted.test.tsx',
             './tests/vitest/bioxpPipetteSettingsMounted.test.tsx',
             './tests/vitest/bioxpCockpitAdmissionFanoutMounted.test.tsx',
             './tests/vitest/bioxpCameraMounted.test.tsx',
