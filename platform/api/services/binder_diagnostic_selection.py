@@ -3,8 +3,11 @@
 No model settings, numerical interpretation or continuation policy lives here.
 """
 from pathlib import Path
+import hashlib
+import json
 from pydantic import BaseModel, ConfigDict
-from database import Job, JobArtifact
+from sqlalchemy import select
+from database import Design, Job, JobArtifact
 
 
 class CandidateDocument(BaseModel):
@@ -17,6 +20,47 @@ def root_id(job):
     return getattr(job, 'lineage_root_job_id', None) or (job.params or {}).get('lineage_root_job_id') or (job.params or {}).get('iteration_source_root_job_id') or job.id
 
 
+async def _ppiflow_feature_targets(job, prepared, session):
+    """Consume the native pre-sampling JSON export; never deserialize features."""
+    if session is None:
+        return []
+    hashes = {row['role']: row['sha256'] for row in prepared['source_bindings']}
+    sources = {row['source_row_index']: row for row in prepared['source_rows']}
+    targets = {}
+    for design in await session.scalars(select(Design).where(Design.job_id == job.id).order_by(Design.id)):
+        provenance = design.provenance or {}
+        export = provenance.get('independent_target') or {}
+        document = export.get('document') or {}
+        index = (provenance.get('source') or {}).get('source_row_index')
+        source = sources.get(index)
+        if (source is None or document.get('schema_version') != 'ppiflow-independent-target/1'
+                or document.get('source_feature_sha256') != hashes.get(f'csv_row:{index}')):
+            continue
+        raw = (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != export.get('sha256'):
+            continue
+        components = []
+        for chain in document.get('chains', []):
+            if not isinstance(chain.get('chain_id'), str) or not isinstance(chain.get('sequence'), str) or not chain['sequence']:
+                components = []
+                break
+            # Native feature indices and unknown insertion codes are preserved
+            # in the bound document, never recast as structural author evidence.
+            components.append({'id': chain['chain_id'], 'type': 'protein', 'sequence': chain['sequence']})
+        if not components or len({row['id'] for row in components}) != len(components):
+            continue
+        key = (index, digest)
+        target = targets.setdefault(key, {
+            'owner_job_id': job.id, 'name': source['native_target_name'],
+            'source_row_index': index, 'sha256': digest, 'independent_target': export,
+            'chains': [row['id'] for row in components], 'components': components,
+            'source_design_ids': [],
+        })
+        target['source_design_ids'].append(design.id)
+    return list(targets.values())
+
+
 async def declared_targets(source, session):
     """Nearest independently declared inputs, following persisted ancestry only."""
     pending, seen = [source], set()
@@ -26,10 +70,27 @@ async def declared_targets(source, session):
             continue
         seen.add(job.id)
         params = job.params or {}
+        if job.model_id == 'ppiflow' and params.get('ppiflow_generation_request'):
+            from paths import resolve_runtime_data_path
+            from services.ppiflow_generation import read_prepared_ppiflow_generation_request
+            directory = resolve_runtime_data_path(params['ppiflow_generation_request'])
+            prepared = read_prepared_ppiflow_generation_request(job.mode, params, directory)
+            transport = prepared['transport_settings']
+            if transport.get('target_pdb'):
+                return [dict(owner_job_id=job.id, name=row['native_target_name'],
+                             source_row_index=row['source_row_index'],
+                             target_path=str(directory / transport['target_pdb']),
+                             chains=transport.get('target_chain') or transport.get('antigen_chain'))
+                        for row in prepared['source_rows']]
+            return await _ppiflow_feature_targets(job, prepared, session)
         targets = (params.get('bindcraft2_settings') or {}).get('targets')
         if isinstance(targets, list) and targets:
-            return [dict(owner_job_id=job.id, name=t.get('name'), target_path=t.get('target_path'))
+            return [dict(owner_job_id=job.id, name=t.get('name'), target_path=t.get('target_path'),
+                         chains=t.get('chains'))
                     for t in targets if isinstance(t, dict)]
+        if params.get('boltzgen_target_pdb_path'):
+            return [dict(owner_job_id=job.id, name=None, target_path=params['boltzgen_target_pdb_path'],
+                         chains=params.get('target_chains'))]
         if params.get('target_pdb'):
             saved = (params.get('blind_pose_selected') or {}).get('target_context') or {}
             return [dict(owner_job_id=saved.get('owner_job_id', job.id),

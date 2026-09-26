@@ -134,6 +134,10 @@ process RunFAMPNN {
     if (!checkpointPath) {
         throw new IllegalArgumentException("FAMPNN checkpoint not configured. Set params.fampnn_checkpoint or params.fampnn_checkpoint_path.")
     }
+    def identityRequest = ['design_chain', 'target_chain'].collectEntries { key -> [(key): params.get(key)] }
+    if (identityRequest.design_chain == null) identityRequest.design_chain = 'A'
+    def identityBase64 = groovy.json.JsonOutput.toJson(identityRequest).getBytes('UTF-8').encodeBase64().toString()
+    def annotateIdentity = params.get('sequence_design_engine') == 'fampnn' ? "python /scripts/prep_fampnn_constraints_generic.py --annotate_dir results --source_csv '${csv}' --request_base64 '${identityBase64}'" : ''
     def extraBase64 = (params.get('fampnn_extra_config') != null ? params.get('fampnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     def strictAnalysis = params.get('core_protein_scientific_contract') != null
     def deferredAnalysis = strictAnalysis && analysis_contract.declaration instanceof Map
@@ -147,7 +151,7 @@ process RunFAMPNN {
     """ : (strictAnalysis ? "printf '%s' '${policyBase64}' | base64 --decode > fampnn_analysis_policy.json" : '')
     def bindNativePolicy = deferredAnalysis ? 'python /scripts/fampnn_policy_resolution.py --scopes fampnn_resolved_scopes.json --native-dir fampnn_output/samples --output fampnn_analysis_policy.json' : ''
     def analysisFlags = strictAnalysis ? '--core-protein-scientific-contract 1 --analysis-policy fampnn_analysis_policy.json --source-pdb-dir . --candidate-pdb-dir fampnn_output/samples' : ''
-    def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : '/app/fampnn/fampnn/inference/seq_design.py'
+    def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : (params.get('sequence_design_engine') == 'fampnn' ? '/scripts/prep_fampnn_constraints_generic.py --native-script /app/fampnn/fampnn/inference/seq_design.py --' : '/app/fampnn/fampnn/inference/seq_design.py')
     """
     # Raw config remains argv data, never shell syntax or command substitution.
     python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["batch_size", "checkpoint_path", "exclude_cys", "fixed_pos_csv", "num_seqs_per_pdb", "pdb_dir", "pdb_key_list", "presort_by_length", "psce_threshold", "temperature", "seq_only", "repack_last", "timestep_schedule.num_steps", "out_dir"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "fampnn"}' > native_extra_args.bin
@@ -182,6 +186,7 @@ process RunFAMPNN {
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp "\$file" "results/\$new_name"
+        if [ -f "\$file.fa_binding.json" ]; then cp "\$file.fa_binding.json" "results/\$new_name.fa_binding"; fi
     done
 
     python /scripts/analyse_fampnn.py \\
@@ -189,6 +194,8 @@ process RunFAMPNN {
         --chain_id "${analysis_chain_id}" \\
         --ignore_cbeta \\
         --out_dir results
+
+    ${annotateIdentity}
 
     # Combine metadata to jsonl file
     python /scripts/metadata_converter.py --input_dir results --input_ext ".json" \\

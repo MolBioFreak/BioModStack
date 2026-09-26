@@ -28,6 +28,9 @@ modes:
     description: Design sequences from a PDB backbone structure
     params:
       - input_pdb
+      - seqs_per_design
+      - fampnn_checkpoint
+      - fampnn_checkpoint_path
       - design_chain
       - target_chain
       - fampnn_temperature
@@ -39,12 +42,17 @@ modes:
       - fampnn_batch_size
       - fampnn_repack_last
       - fampnn_extra_config
-
+      - fixed_positions
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
   - id: fixed_backbone
     name: Fixed Backbone Redesign
     description: Redesign sequence while keeping specific residues fixed
     params:
       - input_pdb
+      - seqs_per_design
+      - fampnn_checkpoint
+      - fampnn_checkpoint_path
       - fixed_positions
       - fampnn_temperature
       - fampnn_exclude_cys
@@ -52,12 +60,21 @@ modes:
       - fampnn_seq_only
       - fampnn_num_steps
       - fampnn_extra_config
-
+      - design_chain
+      - target_chain
+      - fampnn_fix_target_sidechains
+      - fampnn_batch_size
+      - fampnn_repack_last
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
   - id: binder_design
     name: Binder Sequence Design
     description: Design binder sequences against a fixed target
     params:
       - input_pdb
+      - seqs_per_design
+      - fampnn_checkpoint
+      - fampnn_checkpoint_path
       - design_chain
       - target_chain
       - fampnn_temperature
@@ -69,8 +86,32 @@ modes:
       - fampnn_batch_size
       - fampnn_repack_last
       - fampnn_extra_config
+      - fixed_positions
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
 
 params:
+  - name: seqs_per_design
+    type: integer
+    description: Native number of designed sequences per input backbone.
+    required: false
+    default: 8
+    minimum: 1
+
+  - name: fampnn_checkpoint
+    type: string
+    description: Native FA-MPNN checkpoint preset.
+    default: fampnn_0_0.pt
+    enum:
+      - fampnn_0_0.pt
+      - fampnn_0_3.pt
+      - fampnn_0_3_cath.pt
+
+  - name: fampnn_checkpoint_path
+    type: file
+    description: Optional native checkpoint override, replacing the selected preset.
+    required: false
+
   # Input file
   - name: input_pdb
     type: file

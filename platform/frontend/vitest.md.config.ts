@@ -26,6 +26,7 @@ export default defineConfig({
             './tests/vitest/templateManagerNavigationMounted.test.tsx',
             './tests/vitest/sourceAcquisitionDogfoodMounted.test.tsx',
             './tests/vitest/binderGeneratorRouteMounted.test.tsx',
+            './tests/vitest/binderRoundSettingsMounted.test.tsx',
             './tests/vitest/nativeBinderGenerationMounted.test.tsx',
             './tests/vitest/binderSelectedControlsMounted.test.tsx',
             './tests/vitest/binderDiagnosticSelection.test.tsx',

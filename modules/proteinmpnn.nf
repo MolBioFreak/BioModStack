@@ -21,13 +21,17 @@ process PrepMPNN {
     path ("mpnn_prep_*.log")
 
     script:
+    def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
+    def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
+    def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
+    def roleFlags = roles ? "--request_base64 '${roleBase64}'" : ''
     """
     eval "\$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
     
     python /scripts/prep_mpnn_designs.py \
         --input_dir "./" \
-        --out_dir "${params.get('sequence_design_engine') == 'proteinmpnn' ? 'mpnn_fixed' : 'mpnn_input'}" ${params.get('sequence_design_engine') == 'proteinmpnn' ? '--generic' : ''}
+        --out_dir "${params.get('sequence_design_engine') == 'proteinmpnn' ? 'mpnn_fixed' : 'mpnn_input'}" ${params.get('sequence_design_engine') == 'proteinmpnn' ? '--generic' : ''} ${roleFlags}
     
     # Add unique ID to mpnn prep logfile
     cp mpnn_prep.log mpnn_prep_${task.index}.log
@@ -68,6 +72,10 @@ process RunMPNN {
     path "*.log"
 
     script:
+    def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
+    def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
+    def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
+    def nativeLauncher = roles ? "/scripts/proteinmpnn_binder_roles.py --request-base64 '${roleBase64}' --" : '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py'
     def extraBase64 = (params.get('mpnn_extra_config') != null ? params.get('mpnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     """
     # Raw config remains argv data, never shell syntax or command substitution.
@@ -80,7 +88,7 @@ process RunMPNN {
     micromamba activate mpnn
     mkdir results
         
-    python /dl_binder_design/mpnn_fr/dl_interface_design_multi.py \
+    python ${nativeLauncher} \
         -pdbdir "./" \
         -outpdbdir "./results" \
         -augment_eps ${params.mpnn_backbone_noise != null ? params.mpnn_backbone_noise : 0.0} \

@@ -412,6 +412,8 @@ def _generation_design_fields(job, record, artifact):
             "provenance": {"schema": "ppiflow.candidate-lineage.v1",
                            "candidate_key": record["candidate_key"],
                            "source": record.get("source"), "source_identity": record.get("source_identity"),
+                           **{key: record[key] for key in ("target_residue_mapping", "independent_target", "binder_chains", "target_chains")
+                              if key in record},
                            "primary_artifact_id": artifact.id, "validation_state": "unvalidated"}}
 
 

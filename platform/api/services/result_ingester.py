@@ -1140,6 +1140,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     params = _parse_job_params(job.params if job else None)
     model_id = str(job.model_id or "").strip().lower() if job else ""
     mode = str(job.mode or "").strip().lower() if job else ""
+    raw_round_step = (getattr(job, "provenance", None) or {}).get("binder_round_step")
+    round_step = (dict(raw_round_step) if isinstance(raw_round_step, dict)
+                  and raw_round_step.get("schema_version") == 1 else None)
     # Applicability selectors come only from persisted server-owned Job fields.
     # Request params may carry workflow inputs, but cannot mint review authority.
     stage_family = str(getattr(job, "stage_family", None) or "").strip().lower() or None
@@ -1182,7 +1185,8 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
                 break
 
     lineage_root_job_id = (
-        params.get("lineage_root_job_id")
+        (round_step or {}).get("root_job_id")
+        or params.get("lineage_root_job_id")
         or params.get("iteration_source_root_job_id")
         or params.get("resume_root_job_id")
         or getattr(job, "parent_job_id", None)
@@ -1236,7 +1240,8 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     stage_settings = _extract_stage_settings(params, stage_family, stage_mode)
 
     source_stage_job_id = (
-        params.get("source_stage_job_id")
+        (round_step or {}).get("source_job_id")
+        or params.get("source_stage_job_id")
         or params.get("selected_input_source_job_id")
         or getattr(job, "source_stage_job_id", None)
     )
@@ -1326,8 +1331,13 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "stage_settings": stage_settings,
         "selection_manifest": selection_manifest,
     }
+    if round_step is not None:
+        # The server-owned handoff is an identity link, not inherited numerical
+        # evidence. Output chain roles remain with the native producer adapter.
+        provenance["binder_round_step"] = round_step
     return {
         "params": params,
+        "binder_round_step": round_step,
         "stage_family": stage_family,
         "stage_mode": stage_mode,
         "lineage_root_job_id": lineage_root_job_id,
@@ -1400,7 +1410,8 @@ async def _resolve_parent_design_lineage(
     if cache is None:
         cache = {}
     selection_index = context.get("selection_index") or {}
-    candidate_source_ids = _candidate_source_design_ids(design_name)
+    round_step = context.get("binder_round_step")
+    candidate_source_ids = [] if round_step is not None else _candidate_source_design_ids(design_name)
     if structure_path is not None:
         sample_identity = _load_json_payload(structure_path.with_name(
             f"{structure_path.stem}_sample_identity.json"))
@@ -1413,6 +1424,16 @@ async def _resolve_parent_design_lineage(
                 "source_job_id": meta.get("source_job_id") or meta.get("design_job_id"),
                 "source_pdb_path": source.get("source_path"),
             }
+    if round_step is not None:
+        # One round step owns one exact input candidate, including every native
+        # sample it emits. Never reconstruct that parent from an output name.
+        step_source = round_step.get("source_design_id")
+        if source_identity and source_identity.get("source_design_id") and step_source:
+            if str(source_identity["source_design_id"]) != str(step_source):
+                raise ValueError("native sample source differs from its binder round input")
+        source_identity = ({"source_design_id": step_source,
+                            "source_job_id": round_step.get("source_job_id")}
+                           if step_source else None)
     manifest_item = None
     if source_identity and source_identity.get("source_design_id"):
         manifest_item = {
@@ -1420,14 +1441,14 @@ async def _resolve_parent_design_lineage(
             "design_id": source_identity["source_design_id"],
             "design_job_id": source_identity.get("source_job_id") or context.get("source_stage_job_id"),
         }
-    if manifest_item is None and structure_path is not None:
+    if round_step is None and manifest_item is None and structure_path is not None:
         manifest_item = selection_index.get(str(structure_path))
-    if manifest_item is None:
+    if round_step is None and manifest_item is None:
         manifest_item = selection_index.get(design_name)
-    if manifest_item is None:
+    if round_step is None and manifest_item is None:
         stem = Path(design_name).stem
         manifest_item = selection_index.get(stem)
-    if manifest_item is None:
+    if round_step is None and manifest_item is None:
         for key in _candidate_source_design_names(design_name):
             match = selection_index.get(key)
             if key not in selection_index:
@@ -6896,6 +6917,32 @@ async def ingest_collected_ppiflow_structures(
 
 
 
+def _relocate_caliby_native_output(payload: Dict[str, Any], metadata_path: Path) -> Dict[str, Any]:
+    """Reopen the producer-declared native document after return/publication.
+
+    This is optional provenance, not a new condition for publishing the designed
+    candidate. Missing or changed native bytes remain unavailable evidence.
+    """
+    identity = payload.get("native_output_structure")
+    if not isinstance(identity, dict) or not identity.get("relative_path"):
+        return payload
+    native = {**identity, "path": None, "state": "unavailable"}
+    root = metadata_path.parent.resolve()
+    try:
+        relative = Path(identity["relative_path"])
+        path = (root / relative).resolve()
+        if relative.is_absolute() or not path.is_relative_to(root):
+            raise ValueError("native document is outside its publication")
+        if not path.is_file():
+            raise ValueError("native document is not present in this publication")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != identity.get("sha256"):
+            raise ValueError("native document differs from the producer identity")
+        native.update(path=str(path), state="ready")
+    except (OSError, TypeError, ValueError) as exc:
+        native["reason"] = str(exc)
+    return {**payload, "native_output_structure": native}
+
+
 async def ingest_loose_files(
     job_id: str,
     output_path: Path,
@@ -6948,6 +6995,8 @@ async def ingest_loose_files(
             structure_path = json_path.with_name(json_path.stem.removeprefix("generator_") + ".pdb")
             if not structure_path.is_file() or str(structure_path.resolve()) in existing_documents:
                 continue
+            if current_model_id == "caliby_binder":
+                payload = _relocate_caliby_native_output(payload, json_path)
             sample_identity = _load_json_payload(structure_path.with_name(
                 f"{structure_path.stem}_sample_identity.json")) or {}
             source = payload.get("selected_source") or sample_identity.get("source") or {}

@@ -20,6 +20,7 @@ test('summary lists hydrate full job detail before using params-heavy dashboard 
   assert.match(dashboardSource, /const handleResume = async \(job: Job\) =>/u);
   assert.match(dashboardSource, /const detailedJob = await hydrateJobForDetail\(job\);/u);
   assert.match(dashboardSource, /const handleClone = async \(job: Job\) =>/u);
+  assert.match(dashboardSource, /binder_round: detailedJob\.binder_round,/u);
   assert.match(resultsViewerSource, /enabled: Boolean\(jobId\)/u);
   assert.match(resultsViewerSource, /baseJobs\.map\(\(job: Job\) => job\.id === routedJob\.id \? routedJob : job\)/u);
 });

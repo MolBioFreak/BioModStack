@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ authoring: null as any, project: null as any, saveDraft: vi.fn(), submit: vi.fn(async () => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: mocks.submit,
-    fetchModelById: vi.fn(async () => ({ data: null })),
+    fetchModelById: vi.fn(async (id: string) => ({ data: { id, params: [], modes: [] } })),
     fetchModels: vi.fn(async () => ({ data: [{ id: 'boltzgen', name: 'BoltzGen', category: 'generative_design', params: [{ name: 'target_pdb', type: 'string', description: 'Target structure', ui_placeholder: 'Target structure', required: false }], modes: [{ id: 'protein_binder', name: 'Protein Binder Generation', params: ['target_pdb'] }, { id: 'peptide_binder', name: 'Peptide Binder Generation', params: ['target_pdb'] }, { id: 'nanobody_binder', name: 'Nanobody Binder Generation', params: ['target_pdb'] }, { id: 'ligand_binder', name: 'Ligand Binder Generation', params: [] }, { id: 'ntp_binder', name: 'Nucleotide Binder Generation', params: [] }], parameters: [] }] })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchInputPresets: vi.fn(async () => ({ data: [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
@@ -168,7 +168,7 @@ it('advertised native generation submits only its model-mode fields, preserving 
     const launch = [...document.querySelectorAll('button')].find(button => button.textContent === 'Launch Experiment')!;
     expect(launch.disabled).toBe(false);
     await act(async () => launch.click());
-    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' } }, { launchContext: false });
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'native generation', model_id: 'boltzgen', mode: 'protein_binder', params: { target_pdb: '' }, binder_round: { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: {} }, prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] } }, { launchContext: false });
 });
 
 

@@ -110,7 +110,10 @@ class Pose:
         self.ids=list(dict.fromkeys((l[21],int(l[22:26]),l[26]) for l in self.data.decode().splitlines() if l.startswith('ATOM')))
     def pdb_info(self): return Info(self.ids)
     def total_residue(self): return len(self.ids)
-    def dump_pdb(self, path): Path(path).write_bytes(self.data)
+    def dump_pdb(self, path):
+        import os
+        prefix = b'REMARK inert sidechain restoration changes bytes\\n' if os.environ.get('BMS_TEST_FA_REAL_WRITER') else b''
+        Path(path).write_bytes(prefix + self.data)
 def init(*args): pass
 def pose_from_pdb(path): return Pose(path)
 ''')
@@ -121,10 +124,15 @@ import csv,hashlib,json,os,pickle,re,sys
 from pathlib import Path
 import numpy as np
 args=sys.argv[1:]
+if args[0] == '/scripts/proteinmpnn_binder_roles.py':
+    args[1:1] = ['--native-script', os.environ['BMS_TEST_MPNN_ROLE_FIXTURE']]
 with Path({str(tmp_path/'calls.jsonl')!r}).open('a') as f:
     real_script=Path({str(ROOT/'scripts')!r})/Path(args[0]).name
     source_hash=hashlib.sha256(real_script.read_bytes()).hexdigest() if args[0].startswith('/scripts/') and args[0] != '/scripts/analyse_fampnn.py' and real_script.is_file() else None
     f.write(json.dumps(dict(argv=args, cwd=str(Path.cwd()), actual_script_sha256=source_hash))+'\\n')
+optional_binding = args[0] == '/scripts/prep_fampnn_constraints_generic.py' and '--native-script' in args
+if optional_binding:
+    args = [args[2], *args[4:]]
 marked = args[0] == '/scripts/fampnn_native_binding.py'
 if marked:
     assert args[1:5] == ['--root','/app/fampnn','--','/app/fampnn/fampnn/inference/seq_design.py']
@@ -150,6 +158,22 @@ if args[0] == '/app/fampnn/fampnn/inference/seq_design.py':
         (out/'samples'/f'{{source.stem}}_sample{{index}}.pdb').write_bytes(source.read_bytes())
         (out/'samples'/f'{{source.stem}}_sample{{index}}.fasta').write_text('>EXPLICIT_INFERENCE_STUB\\n'+'A'*len(ids)+'\\n')
     (out/'inference_config.yaml').write_text('test_double: true\\n')
+    if optional_binding:
+        sys.path.insert(0, {str(ROOT/'scripts')!r})
+        import fampnn_native_binding as binding
+        from types import SimpleNamespace
+        chain_ids='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+        data=dict(bms_identity=np.array([[ord(c),n,ord(' ')] for c,n in ids]),
+                  chain_index=np.array([chain_ids.index(c) for c,n in ids]),
+                  residue_index=np.array([n for c,n in ids]))
+        context=binding.capture_input(source, data)
+        for index in range(int(values['num_seqs_per_pdb'])):
+            path=out/'samples'/f'{{source.stem}}_sample{{index}}.pdb'
+            prot=SimpleNamespace(chain_index=data['chain_index'], residue_index=data['residue_index'],
+                                 atom_mask=np.ones((len(ids),1)))
+            def writer(samples, paths):
+                binding.capture_candidate(paths[0], prot, chain_ids)
+            binding.save_samples(writer, dict(seq_mask=np.ones((1,len(ids)))), [path], [context])
     chains=list(dict.fromkeys(c for c,n in ids))
     pkl=dict(seq_probs=np.eye(21)[[0]*len(ids)],pred_aatype=np.zeros(len(ids),dtype=int),
         seq_mask=np.ones(len(ids)),aatype_override_mask=np.array(mask('fixed_seq_positions')),
@@ -161,6 +185,10 @@ if args[0] == '/app/fampnn/fampnn/inference/seq_design.py':
             sys.path[:0]=[{str(ROOT/'scripts')!r}, {str(ROOT/'tests')!r}]
             from fampnn_binding_fixtures import synthetic_receipt
             synthetic_receipt(source, out/'samples'/f'{{source.stem}}_sample{{index}}.pdb', pkl_path.read_bytes())
+    if os.environ.get('BMS_TEST_FA_REAL_WRITER'):
+        sys.path.insert(0, {str(ROOT/'tests')!r})
+        from test_sequence_source_correspondence import emit_native_fa
+        emit_native_fa(source, out, int(values['num_seqs_per_pdb']))
 elif args[0] == '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py':
     source=next(Path('.').glob('*.pdb'))
     Path({str(tmp_path/'mpnn_native_input.pdb')!r}).write_bytes(source.read_bytes())
@@ -263,8 +291,8 @@ def test_real_wrapper_native_transport(tmp_path, engine, mode, count):
     assert rows[0]['sequence']==('AAA' if engine=='fampnn' else 'AA')
     assert rows[0]['fampnn_avg_psce' if engine=='fampnn' else 'mpnn_score']==0.25
     if engine=='fampnn':
-        native=next(r['argv'] for r in calls if r['argv'][0].endswith('/seq_design.py'))
-        args=dict(a.split('=',1) for a in native[1:])
+        native=next(r['argv'] for r in calls if '--native-script' in r['argv'])
+        args=dict(a.split('=',1) for a in native[4:])
         assert {k:args[k] for k in ['psce_threshold','repack_last','exclude_cys','seq_only','num_seqs_per_pdb','batch_size','temperature','timestep_schedule.num_steps','seed']} == dict(psce_threshold='0',repack_last='false',exclude_cys='false',seq_only='true',num_seqs_per_pdb=str(count),batch_size='1',temperature='0.5',seed='42',**{'timestep_schedule.num_steps':'20'})
         masks=json.loads((tmp_path/'masks.json').read_text())
         assert masks['ids']==[['A',10],['B',21],['Z',77]]
@@ -343,3 +371,167 @@ def test_real_admission_declaration_to_marked_native_analyzer(tmp_path, mode):
     receipt = next((tmp_path/'work').glob('**/fampnn_input/subject.fampnn_prep.json'))
     proof = json.loads(receipt.read_text())
     assert proof['source_domain'] == proof['prepared_domain'] == ['A:10:', 'B:21:', 'Z:77:']
+
+
+def native_role_fixture(tmp_path):
+    """Installed native parser/classes/loop, with inert model and pose objects.
+
+    This never imports torch/PyRosetta or loads a checkpoint. Supply the native
+    source extracted read-only from the installed SIF, not a substitute parser.
+    """
+    import ast
+    source = os.environ.get('BMS_TEST_MPNN_NATIVE_SOURCE')
+    if not source:
+        pytest.skip('installed native source inspection fixture not supplied')
+    tree = ast.parse(Path(source).read_text())
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'init':
+            continue
+        if isinstance(node, ast.ClassDef) and node.name == 'ProteinMPNN_runner':
+            node.body = [n for n in node.body if not isinstance(n, ast.FunctionDef) or n.name not in {'__init__', 'relax_pose'}]
+            node.body += ast.parse("""
+def __init__(self, args, struct_manager):
+    self.struct_manager=struct_manager
+    self.seqs_per_struct=args.seqs_per_struct
+    self.relax_seqs_per_cycle=args.relax_seqs_per_cycle
+    self.temperature=args.temperature
+    self.omit_AAs=list(args.omit_AAs)
+    self.mpnn_model=None
+    self.device='EXPLICIT_NON_SCIENCE_FIXTURE'
+    self.bias_AAs_np=[]
+def relax_pose(self, sample):
+    pass
+""").body
+        nodes.append(node)
+    prelude = r'''
+# EXPLICIT NON-SCIENCE FIXTURE: installed parser/runner, inert poses/model.
+import os, sys, argparse, glob, json, time, copy
+from pathlib import Path
+from collections import OrderedDict
+from types import SimpleNamespace
+class Info:
+    def __init__(self, pose): self.pose=pose
+    def chain(self, i): return self.pose.rows[i-1][0]
+    def number(self, i, value=None):
+        if value is not None: self.pose.rows[i-1][1]=value
+        return self.pose.rows[i-1][1]
+    def icode(self, i, value=None): return ' '
+    def get_reslabels(self, i): return ['FIXED'] if i in self.pose.fixed else []
+class Pose:
+    def __init__(self, path):
+        self.rows=[]; self.fixed=set()
+        for line in Path(path).read_text().splitlines():
+            if line.startswith('REMARK PDBinfo-LABEL:'):
+                self.fixed.add(int(line.split()[2]))
+            if line.startswith('ATOM') and line[12:16].strip()=='CA':
+                self.rows.append([line[21],int(line[22:26]), {'ALA':'A','GLY':'G','VAL':'V'}[line[17:20]]])
+    def clone(self): return copy.deepcopy(self)
+    def pdb_info(self): return Info(self)
+    def total_residue(self): return len(self.rows)
+    def residue_type_set_for_pose(self, *args): return SimpleNamespace(name_map=lambda x:x)
+    def replace_residue(self, i, residue, orient): self.rows[i-1][2]=residue
+    def residue(self, i): return SimpleNamespace(name1=lambda:self.rows[i-1][2])
+    def dump_pdb(self, path):
+        with Path(path).open('w') as f:
+            for i,(c,n,a) in enumerate(self.rows,1):
+                name={'A':'ALA','G':'GLY','V':'VAL'}[a]
+                f.write(f'ATOM  {i:5d}  CA  {name} {c}{n:4d}    {0:8.3f}{0:8.3f}{0:8.3f}{1:6.2f}{1:6.2f}           C\n')
+pose_from_pdb=Pose
+core=SimpleNamespace(chemical=SimpleNamespace(FULL_ATOM_t=None),conformation=SimpleNamespace(ResidueFactory=SimpleNamespace(create_residue=lambda x:x)))
+def generate_seqopt_features(path, chains):
+    pose=Pose(path)
+    for chain in chains:
+        assert [n for c,n,a in pose.rows if c==chain] == list(range(1,1+sum(c==chain for c,n,a in pose.rows)))
+    return dict(name=str(Path(path).with_suffix('')), rows=pose.rows)
+def set_default_args(count, **kwargs): return dict(count=count)
+def generate_sequences(model, device, features, args, masked, visible, **kwargs):
+    # Installed tied_featurize sorts masks before _S_to_seq concatenation.
+    assert masked == sorted(masked)
+    masks=kwargs['fixed_positions_dict'][features['name']]
+    Path('role-native-call.json').write_text(json.dumps(dict(masked=masked,visible=visible,fixed=masks,rows=features['rows'],args=args)))
+    results=[]
+    for sample in range(args['count']):
+        seq=''
+        for chain in sorted(masked):
+            for index,(_,_,aa) in enumerate([r for r in features['rows'] if r[0]==chain],1):
+                seq += aa if index in masks[chain] else ('G' if sample==0 else 'V')
+        results.append((seq,0.25))
+    return results
+mpnn_util=SimpleNamespace(generate_seqopt_features=generate_seqopt_features,set_default_args=set_default_args,generate_sequences=generate_sequences,aa_1_3={'A':'A','G':'G','V':'V'})
+'''
+    fixture=tmp_path/'native-role-fixture.py'
+    fixture.write_text(prelude+'\n'+ast.unparse(ast.Module(body=nodes,type_ignores=[])))
+    return fixture
+
+
+@pytest.mark.parametrize('binder_order', ['Z,T', 'T,Z'])
+def test_real_role_wrapper_native_parser_transport(tmp_path, monkeypatch, binder_order):
+    fixture=native_role_fixture(tmp_path)
+    monkeypatch.setenv('BMS_TEST_MPNN_ROLE_FIXTURE', str(fixture))
+    # Targets occur first/middle; binder order differs from pose and native sort.
+    text=(atom(1,'B',91)+atom(2,'Z',10)+atom(3,'Z',30)+atom(4,'A',10)+atom(5,'T',7)+atom(6,'T',18))
+    result,calls,source=run_wrapper(tmp_path,'proteinmpnn','design',
+        dict(binder_chains=binder_order,target_chains='B,A',fixed_positions='Z:30',seqs_per_design=2,mpnn_relax_output=True),text=text)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert any(c['argv'][0]=='/scripts/proteinmpnn_binder_roles.py' for c in calls)
+    for sample, expected in [(0, {'A':'A','B':'A','T':'GG','Z':'GA'}),(1, {'A':'A','B':'A','T':'VV','Z':'VA'})]:
+        metadata=json.loads((tmp_path/f'out/pdb_files/subject_seq_{sample}.json').read_text())
+        assert metadata['chain_sequences']==expected
+        assert metadata['designed_chain_sequences']=={c:expected[c] for c in ['T','Z']}
+        assert metadata['source_input_tag']=='subject'
+        assert metadata['source_structure_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+        assert metadata['source_residue_mapping'] == [
+            dict(source=dict(chain_id=c,auth_seq_id=n,insertion_code=''),
+                 output=dict(chain_id=c,auth_seq_id=n,insertion_code=''))
+            for c,n in [('B',91),('Z',10),('Z',30),('A',10),('T',7),('T',18)]]
+        assert metadata['native_output_tag']==f'subject_seq_{sample}'
+        domain=adapter().pdb_domain(tmp_path/f'out/pdb_files/subject_seq_{sample}.pdb')
+        assert list(domain)==[('B',91),('Z',10),('Z',30),('A',10),('T',7),('T',18)]
+        assert domain[('Z',30)]==domain[('B',91)]==domain[('A',10)]=='ALA'
+        assert domain[('T',7)]==('GLY' if sample==0 else 'VAL')
+    native=json.loads(next((tmp_path/'work').glob('**/role-native-call.json')).read_text())
+    assert native['masked']==['T','Z'] and native['visible']==['A','B']
+    assert native['fixed']=={'B':[], 'Z':[2], 'A':[], 'T':[]}
+    assert native['args']['count']==2 and native['args']['temperature']==0.5
+
+
+@pytest.mark.parametrize('model,count_key,default', [('proteinmpnn','seqs_per_design',8),('fampnn','seqs_per_design',8),('caliby_binder','caliby_num_seqs_per_pdb',4)])
+def test_sequence_count_is_model_owned(model,count_key,default):
+    import yaml
+    config=yaml.safe_load((ROOT/f'platform/api/config/models/{model}.yaml').read_text())
+    params={p['name']:p for p in config['params']}
+    assert params[count_key]['default']==default
+    assert params[count_key]['type']=='integer'
+    assert all(count_key in mode['params'] for mode in config['modes'])
+
+
+def test_fampnn_output_identity_uses_designed_pdb_not_source(tmp_path):
+    native=tmp_path/'actual_sample.pdb'
+    native.write_text(atom(1,'Z',17).replace('ALA','GLY')+atom(2,'A',8))
+    native.with_suffix('.json').write_text(json.dumps(dict(design=native.stem,sequence='GA',input_seq='AA',fampnn_avg_psce=0.0)))
+    adapter().annotate_outputs(tmp_path,dict(design_chain='Z',target_chain='A'))
+    record=json.loads(native.with_suffix('.json').read_text())
+    assert record['designed_chain_sequences']=={'Z':'G'}
+    assert record['chain_sequences']=={'Z':'G','A':'A'}
+    assert record['input_seq']=='AA' and record['sequence']=='GA'
+    assert record['output_structure_name']==native.name
+    assert record['residue_mapping']==[
+        dict(chain_id='Z',author_number=17,insertion_code=''),
+        dict(chain_id='A',author_number=8,insertion_code='')]
+
+
+@pytest.mark.parametrize('role_request,error', [
+    (dict(binder_chains='Z',target_chains='Z'),'overlap'),
+    (dict(binder_chains='Z',target_chains='Q'),'absent'),
+    (dict(binder_chains='Z',target_chains=''),'required'),
+    (dict(binder_chains='Z',target_chains='A',fixed_positions='Z:99'),'absent'),
+])
+def test_mpnn_explicit_role_admission(tmp_path,role_request,error):
+    from scripts.prep_mpnn_designs import validate_generic_input
+    source=tmp_path/'complex.pdb'; source.write_text(atom(1,'Z',10)+atom(2,'A',20))
+    with pytest.raises(ValueError,match=error):
+        validate_generic_input(source,role_request)
+    assert validate_generic_input(source,dict(binder_chains='Z',target_chains='A'))=={('Z',10):'ALA',('A',20):'ALA'}

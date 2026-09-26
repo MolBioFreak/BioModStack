@@ -5697,7 +5697,10 @@ def compile_nextflow_invocation(
             'enable_fampnn_filter', 'fampnn_max_psce', 'fampnn_max_residue_psce',
             'mpnn_max_score',
         }
-        settings = {key: value for key, value in params.items() if key in science_keys}
+        # Selected-source identity uses the same typed params document rather
+        # than falling through to the scalar-only runtime argv transport.
+        settings_keys = science_keys | {'iteration_source_design_ids'}
+        settings = {key: value for key, value in params.items() if key in settings_keys}
         settings_path = Path(output_dir) / '.sequence-design-settings.json'
         plan_input(settings_path, json.dumps(settings, allow_nan=False, sort_keys=True).encode('utf-8'))
         cmd.extend(['-params-file', str(settings_path),
@@ -5705,7 +5708,7 @@ def compile_nextflow_invocation(
         native_parameters.update(settings)
         native_parameters['sequence_design_settings_path'] = str(settings_path)
         for key, value in params.items():
-            if key in science_keys or value is None or value == '':
+            if key in settings_keys or value is None or value == '':
                 continue
             if key == 'fampnn_analysis_declaration' and isinstance(value, dict):
                 bind_fampnn_declaration(cmd, value)

@@ -287,11 +287,56 @@ def remap_position_like_spec(spec: str | None, chain_map: dict[str, str]) -> str
     return _POSITION_TOKEN_RE.sub(lambda match: f"{chain_map.get(match.group(1), match.group(1))}{match.group(2)}", text)
 
 
+def remap_observed_position_spec(spec, mapping):
+    """Transport native selectors by observed residues, never chain-set/order guesses.
+
+    Ranges select surviving source residues, not a range between remapped endpoints.
+    Leave unavailable/unsupported evidence to the historical native behavior.
+    """
+    if not isinstance(spec, str) or not mapping:
+        return spec
+    def selector(text):
+        match = re.fullmatch(r"([A-Za-z])(?:(\d+)(?:-(\d+))?)?", text.strip())
+        if not match:
+            return None
+        chain, start, end = match.groups()
+        if not any(pair['source']['chain_id'] == chain for pair in mapping):
+            return None  # preserve the native unknown-chain check
+        selected = []
+        for pair in mapping:
+            source, output = pair['source'], pair['output']
+            if source['chain_id'] != chain or source.get('insertion_code', ''):
+                continue
+            if start is not None and not int(start) <= int(source['auth_seq_id']) <= int(end or start):
+                continue
+            if output.get('insertion_code', ''):
+                return None
+            selected.append(f"{output['chain_id']}{output['auth_seq_id']}")
+        return list(dict.fromkeys(selected))
+    try:
+        groups = []
+        for group in spec.split('|'):
+            tokens = []
+            for token in group.split(','):
+                if not token.strip():
+                    continue
+                position, colon, suffix = token.partition(':')
+                translated = selector(position)
+                if translated is None:
+                    return spec
+                tokens.extend(p + colon + suffix for p in translated)
+            groups.append(','.join(tokens))
+        return '|'.join(groups)
+    except (KeyError, TypeError, ValueError):
+        return spec
+
+
 def remap_constraint_dataframe_to_cleaned_paths(
     pos_constraint_df,
     *,
     original_paths: list[str],
     cleaned_paths: list[str],
+    sources: dict | None = None,
 ):
     if pos_constraint_df is None or pd is None:
         return pos_constraint_df
@@ -310,6 +355,13 @@ def remap_constraint_dataframe_to_cleaned_paths(
         cleaned_path = cleaned_by_key.get(pdb_key)
         if original_path is None or cleaned_path is None:
             raise ValueError(f"Caliby constraint key {pdb_key!r} has no paired original/cleaned structure")
+        mapping = (sources or {}).get(pdb_key, {}).get('source_residue_mapping')
+        if mapping:
+            for column in ('fixed_pos_seq', 'fixed_pos_scn', 'fixed_pos_override_seq',
+                           'pos_restrict_aatype', 'symmetry_pos'):
+                if column in remapped.columns:
+                    remapped.at[index, column] = remap_observed_position_spec(row[column], mapping)
+            continue
         original_chain_order = parse_chain_order(original_path)
         cleaned_chain_order = parse_chain_order(cleaned_path)
         if not original_chain_order or not cleaned_chain_order or len(original_chain_order) != len(cleaned_chain_order):

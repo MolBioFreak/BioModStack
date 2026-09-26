@@ -335,6 +335,7 @@ async def test_analysis_endpoint_rejects_before_queue_service(monkeypatch: pytes
 
     design = SimpleNamespace(
         id="unsupported-design",
+        job_id="unsupported-job",
         review_profile_id="sequence_design_v1",
         review_contract_version=1,
         review_contract_source="producer",
@@ -358,6 +359,9 @@ async def test_analysis_endpoint_rejects_before_queue_service(monkeypatch: pytes
     class _Session:
         async def execute(self, _statement):
             return _Result()
+
+        async def scalar(self, _statement):
+            return SimpleNamespace(provenance={})
 
     queue_calls = 0
 

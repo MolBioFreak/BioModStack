@@ -46,6 +46,8 @@ function transport(job = baseJob, zero = false, designFailure = false) {
             const nativeRows = zero ? [] : Array.from({ length: 26 }, (_, i) => i === 0 ? record : { ...record, design_id: `extra-${i}`, candidate_key: i === 25 ? 'page-two' : `extra-key-${i}` });
             data = { receipt: { emitted_samples: nativeRows.length, status: zero ? 'zero_yield' : 'complete' }, records: nativeRows.slice(params.offset, params.offset + params.limit), total: nativeRows.length, offset: params.offset, limit: params.limit, publication: { candidates: nativeRows }, artifacts: [{ path: 'samples.jsonl', download_url: '/api/files/download/samples.jsonl' }] };
         }
+        else if (url.endsWith('/round')) data = { job_id: job.id, state: 'not_requested', steps: {}, errors: {} };
+        else if (url.endsWith('/binder-evidence')) data = { schema_version: 1, job_id: job.id, offset: 0, limit: 100, total: 0, records: [] };
         else if (url === '/api/jobs') data = { jobs: [job], total: 1 };
         else if (url.endsWith('/workflow-results')) data = { job, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: {}, artifacts: [], counts: { persisted_design_rows: zero ? 0 : 1 } };
         else if (url.endsWith('/selection-context')) data = { source_job_id: 'parent', targets: [], candidate_documents: { exact: [doc] } };
@@ -99,7 +101,7 @@ it('pages and reopens published native metrics with exact native document naviga
     await act(async () => mounted!.unmount()); client.clear();
     await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
     expect(text(mounted!.root)).toContain('producer-key');
-    expect(calls.every(call => call.url === '/api/jobs/parent/generation-results')).toBe(true);
+    expect(calls.every(call => ['/api/jobs/parent/generation-results', '/api/designs/by-job/parent/binder-evidence', '/api/binder-continuation/parent/round'].includes(call.url) && !call.body)).toBe(true);
 });
 
 it('exact native URL restores selection and destination, never loads primary document as fallback', async () => {

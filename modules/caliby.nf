@@ -113,6 +113,7 @@ process RunCalibyBinder {
 
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_metadata.jsonl"
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/native_outputs/*", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_constraints.csv"
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_selection.json"
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
@@ -128,6 +129,7 @@ process RunCalibyBinder {
     path("caliby_constraints.csv"), emit: constraints
     path("caliby_selection.json"), emit: selection, optional: true
     path("caliby_binder.log"), emit: log
+    path("results/native_outputs/*"), emit: native_structures, optional: true
 
     script:
     // Parent must resolve exact roles from the selected structure/document. Never
@@ -155,6 +157,8 @@ process RunCalibyBinder {
     python3 ${params.code_root}/scripts/run_caliby_sequence_design.py \\
         --input-dir ./ \\
         --output-dir results \\
+        --binder-chains "${binderChains}" \\
+        --target-chains "${targetChains}" \\
         --model-name "${params.caliby_model_name ?: 'soluble_caliby_v1'}" \\
         --num-seqs-per-pdb ${params.get('caliby_num_seqs_per_pdb') ?: 4} \\
         --batch-size ${params.caliby_batch_size ?: 4} \\

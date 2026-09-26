@@ -46,6 +46,8 @@ function response(config: any, rows: NativeGenerationRecord[]) {
 }
 async function mount(rows = fixture(), props: Partial<Props> = {}, transport?: (config: any) => Promise<any>) {
     api.defaults.adapter = async config => {
+        if (config.method === 'get' && config.url?.endsWith('/round')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: props.jobId ?? 'cohort-job', state: 'not_requested', steps: {}, errors: {} } };
+        if (config.method === 'get' && config.url?.endsWith('/binder-evidence')) return { config, status: 200, statusText: 'OK', headers: {}, data: { schema_version: 1, job_id: props.jobId ?? 'cohort-job', offset: 0, limit: 100, total: 0, records: [] } };
         requests.push(config);
         if (config.method !== 'get' || !config.url?.endsWith('/generation-results')) throw new Error(`Unexpected request ${config.method} ${config.url}`);
         return transport ? transport(config) : response(config, rows);

@@ -14,6 +14,19 @@ from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_
 router = APIRouter()
 
 
+@router.get('/{job_id}/round')
+async def get_round(job_id: str, session: AsyncSession = Depends(get_session)):
+    from services.binder_round import read_round
+    return await read_round(session, job_id)
+
+
+@router.post('/{job_id}/round/retry')
+async def retry_round(job_id: str, session: AsyncSession = Depends(get_session),
+                      experiment_session: AsyncSession = Depends(get_experiment_session)):
+    from services.binder_round import reconcile_round
+    return await reconcile_round(session, experiment_session, job_id, retry=True)
+
+
 class SelectedOperationRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_job_id: str

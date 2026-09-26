@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { isAxiosError } from 'axios';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { nativeActionDefaults, submitBindCraft2Lifecycle, type BC2ActionField, type BC2Actions } from '../lib/bindcraft2Lifecycle';
@@ -144,6 +145,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
           </details>
         </>}
     </section>
+    <BinderPredictionEvidence jobId={jobId} launchContextId={launchContextId} />
     <BindCraft2NativeActions key={jobId} jobId={jobId} page={data} launchContextId={launchContextId} />
     {!resultsAvailable ? <p>Native results will appear after publication.</p> : isLoading ? <p>Loading BindCraft2 native records...</p>
       : isError || !data ? <p role="status">BindCraft2 native records are not available for this job.</p>

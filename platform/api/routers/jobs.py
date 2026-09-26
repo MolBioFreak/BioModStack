@@ -1578,7 +1578,7 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
     if model_id == 'proteinmpnn':
         from scripts.prep_mpnn_designs import validate_generic_input
         try:
-            validate_generic_input(normalized.get('input_pdb') or '')
+            validate_generic_input(normalized.get('input_pdb') or '', normalized)
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=422, detail={'validation_errors': [str(exc)]}) from exc
     return normalized
@@ -5848,6 +5848,12 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     """
     job_data = job_data.model_copy(deep=True)
     registry = registry or get_registry()
+    if job_data.binder_round is not None:
+        from services.binder_round_inputs import normalize_request
+        try:
+            job_data.binder_round = normalize_request(job_data.binder_round, registry)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
@@ -6228,6 +6234,17 @@ async def _create_job(
     _bound_launch_context_id: str | None = None,
 ):
     """Create and queue a new pipeline job."""
+    from services.binder_round import bind_step
+    round_step_metadata, _preallocated_job_id, round_existing = await bind_step(
+        session, job_data, _preallocated_job_id, project_bound=bool(_bound_launch_context_id))
+    if round_existing is not None:
+        return JobResponse.model_validate(round_existing)
+    if job_data.binder_round is not None:
+        from services.binder_round_inputs import normalize_request
+        try:
+            job_data.binder_round = normalize_request(job_data.binder_round)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     # Reject stale/foreign resume paths before preview, job rows or output writes.
     _managed_resume_output_dir(job_data.params.get("resume_source_dir"))
     from services import core_protein_scientific_contract as scientific_contract
@@ -7234,6 +7251,10 @@ async def _create_job(
         # In particular MD materialization and NGS path normalization must not
         # replace the submitted settings with scheduler-effective values.
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
+        if job_data.binder_round is not None:
+            provenance_payload['binder_round_request'] = job_data.binder_round.model_dump(mode='json')
+        if round_step_metadata is not None:
+            provenance_payload['binder_round_step'] = deepcopy(round_step_metadata)
 
         if execution_preview is not None:
             if 'input_identities' not in execution_preview:
@@ -9210,6 +9231,9 @@ async def resubmit_job(
         resubmit_params, resubmit_provenance = scientific_contract.admitted_payload(
             resubmit_params, {}, resubmit_revision,
         )
+        original_round = (original_job.provenance or {}).get('binder_round_request')
+        if original_round is not None:
+            resubmit_provenance['binder_round_request'] = deepcopy(original_round)
         original_request = (original_job.provenance or {}).get('core_protein_requested_params')
         if original_request is not None:
             resubmit_provenance['core_protein_requested_params'] = deepcopy(original_request)

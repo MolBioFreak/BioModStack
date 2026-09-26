@@ -40,8 +40,39 @@ class ExecutionPolicy(BaseModel):
         return cls(remote_result_policy="automatic" if isinstance(params, dict) and params.get("remote_result_policy") == "automatic" else "manual")
 
 
+class BinderRoundDesign(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_binder']
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BinderRoundPrediction(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: Literal['protenix', 'boltz2', 'esmfold2']
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BinderRoundRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    schema_version: Literal[1] = 1
+    enabled: bool = True
+    sequence_design: BinderRoundDesign
+    prediction: BinderRoundPrediction
+    binder_chains: list[str] = Field(default_factory=list)
+    target_chains: list[str] = Field(default_factory=list)
+
+
+class BinderRoundStepReference(BaseModel):
+    """Opaque retained preparation, not caller-authored scientific lineage."""
+    model_config = ConfigDict(extra='forbid')
+    root_job_id: str
+    step_id: str
+
+
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
+    binder_round: BinderRoundRequest | None = None
+    binder_round_step: BinderRoundStepReference | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     execution_plan_approval: str | None = Field(
         None, pattern=r"^[0-9a-f]{64}$",
@@ -153,10 +184,14 @@ class CandidateResultSummary(BaseModel):
 
 class JobResponse(BaseModel):
     """Response schema for a job."""
+    binder_round: BinderRoundRequest | None = None
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
     @model_validator(mode="after")
     def expose_orm_execution_policy(self):
+        saved_round = (self.provenance or {}).get('binder_round_request')
+        if saved_round is not None:
+            self.binder_round = BinderRoundRequest.model_validate(saved_round)
         if "execution_policy" not in self.model_fields_set:
             self.execution_policy = ExecutionPolicy.from_params(self.params)
         self.params = {key: value for key, value in self.params.items() if key != "remote_result_policy"}

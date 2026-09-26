@@ -3307,6 +3307,9 @@ class GPUOrchestrator:
             from sqlalchemy import select, func
             from database import Job, Design
             from services.nextflow import maybe_trigger_mutation_seed_refinement
+            from services.binder_round import recover_rounds
+            from experiment_database import experiment_session_factory
+            await recover_rounds(self.db_session_factory, experiment_session_factory)
 
             # Native follow-ons remain pending after remote import releases its
             # lease. Recover only explicitly requested, unconsumed MSA batches;

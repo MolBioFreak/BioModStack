@@ -74,6 +74,7 @@ export interface CandidateResultSummary {
 }
 
 export interface Job {
+    binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;
     execution_policy?: ExecutionPolicy;
     result_summary?: CandidateResultSummary;

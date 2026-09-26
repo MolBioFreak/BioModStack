@@ -86,6 +86,7 @@ interface BindCraft2CampaignProps {
     onNameChange: (name: string) => void;
     onBack: () => void;
     generatorChooser: ReactNode;
+    roundSettings?: ReactNode;
     children: ReactNode;
     section?: BC2Section;
     onSectionChange?: (section: BC2Section) => void;
@@ -137,7 +138,7 @@ function messageText(value: unknown): string {
 export function BindCraft2Campaign({
     name, onNameChange, onBack, generatorChooser, children, requestedSettings,
     preview, previewBusy, submitting, launchAvailable, error, onPreview, onLaunch,
-    onOpenLibrary, executionTarget, library, section, onSectionChange,
+    onOpenLibrary, executionTarget, library, section, onSectionChange, roundSettings,
 }: BindCraft2CampaignProps) {
     const display = preview?.effective_settings ?? requestedSettings;
     const sources = Array.isArray(display.targets) ? display.targets : [];
@@ -182,6 +183,7 @@ export function BindCraft2Campaign({
                             <button type="button" key={key} aria-pressed={section === key} onClick={() => onSectionChange(key)} className={`${buttonClass} flex-1`} style={section === key ? action : inset}>{label}</button>)}
                     </nav>}
                     {children}
+                    {roundSettings}
                 </div>
                 <aside aria-label="Campaign review and launch" className="min-w-0 space-y-4 xl:sticky xl:top-5">
                     <section className="rounded-xl border p-4" style={surface}>

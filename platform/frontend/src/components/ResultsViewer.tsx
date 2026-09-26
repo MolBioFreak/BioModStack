@@ -64,6 +64,7 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
+import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
@@ -5437,6 +5438,9 @@ export function ResultsViewer() {
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
 
+                {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
+                    <BinderPredictionEvidence jobId={selectedJobId} sourceDesignId={selectedDesignId ?? undefined} launchContextId={destinationLaunchContextId} />
+                )}
                 {activeJob?.model_id === 'bindcraft2' && (
                     <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} launchContextId={destinationLaunchContextId} />
                 )}

@@ -4,6 +4,8 @@ import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLaunch
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ParamField, compactUiCopy } from './ModelParameterField';
 import { NativeBinderGeneration } from './NativeBinderGeneration';
+import { BinderRoundSettings } from './BinderRoundSettings';
+import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2LifecycleDraft } from './BindCraft2Campaign';
 import { fetchNativeGenerationInventory, nativeBinderDraft, submitNativeBinderRequest, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides, fampnnUserParams } from './FampnnAnalysisControls';
@@ -502,6 +504,7 @@ export function JobSubmission() {
                 }
                 window.dispatchEvent(new Event('bms:execution-target-change'));
                 data.params = fampnnUserParams(data.params || {});
+                if (data.binder_round) data.params.binder_round = data.binder_round;
                 delete data.params.remote_result_policy;
                 console.log('Loading cloned job data:', data);
 
@@ -1334,6 +1337,7 @@ export function JobSubmission() {
                 name: jobName,
                 model_id: selectedModelId,
                 mode: selectedModeId,
+                ...(isNativeBinderGeneration ? { binder_round: hydrateBinderRound(params).binder_round } : {}),
                 params: finalParams,
                 ...(selectedModelId === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
             };
@@ -1629,7 +1633,7 @@ export function JobSubmission() {
                                     onOpenNativeRoute={route => {
                                         setBinderInitialDraft(binderDraftRef.current);
                                         const destinationKey = 'templateId' in route ? route.templateId : `${route.modelId}:${route.mode}`;
-                                        const inherited: Record<string, UntypedApiValue> = {};
+                                        const inherited: Record<string, UntypedApiValue> = binderDraftRef.current ? hydrateBinderRound(binderDraftRef.current) : {};
                                         // Only native fields shared by these contracts inherit sources.
                                         // Never turn context into a seed complex or infer binder chain roles.
                                         if ('modelId' in route && ['boltzgen', 'ppiflow'].includes(route.modelId) && ['protein_binder', 'antibody_binder', 'nanobody_binder', 'peptide', 'peptide_binder'].includes(route.mode)) {
@@ -1924,6 +1928,7 @@ export function JobSubmission() {
                                         setWizardMode('templates'); setSelectedTemplateId('antibody_denovo');
                                         setEngineChooserOpen(true);
                                     }}>Change generation engine</button>
+                                    <BinderRoundSettings values={params} onChange={draft => setParams(previous => ({ ...previous, ...draft }))} />
                                     {nativeGenerationQuery.error && <p role="status" className="text-sm text-amber-500">{nativeGenerationQuery.error.message} Catalog controls remain available; the native inventory may contain additional settings.</p>}
                                     <NativeBinderGeneration key={`${selectedModelId}:${selectedModeId}`} model={selectedModelId as NativeBinderModel} mode={selectedModeId!}
                                         parameters={visibleParams} values={params} profile={nativeGenerationInventory ? { profile: nativeGenerationInventory.profile, assets: nativeGenerationInventory.assets } : undefined} nativeBehavior={nativeGenerationInventory?.native_behavior} onBrowse={setShowFileBrowser}

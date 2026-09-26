@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { CohortAnalytics } from './CohortAnalytics';
 import { metricKeys, numericMetricKeys, metricLabel, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
@@ -168,6 +169,7 @@ function NativeGenerationWorkbench({ jobId, status, launchContextId, selectedDes
     </section>;
     return <section aria-label="Native initial-generation results" className="min-w-0 space-y-4 text-[var(--text-primary)]">
         <header className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-xl font-semibold">Generation dashboard</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
+        <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />
         {query.isLoading && <p role="status">Reading published generation records…</p>}
         {query.isError && <p role="status" className={`${panel} p-4`}>Native publication {rows.length ? 'is partially loaded' : 'is not available'}: {String(query.error)} <button className={control} type="button" onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>Retry native readback</button></p>}
         {query.isFetchingNextPage && <p role="status">Loading the full cohort: {rows.length} of {page?.total} records. Current plots and exports cover loaded records only.</p>}

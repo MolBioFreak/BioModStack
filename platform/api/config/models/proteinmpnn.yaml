@@ -26,6 +26,15 @@ modes:
     description: Design sequences for a given backbone structure
     params:
       - input_pdb
+      - seqs_per_design
+      - binder_chains
+      - target_chains
+      - fixed_positions
+      - mpnn_relax_output
+      - mpnn_relax_seqs_per_cycle
+      - mpnn_relax_convergence_rmsd
+      - mpnn_relax_convergence_score
+      - mpnn_relax_convergence_max_cycles
       - mpnn_temperature
       - mpnn_omitAAs
       - mpnn_checkpoint_type
@@ -35,6 +44,57 @@ modes:
       - mpnn_extra_config
 
 params:
+  - name: seqs_per_design
+    type: integer
+    description: Native number of designed sequences per input backbone.
+    required: false
+    default: 8
+    minimum: 1
+
+  - name: binder_chains
+    type: string
+    description: Explicit comma-separated binder chain IDs for complex design. Omitted retains legacy monomer behavior.
+    required: false
+
+  - name: target_chains
+    type: string
+    description: Explicit comma-separated target chain IDs. Target and other non-binder sequences remain fixed.
+    required: false
+
+  - name: fixed_positions
+    type: string
+    description: "Additional fixed author residues for explicit binder roles, e.g. A:1,A:5-10."
+    required: false
+
+  - name: mpnn_relax_output
+    type: boolean
+    description: Apply native relaxation before writing each final structure.
+    default: false
+
+  - name: mpnn_relax_seqs_per_cycle
+    type: integer
+    description: Native intermediate sequences per relaxation cycle.
+    default: 1
+    minimum: 1
+
+  - name: mpnn_relax_convergence_rmsd
+    type: number
+    description: Native relaxation convergence C-alpha RMSD in Angstroms.
+    default: 0.2
+    minimum: 0
+
+  - name: mpnn_relax_convergence_score
+    type: number
+    description: Native relaxation convergence score improvement.
+    default: 0.1
+    minimum: 0
+
+  - name: mpnn_relax_convergence_max_cycles
+    type: integer
+    description: Consecutive native convergence cycles.
+    default: 1
+    minimum: 0
+
   # Input file
   - name: input_pdb
     type: file

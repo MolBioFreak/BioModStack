@@ -8,15 +8,20 @@ from typing import Iterable, Sequence
 
 from sqlalchemy import select
 
-from database import Design, Job, async_session
+from database import AnalysisRun, Design, Job, async_session
 from services.analysis_registry import (
     ANTIBODY_ANNOTATION_PACK_ANALYSIS,
     CHAIN_METRICS_ANALYSIS,
     FAMPNN_PSCE_PROFILE_ANALYSIS,
     IPSAE_INTERFACE_ANALYSIS,
+    PAE_MATRIX_ANALYSIS,
+    BINDER_POSE_COMPARISON_ANALYSIS,
     STRUCTURE_SUMMARY_ANALYSIS,
 )
-from services.analysis_runs import request_design_analysis
+from services.analysis_runs import (
+    REUSABLE_ANALYSIS_STATUSES, normalize_analysis_params,
+    request_design_analysis, stable_json_hash,
+)
 from runtime_policy import acquire_workflow_mutation_lease, run_with_workflow_mutation_lease
 
 
@@ -58,6 +63,12 @@ def _terminal_or_review_ready(job: Job | None) -> bool:
     return status in {"completed", "awaiting_input"}
 
 
+def _is_binder_round_prediction(job: Job) -> bool:
+    step = (job.provenance or {}).get("binder_round_step")
+    return (isinstance(step, dict) and step.get("schema_version") == 1
+            and step.get("stage") == "prediction")
+
+
 def _viewer_minimum_analysis_types(job: Job, design: Design) -> list[str]:
     analysis_types = [
         STRUCTURE_SUMMARY_ANALYSIS,
@@ -65,6 +76,13 @@ def _viewer_minimum_analysis_types(job: Job, design: Design) -> list[str]:
     ]
     if design.aligned_error_path and design.aligned_error_format:
         analysis_types.append(IPSAE_INTERFACE_ANALYSIS)
+    if _is_binder_round_prediction(job):
+        # Native confidence has its own immutable publication; it need not have
+        # the legacy Design aligned_error_path fields. These are observations,
+        # not success conditions for the prediction or its source candidate.
+        if job.model_id in {"protenix", "boltz2"}:
+            analysis_types.extend([PAE_MATRIX_ANALYSIS, IPSAE_INTERFACE_ANALYSIS])
+        analysis_types.append(BINDER_POSE_COMPARISON_ANALYSIS)
     if _is_antibody_like_job(job):
         analysis_types.append(ANTIBODY_ANNOTATION_PACK_ANALYSIS)
     if design.fampnn_psce is not None:
@@ -90,7 +108,8 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
 
         # Prioritize top-level/results-view jobs to avoid duplicating auto work on
         # every transient child shard that also writes structures.
-        if job.parent_job_id and str(job.status or "").strip().lower() != "awaiting_input":
+        if (job.parent_job_id and not _is_binder_round_prediction(job)
+                and str(job.status or "").strip().lower() != "awaiting_input"):
             return {"designs": 0, "queued": 0, "reused": 0, "skipped": 0}
 
         design_result = await session.execute(
@@ -102,7 +121,8 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
         design_count = len(designs)
         if design_count == 0:
             return {"designs": 0, "queued": 0, "reused": 0, "skipped": 0}
-        if design_count > _autorun_max_designs():
+        round_prediction = _is_binder_round_prediction(job)
+        if design_count > _autorun_max_designs() and not round_prediction:
             logger.info(
                 "[ANALYSIS AUTO] Skipping viewer-minimum bundle for %s (%s designs exceeds cap %s)",
                 job.name,
@@ -114,12 +134,32 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
         queued = 0
         reused = 0
         skipped = 0
+        # Round recovery finds missing default analysis tasks, rather than
+        # reopening immutable native publications for every historical sample
+        # on every scheduler poll. Explicit analysis requests retain the normal
+        # signature/readback checks at their owning API and worker boundaries.
+        existing_round_tasks = set()
+        if round_prediction:
+            rows = await session.execute(select(
+                AnalysisRun.subject_id, AnalysisRun.analysis_type,
+                AnalysisRun.code_version, AnalysisRun.params_hash,
+            ).join(Design, Design.id == AnalysisRun.subject_id).where(
+                Design.job_id == str(job.id), AnalysisRun.subject_kind == 'design',
+                AnalysisRun.status.in_(REUSABLE_ANALYSIS_STATUSES),
+            ))
+            existing_round_tasks = {tuple(row) for row in rows}
         for design in designs:
             if not design.pdb_path:
                 skipped += 1
                 continue
             for analysis_type in _iter_unique(_viewer_minimum_analysis_types(job, design)):
                 try:
+                    if round_prediction:
+                        definition, params = normalize_analysis_params(analysis_type, None)
+                        if (design.id, analysis_type, definition.version,
+                                stable_json_hash(params)) in existing_round_tasks:
+                            reused += 1
+                            continue
                     _run, was_reused = await request_design_analysis(
                         session,
                         design,

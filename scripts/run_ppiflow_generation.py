@@ -29,6 +29,166 @@ def request_authority():
 
 
 _CONTEXT = None
+_ACTIVE_WRITE = None
+_SOURCE_FIELDS = ("bms_source_chain", "bms_source_residue", "bms_source_icode",
+                  "bms_source_aa", "bms_source_index")
+
+
+def optional_export(function):
+    """Missing optional correspondence must not change native execution."""
+    import functools
+    @functools.wraps(function)
+    def observe(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Exception as exc:
+            import warnings
+            warnings.warn(f"PPIFlow target metadata unavailable at {function.__name__}: {exc}", RuntimeWarning)
+            return None
+    return observe
+
+
+@optional_export
+def capture_chain(features, chain):
+    """Keep insertion codes at the actual native parser's one-residue/row boundary."""
+    import numpy as np
+    features["bms_source_icode"] = np.array([ord(res.id[2]) for res in chain])
+    features["bms_source_chain"] = np.full(len(features["aatype"]), ord(chain.id))
+
+
+@optional_export
+def capture_features(features, native_utils):
+    """Observe already-loaded native features; never unpickle in the API."""
+    import numpy as np
+    features.setdefault("bms_source_chain", np.array([
+        ord(native_utils.INT_TO_CHAIN[int(c)]) for c in features["chain_index"]]))
+    features["bms_source_residue"] = features["residue_index"].copy()
+    features.setdefault("bms_source_icode", np.full(len(features["aatype"]), -1))
+    features["bms_source_aa"] = np.array([
+        ord((native_utils.residue_constants.restypes + ["X"])[int(a)])
+        for a in features["aatype"]])
+    features["bms_source_index"] = np.arange(len(features["aatype"]))
+
+
+@optional_export
+def retain_feature_indices(output, features, torch):
+    for key in _SOURCE_FIELDS:
+        if key in features:
+            output[key] = torch.tensor(features[key])
+
+
+@optional_export
+def capture_target(values, antibody=False):
+    """Export the native selected target array, before generation or writer renumbering."""
+    target = values["target_feats"]
+    if not all(key in target for key in _SOURCE_FIELDS):
+        return
+    arrays = {key: _json_value(target[key]) for key in _SOURCE_FIELDS}
+    indices = _json_value(values["target_index"])
+    residues = []
+    for index, feature_index in enumerate(arrays["bms_source_index"]):
+        icode = arrays["bms_source_icode"][index]
+        residues.append({
+            "input_index": int(indices[index]) if antibody else index,
+            "feature_index": int(feature_index),
+            "chain_id": chr(arrays["bms_source_chain"][index]),
+            "auth_seq_id": int(arrays["bms_source_residue"][index]),
+            "insertion_code": chr(icode).strip() if icode >= 0 else None,
+            "amino_acid": chr(arrays["bms_source_aa"][index]),
+        })
+    # A JSON string survives native DataLoader collation without variable-length
+    # metadata being transposed or passed as an additional model tensor.
+    values["output_feats"]["bms_target_residues"] = json.dumps(residues)
+
+
+@optional_export
+def record_writer_indices(indices):
+    if _ACTIVE_WRITE is not None:
+        _ACTIVE_WRITE["indices"] = _json_value(indices)
+
+
+@optional_export
+def record_writer_atom(index, chain, number, insertion):
+    if _ACTIVE_WRITE is not None and "indices" in _ACTIVE_WRITE:
+        source_index = int(_ACTIVE_WRITE["indices"][index])
+        _ACTIVE_WRITE["residues"][source_index] = {
+            "chain_id": str(chain), "auth_seq_id": int(number),
+            "insertion_code": str(insertion).strip()}
+
+
+@optional_export
+def record_target_write(path, batch, index, observation):
+    if _CONTEXT is not None and "bms_target_residues" in batch:
+        _CONTEXT.setdefault("target_writes", {})[str(Path(path).resolve())] = {
+            "source": json.loads(batch["bms_target_residues"][index]),
+            "output": observation["residues"],
+        }
+
+
+def write_sample(writer, batch, index, *args, **kwargs):
+    """Join the producer batch to actual atom emission, including native swaps."""
+    global _ACTIVE_WRITE
+    previous = _ACTIVE_WRITE
+    observation = {"residues": {}}
+    _ACTIVE_WRITE = observation
+    try:
+        path = writer(*args, **kwargs)
+        record_target_write(path, batch, index, observation)
+        return path
+    finally:
+        _ACTIVE_WRITE = previous
+
+
+@optional_export
+def target_metadata(context, source_row, path):
+    observation = context.get("target_writes", {}).pop(str(path), None)
+    if observation is None:
+        return {}
+    residues = observation["source"]
+    bindings = {row["role"]: row for row in context["request"]["source_bindings"]}
+    result = {}
+    # Initial native outputs contain the target plus generated binder. The
+    # captured pre-sampling target indices, composed with actual atom emission,
+    # establish output roles without guessing chain labels or amino acids.
+    target_indices = {row['input_index'] for row in residues}
+    output_targets = list(dict.fromkeys(row['chain_id'] for index, row in observation['output'].items()
+                                       if index in target_indices))
+    output_binders = list(dict.fromkeys(row['chain_id'] for index, row in observation['output'].items()
+                                       if index not in target_indices))
+    if output_binders and not set(output_binders).intersection(output_targets):
+        result.update(binder_chains=output_binders, target_chains=output_targets)
+    if "target_pdb" in bindings:
+        source_hash = bindings["target_pdb"]["sha256"]
+        sources = [({k: r[k] for k in ("chain_id", "auth_seq_id", "insertion_code")}
+                    if r["insertion_code"] is not None else None) for r in residues]
+    else:
+        # CSV features have native sequence/chain arrays but no insertion-code
+        # authority. Export sequence evidence, not invented author selectors or
+        # a generated target pose. Structural comparison remains unmeasured.
+        chains = {}
+        for residue in residues:
+            chain = chains.setdefault(residue["chain_id"], {
+                "chain_id": residue["chain_id"], "sequence": "", "native_residues": []})
+            chain["sequence"] += residue["amino_acid"]
+            chain["native_residues"].append({k: residue[k] for k in (
+                "feature_index", "auth_seq_id", "insertion_code")})
+        binding = bindings.get(f"csv_row:{source_row}")
+        if binding is None:
+            return {}
+        document = {"schema_version": "ppiflow-independent-target/1",
+                    "source_feature_sha256": binding["sha256"],
+                    "chains": list(chains.values())}
+        raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        source_hash = hashlib.sha256(raw).hexdigest()
+        result["independent_target"] = {"sha256": source_hash, "document": document,
+                                        "encoding": "canonical-json-sorted-compact-newline"}
+        return result
+    joins = [{"source": source, "output": observation["output"][r["input_index"]]}
+             for r, source in zip(residues, sources)
+             if source is not None and r["input_index"] in observation["output"]]
+    if joins:
+        result["target_residue_mapping"] = {"source_sha256": source_hash, "residues": joins}
+    return result
 
 
 def _json_value(value):
@@ -99,6 +259,7 @@ def record_sample(values):
               "sha256": hashlib.sha256(data).hexdigest(),
               "source": source, "source_identity": ctx["request"]["source_identity"],
               "metrics": _json_value(values["test_metric"])}
+    record.update(target_metadata(ctx, identity["source_row_index"], path) or {})
     # Retain the native CSV too; these are the exact row values before its rounding.
     with (ctx["output"] / "samples.jsonl").open("a") as handle:
         handle.write(json.dumps(record, allow_nan=False) + "\n")
@@ -147,6 +308,73 @@ def instrument(source: str, filename: str, kind: str):
                     return [node, *ast.parse("_bms_export.record_sample(locals())").body]
                 return node
         tree = Export().visit(tree)
+    if kind in {"entrypoint", "preprocessing", "dataset", "antibody_dataset", "writer", "pdb_writer", "producer"}:
+        class TargetExport(ast.NodeTransformer):
+            def __init__(self):
+                self.function = None
+                self.cls = None
+
+            def visit_ClassDef(self, node):
+                previous, self.cls = self.cls, node.name
+                self.generic_visit(node)
+                self.cls = previous
+                return node
+
+            def visit_FunctionDef(self, node):
+                previous, self.function = self.function, node.name
+                self.generic_visit(node)
+                self.function = previous
+                return node
+
+            def visit_Assign(self, node):
+                self.generic_visit(node)
+                text = ast.unparse(node.value)
+                extra = None
+                if kind in {"entrypoint", "preprocessing"} and text == "dataclasses.asdict(chain_prot)":
+                    extra = "if '_bms_export' in globals():\n    _bms_export.capture_chain(chain_dict, chain)"
+                elif kind in {"dataset", "antibody_dataset"}:
+                    if text == "du.read_pkl(processed_file_path)":
+                        extra = "_bms_export.capture_features(processed_feats, du)"
+                    elif (isinstance(node.value, ast.Dict)
+                          and any(isinstance(t, ast.Name) and t.id == "output_feats" for t in node.targets)
+                          and self.function in {"_process_csv_row", "process_csv_row"}):
+                        extra = "_bms_export.retain_feature_indices(output_feats, processed_feats, torch)"
+                elif kind == "writer" and self.function == "create_full_prot":
+                    if text == "atom37.shape[0]":
+                        extra = "bms_input_indices = np.arange(n)"
+                    elif (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                          and node.value.func.id == "swap_index"):
+                        node.targets[0].elts.append(ast.Name(id="bms_input_indices", ctx=ast.Store()))
+                        node.value.args[1].elts.append(ast.Name(id="bms_input_indices", ctx=ast.Load()))
+                return [node, *ast.parse(extra).body] if extra else node
+
+            def visit_Return(self, node):
+                self.generic_visit(node)
+                extra = None
+                if kind == "writer" and self.function == "create_full_prot":
+                    extra = "_bms_export.record_writer_indices(bms_input_indices)"
+                elif (kind == "dataset" and self.cls == "PpiTestDataset" and self.function == "__getitem__"):
+                    extra = "_bms_export.capture_target(locals())"
+                elif (kind == "antibody_dataset" and self.cls == "AntibodyTestDataset" and self.function == "__getitem__"):
+                    extra = "_bms_export.capture_target(locals(), antibody=True)"
+                return [*ast.parse(extra).body, node] if extra else node
+
+            def visit_Expr(self, node):
+                self.generic_visit(node)
+                if kind == "pdb_writer" and ast.unparse(node.value) == "pdb_lines.append(atom_line)":
+                    return [node, *ast.parse(
+                        "_bms_export.record_writer_atom(i, chain_ids[chain_index[i]], residue_index[i], insertion_code)"
+                    ).body]
+                return node
+
+            def visit_Call(self, node):
+                self.generic_visit(node)
+                if kind == "producer" and ast.unparse(node.func) == "au.write_prot_to_pdb":
+                    node.args = [node.func, ast.Name(id="batch", ctx=ast.Load()),
+                                 ast.Name(id="i", ctx=ast.Load()), *node.args]
+                    node.func = ast.parse("_bms_export.write_sample", mode="eval").body
+                return node
+        tree = TargetExport().visit(tree)
     return compile(ast.fix_missing_locations(tree), filename, "exec")
 
 
@@ -156,8 +384,11 @@ class NativeLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         self.files = {}
 
     def find_spec(self, fullname, path=None, target=None):
-        if fullname not in ("models.flow_module_binder", "models.flow_module_antibody",
-                            "preprocessing.process_pdb_for_inputs"):
+        kinds = {"models.flow_module_binder": "producer", "models.flow_module_antibody": "producer",
+                 "preprocessing.process_pdb_for_inputs": "preprocessing",
+                 "data.datasets": "dataset", "data.datasets_antibody": "antibody_dataset",
+                 "analysis.utils": "writer", "data.protein": "pdb_writer"}
+        if fullname not in kinds:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is not None:
@@ -170,7 +401,10 @@ class NativeLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 
     def exec_module(self, module):
         filename = self.files[module.__name__]
-        kind = "preprocessing" if module.__name__.startswith("preprocessing.") else "producer"
+        kinds = {"preprocessing.process_pdb_for_inputs": "preprocessing",
+                 "data.datasets": "dataset", "data.datasets_antibody": "antibody_dataset",
+                 "analysis.utils": "writer", "data.protein": "pdb_writer"}
+        kind = kinds.get(module.__name__, "producer")
         module.__dict__["_bms_export"] = self.export_module
         exec(instrument(Path(filename).read_text(), filename, kind), module.__dict__)
 
@@ -229,7 +463,8 @@ def prepare_invocation(request_dir: str | Path, output_dir: str | Path,
     relevant = [script, config_name, "experiments/inference_binder.py" if mode == "protein_binder" else "experiments/inference_antibody.py",
                 "models/flow_module_binder.py" if mode == "protein_binder" else "models/flow_module_antibody.py",
                 "data/datasets.py" if mode == "protein_binder" else "data/datasets_antibody.py",
-                "data/interpolant_binder.py" if mode == "protein_binder" else "data/interpolant_antibody.py"]
+                "data/interpolant_binder.py" if mode == "protein_binder" else "data/interpolant_antibody.py",
+                "data/parsers.py", "data/protein.py", "data/utils.py", "analysis/utils.py"]
     if mode == "protein_binder":
         relevant.append("preprocessing/process_pdb_for_inputs.py")
     source = {}

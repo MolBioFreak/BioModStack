@@ -224,7 +224,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         stage_modes=["rfd3_caliby", "protein_hunter"],
         artifact_classes=["validated_binder_complex"],
         result_sets=["binder_candidates"],
-        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS, "ipsae_interface"],
+        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS, "ipsae_interface", "binder_pose_comparison"],
         viewer_capabilities=[
             "result_filter",
             "structure_viewer",
@@ -243,7 +243,7 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         stage_families=["validation", "boltz2", "protenix", "esmfold2"],
         artifact_classes=["validated_complex", "imported_structure"],
         result_sets=["validated"],
-        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS],
+        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS, "binder_pose_comparison"],
         viewer_capabilities=["structure_viewer", "structure_confidence_metrics"],
         required_fields=["artifact_class"],
         required_artifacts=["structure"],
@@ -641,6 +641,7 @@ _ANALYSIS_REQUIRED_ARTIFACTS: Dict[str, List[str]] = {
     "antibody_annotation_pack": ["structure"],
     "pae_matrix": ["aligned_error"],
     "ipsae_interface": ["structure", "aligned_error"],
+    "binder_pose_comparison": ["structure"],
 }
 
 

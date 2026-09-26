@@ -25,7 +25,7 @@ function CdrRanges({ value, onChange }: { value: unknown; onChange: (value: stri
 }
 
 /** Native values are controlled by the parent draft. Null never means default. */
-function NativeSetting({ parameter, values, onPatch, chains, onBrowse }: { parameter: NativeBinderParameter; values: Record<string, UntypedApiValue>; onPatch: (patch: Record<string, UntypedApiValue>) => void; chains: string[]; onBrowse?: (field: string) => void }) {
+export function NativeSetting({ parameter, values, onPatch, chains, onBrowse }: { parameter: NativeBinderParameter; values: Record<string, UntypedApiValue>; onPatch: (patch: Record<string, UntypedApiValue>) => void; chains: string[]; onBrowse?: (field: string) => void }) {
     const key = parameter.name;
     const nativeKey = nativeBinderField(key);
     const value = Object.hasOwn(values, key) ? values[key] : parameter.default;

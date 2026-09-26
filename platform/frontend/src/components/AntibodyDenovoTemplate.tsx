@@ -47,6 +47,8 @@ import { DeNovoModalityNotice } from './DeNovoModalityNotice';
 import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { BindCraft2Settings, type BC2Inventory, type BC2Request, type BC2Section } from './BindCraft2Settings';
 import { BindCraft2Campaign } from './BindCraft2Campaign';
+import { BinderRoundSettings } from './BinderRoundSettings';
+import { hydrateBinderRound } from '../lib/binderRound';
 import { BindCraft2StructureInputs } from './BindCraft2StructureInputs';
 import type { BC2InitialSources } from '../lib/bindcraft2StructureInputs';
 import { BinderGeneratorChooser, type BinderNativeRoute } from './BinderGeneratorChooser';
@@ -243,6 +245,8 @@ const hydrateDeNovoStageSelection = hydrateInitialStageSelection;
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues: savedValues, initialDraft, onDraftChange, onOpenNativeRoute, onSubmitRequest, initialEngineChooserOpen = false }) => {
     const initialValues = useMemo(() => initialDraft ? { ...savedValues, ...initialDraft } : savedValues, [savedValues, initialDraft]);
     const [retainedDraft, setRetainedDraft] = useState(initialValues ?? {});
+    const [roundDraft, setRoundDraft] = useState(() => hydrateBinderRound(initialValues));
+    useEffect(() => { setRoundDraft(hydrateBinderRound(initialValues)); }, [initialValues]);
     const [workspaceSection, setWorkspaceSection] = useState('sources');
     useEffect(() => { setRetainedDraft(initialValues ?? {}); }, [initialValues]);
     const location = useLocation();
@@ -587,21 +591,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
     const ppiflowStageMode = (qualitySettings.ppiflow_stage_mode || (qualitySettings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
-    const hasEnabledDeNovoDownstreamStages = Object.values(deNovoStageSelection).some(Boolean);
+    const hasEnabledDeNovoDownstreamStages = deNovoStageSelection.ppiflow || deNovoStageSelection.qc;
     const showOnlyCoreGeneratorStep = !isRefinementMode && !hasEnabledDeNovoDownstreamStages;
     const boltzgenGeneratorSelected = !isRefinementMode && deNovoGenerator === 'boltzgen';
     const ppiflowGeneratorSelected = !isRefinementMode && deNovoGenerator === 'ppiflow';
     const deNovoDownstreamLocked = boltzgenGeneratorSelected || ppiflowGeneratorSelected;
-    const effectiveSeqDesigner = !isRefinementMode && !deNovoStageSelection.sequence_design ? 'none' : seqDesigner;
+    const effectiveSeqDesigner = isRefinementMode ? seqDesigner : 'none';
     const effectivePpiFlowStageMode = (!isRefinementMode && (!deNovoStageSelection.ppiflow || deNovoDownstreamLocked))
         ? 'off'
         : ppiflowStageMode;
     const runPpiFlowBackboneRefine = effectivePpiFlowStageMode === 'post_rfantibody' || effectivePpiFlowStageMode === 'post_ppiflow' || effectivePpiFlowStageMode === 'both';
     const runPpiFlowMaturation = effectivePpiFlowStageMode === 'post_fampnn' || effectivePpiFlowStageMode === 'both';
     const anyPpiFlowStageEnabled = runPpiFlowBackboneRefine || runPpiFlowMaturation;
-    const effectiveRunStructureValidation = (!isRefinementMode && (!deNovoStageSelection.validation || deNovoDownstreamLocked))
-        ? false
-        : runStructureValidation;
+    const effectiveRunStructureValidation = isRefinementMode && runStructureValidation;
     const effectiveUseAntiberty = (!isRefinementMode && (!deNovoStageSelection.qc || deNovoDownstreamLocked))
         ? false
         : useAntiberty;
@@ -618,9 +620,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         ? false
         : physicsSettings.enabled;
     const showExecutionModePanel = true;
-    const showStructureValidatorPanel = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.validation);
+    const showStructureValidatorPanel = isRefinementMode;
     const showQualitySettingsPanel = isRefinementMode || (!deNovoDownstreamLocked && hasEnabledDeNovoDownstreamStages);
-    const showSequenceDesignerPanel = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.sequence_design);
+    const showSequenceDesignerPanel = isRefinementMode;
     const showQcPanels = isRefinementMode || (!deNovoDownstreamLocked && deNovoStageSelection.qc);
     const showRfQualitySettings = !isRefinementMode && deNovoGenerator === 'rfantibody';
     const showStructureValidationQualitySettings = effectiveRunStructureValidation && structureValidator !== 'esmfold2';
@@ -1081,6 +1083,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const bc2CampaignRequest = {
         name: jobName, model_id: 'bindcraft2', mode: 'campaign',
         params: { bindcraft2_settings: bc2Settings },
+        binder_round: roundDraft.binder_round,
     };
 
     const boltzgenPreviewMutation = useMutation({
@@ -1855,6 +1858,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 name: jobName,
                 model_id: 'template_antibody_denovo',
                 mode: antibodyPipelineMode,
+                ...(!isRefinementMode ? { binder_round: roundDraft.binder_round } : {}),
                 pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     ...(effectiveSeqDesigner === 'fampnn' ? fampnnOverridePayload(fampnnOverrides, false) : {}),
@@ -2084,6 +2088,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     model_id: 'antibody_denovo',
                     mode: 'nanobody_binder',
                     params: buildStandaloneBoltzgenParams(pdbPath, epitopeString),
+                    binder_round: roundDraft.binder_round,
                     pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 });
 
@@ -2092,6 +2097,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     model_id: 'antibody_denovo',
                     mode: 'generator_backbone_refine',
                     params: buildStandalonePpiFlowGeneratorParams(pdbPath, epitopeString, seedLaunch),
+                    binder_round: roundDraft.binder_round,
                     pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 });
 
@@ -2393,6 +2399,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const activeTargetResidues = buildAvailableResidueKeySet(parsedChains);
     const authoringDraft: Record<string, UntypedApiValue> = {
                     ...retainedDraft,
+                    ...(!isRefinementMode ? roundDraft : {}),
                     bindcraft2_settings: bc2Settings,
                     model_id: deNovoGenerator === null ? retainedDraft.model_id : deNovoGenerator === 'bindcraft2' ? 'bindcraft2' : deNovoGenerator === 'boltzgen' ? 'boltzgen' : 'antibody_denovo',
                     mode: deNovoGenerator === null ? retainedDraft.mode : deNovoGenerator === 'bindcraft2' ? 'campaign' : deNovoGenerator === 'boltzgen' ? 'nanobody_binder' : deNovoGenerator === 'ppiflow' ? 'generator_backbone_refine' : ANTIBODY_DENOVO_PIPELINE_MODE,
@@ -2631,20 +2638,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     <div>
                         <div className="text-sm font-medium text-[var(--text-primary)]">Initial Orchestration Menu</div>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                            Default keeps only the core generator active. Expose downstream modules only when you want them in the initial batch run.
+                            Sequence design and blind prediction use the initial candidate round above. These additional operations remain independent.
                         </p>
                     </div>
                     {showOnlyCoreGeneratorStep && (
                         <span className="rounded-full border px-2.5 py-1 text-[11px]" style={themedTagStyle('var(--success)')}>
-                            Generator Only
+                            No additional operations
                         </span>
                     )}
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-4">
                     {([
-                        ['sequence_design', 'Sequence Design', 'FAMPNN / Caliby / ProteinMPNN'],
                         ['ppiflow', 'PPIFlow', 'Backbone refine or maturation'],
-                        ['validation', 'Validation', 'Boltz2 / Protenix / ESMFold2'],
                         ['qc', 'Analysis', 'FrustraMPNN / antibody annotation'],
                     ] as Array<[DeNovoOrchestrationStage, string, string]>).map(([stageKey, label, detail]) => {
                         // Saved selections remain visible and removable; this standalone route
@@ -2856,6 +2861,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         // Load template params into state
                         const p = template.params || {};
                         setRetainedDraft(p);
+                        if (!isRefinementMode) setRoundDraft(hydrateBinderRound(p));
                         setFampnnOverrides(p.fampnn_analysis_overrides);
                         const loaded: string[] = [];
                         const skipped: string[] = [];
@@ -3098,6 +3104,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             name={jobName} onNameChange={setJobName} onBack={onBack}
             generatorChooser={<BinderGeneratorChooser generator={deNovoGenerator} onSelect={selectDeNovoGenerator} onOpenNativeRoute={openNativeRoute} />}
             requestedSettings={bc2Settings} preview={activeBc2Preview}
+            roundSettings={<BinderRoundSettings values={roundDraft} onChange={setRoundDraft} />}
             section={bc2Section} onSectionChange={setBc2Section}
             previewBusy={bc2PreviewBusy} submitting={submitMutation.isPending}
             launchAvailable={bc2LaunchAvailable} error={bc2SubmitError}
@@ -3132,6 +3139,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     const params = template.params || {};
                     if (resolveExistingDeNovoGenerator({ ...params, model_id: template.model_id, mode: template.mode }) !== 'bindcraft2') return;
                     setRetainedDraft(params);
+                    setRoundDraft(hydrateBinderRound(params));
                     setJobName(params.job_name ?? template.name);
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
@@ -3161,6 +3169,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
             submitControls={submitControls} library={!bc2Workspace && library}
         >
+            {!isRefinementMode && !bc2Workspace && <BinderRoundSettings values={roundDraft} onChange={setRoundDraft} />}
             <DeNovoModalityNotice generator={deNovoGenerator} />
             <ModelDocumentationLinks
                 topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}

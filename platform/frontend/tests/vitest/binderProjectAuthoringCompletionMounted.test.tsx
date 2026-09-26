@@ -1,5 +1,6 @@
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -7,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ project: null as any, models: [] as any[], inventory: {} as any, trace: [] as string[], save: vi.fn(), prepare: vi.fn(), reserve: vi.fn(), context: vi.fn(), submit: vi.fn(async (_request: any, _options?: any) => ({ data: { id: 'created-job' } })), library: null as any }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(),
     submitJob: state.submit,
+    fetchModelById: vi.fn(async (id: string) => ({ data: roundCatalogs.find((model: any) => model.id === id) ?? { id, params: [] } })),
     fetchModels: vi.fn(async () => ({ data: state.models })), fetchModel: vi.fn(async (id: string) => ({ data: state.models.find(m => m.id === id) })),
     fetchTemplates: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchInputPresets: vi.fn(async () => ({ data: [{ id: 'fixture', name: 'Fixture target', path: 'inputs/fixture.pdb', category: 'test' }] })),
@@ -29,6 +31,7 @@ vi.mock('../../src/structureViewer/StructureWorkbench', () => ({ StructureWorkbe
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { api } from '../../src/lib/api';
 import { submitBindCraft2Lifecycle } from '../../src/lib/bindcraft2Lifecycle';
+const roundCatalogs = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import json,yaml; from pathlib import Path; p=Path('../api/config/models'); print(json.dumps([yaml.safe_load((p/(x+'.yaml')).read_text()) for x in ['proteinmpnn','fampnn','caliby_binder','protenix','boltz2','esmfold2']]))"], { encoding: 'utf8' }));
 const PDB = 'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C  \nEND\n';
 const field = (native_key: string, type: string) => ({ native_key, observed_types: [type], has_native_default: false, native_default: null, status: 'typed' });
 const bc2 = { fields: { targets: field('targets', 'array'), max_trajectories: field('max_trajectories', 'integer'), trajectory_only: field('trajectory_only', 'boolean'), losses: field('losses', 'object') }, presets: {}, paratope_conformations: [], registered_metrics: { filters: {}, losses: {} } };
@@ -76,14 +79,27 @@ it.each([['ppiflow', 'protein_binder'], ['ppiflow', 'antibody_binder'], ['ppiflo
     state.project.draft = { model_id: model, mode, native_generation_authoring: true, job_name: 'Project native', target_pdb: 'inputs/fixture.pdb', target_chain: 'A', antigen_chain: 'A', framework_pdb: 'inputs/framework.pdb', heavy_chain: 'H', light_chain: null, self_condition: false, dataset_seed: 0, target_source: { path: 'inputs/fixture.pdb', name: 'Imported source', jobId: 'foreign-source-job', document: { artifact_id: 'source-doc' } } };
     await mount();
     expect(document.querySelector('[aria-label="Target source"], [aria-label="Antigen source"]')).not.toBeNull();
+    const designer = document.querySelector<HTMLSelectElement>('[aria-label="Round sequence designer"]')!;
+    await act(async () => { designer.value = 'caliby_binder'; designer.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await edit('caliby_num_seqs_per_pdb', '11');
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="Automatic blind complex prediction"]')!.click()); await settle();
     await edit('Native binder job name', 'Edited in same editor'); await click('Save draft');
+    const savedRound = structuredClone(state.project.draft.binder_round);
+    const savedRoundDrafts = structuredClone(state.project.draft.binder_round_drafts);
+    expect(savedRound).toMatchObject({ enabled: false, sequence_design: { model_id: 'caliby_binder', params: { caliby_num_seqs_per_pdb: 11 } } });
     expect(state.project.draft.job_name).toBe('Edited in same editor'); expect(state.project.draft.target_source.jobId).toBe('foreign-source-job');
     await unmount(); await mount();
     expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')!.value).toBe('Edited in same editor');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="caliby_num_seqs_per_pdb"]')!.value).toBe('11');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Automatic blind complex prediction"]')!.checked).toBe(false);
     state.trace = []; await click('Start run');
     expect(state.trace).toEqual(['save', 'prepare', 'reserve', 'context', 'submit', 'bind']);
     const request = state.submit.mock.calls.at(-1)![0];
     expect(request).toMatchObject({ name: 'Edited in same editor', model_id: model, mode, launch_context_id: 'destination-child' });
+    expect(request.binder_round).toEqual(savedRound);
+    expect(state.project.draft.binder_round_drafts).toEqual(savedRoundDrafts);
+    expect(request.params).not.toHaveProperty('binder_round');
+    expect(request.params).not.toHaveProperty('binder_round_drafts');
     expect(request.params).not.toHaveProperty('target_source'); expect(request.params).not.toHaveProperty('native_job_request');
     if (model === 'ppiflow' && mode === 'protein_binder') expect(request.params).toMatchObject({ self_condition: false, dataset_seed: 0 });
     expect(document.querySelector('[data-location]')!.textContent).toBe('/projects/destination');
@@ -127,6 +143,9 @@ it('real parent four-generator round trip preserves native drafts and independen
     await mount();
     await click('PPIFlow · nanobody generation');
     await edit('Native binder job name', 'PPI retained');
+    const designer = document.querySelector<HTMLSelectElement>('[aria-label="Round sequence designer"]')!;
+    await act(async () => { designer.value = 'caliby_binder'; designer.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    await edit('caliby_num_seqs_per_pdb', '9');
     await click('Change generation engine');
     await click('BindCraft2 campaign'); await click('Campaign'); await edit('max_trajectories', '0');
     await click('RFantibody Stack');
@@ -134,8 +153,10 @@ it('real parent four-generator round trip preserves native drafts and independen
     await edit('Native binder job name', 'Boltz retained');
     await click('Change generation engine'); await click('PPIFlow · nanobody generation');
     expect(document.querySelector<HTMLInputElement>('[aria-label="Native binder job name"]')!.value).toBe('PPI retained');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="caliby_num_seqs_per_pdb"]')!.value).toBe('9');
     await click('Save draft');
     expect(state.project.draft.binder_native_drafts['boltzgen:nanobody_binder'].job_name).toBe('Boltz retained');
+    expect(state.project.draft.binder_native_drafts['ppiflow:nanobody_binder'].binder_round.sequence_design.params.caliby_num_seqs_per_pdb).toBe(9);
     expect(state.project.draft.binder_workflow_draft.bindcraft2_settings.max_trajectories).toBe(0);
     await unmount(); await mount(); await click('Change generation engine'); await click('BindCraft2 campaign');
     expect(document.querySelector<HTMLInputElement>('[aria-label="max_trajectories"]')!.value).toBe('0');
