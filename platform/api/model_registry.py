@@ -12,7 +12,7 @@ import math
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from functools import lru_cache
 
 from services.md.feature_gate import MD_MODEL_ID, molecular_dynamics_feature_enabled
@@ -84,7 +84,16 @@ class RuntimeDependencyRef(BaseModel):
     """Trusted managed-storage binding, never an operator path or download URL."""
     model_config = {"extra": "forbid", "frozen": True}
     kind: str = Field(pattern=r"^(image|weights)$")
-    relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
+    # Nested managed members are resolved by the existing contained-root owner.
+    # Reject empty/dot/traversal segments rather than normalizing their spelling.
+    relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
+
+    @field_validator('relative_path')
+    @classmethod
+    def managed_relative_member(cls, value: str) -> str:
+        if any(part in {'.', '..'} for part in value.split('/')):
+            raise ValueError('Managed runtime members cannot contain dot segments')
+        return value
 
 
 # Managed scientific assets shared by independent provisioning and selected
@@ -92,7 +101,7 @@ class RuntimeDependencyRef(BaseModel):
 # owners bind immutable bytes. A model's composed workflow may select more.
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
-    "boltz2", "af2", "proteinmpnn", "unidock",
+    "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
 })
 
 
@@ -124,6 +133,8 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     known = INDEPENDENT_RUNTIME_MODELS | ({'diffdock', 'boltzgen'} if internal else set())
     if model is None or not model.enabled or model_id not in known:
         raise ValueError("Independent runtime closure is not available for this model")
+    if model_id == 'protein_modification_experimental':
+        return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
                "boltz2": "boltz", "af2": "alphafold"}
@@ -134,6 +145,31 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id in {"fampnn", "proteinmpnn", "diffdock", "af2", "boltzgen"}:
         refs.append(RuntimeDependencyRef(kind="image", relative_path="pyrosetta_tools.sif"))
     return tuple(refs)
+
+
+def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
+    """Built-in family preload only, never a selected scientific launch recipe.
+
+    Reuse native asset owners without manufacturing requests. Operator runtime
+    overrides belong to selected-request preparation, not these defaults.
+    """
+    from native_components import LABEL_ASSETS
+
+    refs = []
+    for label in ('Foundry', 'ShapeRFD3', 'DISCO', 'LaProteina'):
+        image, _, weights, _ = LABEL_ASSETS[label]
+        refs.append(RuntimeDependencyRef(kind='image', relative_path=image))
+        if weights:
+            refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
+    # Both designers ship their default checkpoints inside their images.
+    for peer in ('fampnn', 'proteinmpnn', 'boltz2', 'esmfold2'):
+        refs.extend(model_runtime_dependencies(peer))
+    refs.extend(model_image_dependencies('protenix'))
+    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina', 'RunShapeProtenixValidator'):
+        dependencies, _ = native_checkpoint_dependencies(process, {})
+        refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
+                    for dep in dependencies)
+    return tuple(dict.fromkeys(refs))
 
 
 def _native_metadata_bytes(root, relative):
@@ -207,6 +243,25 @@ def native_checkpoint_dependencies(process: str, params: dict):
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
+    elif process == 'RunLaProteina':
+        from paths import get_weights_root
+
+        owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
+        default = Path(params.get('weights_root') or get_weights_root()) / 'laproteina'
+        seen = set()
+        for name in ('checkpoint_dir', 'data_path'):
+            selector = ('pcad_laproteina_' + name if params.get('pcad_laproteina_' + name)
+                        else 'laproteina_' + name)
+            selected = params.get(selector)
+            path = Path(str(selected)).expanduser() if selected else default
+            # DATA_PATH defaults to weights/laproteina independently of the
+            # checkpoint override. The bundle owner still checks containment.
+            if path.resolve() in seen:
+                continue
+            seen.add(path.resolve())
+            dependencies.append(SelectedDependency('weights:laproteina:' + name, 'weights',
+                None if selected else 'laproteina', owner,
+                selector=selector if selected else None))
     elif process == 'RunRF3':
         owner = 'scripts/run_rf3.py:main overrides; modules/rf3.nf:RunRF3'
         if params.get('rf3_extra_config'):

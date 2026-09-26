@@ -290,7 +290,7 @@ LABEL_ASSETS = {
     'ShapeRFD3': ('shape_rfd3.sif', None, None, None),
     'ShapeEvaluate': ('shape_rfd3.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
-    'LaProteina': ('laproteina.sif', None, 'laproteina', 'pcad_laproteina_checkpoint_dir'),
+    'LaProteina': ('laproteina.sif', None, None, None),
     'DISCO': ('disco.sif', None, 'disco', 'pcad_disco_checkpoint_path'),
     'Antiberty': ('antibody_tools.sif', None, None, None),
     'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
@@ -860,8 +860,13 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
     if workflow == 'protein_cad_experimental':
         backend = p.get('pcad_backend') or 'disco'
         after = a.chain(['PrepProteinCadRequest', 'RunLaProteina' if backend == 'laproteina' else 'RunDISCO', 'FinalizeProteinCadOutputs'])
-        if backend == 'laproteina':
-            a.asset('runtime_data', 'laproteina', 'modules/protein_cad_experimental.nf:PrepProteinCadRequest', 'pcad_laproteina_data_path')
+        if backend == 'disco':
+            selector = ('pcad_disco_cutlass_path' if p.get('pcad_disco_cutlass_path')
+                        else 'disco_cutlass_path')
+            if p.get(selector):
+                a.asset('runtime_data', None,
+                    'modules/protein_cad_experimental.nf:PrepProteinCadRequest', selector,
+                    condition='explicit DISCO CUTLASS path')
         return True
 
     if workflow == 'confornets_experimental':

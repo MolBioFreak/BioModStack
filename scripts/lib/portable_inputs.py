@@ -329,6 +329,11 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             visit(path.parent / "cm_runtime_registry_v1.json", path, ("runtime_registry",), "runtime-config", (*lineage, logical_id))
             visit(path.parent / "cm_coordinate_plan_v1.json", path, ("coordinate_plan",), "coordinate-plan", (*lineage, logical_id))
     keys = {"complex_json_path", "sequence_batch_json_path", "msa_path", "bcp_input_path", "input_path", "cm_request_path", "cm_coordinate_plan_path", "md_job_config", "laproteina_motif_pdb", "disco_input_json_path", "disco_ligand_sdf", "protein_cad_request", "boltz_launch_authority_path", "boltz_prepared_msa_dir"}
+    # The CAD compiler consumes the public names and emits pcad_* slots.
+    # Discover the same immutable documents after compilation so nested FILE_
+    # references reach the existing portable binding owner, not a JSON rewrite.
+    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path',
+                 'pcad_disco_ligand_sdf'})
     if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
             'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
         # Full-root preview and transport must bind the actual native biological

@@ -518,7 +518,10 @@ async def test_executor_forwards_real_invocation_to_bundle(tmp_path, compiler_en
     job.status, job.queue_status, job.remote_state = 'queued', 'preparing', 'preparing'
     job.remote_attempt_id = job.nextflow_run_id = None
     target = SimpleNamespace(id='vast:123', host='203.0.113.10', port=22,
-                             username='root', remote_root='/opt/biomodstack')
+                             username='root', remote_root='/opt/biomodstack',
+                             host_key_sha256='c' * 64, activated_at=None,
+                             leased_job_id=job.id, lease_acquired_at=None,
+                             provider_metadata={}, capabilities={})
     monkeypatch.setattr(executor, 'get_ready_target', AsyncMock(return_value=target))
     monkeypatch.setattr(executor, '_verify_launch_runner', AsyncMock())
     monkeypatch.setattr(executor, 'get_data_root', lambda: tmp_path)

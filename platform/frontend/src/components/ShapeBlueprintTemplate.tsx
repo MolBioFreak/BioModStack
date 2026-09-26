@@ -1,4 +1,5 @@
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -336,7 +337,7 @@ export default function ShapeBlueprintTemplate({ initialValues = {}, embedded = 
             <section className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4">
                         <label className="mt-3 block text-xs text-[var(--text-secondary)]">Job name<input value={name} onChange={(event) => setName(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)]" /></label>
                 {runDetails}
-                <ExecutionTargetPicker />
+                <ExecutionTargetPicker preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                     {invalidLengthPolicy && <p className="text-xs text-amber-200">Minimum length must not exceed maximum length.</p>}
                     <button type="button" disabled={!selected || launch.isPending || invalidLengthPolicy || Boolean(hydrationError) || Boolean(sequenceSettingsError)} onClick={() => launch.mutate()} className="w-full rounded-xl bg-emerald-600 px-4 py-3 font-semibold text-[var(--text-primary)] hover:bg-emerald-500 disabled:opacity-40">{launch.isPending ? 'Staging immutable request…' : 'Launch Shape Blueprint'}</button>
             </section>

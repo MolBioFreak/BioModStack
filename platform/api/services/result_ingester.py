@@ -3112,7 +3112,10 @@ def _local_redesign_validate_artifact(
             raise RuntimeError("RFD3 local-redesign source artifact path does not match the request")
     else:
         resolved = _local_redesign_safe_job_artifact(output_root, relative)
-        if resolved != Path(storage).expanduser().resolve():
+        # New producer descriptors use the existing job-relative artifact name.
+        # Historical absolute descriptors still require exact local placement;
+        # never treat an arbitrary absolute worker path as relocatable.
+        if storage != relative and resolved != Path(storage).expanduser().resolve():
             raise RuntimeError(f"RFD3 local-redesign artifact storage path mismatch: {role}")
     content = _local_redesign_read_bytes(resolved)
     actual_sha = hashlib.sha256(content).hexdigest()
@@ -3460,7 +3463,13 @@ async def _ingest_rfd3_local_redesign_manifest(
             "candidate_id": candidate_id,
             "role": descriptor["role"],
             "relative_path": relative_path,
-            "storage_path": descriptor["storage_path"],
+            # Persist controller placement without changing the sealed descriptor
+            # (and therefore without changing candidate or manifest identity).
+            "storage_path": (
+                str((output_root / relative_path).resolve())
+                if descriptor["role"] != "source_structure" and descriptor["storage_path"] == relative_path
+                else descriptor["storage_path"]
+            ),
             "content_sha256": descriptor["sha256"],
             "size_bytes": descriptor["bytes"],
             "media_type": descriptor.get("media_type") or "application/octet-stream",

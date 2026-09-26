@@ -1,4 +1,5 @@
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -514,7 +515,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <input className={fieldClass} value={jobName} onChange={event => setJobName(event.target.value)} />
                 </label>
                 {runDetails}
-                <ExecutionTargetPicker workflowRequest={stableWorkflowRequest} />
+                <ExecutionTargetPicker workflowRequest={stableWorkflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                 {error && <div role="alert" className="text-sm text-[var(--text-primary)]">{error}</div>}
                 <button type="button" onClick={generator === 'rfd3' ? submitDeNovo : submitAlternative}
                     disabled={submitMutation.isPending}

@@ -103,6 +103,8 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const valid = kind !== 'workflow' && !models.isError && modelEntries.some(item => item.id === modelId)
     && selections.some(item => item.model_id === modelId);
   const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
+  const familySelection = !catalog.isError && selectedWorkflow?.id === DE_NOVO_PRELOAD_SELECTION.model_id
+    ? catalog.data?.find(item => item.kind === 'model' && item.model_id === selectedWorkflow.id) : undefined;
   const operation = target.preload;
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
@@ -111,7 +113,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {live && <PreparationStatus target={target} onChanged={onChanged} />}
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
-        <option value="workflow">Workflow (exact dependencies)</option><option value="model">Model (reviewed managed assets only)</option><option value="image">Container image only (not weights)</option>
+        <option value="workflow">Workflow</option><option value="model">Model (reviewed managed assets only)</option><option value="image">Container image only (not weights)</option>
       </select></label>
       <label className="text-sm">{kind === 'workflow' ? 'Preparation workflow' : 'Provision model'}<select aria-label={kind === 'workflow' ? 'Preparation workflow' : 'Provision model'} className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={kind !== 'workflow' && (models.isPending || models.isError)}>
         <option value="">Select a model or workflow</option>
@@ -128,7 +130,8 @@ function ProvisionChooser({ target, onChanged }: Props) {
     {kind !== 'workflow' && modelId && !valid && <p role="status">Model scope needs reviewed managed assets for this model in this deployment, and {modelId} has none. Use Container image only, or a configured workflow's dependency preview.</p>}
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
-      <p>Open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
+      {familySelection && <CatalogProvisionPanel target={target} onChanged={onChanged} selection={familySelection} showStatus={false} />}
+      <p>For current-request dependencies, open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
     </div>}
     {kind !== 'workflow' && <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />}
@@ -161,7 +164,31 @@ export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: P
     <PreparationStatus target={target} onChanged={onChanged} />
   </section>;
 }
-function ProvisionActions({ target, onChanged, selection, retryOperationId }: Props & { selection: ProvisionSelection | null; retryOperationId?: string }) {
+export const DE_NOVO_PRELOAD_SELECTION: CatalogProvisionSelection = { kind: 'model', model_id: 'protein_modification_experimental' };
+
+type ProvisionActionsProps = Props & { selection: ProvisionSelection | null; retryOperationId?: string };
+
+// Keep invalidation at the shared action boundary, including for independent callers.
+export function ProvisionActions(props: ProvisionActionsProps) {
+  const { target, selection, retryOperationId } = props;
+  const binding = JSON.stringify([selection, retryOperationId, target.id, target.provider_instance_id,
+    target.host, target.port, target.username, target.remote_root, target.host_key_sha256,
+    target.active, target.state, target.activated_at, target.capabilities, target.preload?.operation_id,
+    target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase,
+    target.preload?.recovery_required, target.progress?.operation_id]);
+  return <BoundProvisionActions key={binding} {...props} />;
+}
+
+export function CatalogProvisionPanel({ target, onChanged, selection, showStatus = true }: Props & { selection: CatalogProvisionSelection; showStatus?: boolean }) {
+  return <section aria-label="Independent dependency preparation" className="mt-3 space-y-3">
+    <h4>{selection.model_id === DE_NOVO_PRELOAD_SELECTION.model_id ? 'All De Novo dependencies' : 'Independent dependency preparation'}</h4>
+    <p className="text-xs">Prepare the catalog's full dependency set, independently of the current scientific draft. {PREPARATION_CAVEAT}</p>
+    <ProvisionActions target={target} onChanged={onChanged} selection={selection} />
+    {showStatus && <PreparationStatus target={target} onChanged={onChanged} />}
+  </section>;
+}
+
+function BoundProvisionActions({ target, onChanged, selection, retryOperationId }: ProvisionActionsProps) {
   const client = useQueryClient();
   // Shared with saved-Job preloading: neither can enqueue over the other.
   const mutationKey = ['remote-preload', target.id];

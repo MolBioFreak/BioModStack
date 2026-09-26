@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { WorkflowProvisionPanel } from './dashboard/IndependentProvisionPanel';
+import { CatalogProvisionPanel, WorkflowProvisionPanel } from './dashboard/IndependentProvisionPanel';
 
 import {
     EXECUTION_TARGET_STORAGE_KEY,
     fetchExecutionTargets,
-    prepareJobSubmission, prepareExecutionPlacement, type WorkflowProvisionRequest,
+    prepareJobSubmission, prepareExecutionPlacement, type WorkflowProvisionRequest, type CatalogProvisionSelection,
 } from '../lib/api';
 
 interface ExecutionTargetPickerProps {
@@ -13,10 +13,11 @@ interface ExecutionTargetPickerProps {
     onChange?: (targetId: string | null) => void;
     disabled?: boolean;
     workflowRequest?: WorkflowProvisionRequest | null;
+    preloadSelection?: CatalogProvisionSelection;
     submissionOptions?: { launchContext?: boolean };
 }
 
-export function ExecutionTargetPicker({ value, onChange, disabled = false, workflowRequest, submissionOptions }: ExecutionTargetPickerProps = {}) {
+export function ExecutionTargetPicker({ value, onChange, disabled = false, workflowRequest, preloadSelection, submissionOptions }: ExecutionTargetPickerProps = {}) {
     const [, policyChanged] = useState(0);
     useEffect(() => {
         const changed = () => policyChanged(version => version + 1);
@@ -121,7 +122,12 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                             : { ...workflowRequest, request: prepareExecutionPlacement({ ...workflowRequest.request, execution_target_id: target.id }) }
                         : prepareJobSubmission({ ...workflowRequest, execution_target_id: target.id }, submissionOptions)}
                     onChanged={() => targetsQuery.refetch()} />
-                    : <p className="mt-3 text-xs text-slate-400">To provision without launching, select a worker and configure the workflow in its existing controls.</p>;
+                    : <p className="mt-3 text-xs text-slate-400">For current-request dependencies, select a worker and configure the workflow in its existing controls.</p>;
+            })()}
+            {preloadSelection && (() => {
+                const target = targets.find(item => item.id === selectedTargetId);
+                return target ? <CatalogProvisionPanel target={target} selection={preloadSelection} showStatus={!workflowRequest}
+                    onChanged={() => targetsQuery.refetch()} /> : null;
             })()}
         </section>
     );

@@ -3,6 +3,7 @@ import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides }
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
@@ -2179,7 +2180,7 @@ export function ProteinLocalRedesignTemplate({
                                     </div>
 
             {runDetails}
-            <ExecutionTargetPicker workflowRequest={workflowRequest} />
+            <ExecutionTargetPicker workflowRequest={workflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             <div className="flex justify-end gap-3">
                 {!embedded && <button
                     onClick={onBack}

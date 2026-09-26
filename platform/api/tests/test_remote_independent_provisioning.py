@@ -138,6 +138,15 @@ async def test_readback_detects_post_ingest_corruption(assets, local_transport, 
 
 
 def test_launch_and_independent_resolve_identical_reviewed_assets(assets, monkeypatch, tmp_path):
+    # Match the native Protenix checkpoint/common-member contract rather than a
+    # generic model.pt that the actual selected workflow never consumes.
+    (assets[1] / 'protenix/model.pt').unlink()
+    for member in ('checkpoint/protenix-v2.pt', 'common/components.cif',
+                   'common/components.cif.rdkit_mol.pkl',
+                   'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv'):
+        path = assets[1] / 'protenix' / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(('controlled native asset ' + member).encode())
     data = tmp_path / 'data'
     (data / 'runtime/cm-api-python/current').mkdir(parents=True)
     monkeypatch.delenv('BMS_CM_API_RUNTIME_DIR', raising=False)

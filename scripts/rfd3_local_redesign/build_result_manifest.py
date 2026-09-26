@@ -57,7 +57,9 @@ def _descriptor(
     return {
         "role": role,
         "relative_path": relative_path,
-        "storage_path": str(storage_path),
+        # Source custody belongs to the immutable request; generated evidence
+        # belongs to the job output, not the worker's absolute filesystem.
+        "storage_path": str(storage_path) if role == "source_structure" else relative_path,
         "sha256": _sha256(source_path),
         "bytes": source_path.stat().st_size,
         "media_type": _media_type(source_path),
@@ -229,7 +231,7 @@ def main() -> None:
         _descriptor(
             role="source_structure",
             source_path=source_file,
-            storage_path=source_storage_path,
+            storage_path=Path(input_binding["path"]),
             relative_path=f"external_inputs/{source_storage_path.name}",
         ),
         _descriptor(
