@@ -1,6 +1,6 @@
 # Sequence-design and packing harmonization
 
-Status: proposed implementation spec, documentation only. This is the focused sequence/packing slice of the existing [binder harmonization specification](de-novo-binder-harmonization.md). NGS is excluded.
+Status: implementation authorized and in progress. Christian also explicitly chose restoration of standalone ensemble design and fixed-sequence packing (SQ08). This is the focused sequence/packing slice of the existing [binder harmonization specification](de-novo-binder-harmonization.md). NGS is excluded.
 
 ## Outcome and boundaries
 
@@ -88,13 +88,13 @@ In `modules/thermompnn.nf`, check the subprocess result and read only the attemp
 
 Evidence to close: AntiFold consumes requested settings; ThermoMPNN failure/stale-file fixtures cannot produce fabricated native results. Keep FrustraMPNN analysis, Rosetta refinement and GROMACS separate and otherwise untouched.
 
-### SQ08. Resolve standalone Caliby ensemble/packing separately
+### SQ08. Restore standalone Caliby ensemble design and packing
 
-The prior review left restore-versus-retire undecided. `caliby_experimental` is already retired; retained `ensemble_sample`/`sidechain_pack` code is not a public product. Do not delete or re-enable it implicitly.
+Christian explicitly selected restoration of both standalone ensemble design and fixed-sequence packing during implementation. The existing `caliby_experimental` identifier remains available for historical request compatibility; removal of retirement applies only to genuinely connected native modes.
 
-If Christian chooses restoration, expose explicit ensemble-design/fixed-sequence-packing modes with applicable typed inputs/settings, correct checkpoint assets, an exact executable route and native result reader under the existing Caliby owner. Reuse compatible runtime code, not the retired bundle wholesale. Packing preserves amino-acid identity; sequence design is not a substitute.
+Expose explicit ensemble-design/fixed-sequence-packing modes with applicable typed inputs/settings, correct checkpoint assets, an exact executable route and native result reader under the existing Caliby owner. Reuse compatible runtime code, not the retired bundle wholesale. Packing preserves amino-acid identity; sequence design is not a substitute.
 
-Until that decision, leave existing retirement unchanged and finish the enabled sequence-design repairs independently. Complete deletion also needs the product decision and a reference check. This is unresolved standalone scope, not a new restriction on `caliby_binder` and not a claim of full Caliby capability parity.
+Restore these paths alongside the selected sequence-design repairs. Missing native execution evidence remains a disclosed test limitation, not a new restriction on `caliby_binder` or ordinary continuation.
 
 ## Completion without runtime bloat
 

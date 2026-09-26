@@ -3,7 +3,7 @@
 
 id: proteinmpnn
 name: ProteinMPNN
-version: "1.0.1"
+version: "1.1.0"
 category: sequence_design
 description: >
   Fast backbone-based sequence design using message passing neural networks.
@@ -29,12 +29,17 @@ modes:
       - seqs_per_design
       - binder_chains
       - target_chains
+      - design_chain
+      - target_chain
       - fixed_positions
       - mpnn_relax_output
       - mpnn_relax_seqs_per_cycle
       - mpnn_relax_convergence_rmsd
       - mpnn_relax_convergence_score
       - mpnn_relax_convergence_max_cycles
+      - mpnn_output_intermediates
+      - mpnn_num_connections
+      - mpnn_bias_AA_jsonl
       - mpnn_temperature
       - mpnn_omitAAs
       - mpnn_checkpoint_type
@@ -46,7 +51,7 @@ modes:
 params:
   - name: seqs_per_design
     type: integer
-    description: Native number of designed sequences per input backbone.
+    description: "Sequences sampled per input backbone."
     required: false
     default: 8
     minimum: 1
@@ -61,39 +66,73 @@ params:
     description: Explicit comma-separated target chain IDs. Target and other non-binder sequences remain fixed.
     required: false
 
+  - name: design_chain
+    type: string
+    description: "Exact case-sensitive designed chain IDs, comma-separated; omitted only for a monomer."
+    required: false
+
+  - name: target_chain
+    type: string
+    description: "Exact target chain IDs; all non-designed context chains remain fixed."
+    required: false
+
   - name: fixed_positions
     type: string
-    description: "Additional fixed author residues for explicit binder roles, e.g. A:1,A:5-10."
+    description: "Fixed author residues, e.g. a:10B,1:5,A:20-30. Number-only ranges select blank insertion codes."
     required: false
 
   - name: mpnn_relax_output
     type: boolean
-    description: Apply native relaxation before writing each final structure.
+    description: "Run native FastRelax before saving the output."
+    required: false
     default: false
 
   - name: mpnn_relax_seqs_per_cycle
     type: integer
-    description: Native intermediate sequences per relaxation cycle.
+    description: "Intermediate sequences per relaxation cycle; retain the lowest native score."
+    required: false
     default: 1
     minimum: 1
 
   - name: mpnn_relax_convergence_rmsd
     type: number
-    description: Native relaxation convergence C-alpha RMSD in Angstroms.
+    description: "Native relaxation convergence C-alpha RMSD threshold (angstrom)."
+    required: false
     default: 0.2
     minimum: 0
 
   - name: mpnn_relax_convergence_score
     type: number
-    description: Native relaxation convergence score improvement.
+    description: "Native relaxation convergence absolute score-change threshold."
+    required: false
     default: 0.1
     minimum: 0
 
   - name: mpnn_relax_convergence_max_cycles
     type: integer
-    description: Consecutive native convergence cycles.
+    description: "Consecutive native convergence cycles."
+    required: false
     default: 1
     minimum: 0
+
+  - name: mpnn_output_intermediates
+    type: boolean
+    description: "Write native intermediate relaxation-cycle candidates."
+    required: false
+    default: false
+
+  - name: mpnn_num_connections
+    type: integer
+    description: "Native graph neighbors; must agree with the selected checkpoint architecture."
+    required: false
+    default: 48
+    minimum: 1
+
+  - name: mpnn_bias_AA_jsonl
+    type: file
+    description: "Native per-amino-acid additive sampling bias JSON file."
+    required: false
+    file_type: json
 
   # Input file
   - name: input_pdb

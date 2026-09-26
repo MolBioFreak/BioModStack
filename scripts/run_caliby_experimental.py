@@ -1,169 +1,97 @@
 #!/usr/bin/env python3
+"""Run the two standalone native operations without binder reinterpretation."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 
-from caliby_runtime import (
-    build_conformer_mapping,
-    collect_structure_paths,
-    dump_json,
-    filter_structure_paths_by_name,
-    load_caliby_model,
-    load_constraints_dataframe,
-    load_json,
-    maybe_clean_inputs,
-    maybe_run_self_consistency,
-    normalize_sampling_results,
-    parse_omit_aas,
-    parse_bool,
-    preflight_caliby_runtime,
-    read_name_list,
-)
+from caliby_runtime import dump_json, load_caliby_model, preflight_caliby_runtime
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Caliby experimental sequence-design tasks and normalize outputs for BMS.")
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--input-dir", required=True)
+def sampling_overrides(request):
+    result = {"scn_packing_cfg": {"num_steps": request["scn_num_steps"], "step_scale": request["scn_step_scale"]}}
+    if request["task"] == "ensemble_design":
+        result.update({
+            "ensemble_ignore_res_idx_mismatch": request["ensemble_ignore_res_idx_mismatch"],
+            "gaussian_conformers_cfg": {"n_conformers": request["gaussian_n_conformers"], "noise_std": request["gaussian_noise_std"]},
+            "potts_sampling_cfg": {"regularization": request["potts_regularization"], "potts_sweeps": request["potts_sweeps"],
+                                   "potts_proposal": request["potts_proposal"], "rejection_step": request["potts_rejection_step"],
+                                   "potts_only_cond": request["potts_only_cond"]},
+        })
+    return result
+
+
+def run(request_dir: Path, output_dir: Path):
+    document = json.loads((request_dir / "request.json").read_text())
+    request = document["effective"]
+    task = request["task"]
+    if request.get("schema_version") != 1 or task not in {"ensemble_design", "sidechain_pack"}:
+        raise ValueError("Only versioned ensemble_design and sidechain_pack are supported")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    runtime = preflight_caliby_runtime(task=task, model_name=request.get("model_name", ""),
+                                       packer_model_name=request.get("packer_model_name"))
+    from caliby.api import _merge_sampling_cfg
+    from omegaconf import OmegaConf
+
+    model = load_caliby_model(runtime["model_name"])
+    kwargs = {"batch_size": request["batch_size"], "num_workers": request["num_workers"],
+              "sampling_overrides": sampling_overrides(request)}
+    if task == "ensemble_design":
+        kwargs.update({key: request[key] for key in ("num_seqs_per_pdb", "omit_aas", "temperature", "verbose")})
+    effective_sampling = OmegaConf.to_container(_merge_sampling_cfg(model.sampling_cfg, **kwargs), resolve=True)
+
+    def input_path(state):
+        path = (request_dir / state["path"]).resolve()
+        if not path.is_relative_to(request_dir.resolve()):
+            raise ValueError("Input path escapes prepared Caliby tree")
+        return str(path)
+
+    state_by_native_id = {}
+    if task == "ensemble_design":
+        import pandas as pd
+        mapping, constraints = {}, []
+        for ensemble in request["ensembles"]:
+            mapping[ensemble["ensemble_id"]] = [input_path(state) for state in ensemble["states"]]
+            for index, state in enumerate(ensemble["states"]):
+                native_id = Path(state["path"]).stem
+                state_by_native_id[native_id] = {"ensemble_id": ensemble["ensemble_id"], "state_id": state["state_id"],
+                                                "primary": index == 0, "conditioning_states": ensemble["states"]}
+                constraints.append({"pdb_key": native_id, **{key: state[key] for key in
+                                    ("fixed_pos_seq", "fixed_pos_scn", "fixed_pos_override_seq", "pos_restrict_aatype", "symmetry_pos")}})
+        results = model.ensemble_sample(mapping, out_dir=str(output_dir / "native"),
+                                        pos_constraint_df=pd.DataFrame(constraints),
+                                        use_primary_res_type=request["use_primary_res_type"], **kwargs)
+    else:
+        for state in request["structures"]:
+            state_by_native_id[Path(state["path"]).stem] = {"state_id": state["state_id"]}
+        # Native run_sidechain_packing fixes seq_cond_mask to token_resolved_mask;
+        # its decoder constructs outputs from the original encoded_seq, not samples.
+        results = model.sidechain_pack([input_path(state) for state in request["structures"]],
+                                       out_dir=str(output_dir / "native"), **kwargs)
+
+    dump_json(output_dir / "native_results.json", results)
+    records = []
+    for index, native_id in enumerate(results.get("example_id", [])):
+        native_path = Path(results["out_pdb"][index]).resolve()
+        relative_path = native_path.relative_to(output_dir.resolve()).as_posix()
+        row = {key: values[index] for key, values in results.items()}
+        records.append({"record_id": str(index), "native": row, "structure_path": relative_path,
+                        "source": state_by_native_id.get(native_id),
+                        "operation": task})
+    payload = {"schema": "bms.caliby-native-results.v1", "task": task, "request": document,
+               "effective_sampling": effective_sampling, "runtime": runtime, "records": records}
+    dump_json(output_dir / "caliby_results.json", payload)
+    return payload
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--request-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
-
-    request = load_json(Path(args.request).resolve())
-    output_dir = Path(args.output_dir).resolve()
-    raw_pdb_dir = output_dir / "raw" / "pdbs"
-    raw_meta_dir = output_dir / "raw" / "metadata"
-    raw_pdb_dir.mkdir(parents=True, exist_ok=True)
-    raw_meta_dir.mkdir(parents=True, exist_ok=True)
-
-    task = str(request.get("task") or "sequence_design").strip().lower()
-    model_name = str(request.get("model_name") or "soluble_caliby_v1").strip()
-    packer_model = str(request.get("packer_model_name") or "caliby_packer_010").strip()
-    preflight_caliby_runtime(
-        task=task,
-        model_name=model_name,
-        packer_model_name=packer_model,
-    )
-    batch_size = int(request.get("batch_size") or 4)
-    num_workers = int(request.get("num_workers") or 8)
-    clean_num_workers = int(request.get("clean_num_workers") or 2)
-    temperature = float(request.get("temperature") or 0.1)
-    num_seqs_per_pdb = int(request.get("num_seqs_per_pdb") or 4)
-    sampling_overrides = request.get("sampling_overrides") or {}
-    omit_aas = parse_omit_aas(request.get("omit_aas"))
-    name_filter = read_name_list(Path(str(request.get("pdb_name_list")))) if request.get("pdb_name_list") else set()
-    pos_constraint_df = load_constraints_dataframe(Path(str(request.get("pos_constraint_csv")))) if request.get("pos_constraint_csv") else None
-
-    prefix = "".join(
-        ch if ch.isalnum() else "_"
-        for ch in str(request.get("job_name") or "caliby_experimental").strip()
-    ).strip("_") or "caliby_experimental"
-
-    run_dir = output_dir / "caliby_output"
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    if task in {"sequence_design", "sidechain_pack"}:
-        input_dir = Path(str(request.get("input_pdb_dir"))).resolve()
-        pdb_paths = filter_structure_paths_by_name(collect_structure_paths(input_dir), name_filter)
-        cleaned_pdb_paths = maybe_clean_inputs(
-            pdb_paths=pdb_paths,
-            cleaned_dir=run_dir / "cleaned_pdbs",
-            num_workers=clean_num_workers,
-        )
-    else:
-        cleaned_pdb_paths = []
-
-    if task == "sequence_design":
-        model = load_caliby_model(model_name)
-        results = model.sample(
-            cleaned_pdb_paths,
-            out_dir=str(run_dir / "sequence_design"),
-            num_seqs_per_pdb=num_seqs_per_pdb,
-            batch_size=batch_size,
-            omit_aas=omit_aas,
-            num_workers=num_workers,
-            temperature=temperature,
-            pos_constraint_df=pos_constraint_df,
-            sampling_overrides=sampling_overrides,
-        )
-        self_consistency = maybe_run_self_consistency(
-            model=model,
-            designed_paths=list(results.get("out_pdb", [])),
-            output_dir=run_dir / "self_consistency",
-            enabled=bool(request.get("run_self_consistency_eval")),
-            num_models=int(request.get("self_consistency_num_models") or 5),
-            num_recycles=int(request.get("self_consistency_num_recycles") or 3),
-            use_multimer=bool(request.get("self_consistency_use_multimer")),
-        )
-        manifest = normalize_sampling_results(
-            results=results,
-            output_pdb_dir=raw_pdb_dir,
-            output_meta_dir=raw_meta_dir,
-            prefix=prefix,
-            source="caliby",
-            stage_mode=task,
-            extra_metadata={"caliby_model": model_name},
-            self_consistency=self_consistency,
-        )
-    elif task == "ensemble_design":
-        conformer_dir = Path(str(request.get("conformer_dir"))).resolve()
-        pdb_to_conformers = build_conformer_mapping(conformer_dir, name_filter)
-        model = load_caliby_model(model_name)
-        results = model.ensemble_sample(
-            pdb_to_conformers,
-            out_dir=str(run_dir / "ensemble_design"),
-            num_seqs_per_pdb=num_seqs_per_pdb,
-            batch_size=batch_size,
-            omit_aas=omit_aas,
-            num_workers=num_workers,
-            temperature=temperature,
-            pos_constraint_df=pos_constraint_df,
-            sampling_overrides=sampling_overrides,
-        )
-        self_consistency = maybe_run_self_consistency(
-            model=model,
-            designed_paths=list(results.get("out_pdb", [])),
-            output_dir=run_dir / "self_consistency",
-            enabled=bool(request.get("run_self_consistency_eval")),
-            num_models=int(request.get("self_consistency_num_models") or 5),
-            num_recycles=int(request.get("self_consistency_num_recycles") or 3),
-            use_multimer=bool(request.get("self_consistency_use_multimer")),
-        )
-        manifest = normalize_sampling_results(
-            results=results,
-            output_pdb_dir=raw_pdb_dir,
-            output_meta_dir=raw_meta_dir,
-            prefix=prefix,
-            source="caliby",
-            stage_mode=task,
-            extra_metadata={"caliby_model": model_name},
-            self_consistency=self_consistency,
-        )
-    elif task == "sidechain_pack":
-        packer = load_caliby_model(packer_model)
-        results = packer.sidechain_pack(
-            cleaned_pdb_paths,
-            out_dir=str(run_dir / "sidechain_pack"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            sampling_overrides=sampling_overrides,
-        )
-        manifest = normalize_sampling_results(
-            results={**results, "seq": [], "U": [], "input_seq": []},
-            output_pdb_dir=raw_pdb_dir,
-            output_meta_dir=raw_meta_dir,
-            prefix=prefix,
-            source="caliby",
-            stage_mode=task,
-            extra_metadata={"caliby_packer_model": packer_model},
-        )
-    else:
-        raise ValueError(f"Unsupported Caliby experimental task: {task}")
-
-    dump_json(output_dir / "design_manifest.json", manifest)
+    run(Path(args.request_dir).resolve(), Path(args.output_dir).resolve())
 
 
 if __name__ == "__main__":
     main()
-

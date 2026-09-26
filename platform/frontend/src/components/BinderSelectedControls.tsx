@@ -13,6 +13,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import { parseBC2Document, type BC2Document } from '../lib/bindcraft2StructureInputs';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { ParamField } from './ModelParameterField';
+import { SequenceDesignerSettings } from './SequenceDesignerSettings';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel';
 import { hydrateFrustraMpnnSettings } from './frustrampnn/frustraMpnnSettingsState';
@@ -212,7 +213,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             {inspectionError && <p role="status">Source inspection unavailable: {inspectionError}. The model owner resolves the selected inputs at submission.</p>}
         </> : <>
             {!model && !error && <p role="status">Loading model settings…</p>}
-            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">{fields.map((param: UntypedApiValue) => param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
+            <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
                 <h4>Manual native CDR definitions</h4><p>Assign author residues from the inspected source; no automatic region inference.</p>
                 <label>CDR source chain<select aria-label="CDR source chain" value={cdrChain} onChange={event => setCdrChain(event.target.value)}><option value="">First inspected chain</option>{inspectedModel?.chains.map(chain => <option key={chain.id} value={chain.id}>{chain.id}</option>)}</select></label>
                 <CDRRangeSelector activeChain={cdrChain || undefined} chains={inspectedModel?.chains ?? []} cdrDefinitions={(Array.isArray(params[param.name]) ? params[param.name] : []).map((row: UntypedApiValue) => ({ ...row, residues: new Set<string>(row.residues ?? []) }))}
@@ -231,7 +232,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             </section> : <ParamField
                 key={param.name} param={param} params={params}
                 updateParam={updateParam}
-                setShowFileBrowser={name => { setFileField(name); if (name) void browseFiles('/'); }} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />)}</div>
+                setShowFileBrowser={name => { setFileField(name); if (name) void browseFiles('/'); }} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} />
             <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
         </>}
         {fileField && <section aria-label="Native input file browser"><h4>Choose {fileField}</h4>

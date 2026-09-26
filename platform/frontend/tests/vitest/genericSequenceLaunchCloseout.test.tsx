@@ -309,17 +309,34 @@ vi.mock('../../src/components/SequenceManagerModal', () => ({ SequenceManagerMod
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
+// Keep the ordinary remote review mounted; only its transport is a fixture.
+import '../../src/components/ExecutionPlanApproval';
 
 let root: Root | undefined;
 let client: QueryClient;
 const originalAdapter = api.defaults.adapter;
 const originalUrl = window.location.href;
 let captured: Array<Record<string, any>>;
+let previews: Array<Record<string, any>>;
+const approvalDigest = 'a'.repeat(64);
 beforeEach(() => {
     window.history.replaceState({}, '', '/submit');
-    captured = [];
+    captured = []; previews = [];
     // Reject every unexpected transport operation, rather than opening a socket.
     api.defaults.adapter = async config => {
+        if (config.method === 'post' && config.url === '/api/jobs/execution-plan/preview') {
+            const payload = JSON.parse(config.data);
+            previews.push(payload);
+            // Transport/UI evidence only, not server or scientific admission.
+            return { data: {
+                schema: 'bms.job.execution-preview.v1', approval_digest: approvalDigest,
+                admissible: true, request: payload,
+                plan: { requested_json: payload.params, effective_json: payload.params,
+                    source_identity: { revision: 'fixture', tree: 'fixture' },
+                    metadata: { static_components: [], dynamic_templates: [], external_services: [] } },
+                deferred_preparation: [], blockers: [],
+            }, status: 200, statusText: 'OK', headers: {}, config };
+        }
         if (config.method !== 'post' || config.url !== '/api/jobs') throw Error(`Unexpected fixture request: ${config.method} ${config.url}`);
         const payload = JSON.parse(config.data);
         captured.push(payload);
@@ -419,8 +436,29 @@ it.each(rows.flatMap(row => [{ ...row, variant: 'edge' }, { ...row, target: null
     expect(button(target ? 'Vast · Sequence fixture' : 'Local').getAttribute('aria-pressed')).toBe('true');
     expect(button('Launch Experiment').disabled).toBe(false);
     await click('Launch Experiment');
+    if (target) {
+        await vi.waitFor(async () => {
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+            expect(button('Approve and submit').disabled).toBe(false);
+        });
+        expect(captured).toHaveLength(0);
+        expect(previews).toHaveLength(1);
+        expect(previews[0]).not.toHaveProperty('execution_plan_approval');
+        expect(document.body.textContent).toContain('Review remote execution plan');
+        expect(document.body.textContent).toContain(target);
+        await click('Show all settings');
+        const settings = [...document.querySelectorAll('tr')].map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent));
+        expect(settings).toContainEqual(['fampnn_psce_threshold', '0', '0']);
+        expect(settings).toContainEqual([mode === 'fixed_backbone' ? 'fixed_positions' : 'target_chain', '', '']);
+        if (mode !== 'fixed_backbone') expect(settings).toContainEqual(['fampnn_repack_last', 'false', 'false']);
+        await click('Approve and submit');
+    } else {
+        expect(previews).toHaveLength(0);
+    }
     expect(captured).toHaveLength(1);
     const payload = captured[0];
+    if (target) expect(payload).toEqual({ ...previews[0], execution_plan_approval: approvalDigest });
+    else expect(payload).not.toHaveProperty('execution_plan_approval');
     expect(payload).toMatchObject({ model_id: model, mode, execution_target_id: target, execution_policy: { remote_result_policy: policy }, params: { input_pdb: 'inputs/generic-sequence-fixture.pdb' } });
     const selected = fixtures.models.find(item => item.id === model)!.modes.find(item => item.id === mode)!;
     expect(Object.keys(payload.params).every(key => selected.params.includes(key))).toBe(true);
@@ -445,7 +483,26 @@ it('failed target refresh preserves the saved remote placement in the real submi
     expect(button('Local').getAttribute('aria-pressed')).toBe('false');
     expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe('vast:sequence-fixture');
     await click('Launch Experiment');
+    await vi.waitFor(async () => {
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+        expect(button('Approve and submit').disabled).toBe(false);
+    });
+    expect(captured).toHaveLength(0);
+    expect(previews).toHaveLength(1);
+    expect(previews[0]).toMatchObject({ model_id: 'proteinmpnn', mode: 'design', execution_target_id: 'vast:sequence-fixture' });
+    expect(previews[0]).not.toHaveProperty('execution_plan_approval');
+    expect(document.body.textContent).toContain('Review remote execution plan');
+    await click('Show all settings');
+    const settings = [...document.querySelectorAll('tr')].map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent));
+    expect(settings).toContainEqual(['mpnn_checkpoint_type', 'soluble', 'soluble']);
+    expect(settings).toContainEqual(['mpnn_checkpoint_model', 'v_48_020', 'v_48_020']);
+    expect(settings).toContainEqual(['mpnn_backbone_noise', '0', '0']);
+    expect(settings).toContainEqual(['mpnn_relax_max_cycles', '0', '0']);
+    await click('Approve and submit');
     expect(captured).toHaveLength(1);
+    expect(captured[0]).toEqual({ ...previews[0], execution_plan_approval: approvalDigest });
     expect(captured[0].execution_target_id).toBe('vast:sequence-fixture');
+    expect(captured[0].params).toMatchObject({ mpnn_checkpoint_type: 'soluble', mpnn_checkpoint_model: 'v_48_020', mpnn_backbone_noise: 0, mpnn_relax_max_cycles: 0 });
+    expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe('vast:sequence-fixture');
     // Fixture records intent only: server readiness/admission is not mocked as accepted science.
 });

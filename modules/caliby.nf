@@ -20,15 +20,20 @@ process RunCaliby {
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
 
+    publishDir "${params.out_dir}/collected/caliby_raw", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+
     input:
     tuple val(meta), path(pdb_files)
 
     output:
     tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons
+    path("results/native_outputs/**/*"), emit: native_outputs, optional: true
     path("caliby_metadata_${task.index}.jsonl"), emit: metadata
     path "*.log"
 
     script:
+    def samplingOverrides = calibyBinderSamplingOverrides(params)
     def designMode = params.antibody_design_mode ?: 'cdr_only'
     def designLoops = params.antibody_design_loops ?: 'H1,H2,H3,L1,L2,L3'
     def protectTetrad = params.protect_vhh_tetrad != null ? params.protect_vhh_tetrad : true
@@ -66,14 +71,14 @@ process RunCaliby {
         --batch-size ${params.caliby_batch_size ?: 4} \\
         --num-workers ${params.caliby_num_workers ?: 8} \\
         --clean-num-workers ${params.caliby_clean_num_workers ?: 2} \\
-        --temperature ${params.caliby_temperature ?: 0.1} \\
-        --omit-aas "${params.caliby_omit_aas ?: 'C'}" \\
+        --temperature ${params.caliby_temperature != null ? params.caliby_temperature : 0.1} \\
+        --omit-aas "${params.caliby_omit_aas != null ? params.caliby_omit_aas : 'C'}" \\
         --pos-constraint-csv "caliby_constraints.csv" \\
         --run-self-consistency-eval "${params.caliby_run_self_consistency_eval ?: false}" \\
         --self-consistency-num-models ${params.caliby_self_consistency_num_models ?: 5} \\
         --self-consistency-num-recycles ${params.caliby_self_consistency_num_recycles ?: 3} \\
         --self-consistency-use-multimer "${params.caliby_self_consistency_use_multimer ?: false}" \\
-        --sampling-overrides-json '${params.caliby_sampling_overrides_json ?: ''}' \\
+        --sampling-overrides-json '${samplingOverrides}' \\
         2>&1 | tee caliby_${task.index}.log
 
     cp results/caliby_metadata.jsonl "caliby_metadata_${task.index}.jsonl"
@@ -82,7 +87,7 @@ process RunCaliby {
 
 def calibyBinderSamplingOverrides(params) {
     def raw = params.get('caliby_sampling_overrides_json')
-    def values = raw ? new groovy.json.JsonSlurper().parseText(raw.toString()) : [:]
+    def values = raw instanceof Map ? new LinkedHashMap(raw) : (raw ? new groovy.json.JsonSlurper().parseText(raw.toString()) : [:])
     def nativeKeys = [
         caliby_verbose: ['verbose'],
         caliby_gaussian_n_conformers: ['gaussian_conformers_cfg', 'n_conformers'],
@@ -119,12 +124,15 @@ process RunCalibyBinder {
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
 
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+
     input:
     tuple path(pdb_files), path(source_identity)
 
     output:
     path("results/*.pdb"), emit: pdbs
     path("results/generator_*.json"), emit: jsons
+    path("results/native_outputs/**/*"), emit: native_outputs, optional: true
     path("caliby_metadata.jsonl"), emit: metadata
     path("caliby_constraints.csv"), emit: constraints
     path("caliby_selection.json"), emit: selection, optional: true

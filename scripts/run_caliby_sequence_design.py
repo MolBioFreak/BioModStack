@@ -262,8 +262,11 @@ def main() -> None:
         stage_mode="sequence_design",
         extra_metadata={"caliby_model": args.model_name, "validation_status": "unvalidated",
                         "terminal_producer": "caliby",
-                        "effective_settings": {key: value for key, value in vars(args).items()
-                                               if key not in {"input_dir", "output_dir"}}},
+                        "effective_settings": {
+                            **{key: value for key, value in vars(args).items()
+                               if key not in {"input_dir", "output_dir", "sampling_overrides_json"}},
+                            "sampling_overrides": sampling_overrides,
+                        }},
         self_consistency=self_consistency,
     )
 
@@ -291,7 +294,7 @@ def main() -> None:
     with jsonl_path.open("w", encoding="utf-8") as handle:
         for item in manifest:
             metadata_path = Path(str(item["metadata_path"]))
-            handle.write(metadata_path.read_text(encoding="utf-8").strip())
+            handle.write(json.dumps(json.loads(metadata_path.read_text(encoding="utf-8"))))
             handle.write("\n")
 
 

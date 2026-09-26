@@ -82,6 +82,8 @@ def test_binder_module_requires_roles_and_does_not_force_off_native_controls() -
     assert "--self-consistency-use-multimer" in binder
     assert "--sampling-overrides-json" in binder
     assert "set -euo pipefail" in binder
+    assert 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true' in binder
+    assert 'pattern: "results/native_outputs/**/*"' in binder
 
 
 def test_caliby_cardinality_and_chain_rename_fail_closed(tmp_path: Path) -> None:
@@ -258,3 +260,16 @@ def test_normalized_caliby_sidecar_owns_sequence_design_review_and_lineage(tmp_p
     assert metadata["selection_metric"] == "caliby_potts_energy"
     assert metadata["selection_direction"] == "lower_is_better"
     assert metadata["af3score_used"] is False
+    native = metadata["native_output"]
+    assert native == {
+        "producer": "caliby", "example_id": "rfantibody_0007",
+        "filename": "source.pdb", "path": "native_outputs/caliby_0001/source.pdb",
+    }
+    import shutil
+    returned = tmp_path / "returned"
+    shutil.copytree(tmp_path / "metadata", returned)
+    source_pdb.unlink()
+    shutil.rmtree(tmp_path / "metadata")
+    assert (returned / native["path"]).read_text() == "END\n"
+    # Native PDB originals must not become additional candidate Designs.
+    assert list(returned.glob("*.pdb")) == []

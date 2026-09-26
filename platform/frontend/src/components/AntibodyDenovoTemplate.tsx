@@ -398,6 +398,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             }
         });
 
+        // Model-owned Caliby settings can grow independently of legacy quality presets.
+        for (const [key, value] of Object.entries(params)) {
+            if (key.startsWith('caliby_') && value !== undefined) merged[key as `caliby_${string}`] = value;
+        }
+
         merged.ppiflow_objective_mode = normalizePpiFlowObjectiveMode(merged.ppiflow_objective_mode);
         if (!Number.isFinite(Number(merged.ppiflow_objective_threshold))) {
             merged.ppiflow_objective_threshold = 0;
@@ -1420,7 +1425,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             else if (initialValues.name) setJobName(initialValues.name); // Job name usually comes from wrapper but might be passed
             if (initialValues.boltzgen_num_designs !== undefined && resolveExistingDeNovoGenerator(initialValues) === 'boltzgen') setNumDesigns(initialValues.boltzgen_num_designs);
             else if (initialValues.rfantibody_num_designs !== undefined) setNumDesigns(initialValues.rfantibody_num_designs);
-            if (initialValues.seqs_per_design) setSeqsPerDesign(initialValues.seqs_per_design);
+            if (initialValues.seq_designer === 'caliby' && initialValues.caliby_num_seqs_per_pdb !== undefined) setSeqsPerDesign(initialValues.caliby_num_seqs_per_pdb);
+            else if (initialValues.seqs_per_design !== undefined) setSeqsPerDesign(initialValues.seqs_per_design);
             if (initialValues.seqs_per_validation_job) setSeqsPerBoltzJob(initialValues.seqs_per_validation_job);
             else if (initialValues.seqs_per_boltz_job) setSeqsPerBoltzJob(initialValues.seqs_per_boltz_job);
             // exploration_mode is now always true - controlled via parallel_mode instead
@@ -1970,24 +1976,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_target_chains: qualitySettings.lock_target_chains,
                     lock_antibody_framework: qualitySettings.lock_antibody_framework,
                     fampnn_constraint_mode: effectiveSeqDesigner === 'fampnn' ? fampnnConstraintMode : undefined,
-                    caliby_model_name: qualitySettings.caliby_model_name,
-                    caliby_temperature: qualitySettings.caliby_temperature,
-                    caliby_batch_size: qualitySettings.caliby_batch_size,
-                    caliby_num_workers: qualitySettings.caliby_num_workers,
-                    caliby_clean_num_workers: qualitySettings.caliby_clean_num_workers,
-                    caliby_omit_aas: qualitySettings.caliby_omit_aas.trim() || undefined,
-                    caliby_run_self_consistency_eval: qualitySettings.caliby_run_self_consistency_eval,
-                    caliby_self_consistency_num_models: qualitySettings.caliby_self_consistency_num_models,
-                    caliby_self_consistency_num_recycles: qualitySettings.caliby_self_consistency_num_recycles,
-                    caliby_self_consistency_use_multimer: qualitySettings.caliby_self_consistency_use_multimer,
+                    // Keep the native keys and explicit empty/false/zero/null values.
+                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key, value]) => key.startsWith('caliby_') && (key !== 'caliby_sampling_overrides_json' || Boolean(value)))),
+                    ...(effectiveSeqDesigner === 'caliby' ? { caliby_num_seqs_per_pdb: seqsPerDesign } : {}),
                     enable_caliby_filter: qualitySettings.enable_caliby_filter,
-                    caliby_max_potts_energy: qualitySettings.caliby_max_potts_energy ?? undefined,
-                    caliby_min_sc_plddt: qualitySettings.caliby_min_sc_plddt ?? undefined,
-                    caliby_max_sc_rmsd: qualitySettings.caliby_max_sc_rmsd ?? undefined,
-                    caliby_fixed_pos_override_seq: qualitySettings.caliby_fixed_pos_override_seq.trim() || undefined,
-                    caliby_pos_restrict_aatype: qualitySettings.caliby_pos_restrict_aatype.trim() || undefined,
-                    caliby_symmetry_pos: qualitySettings.caliby_symmetry_pos.trim() || undefined,
-                    caliby_sampling_overrides_json: qualitySettings.caliby_sampling_overrides_json.trim() || undefined,
                     // PPIFlow settings
                     run_ppiflow_backbone_refine: runPpiFlowBackboneRefine,
                     run_ppiflow_maturation: runPpiFlowMaturation,
@@ -2579,6 +2571,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     lock_gpus: lockGpus,
                     out_dir: customOutputDir.trim() || undefined,
                     // Quality settings
+                    ...Object.fromEntries(Object.entries(qualitySettings).filter(([key]) => key.startsWith('caliby_'))),
+                    ...(seqDesigner === 'caliby' ? { caliby_num_seqs_per_pdb: seqsPerDesign } : {}),
                     quality_settings: qualitySettings,
                     sabdab_framework: sabdabFramework ? {
                         type: sabdabFramework.type,
@@ -2892,7 +2886,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         else if (p.seq_design_fampnn === false && p.seq_design_caliby === false && p.seq_design_antifold === false && p.seq_design_proteinmpnn === false) { setSeqDesigner('none'); loaded.push('seq_designer:none'); }
                         else { skipped.push('seq_designer'); }
                         if (p.rfantibody_num_designs) { setNumDesigns(p.rfantibody_num_designs); loaded.push('rfantibody_num_designs'); } else { skipped.push('rfantibody_num_designs'); }
-                        if (p.seqs_per_design) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
+                        if (p.seq_designer === 'caliby' && p.caliby_num_seqs_per_pdb !== undefined) { setSeqsPerDesign(p.caliby_num_seqs_per_pdb); loaded.push('caliby_num_seqs_per_pdb'); }
+                        else if (p.seqs_per_design !== undefined) { setSeqsPerDesign(p.seqs_per_design); loaded.push('seqs_per_design'); } else { skipped.push('seqs_per_design'); }
                         if (typeof p.run_immunogenicity_scoring === 'boolean') { setUseAntiberty(p.run_immunogenicity_scoring); loaded.push('run_immunogenicity_scoring'); }
                         if (typeof p.run_thermompnn === 'boolean') { setUseThermoMPNN(p.run_thermompnn); loaded.push('run_thermompnn'); }
                         else if (typeof p.run_stability_scoring === 'boolean') { setUseThermoMPNN(p.run_stability_scoring); loaded.push('run_stability_scoring'); }
@@ -5689,7 +5684,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Designer</label>
                             <div className="flex gap-3">
-                                {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'caliby', 'antifold', 'proteinmpnn'] as const).map((designer) => (
+                                {([...(isRefinementMode ? (['none'] as const) : []), 'fampnn', 'caliby', ...(seqDesigner === 'antifold' ? (['antifold'] as const) : []), 'proteinmpnn'] as const).map((designer) => (
                                     <button
                                         key={designer}
                                         onClick={() => {

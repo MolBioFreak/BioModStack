@@ -21,17 +21,15 @@ process PrepMPNN {
     path ("mpnn_prep_*.log")
 
     script:
-    def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
-    def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
+    def roleRequest = ['binder_chains', 'target_chains', 'design_chain', 'target_chain', 'fixed_positions', 'binder_chain_ids', 'target_chain_ids'].collectEntries { key -> [(key): params.get(key)] }
     def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
-    def roleFlags = roles ? "--request_base64 '${roleBase64}'" : ''
     """
     eval "\$(micromamba shell hook --shell bash)"
     micromamba activate pyrosetta
     
     python /scripts/prep_mpnn_designs.py \
         --input_dir "./" \
-        --out_dir "${params.get('sequence_design_engine') == 'proteinmpnn' ? 'mpnn_fixed' : 'mpnn_input'}" ${params.get('sequence_design_engine') == 'proteinmpnn' ? '--generic' : ''} ${roleFlags}
+        --out_dir "${params.get('sequence_design_engine') == 'proteinmpnn' ? 'mpnn_fixed' : 'mpnn_input'}" ${params.get('sequence_design_engine') == 'proteinmpnn' ? "--generic --request_base64 '${roleBase64}'" : ''}
     
     # Add unique ID to mpnn prep logfile
     cp mpnn_prep.log mpnn_prep_${task.index}.log
@@ -75,11 +73,11 @@ process RunMPNN {
     def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
     def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
     def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
-    def nativeLauncher = roles ? "/scripts/proteinmpnn_binder_roles.py --request-base64 '${roleBase64}' --" : '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py'
+    def nativeLauncher = roles ? "/scripts/proteinmpnn_binder_roles.py --request-base64 '${roleBase64}' --" : (params.get('sequence_design_engine') == 'proteinmpnn' ? '/scripts/proteinmpnn_native_binding.py --native /dl_binder_design/mpnn_fr/dl_interface_design_multi.py --' : '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py')
     def extraBase64 = (params.get('mpnn_extra_config') != null ? params.get('mpnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     """
     # Raw config remains argv data, never shell syntax or command substitution.
-    python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["-pdbdir", "-outpdbdir", "-augment_eps", "-checkpoint_path", "-omit_AAs", "-relax_max_cycles", "-relax_output", "-relax_seqs_per_cycle", "-relax_convergence_rmsd", "-relax_convergence_score", "-relax_convergence_max_cycles", "-seqs_per_struct", "-temperature", "-debug"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "proteinmpnn"}' > native_extra_args.bin
+    python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["-pdbdir", "-outpdbdir", "-augment_eps", "-checkpoint_path", "-omit_AAs", "-relax_max_cycles", "-relax_output", "-relax_seqs_per_cycle", "-relax_convergence_rmsd", "-relax_convergence_score", "-relax_convergence_max_cycles", "-seqs_per_struct", "-temperature", "-debug", "-num_connections", "-bias_AA_jsonl", "-output_intermediates"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "proteinmpnn"}' > native_extra_args.bin
     mapfile -d '' -t native_extra_args < native_extra_args.bin
     export OPENBLAS_NUM_THREADS=1 
     export MKL_NUM_THREADS=1
@@ -102,6 +100,9 @@ process RunMPNN {
         -relax_convergence_max_cycles ${params.mpnn_relax_convergence_max_cycles != null ? params.mpnn_relax_convergence_max_cycles : 1}\
         -seqs_per_struct ${params.seqs_per_design != null ? params.seqs_per_design : 8} \
         -temperature ${params.mpnn_temperature != null ? params.mpnn_temperature : 0.1} \
+        ${params.get('mpnn_num_connections') != null ? '-num_connections ' + params.mpnn_num_connections : ''} \
+        ${params.get('mpnn_output_intermediates') ? '-output_intermediates' : ''} \
+        ${params.get('mpnn_bias_AA_jsonl') != null ? "-bias_AA_jsonl '" + params.mpnn_bias_AA_jsonl.toString().replace("'", "'\"'\"'") + "'" : ''} \
         -debug \
         "\${native_extra_args[@]}" \
         2>&1 | tee mpnn_${task.index}.log

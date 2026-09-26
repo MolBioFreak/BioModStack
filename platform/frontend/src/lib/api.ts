@@ -27,6 +27,11 @@ export interface BlindPoseSelectedRequest {
         num_loops: number; num_sampling_steps: number; num_diffusion_samples: number; seed?: number;
     };
 }
+export const fetchCalibyNativeResults = async (jobId: string): Promise<import('../components/NativeSequenceResults').CalibyNativeResults> =>
+    (await api.get<import('../components/NativeSequenceResults').CalibyNativeResults>(`/api/jobs/${encodeURIComponent(jobId)}/caliby-native-results`)).data;
+export const fetchLigandMPNNDesignResults = async (jobId: string): Promise<import('../components/NativeSequenceResults').LigandMPNNDesignResults> =>
+    (await api.get<import('../components/NativeSequenceResults').LigandMPNNDesignResults>(`/api/jobs/${encodeURIComponent(jobId)}/ligandmpnn-design-results`)).data;
+
 export interface SelectedNativeResult {
     records: Array<Record<string, unknown>>;
     [key: string]: unknown;

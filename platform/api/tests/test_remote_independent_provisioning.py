@@ -165,3 +165,47 @@ def test_launch_and_independent_resolve_identical_reviewed_assets(assets, monkey
     provisioned = cache.independent_plan(ProvisionSelection(kind='model',model_id='protenix'))
     assert {(r.relative_path,r.sha256,r.size_bytes) for r in records} == {
         (r.remote_destination,r.sha256,r.size_bytes) for r in provisioned}
+
+
+@pytest.mark.asyncio
+async def test_caliby_catalog_and_default_prewarm_match_selected_launch(assets, monkeypatch):
+    from routers.execution_targets import provision_catalog
+    from component_runtime import SourceIdentity
+    from services.nextflow import build_selected_execution_plan
+    catalog = {(row.kind, row.model_id) for row in await provision_catalog()}
+    assert {('model', 'caliby_binder'), ('image', 'caliby_binder')} <= catalog
+    assert ('model', 'caliby_experimental') not in catalog
+    containers, weights = assets
+    (containers / 'caliby.sif').write_bytes(b'fixture caliby image; not executable')
+    checkpoint = weights / 'caliby/model_params/caliby/soluble_caliby_v1.ckpt'
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b'fixture selected checkpoint')
+    # Unselected installed alternatives must not be scanned or provisioned.
+    (checkpoint.parent / 'caliby.ckpt').write_bytes(b'unselected fixture checkpoint')
+    (weights / 'caliby/model_params/af2').mkdir()
+    (weights / 'caliby/model_params/af2/unselected').write_bytes(b'optional fixture')
+    monkeypatch.setattr(bundle, 'get_container_dir', lambda: containers)
+    monkeypatch.setattr(bundle, 'get_weights_root', lambda: weights)
+    params = {'caliby_model_name': 'soluble_caliby_v1', 'caliby_run_self_consistency_eval': False}
+    plan = build_selected_execution_plan(model_id='caliby_binder', mode='design',
+        entrypoint='workflows/caliby_binder.nf', requested=params, effective=params,
+        native_parameters=params, source_identity=SourceIdentity('a'*40, 'b'*40))
+    launched = bundle._runtime_assets('caliby_binder', 'design', params, selected_plan=plan,
+                                     only_kinds=frozenset({'image', 'weights'}))
+    records = [r for path, prefix in launched for r in bundle._records_for_source(path, prefix, 'runtime')]
+    provisioned = cache.independent_plan(ProvisionSelection(kind='model', model_id='caliby_binder'))
+    assert {(r.relative_path, r.sha256, r.size_bytes) for r in records} == {
+        (r.remote_destination, r.sha256, r.size_bytes) for r in provisioned}
+    assert {r.remote_destination for r in provisioned} == {
+        'containers/caliby.sif', 'weights/caliby/model_params/caliby/soluble_caliby_v1.ckpt'}
+    checkpoint.unlink()
+    with pytest.raises((ValueError, FileNotFoundError, bundle.RemoteBundleError)):
+        cache.independent_plan(ProvisionSelection(kind='model', model_id='caliby_binder'))
+    assert len(cache.independent_plan(ProvisionSelection(kind='image', model_id='caliby_binder'))) == 1
+
+
+@pytest.mark.parametrize('path', ['/absolute', '../escape', 'nested/../escape', 'nested//member', 'nested/./member'])
+def test_runtime_dependency_members_remain_contained(path):
+    from model_registry import RuntimeDependencyRef
+    with pytest.raises(ValueError):
+        RuntimeDependencyRef(kind='weights', relative_path=path)

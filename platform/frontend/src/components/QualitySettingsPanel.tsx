@@ -3,9 +3,14 @@ import { NeurosnapMsaControls } from './NeurosnapMsaControls';
 import { hydrateColabfoldMsaSettings, type ColabfoldMsaSettings, hydrateNeurosnapMsaSettings } from '../lib/msaPolicy';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import React, { useEffect, useState } from 'react';
+import { fetchModelById } from '../lib/api';
+import { ParamField } from './ModelParameterField';
+import { SequenceDesignerSettings } from './SequenceDesignerSettings';
 import { applyPpiFlowStageMode, applyPpiFlowTuningProfile, getPpiFlowOptimizationScenario, normalizePpiFlowTuningProfile } from './qualitySettingsLogic';
 
 export interface QualitySettings extends Partial<ColabfoldMsaSettings> {
+    // Additional Caliby fields are supplied by its model-owned schema.
+    [key: `caliby_${string}`]: UntypedApiValue;
     // Local MSA search quality (used by MSA-consuming validators)
     msa_preset: 'maximum' | 'balanced' | 'fast';
 
@@ -990,6 +995,22 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     showPostValidationFiltering = true,
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
+    const [calibyFields, setCalibyFields] = useState<UntypedApiValue[]>([]);
+    const [calibyError, setCalibyError] = useState<string | null>(null);
+    useEffect(() => {
+        if (!showCalibySettings) return;
+        let current = true;
+        setCalibyError(null);
+        fetchModelById('caliby_binder').then(({ data }) => {
+            if (!current) return;
+            const mode = data.modes?.find((row: UntypedApiValue) => row.id === 'design');
+            setCalibyFields((data.params ?? []).filter((field: UntypedApiValue) =>
+                field.name.startsWith('caliby_') && !field.hidden
+                && !['caliby_num_seqs_per_pdb', 'caliby_design_positions'].includes(field.name)
+                && (!mode?.params?.length || mode.params.includes(field.name))));
+        }).catch(reason => { if (current) setCalibyError(String(reason)); });
+        return () => { current = false; };
+    }, [showCalibySettings]);
     const [showMsaRuntimeOverrides, setShowMsaRuntimeOverrides] = useState(false);
 
     const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
@@ -1939,164 +1960,16 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             Structure-conditioned Potts sequence design for hard or non-ideal backbones. In the nanobody workflow this is intended as an experimental alternative to FA-MPNN for CDR-focused redesign.
                         </p>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">Model Variant</label>
-                                <select
-                                    value={settings.caliby_model_name}
-                                    onChange={(e) => updateSetting('caliby_model_name', e.target.value)}
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300"
-                                >
-                                    <option value="soluble_caliby_v1">soluble_caliby_v1</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">Omit Amino Acids</label>
-                                <input
-                                    type="text"
-                                    value={settings.caliby_omit_aas}
-                                    onChange={(e) => updateSetting('caliby_omit_aas', e.target.value)}
-                                    placeholder="C"
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 font-mono"
-                                />
-                                <p className="mt-1 text-[10px] text-slate-600">
-                                    Comma-separated amino acids excluded globally during sampling.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-4">
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Temperature <span className="text-slate-600">({settings.caliby_temperature.toFixed(2)})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={0.01}
-                                    max={0.5}
-                                    step={0.01}
-                                    value={settings.caliby_temperature}
-                                    onChange={(e) => updateSetting('caliby_temperature', parseFloat(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Batch Size <span className="text-slate-600">({settings.caliby_batch_size})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={1}
-                                    max={16}
-                                    step={1}
-                                    value={settings.caliby_batch_size}
-                                    onChange={(e) => updateSetting('caliby_batch_size', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Model Workers <span className="text-slate-600">({settings.caliby_num_workers})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={1}
-                                    max={32}
-                                    step={1}
-                                    value={settings.caliby_num_workers}
-                                    onChange={(e) => updateSetting('caliby_num_workers', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">
-                                    Clean Workers <span className="text-slate-600">({settings.caliby_clean_num_workers})</span>
-                                </label>
-                                <input
-                                    type="range"
-                                    min={1}
-                                    max={8}
-                                    step={1}
-                                    value={settings.caliby_clean_num_workers}
-                                    onChange={(e) => updateSetting('caliby_clean_num_workers', parseInt(e.target.value))}
-                                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                />
-                                <p className="mt-1 text-[10px] text-slate-600">
-                                    Workers used to clean input structures before inference.
-                                </p>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">Sampling Overrides JSON</label>
-                                <textarea
-                                    value={settings.caliby_sampling_overrides_json}
-                                    onChange={(e) => updateSetting('caliby_sampling_overrides_json', e.target.value)}
-                                    rows={4}
-                                    placeholder='{"max_iter": 64}'
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
-                            <label className="flex items-start gap-3">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.caliby_run_self_consistency_eval}
-                                    onChange={(e) => updateSetting('caliby_run_self_consistency_eval', e.target.checked)}
-                                    className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
-                                />
-                                <span>
-                                    <span className="font-medium text-slate-200">AF2 self-consistency</span>
-                                    <span className="mt-1 block text-[10px] text-slate-500">
-                                        Refolds Caliby outputs and stores fold-consistency metrics that can be used for pre-validation filtering.
-                                    </span>
-                                </span>
-                            </label>
-                            {settings.caliby_run_self_consistency_eval && (
-                                <div className="mt-3 grid grid-cols-3 gap-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-500 mb-1">
-                                            AF2 Models <span className="text-slate-600">({settings.caliby_self_consistency_num_models})</span>
-                                        </label>
-                                        <input
-                                            type="range"
-                                            min={1}
-                                            max={5}
-                                            step={1}
-                                            value={settings.caliby_self_consistency_num_models}
-                                            onChange={(e) => updateSetting('caliby_self_consistency_num_models', parseInt(e.target.value))}
-                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-500 mb-1">
-                                            Recycles <span className="text-slate-600">({settings.caliby_self_consistency_num_recycles})</span>
-                                        </label>
-                                        <input
-                                            type="range"
-                                            min={1}
-                                            max={12}
-                                            step={1}
-                                            value={settings.caliby_self_consistency_num_recycles}
-                                            onChange={(e) => updateSetting('caliby_self_consistency_num_recycles', parseInt(e.target.value))}
-                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
-                                        />
-                                    </div>
-                                    <label className="flex items-center gap-2 text-xs text-slate-300">
-                                        <input
-                                            type="checkbox"
-                                            checked={settings.caliby_self_consistency_use_multimer}
-                                            onChange={(e) => updateSetting('caliby_self_consistency_use_multimer', e.target.checked)}
-                                            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
-                                        />
-                                        Use AF2-Multimer
-                                    </label>
-                                </div>
-                            )}
-                        </div>
+                        {calibyError && <p role="status">Caliby settings unavailable: {calibyError}. Saved settings are retained.</p>}
+                        {!calibyFields.length && !calibyError && <p role="status">Loading Caliby settings…</p>}
+                        <SequenceDesignerSettings fields={calibyFields} renderField={field =>
+                            <ParamField param={field} params={settings}
+                                updateParam={(key, value) => onSettingsChange({ ...settings, [key]: value })}
+                                setShowFileBrowser={() => {}} setActiveSequenceField={() => {}}
+                                setShowSequenceManager={() => {}} ligandPresets={[]} />} />
+                        {settings.caliby_sampling_overrides_json && <p className="text-xs text-slate-500">
+                            Historical sampling overrides are retained for server normalization; new edits use the typed model settings above.
+                        </p>}
 
                         <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 p-3">
                             <label className="flex items-start gap-3">
@@ -2153,38 +2026,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-4">
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">fixed_pos_override_seq</label>
-                                <input
-                                    type="text"
-                                    value={settings.caliby_fixed_pos_override_seq}
-                                    onChange={(e) => updateSetting('caliby_fixed_pos_override_seq', e.target.value)}
-                                    placeholder="H52:A,H53:G"
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">pos_restrict_aatype</label>
-                                <input
-                                    type="text"
-                                    value={settings.caliby_pos_restrict_aatype}
-                                    onChange={(e) => updateSetting('caliby_pos_restrict_aatype', e.target.value)}
-                                    placeholder="H52:AVG,H53:VG"
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-500 mb-1">symmetry_pos</label>
-                                <input
-                                    type="text"
-                                    value={settings.caliby_symmetry_pos}
-                                    onChange={(e) => updateSetting('caliby_symmetry_pos', e.target.value)}
-                                    placeholder="H26,H52|H27,H53"
-                                    className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 font-mono"
-                                />
-                            </div>
-                        </div>
                     </div>
                     )}
 

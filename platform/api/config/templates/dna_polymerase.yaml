@@ -7,13 +7,12 @@ icon: dna
 color: "#10B981"
 description: >
   Redesign protein sequences to optimize nucleotide triphosphate (NTP) binding.
-  Uses ligand-aware sequence design to account for NTP interactions, followed
-  by structure validation.
+  Uses FA-MPNN sequence design followed by structure validation.
 
 stages:
   - name: Sequence Design
-    tool: LigandMPNN
-    description: Redesign sequences with awareness of NTP binding geometry and chemistry.
+    tool: FA-MPNN
+    description: Redesign sequences from the supplied protein structure.
   - name: Structure Validation
     tool: Boltz-2
     description: Predict structures to verify designs maintain proper NTP coordination.

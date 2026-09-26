@@ -122,6 +122,14 @@ def model_request(*, operation: str, params: dict, source: Job, root: Job,
     # The operation owns only its requested model settings. Input/lineage comes
     # from persisted selected Designs, never a browser path or inherited recipe.
     effective = dict(params)
+    if operation in {'proteinmpnn', 'fampnn'}:
+        # Selected roles are exact author IDs, not antibody/CDR annotations.
+        # Consume the selection aliases before the model's closed normalization.
+        for selected_key, native_key in (('binder_chains', 'design_chain'),
+                                         ('target_chains', 'target_chain')):
+            if selected_key in effective:
+                role = effective.pop(selected_key)
+                effective.setdefault(native_key, role)
     effective.update({
         'pdb_paths': ','.join(item['selection_pdb_path'] for item in manifest['designs']),
         'source_identity_json': str(selection_dir / 'source_identity.json'),
@@ -159,6 +167,9 @@ def individual_model_requests(base: JobCreate, operation: str, selection_dir: Pa
                       source_stage_job_id=item['design_job_id'])
         if operation in {'fampnn', 'proteinmpnn'}:
             params['input_pdb'] = path
+            # The single-input child must not retain the batch CSV as a path;
+            # shared portable discovery treats native file values literally.
+            params['pdb_paths'] = path
         else:
             # Protein prediction is explicitly sequence-conditioned, not an
             # inherited ligand/pose constraint. Preserve exact chain labels.

@@ -503,12 +503,16 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
 }
 
 from services.bindcraft2_runtime import NATIVE_ACTIONS as BC2_NATIVE_ACTIONS
+from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
+from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
        for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
     ('binder_refinement', 'refine'): 'workflows/binder_refinement.nf',
     ('caliby_binder', 'design'): 'workflows/caliby_binder.nf',
+    **{('caliby_experimental', native_mode): 'workflows/caliby_native.nf'
+       for native_mode in CALIBY_NATIVE_MODES},
     **{('boltzgen', generation_mode): 'workflows/boltzgen_generation.nf'
        for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
     **{('ppiflow', generation_mode): 'workflows/ppiflow_generation.nf'
@@ -518,6 +522,8 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     # enabled LigandMPNN YAML must not advertise it before the parent submits
     # its sealed, nonempty selection manifest through this exact route.
     ('ligandmpnn', 'interface_context'): 'workflows/ligandmpnn_interface_context.nf',
+    **{('ligandmpnn', native_mode): 'workflows/ligandmpnn_design.nf'
+       for native_mode in LIGANDMPNN_DESIGN_MODES},
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
@@ -5217,10 +5223,8 @@ def compile_nextflow_invocation(
             raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
     if normalized_model_id == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
-    if str(model_id or "").strip().lower() == "caliby_experimental":
-        raise ValueError(
-            "Standalone Caliby has been retired; select Caliby inside a supported parent design workflow"
-        )
+    if normalized_model_id == "caliby_experimental" and normalized_mode not in CALIBY_NATIVE_MODES:
+        raise ValueError("Historical Caliby design mode remains retired")
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
     if normalized_model_id == "protein_hunter_experimental" or (
@@ -5331,6 +5335,8 @@ def compile_nextflow_invocation(
            for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
         ('binder_refinement', 'refine'): 'maturation_child',
         ('caliby_binder', 'design'): 'protein_sequence_design',
+        **{('caliby_experimental', native_mode): 'protein_sequence_design'
+           for native_mode in CALIBY_NATIVE_MODES},
         **{('boltzgen', generation_mode): 'boltzgen'
            for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
         **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
@@ -5546,13 +5552,15 @@ def compile_nextflow_invocation(
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
-    if is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'ppiflow', 'boltzgen'}:
+    if (is_generic_sequence_command or model_id in {'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            or model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES):
         # No diffusion, prediction or hosted/local MSA stage is selected by the
         # sequence-only wrapper. Do not demand their unselected input stores.
         for key in ('rfd_models', 'af2_models', 'boltz_models', 'alphafold_params'):
             explicit_path_defaults.pop(key, None)
     if (not is_fastq_only_ont_command and not is_generic_sequence_command
-            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'ppiflow', 'boltzgen'}
+            and model_id not in {'bindcraft2', 'binder_refinement', 'caliby_binder', 'caliby_experimental', 'ppiflow', 'boltzgen'}
+            and not (model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES)
             and (model_id, mode) not in {('ligandmpnn', 'interface_context'),
                                          ('esmfold2', 'blind_pose')}):
         explicit_path_defaults.update({
@@ -5563,6 +5571,59 @@ def compile_nextflow_invocation(
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
             native_parameters[key] = str(value)
+
+    if model_id == 'ligandmpnn' and mode in LIGANDMPNN_DESIGN_MODES:
+        from services.ligandmpnn_design import science_params, prepare_design_request, read_prepared_request
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        request_path = params.get('ligandmpnn_design_request')
+        source_path = params.get('ligandmpnn_design_input')
+        if request_path:
+            from paths import get_inputs_dir, get_results_dir
+            read_prepared_request(mode, params,
+                allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters.update(ligandmpnn_design_request=str(request_path),
+                                     ligandmpnn_design_input=str(source_path))
+        elif _preview_only:
+            request_path = Path(output_dir) / '.ligandmpnn-design-request.json'
+            plan_input(request_path, json.dumps(prepare_design_request(mode, science),
+                       sort_keys=True, allow_nan=False).encode('utf-8'))
+            source_path = science['target_pdb']
+        else:
+            raise ValueError('LigandMPNN requires its materialized native request')
+        cmd.extend(['--ligandmpnn_design_request', str(request_path),
+                    '--ligandmpnn_design_input', str(source_path)])
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
+
+    if model_id == 'caliby_experimental' and mode in CALIBY_NATIVE_MODES:
+        from services.caliby_native import science_params
+        science = science_params(mode, params)
+        params.update(science)
+        native_parameters.update(science)
+        request_dir = params.get('caliby_request_dir')
+        if request_dir:
+            from paths import get_inputs_dir, get_results_dir
+            from services.caliby_native import read_prepared_request
+            read_prepared_request(mode, params, request_dir,
+                                  allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()))
+            native_parameters['caliby_request_dir'] = str(request_dir)
+        elif _preview_only:
+            # Preview observes source inputs; this not-yet-created destination
+            # is command metadata, never an input directory to rediscover.
+            request_dir = str(Path(output_dir) / 'inputs' / 'caliby-native')
+        else:
+            raise ValueError('Caliby requires its materialized native request')
+        cmd.extend(['--caliby_request_dir', str(request_dir)])
+        for key in (*explicit_path_defaults, 'gpu_id', 'cpus'):
+            if key in params and params[key] is not None:
+                cmd.extend(['--' + key, str(params[key])])
+                native_parameters[key] = params[key]
+        return finish_command(cmd)
 
     if model_id == 'ppiflow':
         from services.ppiflow_generation import (
@@ -5696,6 +5757,8 @@ def compile_nextflow_invocation(
             'sequence_design_engine', 'sequence_design_mode', 'seqs_per_design',
             'enable_fampnn_filter', 'fampnn_max_psce', 'fampnn_max_residue_psce',
             'mpnn_max_score',
+            # Selected-source identity is an ordered list, not scalar argv.
+            'iteration_source_design_ids',
         }
         # Selected-source identity uses the same typed params document rather
         # than falling through to the scalar-only runtime argv transport.

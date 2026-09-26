@@ -41,7 +41,12 @@ process PrepFAMPNN {
     def genericRequest = params.get('sequence_design_engine') == 'fampnn'
     def genericSelection = ['sequence_design_mode', 'design_chain', 'target_chain', 'fixed_positions', 'fampnn_fix_target_sidechains'].collectEntries { key -> [(key): params.get(key)] }
     if (genericRequest && genericSelection.design_chain == null) {
-        genericSelection.design_chain = 'A'
+        def binderRoles = params.get('binder_chain_ids')
+        genericSelection.design_chain = binderRoles instanceof List ? binderRoles.join(',') : (binderRoles != null ? binderRoles : 'A')
+    }
+    if (genericRequest && genericSelection.target_chain == null) {
+        def targetRoles = params.get('target_chain_ids')
+        genericSelection.target_chain = targetRoles instanceof List ? targetRoles.join(',') : targetRoles
     }
     def genericBase64 = groovy.json.JsonOutput.toJson(genericSelection).getBytes('UTF-8').encodeBase64().toString()
     def genericFlags = genericRequest ? "--request_base64 '${genericBase64}' --prepared_dir fampnn_input" : ''
@@ -123,6 +128,26 @@ process RunFAMPNN {
     path "*.log"
 
     script:
+    def typedNativeMapping = [
+        'fampnn_seed': 'seed',
+        'fampnn_presort_by_length': 'presort_by_length',
+        'fampnn_timestep_mode': 'timestep_schedule.mode',
+        'fampnn_timestep_start': 'timestep_schedule.t_start',
+        'fampnn_timestep_end': 'timestep_schedule.t_end',
+        'fampnn_scn_num_steps': 'scn_diffusion.num_steps',
+        'fampnn_scn_timestep_mode': 'scn_diffusion.timestep_schedule.mode',
+        'fampnn_scn_timestep_start': 'scn_diffusion.timestep_schedule.t_start',
+        'fampnn_scn_timestep_end': 'scn_diffusion.timestep_schedule.t_end',
+        'fampnn_scn_step_scale': 'scn_diffusion.step_scale',
+        'fampnn_scn_s_churn': 'scn_diffusion.churn_cfg.s_churn',
+        'fampnn_scn_s_noise': 'scn_diffusion.churn_cfg.s_noise',
+        'fampnn_scn_s_t_min': 'scn_diffusion.churn_cfg.s_t_min',
+        'fampnn_scn_s_t_max': 'scn_diffusion.churn_cfg.s_t_max',
+    ]
+    def typedNativeArgs = typedNativeMapping.findAll { key, nativeKey -> params.get(key) != null }.collect { key, nativeKey ->
+        "'" + (nativeKey + '=' + params.get(key).toString()).replace("'", "'\"'\"'") + "'"
+    }.join(' ')
+    def psceThreshold = params.get('sequence_design_engine') == 'fampnn' && params.containsKey('fampnn_psce_threshold') ? params.fampnn_psce_threshold : (params.fampnn_psce_threshold != null ? params.fampnn_psce_threshold : 0.3)
     def checkpointPreset = (params.fampnn_checkpoint != null ? params.fampnn_checkpoint : 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path != null ? params.fampnn_checkpoint_path : '').toString().trim()
     def checkpointMap = [
@@ -154,7 +179,7 @@ process RunFAMPNN {
     def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : (params.get('sequence_design_engine') == 'fampnn' ? '/scripts/prep_fampnn_constraints_generic.py --native-script /app/fampnn/fampnn/inference/seq_design.py --' : '/app/fampnn/fampnn/inference/seq_design.py')
     """
     # Raw config remains argv data, never shell syntax or command substitution.
-    python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["batch_size", "checkpoint_path", "exclude_cys", "fixed_pos_csv", "num_seqs_per_pdb", "pdb_dir", "pdb_key_list", "presort_by_length", "psce_threshold", "temperature", "seq_only", "repack_last", "timestep_schedule.num_steps", "out_dir"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "fampnn"}' > native_extra_args.bin
+    python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["batch_size", "checkpoint_path", "exclude_cys", "fixed_pos_csv", "num_seqs_per_pdb", "pdb_dir", "pdb_key_list", "presort_by_length", "psce_threshold", "temperature", "seq_only", "repack_last", "timestep_schedule.num_steps", "out_dir", "seed", "timestep_schedule.mode", "timestep_schedule.t_start", "timestep_schedule.t_end", "scn_diffusion.num_steps", "scn_diffusion.timestep_schedule.mode", "scn_diffusion.timestep_schedule.t_start", "scn_diffusion.timestep_schedule.t_end", "scn_diffusion.step_scale", "scn_diffusion.churn_cfg.s_churn", "scn_diffusion.churn_cfg.s_noise", "scn_diffusion.churn_cfg.s_t_min", "scn_diffusion.churn_cfg.s_t_max"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "fampnn"}' > native_extra_args.bin
     mapfile -d '' -t native_extra_args < native_extra_args.bin
     mkdir -p results
     ${policySetup}
@@ -168,8 +193,9 @@ process RunFAMPNN {
         fixed_pos_csv=${csv} \\
         num_seqs_per_pdb=${params.seqs_per_design != null ? params.seqs_per_design : 8} \\
         pdb_dir="./" \\
-        presort_by_length=true \\
-        psce_threshold=${params.fampnn_psce_threshold != null ? params.fampnn_psce_threshold : 0.3}  \\
+        ${params.get('fampnn_presort_by_length') == null ? 'presort_by_length=true' : ''} \\
+        ${typedNativeArgs} \\
+        psce_threshold=${psceThreshold == null ? 'null' : psceThreshold}  \\
         temperature=${params.fampnn_temperature != null ? params.fampnn_temperature : 0.1} \\
         seq_only=${params.fampnn_seq_only != null ? params.fampnn_seq_only : false} \\
         repack_last=${params.fampnn_repack_last != null ? params.fampnn_repack_last : true} \\

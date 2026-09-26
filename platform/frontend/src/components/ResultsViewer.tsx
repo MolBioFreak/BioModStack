@@ -66,6 +66,7 @@ import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
+import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
 import RFD3GenerationResultsPane from './RFD3GenerationResultsPane';
@@ -1893,7 +1894,7 @@ export function ResultsViewer() {
         retry: false,
         refetchInterval: (query) => {
             const job = query.state.data?.data;
-            if (isNativeBinderGeneration(job) || (job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
+            if (nativeSequenceResultKind(job) || isNativeBinderGeneration(job) || (job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
                 || (job?.model_id === 'ligandmpnn' && job.mode === 'interface_context')) {
                 return job?.status === 'queued' || job?.status === 'running' ? jobPollingInterval(1500, query) : false;
             }
@@ -3222,6 +3223,7 @@ export function ResultsViewer() {
         ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
         : null;
     const activeBadgeLabel = useMemo(() => {
+        if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
@@ -3234,7 +3236,7 @@ export function ResultsViewer() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -5451,7 +5453,9 @@ export function ResultsViewer() {
                             sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
-                    isNativeBinderGeneration(activeJob) ? (
+                    nativeSequenceResultKind(activeJob) ? (
+                        <NativeSequenceResults key={activeJob.id} job={activeJob} />
+                    ) : isNativeBinderGeneration(activeJob) ? (
                         <>
                             <NativeBinderGenerationResults key={selectedJobId}
                                 jobId={selectedJobId} status={activeJob.status}

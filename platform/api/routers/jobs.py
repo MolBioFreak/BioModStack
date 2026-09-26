@@ -116,6 +116,7 @@ from services.frustrampnn.settings import (
 )
 
 from model_registry import get_registry
+from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 from services.stage_review import (
     REVIEWABLE_STAGES,
     gate_file_for_stage,
@@ -1571,7 +1572,8 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
         return params
 
     normalized = dict(params)
-    keys = ("input_pdb",) if model_id in {"fampnn", "proteinmpnn"} else ("target_pdb", "fixed_target_source_path")
+    keys = (("input_pdb", "mpnn_bias_AA_jsonl") if model_id == "proteinmpnn" else
+            ("input_pdb",) if model_id == "fampnn" else ("target_pdb", "fixed_target_source_path"))
     for key in keys:
         value = normalized.get(key)
         if isinstance(value, str):
@@ -5861,6 +5863,52 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    from services.sequence_designer_settings import normalize_historical_sequence_settings
+    job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
+    if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
+        from services.ligandmpnn_design import normalize_design_params
+        transport_keys = {'ligandmpnn_design_request', 'ligandmpnn_design_input',
+                          'num_parallel_jobs', 'job_name', 'workflow_adapter',
+                          '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        values = {key: value for key, value in job_data.params.items() if key not in transport_keys}
+        try:
+            if not transport.get('ligandmpnn_design_request'):
+                for key in ('target_pdb', 'ligand_pdb'):
+                    if values.get(key):
+                        values[key] = _resolve_alias_path_for_runtime(values[key])
+            science = normalize_design_params(normalized_mode, values)
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, normalized_mode, science)
+        if errors:
+            raise HTTPException(422, detail={'validation_errors': errors})
+        return job_data
+    if normalized_model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, normalize_request
+        if normalized_mode not in SUPPORTED_MODES:
+            raise HTTPException(410, 'Historical Caliby design mode remains retired')
+        transport_keys = {'caliby_request_dir', 'num_parallel_jobs', 'job_name',
+                          'workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'}
+        transport = {key: value for key, value in job_data.params.items() if key in transport_keys}
+        try:
+            science = normalize_request(normalized_mode, {
+                key: value for key, value in job_data.params.items() if key not in transport_keys
+            })
+            if not transport.get('caliby_request_dir'):
+                states = (science['structures'] if normalized_mode == 'sidechain_pack' else
+                          [state for group in science['ensembles'] for state in group['states']])
+                for state in states:
+                    state['path'] = _resolve_alias_path_for_runtime(state['path'])
+            job_data.params = {**science, **transport}
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        errors = registry.validate_job_params(job_data.model_id, normalized_mode, science)
+        if errors:
+            raise HTTPException(422, detail={'validation_errors': errors})
+        # This model owns normalization; antibody/MSA defaults do not apply.
+        return job_data
     if normalized_model_id == 'ppiflow':
         from services.ppiflow_generation import normalize_ppiflow_generation_params
         # Initial generation owns its native settings. The old antibody-parent
@@ -6338,6 +6386,39 @@ async def _create_job(
                     status_code=503,
                     detail="Committed BMS source identity is unavailable",
                 ) from exc
+    if (normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES
+            and selected_execution_target is not None
+            and not job_data.params.get('ligandmpnn_design_request')):
+        from services.ligandmpnn_design import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'ligandmpnn-design' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': normalized_model_id, 'mode': normalized_mode})
+
+    if (normalized_model_id == 'caliby_experimental'
+            and normalized_mode in {'ensemble_design', 'sidechain_pack'}
+            and selected_execution_target is not None
+            and not job_data.params.get('caliby_request_dir')):
+        from services.caliby_native import prepare_for_job
+        job_data = normalize_job_request(job_data)
+        prepared = get_inputs_dir() / 'caliby-native' / str(uuid.uuid4())
+        try:
+            job_data.params.update(await asyncio.to_thread(
+                prepare_for_job, normalized_mode, job_data.params, prepared,
+                allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+            ))
+        except (OSError, ValueError, KeyError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        job_data.execution_plan_approval = None
+        _require_prepared_remote_review(job_data, {'model_id': normalized_model_id, 'mode': normalized_mode})
+
     if (normalized_model_id == 'ppiflow' and selected_execution_target is not None
             and not job_data.params.get('ppiflow_generation_request')):
         from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract
@@ -6548,11 +6629,10 @@ async def _create_job(
         )
     if normalized_model_id in retired_model_ids or normalized_mode in retired_modes:
         raise HTTPException(status_code=410, detail="This retired workflow has been permanently removed.")
-    if str(job_data.model_id or "").strip().lower() == "caliby_experimental":
-        raise HTTPException(
-            status_code=410,
-            detail="Standalone Caliby is retired; select Caliby inside a supported parent design workflow.",
-        )
+    if normalized_model_id == "caliby_experimental":
+        from services.caliby_native import SUPPORTED_MODES
+        if normalized_mode not in SUPPORTED_MODES:
+            raise HTTPException(410, detail="Historical Caliby design mode remains retired")
     reserved_review_keys = {
         "review_profile_id",
         "review_contract_version",
@@ -6994,6 +7074,31 @@ async def _create_job(
             job_name = job_data.name
             output_dir = base_output_dir
             job_params = dict(job_data.params)
+
+        if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
+            from services.ligandmpnn_design import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'ligandmpnn-design',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+
+        if (normalized_model_id == 'caliby_experimental'
+                and normalized_mode in {'ensemble_design', 'sidechain_pack'}):
+            from services.caliby_native import prepare_for_job
+            try:
+                job_params.update(await asyncio.to_thread(
+                    prepare_for_job, normalized_mode, job_params,
+                    Path(output_dir) / 'inputs' / 'caliby-native',
+                    allowed_roots=(*get_allowed_roots().values(), get_data_root(), get_inputs_dir(), get_results_dir()),
+                    retain_prepared=execution_preview is not None,
+                ))
+            except (OSError, ValueError, KeyError) as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
 
         if normalized_model_id == 'ppiflow':
             from services.ppiflow_generation import prepare_ppiflow_generation_request, parameter_contract

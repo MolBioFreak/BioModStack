@@ -12,6 +12,8 @@ process ANTIFOLD {
     path "antifold.log"
 
     script:
+    def sequenceCount = params.seqs_per_design
+    def temperature = params.containsKey('antifold_temperature') && params.antifold_temperature != null ? params.antifold_temperature : 0.2
     def weightsRoot = params.weights_root
     def antifoldModel = "${weightsRoot}/antifold/model.pt"
     """
@@ -27,8 +29,8 @@ process ANTIFOLD {
             --nanobody_chain \$FIRST_CHAIN \\
             --nanobody_mode \\
             --model_path ${antifoldModel} \\
-            --num_seq_per_target 10 \\
-            --sampling_temp 0.2 \\
+            --num_seq_per_target ${sequenceCount} \\
+            --sampling_temp ${temperature} \\
             --out_dir . \\
             >> antifold.log 2>&1
     else
@@ -40,8 +42,8 @@ process ANTIFOLD {
             --heavy_chain \$FIRST_CHAIN \\
             --light_chain \$SECOND_CHAIN \\
             --model_path ${antifoldModel} \\
-            --num_seq_per_target 10 \\
-            --sampling_temp 0.2 \\
+            --num_seq_per_target ${sequenceCount} \\
+            --sampling_temp ${temperature} \\
             --out_dir . \\
             >> antifold.log 2>&1
     fi

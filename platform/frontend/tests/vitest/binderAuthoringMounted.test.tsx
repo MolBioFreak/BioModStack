@@ -253,3 +253,65 @@ it('changing generation engines keeps the populated source tool mounted and inac
     expect(draft.boltzgen_filter_biased).toBe(false);
     expect(draft.denovo_generator).toBe('rfantibody');
 });
+
+
+const calibyModel = { modes: [{ id: 'design', params: ['caliby_model_name', 'caliby_num_seqs_per_pdb', 'caliby_gaussian_n_conformers', 'caliby_gaussian_noise_std', 'caliby_potts_rejection_step', 'caliby_scn_num_steps', 'caliby_omit_aas'] }], params: [
+    { name: 'caliby_model_name', type: 'string', default: 'soluble_caliby_v1', enum: ['caliby', 'soluble_caliby', 'soluble_caliby_v1'] },
+    { name: 'caliby_num_seqs_per_pdb', type: 'integer', default: 4 },
+    { name: 'caliby_gaussian_n_conformers', type: 'integer', default: 0 },
+    { name: 'caliby_gaussian_noise_std', type: 'number', default: 0 },
+    { name: 'caliby_potts_rejection_step', type: 'boolean', default: false },
+    { name: 'caliby_scn_num_steps', type: 'integer', default: 50 },
+    { name: 'caliby_omit_aas', type: 'string', default: 'C' },
+] };
+const calibyField = (key: string) => document.querySelector<HTMLInputElement>(`[data-sequence-designer-field="${key}"] input`)!;
+async function editCaliby(key: string, value: string) {
+    const input = calibyField(key); expect(input).not.toBeNull();
+    const disclosure = input.closest('details')!;
+    if (!disclosure.open) await act(async () => disclosure.querySelector('summary')!.click());
+    await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+}
+it('Caliby typed controls use discovered defaults without mutating the draft on load', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({ data: calibyModel });
+    const changes = vi.fn();
+    await mount(<QualitySettingsPanel settings={PRESETS.balanced} onSettingsChange={changes} showCalibySettings />);
+    await click('Quality Settings');
+    expect(calibyField('caliby_scn_num_steps').value).toBe('50');
+    expect(calibyField('caliby_scn_num_steps').closest('details')!.open).toBe(false);
+    expect(document.body.textContent).not.toContain('Sampling Overrides JSON');
+    expect(changes).not.toHaveBeenCalled();
+    await editCaliby('caliby_scn_num_steps', '17');
+    expect(changes.mock.calls.at(-1)?.[0].caliby_scn_num_steps).toBe(17);
+});
+it('Caliby typed false/zero/empty values survive edits, save, reopen and a second clone', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({ data: calibyModel });
+    const drafts = vi.fn();
+    const native = { caliby_gaussian_n_conformers: 0, caliby_gaussian_noise_std: 0, caliby_potts_rejection_step: false, caliby_scn_num_steps: 0, caliby_omit_aas: '', caliby_max_potts_energy: null };
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} onDraftChange={drafts} initialValues={{ seq_designer: 'caliby', initial_orchestration_sequence_design: true, ...native }} />);
+    await click('Quality Settings');
+    expect(calibyField('caliby_scn_num_steps').value).toBe('0');
+    expect(calibyField('caliby_potts_rejection_step').checked).toBe(false);
+    await editCaliby('caliby_scn_num_steps', '17');
+    const saved = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+    expect(saved.quality_settings).toMatchObject({ ...native, caliby_scn_num_steps: 17 });
+    for (const name of ['reopened', 'second clone']) {
+        await act(async () => mocks.select({ name, params: saved }));
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+        const reopened = JSON.parse(document.querySelector('[data-saved]')!.textContent!);
+        expect(reopened.quality_settings).toMatchObject({ ...native, caliby_scn_num_steps: 17 });
+        expect(calibyField('caliby_scn_num_steps').value).toBe('17');
+        expect(JSON.parse(JSON.stringify(drafts.mock.calls.at(-1)?.[0]))).toEqual(reopened);
+    }
+});
+
+
+it.each(['fampnn', 'antifold'])('binder designer lineup retains %s only when historically selected', async selected => {
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: selected, initial_orchestration_sequence_design: true }} />);
+    const buttons = [...document.querySelectorAll('button')].map(button => button.textContent?.trim());
+    for (const designer of ['FAMPNN', 'PROTEINMPNN', 'CALIBY']) expect(buttons).toContain(designer);
+    expect(buttons.includes('ANTIFOLD')).toBe(selected === 'antifold');
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).seq_designer).toBe(selected);
+});

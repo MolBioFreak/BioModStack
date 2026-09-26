@@ -102,6 +102,7 @@ class RuntimeDependencyRef(BaseModel):
 INDEPENDENT_RUNTIME_MODELS = frozenset({
     "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
+    "caliby_binder", "caliby_experimental", "ligandmpnn",
 })
 
 
@@ -136,6 +137,21 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id == 'protein_modification_experimental':
         return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, selected_assets
+        # Union of the two public native tasks' declared default checkpoints;
+        # a configured request still selects only its chosen checkpoint.
+        for mode in sorted(SUPPORTED_MODES):
+            selected = selected_assets(mode, {})
+            refs.append(RuntimeDependencyRef(kind='weights',
+                relative_path=selected['model_params_subdir'] + '/' + selected['checkpoint']))
+    if model_id == 'caliby_binder':
+        # Independent model preparation uses the same declared default as launch.
+        # Exact nondefault requests use the existing configured-workflow preview.
+        defaults = {field.name: field.default for field in model.params if field.default is not None}
+        selected, _ = native_checkpoint_dependencies('RunCalibyBinder', defaults)
+        refs.extend(RuntimeDependencyRef(kind=item.kind, relative_path=item.relative_path)
+                    for item in selected)
     weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2",
                "boltz2": "boltz", "af2": "alphafold"}
     if model_id in weights:
@@ -272,7 +288,25 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
+    if process in {'RunCaliby', 'RunCalibyBinder'}:
+        from scripts.caliby_runtime import resolve_expected_caliby_checkpoint
+        root = Path('/weights/caliby/model_params')
+        selected = resolve_expected_caliby_checkpoint(
+            params.get('caliby_model_name') or 'soluble_caliby_v1', root)
+        members = [selected.relative_to(root).as_posix()]
+        if params.get('caliby_run_self_consistency_eval') in (True, 'true'):
+            members.append('af2')
+        for member in members:
+            relative = 'caliby/model_params/' + member
+            dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+                'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
+    elif process == 'RunCalibyNative':
+        from services.caliby_native import selected_assets
+        assets = selected_assets(params['task'], params)
+        relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
+        dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+            'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
+    elif process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
                    'CanonicalProtenixEnsemble', 'RunShapeProtenixValidator'}:
         # Installed Protenix bd54a05d047b8925a241056f36d619700604068a:
         # runner/inference.py:download_inference_cache,load_checkpoint and
@@ -588,6 +622,15 @@ class ModelRegistry:
                         loaded_models[model.id] = model
             except Exception as e:
                 raise ValueError(f"Failed to load model registry entry {yaml_file}: {e}") from e
+        # The embedded Caliby sampler consumes the selected model's native
+        # settings. Keep parent constraints/count/defaults at their existing owner.
+        parent, caliby = loaded_models.get('antibody_denovo'), loaded_models.get('caliby_binder')
+        if parent is not None and caliby is not None:
+            existing = {field.name for field in parent.params}
+            for field in caliby.params:
+                if (field.name.startswith('caliby_') and field.name not in existing
+                        and field.name not in {'caliby_design_positions', 'caliby_num_seqs_per_pdb'}):
+                    parent.params.append(field.model_copy(deep=True))
         self._models = loaded_models
 
     @staticmethod
@@ -708,6 +751,17 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'ligandmpnn':
+            from services.ligandmpnn_design import MODES, science_params
+            if mode_id in MODES:
+                # Native nullable fields and ranges belong to the ordinary
+                # operation, not the diagnostic's shared scalar definitions.
+                try:
+                    science_params(mode_id, params)
+                except (TypeError, ValueError) as exc:
+                    errors.append(str(exc))
+                return errors
+
         # A saved launcher selector is descriptive, not authority to switch the
         # native mode. Reject contradictory identities at the request boundary.
         if model_id == 'antibody_denovo' and mode_id in {'nanobody_binder', 'generator_backbone_refine'}:
@@ -755,7 +809,9 @@ class ModelRegistry:
                 # JSON booleans are not integer/number settings. Validate the
                 # declared wire type before range/enum checks, without coercing
                 # strings or silently letting invalid values reach native argv.
-                if value is None and not param_def.required and param_def.default is None:
+                if value is None and (
+                        not param_def.required and param_def.default is None
+                        or model_id == 'fampnn' and param_name == 'fampnn_psce_threshold'):
                     continue
                 wire_type = param_def.type
                 valid_type = {
@@ -1200,6 +1256,14 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     if native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
+    elif reviewed and model_id == 'ligandmpnn' and workflow == 'ligandmpnn_design':
+        from services.ligandmpnn_design import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and model_id == 'caliby_experimental' and workflow == 'caliby_native':
+        from services.caliby_native import result_contract
+        result_payload = result_contract(mode)
+        retrieval_authority = result_payload['native_contract_authority']
     elif reviewed and model_id == 'ppiflow' and workflow == 'ppiflow_generation':
         # Initial native producer records are not partial-flow maturation scores.
         from services.ppiflow_generation import generation_result_contract as ppiflow_result_contract

@@ -1,4 +1,6 @@
 import React from 'react';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -19,11 +21,11 @@ const model = { params: [
     { name: 'pdb_paths', label: 'Owned inputs', type: 'string', hidden: true },
 ] };
 const open = vi.fn(), md = vi.fn();
-async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId?: string) {
+async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId?: string, discovered: any = model) {
     posted.length = 0;
     api.defaults.adapter = async config => {
         let data: unknown = [];
-        if (config.url?.startsWith('/api/models/')) data = model;
+        if (config.url?.startsWith('/api/models/')) data = discovered;
         if (config.url?.startsWith('/api/designs/')) data = { job_id: 'producer-sibling', pdb_path: 'primary.pdb' };
         if (config.url?.endsWith('/selection-context')) data = { candidate_documents: Object.fromEntries(ids.map(id => [id,
             [{ artifact_id: `alternate-${id}`, target_state: 'alternate-state', logical_path: 'native/alternate.cif', download_url: '/api/files/download/inputs/alternate.cif' }]])) };
@@ -156,3 +158,30 @@ it('uses mounted shared remote approval with the retained exact document request
     expect(post.mock.calls[2][1]).toMatchObject({ ...prepared, execution_plan_approval: preview.approval_digest });
     expect((await pending).launched_jobs[0].id).toBe('queued');
 }, 15000);
+
+
+it.each(['caliby', 'fampnn', 'proteinmpnn'])('submits %s model-native count/settings unchanged through the grouped controls', async operation => {
+    const count = operation === 'caliby' ? 'caliby_num_seqs_per_pdb' : 'seqs_per_design';
+    const numeric = operation === 'caliby' ? 'caliby_gaussian_noise_std' : operation === 'proteinmpnn' ? 'mpnn_relax_max_cycles' : 'fampnn_seed';
+    const binderRole = operation === 'caliby' ? 'binder_chains' : 'design_chain';
+    const targetRole = operation === 'caliby' ? 'target_chains' : 'target_chain';
+    const boolean = operation === 'caliby' ? 'caliby_potts_rejection_step' : operation === 'proteinmpnn' ? 'mpnn_relax_output' : 'fampnn_presort_by_length';
+    const discovered = { modes: [{ id: operation === 'fampnn' ? 'binder_design' : 'design', params: [count, numeric, boolean, binderRole, targetRole] }], params: [
+        { name: count, type: 'integer', default: 4 },
+        { name: numeric, type: 'number', default: 1 },
+        { name: boolean, type: 'boolean', default: true },
+        { name: binderRole, type: 'string', default: '' },
+        { name: targetRole, type: 'string', default: '' },
+    ] };
+    await mount(['fixture-design'], undefined, discovered);
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Binder continuation operation' }).props.onChange({ target: { value: operation } }));
+    const field = (name: string) => renderer!.root.findByProps({ 'data-sequence-designer-field': name }).findByType('input');
+    for (const [name, value] of [[count, '7'], [numeric, '0'], [binderRole, 'A'], [targetRole, 'B']]) {
+        await act(async () => field(name).props.onChange({ target: { value } }));
+    }
+    await act(async () => field(boolean).props.onChange({ target: { checked: false } }));
+    await act(async () => button('Run selected operation').props.onClick());
+    expect(posted[0]).toMatchObject({ operation, design_ids: ['fixture-design'], params: { [count]: 7, [numeric]: 0, [boolean]: false, [binderRole]: 'A', [targetRole]: 'B' } });
+    expect(posted[0].params).not.toHaveProperty(operation === 'caliby' ? 'seqs_per_design' : 'caliby_num_seqs_per_pdb');
+    if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(join(process.env.BMS_UI_EVIDENCE_DIR, `${operation}-request.json`), JSON.stringify(posted[0], null, 2));
+});

@@ -280,6 +280,19 @@ def _frustrampnn_discovery_metadata() -> dict:
     }
 
 
+def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
+    """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, parameter_schema
+        if mode_id in SUPPORTED_MODES:
+            return parameter_schema(mode_id)
+    if model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import MODES, parameter_schema
+        if mode_id in MODES:
+            return parameter_schema(mode_id)
+    return None
+
+
 @router.get("", response_model=List[dict])
 async def list_models(
     category: Optional[str] = None,
@@ -311,7 +324,8 @@ async def list_models(
                     "id": mode.id, 
                     "name": mode.name,
                     "description": mode.description,
-                    "params": mode.params
+                    "params": mode.params,
+                    "parameter_schema": _native_parameter_schema(m.id, mode.id),
                 }
                 for mode in m.modes
             ],
@@ -449,6 +463,7 @@ async def get_model(model_id: str):
                 "name": mode.name,
                 "description": mode.description,
                 "params": mode.params,
+                "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
             for mode in model.modes
         ],
@@ -533,6 +548,7 @@ async def get_model_modes(model_id: str):
                 "name": mode.name,
                 "description": mode.description,
                 "params": mode.params,
+                "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
             for mode in model.modes
         ]

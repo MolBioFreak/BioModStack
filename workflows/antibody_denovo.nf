@@ -2761,9 +2761,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 }
             }
 
-            def thermompnn_with_pdb = THERMOMPNN.out.stability
-                .join(thermompnn_input.map { meta, pdb -> tuple(meta, pdb) })
-                .map { meta, csv, pdb ->
+            def thermompnn_with_pdb = thermompnn_input
+                .join(THERMOMPNN.out.stability, remainder: true)
+                .map { meta, pdb, csv ->
                     tuple(meta, pdb, csv)
                 }
 
@@ -2771,6 +2771,7 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 log.info("  Filtering by ThermoMPNN ddG <= ${params.thermompnn_max_ddg}...")
 
                 stable_pdb_designs = thermompnn_with_pdb.filter { meta, pdb, csv ->
+                    if (csv == null) return true
                     try {
                         def lines = csv.text.split('\n')
                         if (lines.size() > 1) {

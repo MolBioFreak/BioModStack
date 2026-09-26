@@ -45,8 +45,10 @@ PROCESS_CONTRACTS = {
     'modules/boltzgen.nf:WaitForBoltzGenChildren': (('process_low',), ('val parent_job_id', 'path spawn_result', 'val batch_name'), ('path "boltzgen_child_outputs.json", emit: result', 'path "wait_boltzgen.log"'), ('scripts/wait_for_children.py',), ()),
     'modules/boltzgen.nf:CollectBoltzGenOutputs': (('process_low',), ('path child_outputs_json',), ('path "collected/*.pdb", emit: pdbs, optional: true', 'path "collected/*.{json,npz,csv}", emit: jsons, optional: true', 'path "collection_manifest.json", emit: manifest'), ('scripts/child_job_utils.py',), ()),
     'modules/boltzgen.nf:AggregateBoltzGenResults': (('process_low',), ('val parent_job_id', 'path collected_pdbs', 'path collected_jsons', 'path manifest'), ('path "aggregation_report.json", emit: report',), (), ()),
-    'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
-    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(source_identity)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_constraints.csv"), emit: constraints', 'path("caliby_selection.json"), emit: selection, optional: true', 'path("caliby_binder.log"), emit: log', 'path("results/native_outputs/*"), emit: native_structures, optional: true'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/caliby.nf:RunCaliby': (('Caliby', 'gpu'), ('tuple val(meta), path(pdb_files)',), ('tuple path("results/*.pdb"), path("results/generator_*.json"), emit: pdbs_jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata_${task.index}.jsonl"), emit: metadata', 'path "*.log"'), ('scripts/prep_caliby_antibody_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/caliby.nf:RunCalibyBinder': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(source_identity)',), ('path("results/*.pdb"), emit: pdbs', 'path("results/generator_*.json"), emit: jsons', 'path("results/native_outputs/**/*"), emit: native_outputs, optional: true', 'path("caliby_metadata.jsonl"), emit: metadata', 'path("caliby_constraints.csv"), emit: constraints', 'path("caliby_selection.json"), emit: selection, optional: true', 'path("caliby_binder.log"), emit: log', 'path("results/native_outputs/*"), emit: native_structures, optional: true'), ('scripts/prep_caliby_binder_constraints.py', 'scripts/run_caliby_sequence_design.py'), ()),
+    'modules/ligandmpnn_design.nf:RunLigandMPNNDesign': (('gpu',), ("path request, stageAs: 'prepared_request.json'", "path source, stageAs: 'source/*'"), ("path 'ligandmpnn_design', emit: native_outputs",), ('scripts/run_ligandmpnn_design.py',), ()),
+    'modules/caliby_native.nf:RunCalibyNative': (('Caliby', 'gpu'), ('path request_dir',), ("path 'caliby_native', emit: native_results",), ('scripts/run_caliby_experimental.py',), ()),
     'modules/caliby.nf:FilterCaliby': (('Caliby',), ('tuple path(pdb_files), path(json_files)',), ('path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path("filtered_output/generator_*.json"), emit: jsons, optional: true', 'path("filter_caliby_${task.index}.log"), emit: logs'), ('scripts/filter_caliby.py',), ()),
     'modules/combine_metadata.nf:CombineMetadata': (('pyrosetta_tools',), ('path metadata_fold', 'path metadata_fold_seq'), ('path ("combined_metadata.csv"), emit: csv', 'path "combined_metadata.log"'), (), ()),
     'modules/compress.nf:Compress': (('pyrosetta_tools',), ('val program', 'path files'), ('path "*.tar.gz"',), (), ()),
@@ -120,8 +122,8 @@ PROCESS_CONTRACTS = {
     'modules/protein_cad_experimental.nf:RunLaProteina': (('LaProteina', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', emit: pdbs", "path 'raw/metadata/*.json', emit: jsons", "path 'design_manifest.json', emit: manifest", "path '*.log'"), ('scripts/run_laproteina_inference.py',), ()),
     'modules/protein_cad_experimental.nf:RunDISCO': (('DISCO', 'gpu'), ('path request_json', 'path input_dir'), ("path 'raw/pdbs/*.pdb', emit: pdbs", "path 'raw/metadata/*.json', emit: jsons", "path 'design_manifest.json', emit: manifest", "path '*.log'"), ('scripts/run_disco_inference.py',), ()),
     'modules/protein_cad_experimental.nf:FinalizeProteinCadOutputs': (('process_low',), ('path pdb_files', 'path metadata_jsons', 'path design_manifest'), ("path 'published/*.pdb', emit: pdbs", "path 'published/confidence_*.json', emit: jsons", "path 'published/design_manifest.json', emit: manifest"), (), ()),
-    'modules/proteinmpnn.nf:PrepMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("mpnn_fixed/*.pdb"), emit: pdbs', 'path ("mpnn_prep_*.log")'), (), ()),
-    'modules/proteinmpnn.nf:RunMPNN': (('MPNN', 'gpu_light'), ('path pdbs',), ('tuple path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.pdb"), path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.json"), emit: pdbs_jsons', 'path "mpnn_native_output", emit: raw', 'path ("mpnn_metadata_${task.index}.jsonl"), topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/proteinmpnn_binder_roles.py',), ("errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }", 'maxRetries { params.allow_retries ? 2 : 0 }')),
+    'modules/proteinmpnn.nf:PrepMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("mpnn_fixed/*.pdb"), emit: pdbs', 'path ("mpnn_prep_*.log")'), ('scripts/prep_mpnn_designs.py', 'scripts/add_fixed_labels.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ()),
+    'modules/proteinmpnn.nf:RunMPNN': (('MPNN', 'gpu_light'), ('path pdbs',), ('tuple path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.pdb"), path("${params.get(\'sequence_design_engine\') == \'proteinmpnn\' ? \'mpnn_canonical\' : \'results\'}/*.json"), emit: pdbs_jsons', 'path "mpnn_native_output", emit: raw', 'path ("mpnn_metadata_${task.index}.jsonl"), topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/proteinmpnn_binder_roles.py', 'scripts/proteinmpnn_native_binding.py'), ("errorStrategy { params.allow_retries && task.exitStatus in [137, 139] ? 'retry' : 'terminate' }", 'maxRetries { params.allow_retries ? 2 : 0 }')),
     'modules/proteinmpnn.nf:FilterMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filtered_output/*.json"), emit: jsons, optional: true', 'path ("filter_mpnn_${task.index}.log"), emit: logs'), (), ()),
     'workflows/protein_sequence_design.nf:PublishSequenceDesign': (('pyrosetta_tools',), ("path source_pdb, stageAs: 'source/*'", "path settings_json, stageAs: 'settings/*'", "tuple path(native_pdbs, stageAs: 'unfiltered/*'), path(native_jsons, stageAs: 'unfiltered/*')", "tuple path(selected_pdbs, stageAs: 'filtered/*'), path(selected_jsons, stageAs: 'filtered/*'), path(filter_logs, stageAs: 'filter_logs/*')"), ("path 'sequence_design_results.json', emit: index",), ('scripts/sequence_design_results.py',), ()),
     'modules/protenix.nf:ProtenixPredict': (('Protenix', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)',), ('tuple val(producer_meta), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: typed_cifs', 'path "producer_publication/**/*.json", emit: producer_publication', 'path "predictions/**/*confidence*.json", emit: confidence, optional: true', 'path "predictions/**/*full_data*.json", emit: full_confidence, optional: true', 'path "msa_prepared/msa_report.json", emit: msa_report, optional: true', 'path "*.log", emit: logs, optional: true'), ('scripts/prepare_protenix_msa.py', 'scripts/run_protenix_inference.py', 'scripts/write_structure_producer_manifest.py'), ()),
@@ -162,7 +164,7 @@ PROCESS_CONTRACTS = {
     'modules/structure_prediction.nf:BoltzFromSequenceWithMSATask': (('Boltz', 'gpu'), ('tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)',), ("path 'boltz_task_binding.json'", 'tuple val(producer_meta), path("producer_candidates.json"), path("predictions/*.{pdb,cif}"), emit: canonical_structures', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: native_identity_artifacts, optional: true', 'path "*.log"'), (), ()),
     'modules/structure_prediction.nf:PrepareComplexWithMSA': (('CPU',), ('tuple val(complex_name), path(complex_json), path(msa_files)',), ('tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared', 'path "msa/*.a3m", emit: msa, optional: true', 'path "msa/*_msa_quality.json", emit: quality_report, optional: true', 'path "msa/complex_msa_manifest.json", emit: msa_manifest, optional: true', 'path "*.log"'), ('scripts/extract_target_templates.py', 'scripts/run_local_msa.py'), ()),
     'modules/structure_prediction.nf:BoltzFromComplex': (('Boltz', 'gpu'), ('tuple val(complex_name), path(complex_yaml), path(msa_dir)',), ("path 'boltz_task_binding.json'", 'tuple val(complex_name), path("producer_candidates.json"), path("predictions/*.pdb"), emit: canonical_pdbs, optional: true', 'path "predictions/*.cif", emit: cifs, optional: true', 'path "predictions/*.json", emit: jsons, optional: true', 'path "predictions/*.npz", emit: npz, optional: true', 'path "*.log"'), ('scripts/finalize_target_geometry.py', 'scripts/write_structure_producer_manifest.py'), ()),
-    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
+    'modules/thermompnn.nf:THERMOMPNN': (('process_gpu',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_stability.csv"), optional: true, emit: stability', 'path "thermompnn.log"'), (), ('container "${params.container_dir}/stability_tools.sif"',)),
     'modules/utils/anarci.nf:ANARCII': (('process_low',), ('tuple val(meta), path(pdb)',), ('tuple val(meta), path("*_imgt.pdb"), emit: pdb_imgt', 'tuple val(meta), path("*_cdrs.json"), emit: cdrs', 'tuple val(meta), path("*_cdr_positions.json"), emit: cdr_positions', 'path "anarci.log"'), (), ('container "${params.container_dir}/antibody_tools.sif"',)),
     'workflows/antibody_denovo.nf:SpawnRFantibodyJobs': (('process_low',), ('path target_pdb', 'val epitope_residues', 'val framework_type', 'val total_designs', 'val designs_per_job', 'val parent_job_id', 'val batch_name'), ('path "spawn_rfa_result.json", emit: result',), ('scripts/spawn_rfantibody_children.py',), ()),
     'workflows/antibody_denovo.nf:NormalizeTargetPDB': (('process_low',), ('tuple val(meta), path(target_pdb)',), ('tuple val(meta), path("normalized_target.pdb"), emit: normalized',), ('scripts/normalize_target_pdb.py',), ()),
@@ -893,6 +895,13 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         a.stage('BinderBlindPoseESMFold2')
         return True
 
+    if workflow == 'ligandmpnn_design' and model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import selected_assets
+        assets = tuple(a.asset(item['kind'], item['relative_path'],
+                       'services.ligandmpnn_design:selected_assets') for item in selected_assets())
+        a.stage('RunLigandMPNNDesign', extra=assets)
+        return True
+
     if workflow == 'ligandmpnn_interface_context' and (model_id, mode) == ('ligandmpnn', 'interface_context'):
         # The leaf invokes Apptainer explicitly rather than via a process
         # container directive; its exact image still belongs in the closure.
@@ -990,17 +999,14 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.callback('OpenInteractiveGate', 'scripts/open_stage_gate.py')
         return True
 
+    if (workflow == 'caliby_native' and model_id == 'caliby_experimental'
+            and mode in {'ensemble_design', 'sidechain_pack'}):
+        a.p.setdefault('task', mode)
+        a.stage('RunCalibyNative')
+        return True
+
     if workflow == 'caliby_binder' and (model_id, mode) == ('caliby_binder', 'design'):
-        from pathlib import Path
-        from scripts.caliby_runtime import resolve_expected_caliby_checkpoint
-        root = Path('/weights/caliby/model_params')
-        selected = resolve_expected_caliby_checkpoint(p.get('caliby_model_name') or 'soluble_caliby_v1', root)
-        weights = [a.asset('weights', 'caliby/model_params/' + selected.relative_to(root).as_posix(),
-                           'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint')]
-        if yes('caliby_run_self_consistency_eval'):
-            weights.append(a.asset('weights', 'caliby/model_params/af2',
-                'caliby.self_consistency_eval; MODEL_PARAMS_DIR/af2'))
-        a.stage('RunCalibyBinder', extra=tuple(weights))
+        a.stage('RunCalibyBinder')
         return True
 
     if workflow == 'binder_refinement' and (model_id, mode) == ('binder_refinement', 'refine'):
@@ -1099,9 +1105,15 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             branches.extend(fampnn_after)
         if yes('seq_design_antifold', True):branches.extend(a.chain(['ANARCII', 'ANTIFOLD'], after))
         if yes('seq_design_proteinmpnn', True):branches.extend(a.chain(['PrepMPNN', 'RunMPNN'], after))
-        if yes('seq_design_caliby'):
-            unresolved('caliby', 'availability', 'platform/api/config/models/caliby_experimental.yaml',
-                       'Disabled native model is not enabled by workflow descriptor')
+        caliby_precollected = ((yes('interactive_gate_continue') or p.get('resume_job_id') is not None)
+            and conditioned and bool(p.get('selected_input_dir') or p.get('rfantibody_input_pdbs')
+                                     or p.get('fampnn_collected_pdbs')) and stage_family == 'caliby')
+        if yes('seq_design_caliby') and not caliby_precollected:
+            caliby_after = a.chain(['RunCaliby'], after)
+            if p.get('enable_caliby_filter') is not False and any(p.get(key) is not None for key in (
+                    'caliby_max_potts_energy', 'caliby_min_sc_plddt', 'caliby_max_sc_rmsd')):
+                caliby_after = a.chain(['FilterCaliby'], caliby_after)
+            branches.extend(caliby_after)
         after = tuple(branches) or after
         if yes('run_ppiflow_maturation', yes('run_maturation')):
             a.callback('maturation', entrypoint + ':SpawnMaturationJobs')

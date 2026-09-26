@@ -478,10 +478,22 @@ def normalize_sampling_results(
         design_id = f"{prefix}_{index:04d}"
         structure_source = Path(str(output_paths[index - 1])).resolve()
         published_pdb = publish_structure(structure_source, output_pdb_dir, design_id)
+        # Keep exact native bytes beside the metadata, outside candidate PDBs.
+        # A per-sample directory preserves native filenames without collisions.
+        native_relative = Path("native_outputs") / design_id / structure_source.name
+        native_path = output_meta_dir / native_relative
+        native_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(structure_source, native_path)
 
         metadata = {
             "design_id": design_id,
             "example_id": example_id,
+            "native_output": {
+                "producer": "caliby",
+                "example_id": example_id,
+                "filename": structure_source.name,
+                "path": native_relative.as_posix(),
+            },
             "source_backbone_id": example_id,
             "source": source,
             "source_model": source,

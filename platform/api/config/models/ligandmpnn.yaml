@@ -6,9 +6,9 @@ name: LigandMPNN
 version: "1.0.0"
 category: sequence_design
 description: >
-  Sequence design with explicit ligand awareness. Critical for designing
-  proteins that interact with small molecules, nucleotides (NTPs), metals,
-  or nucleic acids. Essential for DNA polymerase engineering.
+  Sequence design conditioned on a supplied protein-context structure using
+  Foundry LigandMPNN. Small molecules, nucleotides, metals and nucleic acids
+  require actual positioned coordinates; descriptive labels do not create geometry.
 container: foundry.sif
 
 ui_icon: flask
@@ -16,9 +16,9 @@ ui_color: "#F59E0B"
 
 inputs:
   - pdb
-  - smiles
+  - cif
 outputs:
-  - pdb
+  - cif
   - fasta
   - json
 
@@ -27,33 +27,161 @@ modes:
     name: Ligand-Aware Design
     description: Design sequences aware of bound ligand coordinates
     params:
+      - target_pdb
       - ligand_pdb
       - ligand_smiles
+      - ntp_type
+      - metal_type
+      - dna_sequence
       - temperature
+      - design_seed
+      - batch_size
+      - number_of_batches
+      - remove_ccds
+      - remove_waters
+      - occupancy_threshold_sidechain
+      - occupancy_threshold_backbone
+      - structure_noise
+      - decode_type
+      - causality_pattern
+      - initialize_sequence_embedding_with_ground_truth
+      - atomize_side_chains
+      - fixed_residues
+      - designed_residues
+      - fixed_chains
+      - designed_chains
+      - bias
+      - bias_per_residue
+      - omit
+      - omit_per_residue
+      - pair_bias
+      - pair_bias_per_residue_pair
+      - temperature_per_residue
+      - symmetry_residues
+      - symmetry_residues_weights
+      - homo_oligomer_chains
+      - write_fasta
+      - write_structures
 
   - id: ntp_aware
     name: NTP-Aware Design
     description: Design sequences for nucleotide triphosphate binding (e.g., DNA Polymerase engineering)
     params:
-      - ntp_type
       - target_pdb
+      - ligand_pdb
+      - ligand_smiles
+      - ntp_type
+      - metal_type
+      - dna_sequence
       - temperature
+      - design_seed
+      - batch_size
+      - number_of_batches
+      - remove_ccds
+      - remove_waters
+      - occupancy_threshold_sidechain
+      - occupancy_threshold_backbone
+      - structure_noise
+      - decode_type
+      - causality_pattern
+      - initialize_sequence_embedding_with_ground_truth
+      - atomize_side_chains
+      - fixed_residues
+      - designed_residues
+      - fixed_chains
+      - designed_chains
+      - bias
+      - bias_per_residue
+      - omit
+      - omit_per_residue
+      - pair_bias
+      - pair_bias_per_residue_pair
+      - temperature_per_residue
+      - symmetry_residues
+      - symmetry_residues_weights
+      - homo_oligomer_chains
+      - write_fasta
+      - write_structures
 
   - id: metal_aware
     name: Metal-Aware Design
     description: Design sequences for metal ion coordination
     params:
-      - metal_type
       - target_pdb
+      - ligand_pdb
+      - ligand_smiles
+      - ntp_type
+      - metal_type
+      - dna_sequence
       - temperature
+      - design_seed
+      - batch_size
+      - number_of_batches
+      - remove_ccds
+      - remove_waters
+      - occupancy_threshold_sidechain
+      - occupancy_threshold_backbone
+      - structure_noise
+      - decode_type
+      - causality_pattern
+      - initialize_sequence_embedding_with_ground_truth
+      - atomize_side_chains
+      - fixed_residues
+      - designed_residues
+      - fixed_chains
+      - designed_chains
+      - bias
+      - bias_per_residue
+      - omit
+      - omit_per_residue
+      - pair_bias
+      - pair_bias_per_residue_pair
+      - temperature_per_residue
+      - symmetry_residues
+      - symmetry_residues_weights
+      - homo_oligomer_chains
+      - write_fasta
+      - write_structures
 
   - id: dna_aware
     name: DNA-Aware Design
     description: Design sequences for DNA binding
     params:
-      - dna_sequence
       - target_pdb
+      - ligand_pdb
+      - ligand_smiles
+      - ntp_type
+      - metal_type
+      - dna_sequence
       - temperature
+      - design_seed
+      - batch_size
+      - number_of_batches
+      - remove_ccds
+      - remove_waters
+      - occupancy_threshold_sidechain
+      - occupancy_threshold_backbone
+      - structure_noise
+      - decode_type
+      - causality_pattern
+      - initialize_sequence_embedding_with_ground_truth
+      - atomize_side_chains
+      - fixed_residues
+      - designed_residues
+      - fixed_chains
+      - designed_chains
+      - bias
+      - bias_per_residue
+      - omit
+      - omit_per_residue
+      - pair_bias
+      - pair_bias_per_residue_pair
+      - temperature_per_residue
+      - symmetry_residues
+      - symmetry_residues_weights
+      - homo_oligomer_chains
+      - write_fasta
+      - write_structures
 
   - id: interface_context
     name: Selected Interface Context
@@ -123,27 +251,27 @@ params:
 
   - name: ligand_pdb
     type: file
-    description: PDB file containing ligand coordinates
+    description: Legacy source alias for a complete protein-context PDB/mmCIF; a separate ligand-only file is not automatically assembled.
     required: false
     file_type: pdb
     preset_type: pdb
 
   - name: ligand_smiles
     type: string
-    description: SMILES string of the ligand
+    description: Optional descriptive SMILES only; inference uses supplied complex coordinates, not generated ligand geometry.
     required: false
     preset_type: ligand
 
   - name: target_pdb
     type: file
-    description: Target protein PDB with ligand binding site
+    description: Complete protein-context PDB/mmCIF with positioned ligand, nucleotide, metal or nucleic-acid coordinates.
     required: true
     file_type: pdb
     preset_type: pdb
 
   - name: ntp_type
     type: string
-    description: Type of nucleotide triphosphate
+    description: Descriptive nucleotide identity; actual conditioning comes only from coordinates in the supplied complex.
     required: false
     enum:
       - dATP
@@ -157,7 +285,7 @@ params:
 
   - name: metal_type
     type: string
-    description: Metal ion type
+    description: Descriptive metal identity; actual conditioning comes only from coordinates in the supplied complex.
     required: false
     enum:
       - Mg2+
@@ -170,8 +298,180 @@ params:
 
   - name: dna_sequence
     type: string
-    description: DNA sequence for context
+    description: Descriptive DNA sequence; inference requires positioned nucleic-acid coordinates in the complex.
     required: false
+
+  - name: design_seed
+    type: integer
+    description: "Native random seed; null preserves native unseeded sampling (separate from diagnostic seed)."
+    required: false
+    default: null
+
+  - name: batch_size
+    type: integer
+    description: "Native rc-foundry 0.1.9 batch_size control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: 1
+    minimum: 1
+
+  - name: number_of_batches
+    type: integer
+    description: "Native rc-foundry 0.1.9 number_of_batches control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: 1
+    minimum: 1
+
+  - name: remove_ccds
+    type: string_list
+    description: "CCD residue names removed during parsing; empty list retains native complex components."
+    required: false
+    default: []
+
+  - name: remove_waters
+    type: boolean
+    description: "Override native water removal; null uses native parser default."
+    required: false
+    default: null
+
+  - name: occupancy_threshold_sidechain
+    type: number
+    description: "Native rc-foundry 0.1.9 occupancy_threshold_sidechain control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: 0.0
+
+  - name: occupancy_threshold_backbone
+    type: number
+    description: "Native rc-foundry 0.1.9 occupancy_threshold_backbone control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: 0.0
+
+  - name: structure_noise
+    type: number
+    description: "Native coordinate noise standard deviation in Angstroms."
+    required: false
+    default: 0.0
+
+  - name: decode_type
+    type: string
+    description: "Native rc-foundry 0.1.9 decode_type control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: "auto_regressive"
+    enum: [auto_regressive, teacher_forcing]
+
+  - name: causality_pattern
+    type: string
+    description: "Native rc-foundry 0.1.9 causality_pattern control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: "auto_regressive"
+    enum: [auto_regressive, unconditional, conditional, conditional_minus_self]
+
+  - name: initialize_sequence_embedding_with_ground_truth
+    type: boolean
+    description: "Native rc-foundry 0.1.9 initialize_sequence_embedding_with_ground_truth control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: false
+
+  - name: atomize_side_chains
+    type: boolean
+    description: "Atomize fixed-residue side chains as structural context; native default false."
+    required: false
+    default: false
+
+  - name: fixed_residues
+    type: string_list
+    description: "Native fixed author residue IDs; mutually exclusive with designed residues and chain scopes."
+    required: false
+    default: null
+
+  - name: designed_residues
+    type: string_list
+    description: "Native designed author residue IDs; null scope designs all protein residues."
+    required: false
+    default: null
+
+  - name: fixed_chains
+    type: string_list
+    description: "Native rc-foundry 0.1.9 fixed_chains control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: designed_chains
+    type: string_list
+    description: "Native rc-foundry 0.1.9 designed_chains control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: bias
+    type: object
+    description: "Native rc-foundry 0.1.9 bias control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: bias_per_residue
+    type: object
+    description: "Native rc-foundry 0.1.9 bias_per_residue control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: omit
+    type: string_list
+    description: "Native rc-foundry 0.1.9 omit control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: ["UNK"]
+
+  - name: omit_per_residue
+    type: object
+    description: "Native rc-foundry 0.1.9 omit_per_residue control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: pair_bias
+    type: object
+    description: "Native rc-foundry 0.1.9 pair_bias control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: pair_bias_per_residue_pair
+    type: object
+    description: "Native rc-foundry 0.1.9 pair_bias_per_residue_pair control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: temperature_per_residue
+    type: object
+    description: "Native rc-foundry 0.1.9 temperature_per_residue control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: symmetry_residues
+    type: array
+    description: "Native rc-foundry 0.1.9 symmetry_residues control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: symmetry_residues_weights
+    type: array
+    description: "Native rc-foundry 0.1.9 symmetry_residues_weights control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: homo_oligomer_chains
+    type: array
+    description: "Native rc-foundry 0.1.9 homo_oligomer_chains control; typed nested shape is defined by NativeOptions."
+    required: false
+    default: null
+
+  - name: write_fasta
+    type: boolean
+    description: "Write native FASTA sequences."
+    required: false
+    default: true
+
+  - name: write_structures
+    type: boolean
+    description: "Write native designed CIF structures (sequence design, not side-chain packing)."
+    required: false
+    default: true
 
 # Pre-configured NTP templates for DNA polymerase work
 ntp_templates:

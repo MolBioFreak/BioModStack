@@ -133,6 +133,9 @@ with Path({str(tmp_path/'calls.jsonl')!r}).open('a') as f:
 optional_binding = args[0] == '/scripts/prep_fampnn_constraints_generic.py' and '--native-script' in args
 if optional_binding:
     args = [args[2], *args[4:]]
+if args[0] == '/scripts/proteinmpnn_native_binding.py':
+    assert args[1:4] == ['--native','/dl_binder_design/mpnn_fr/dl_interface_design_multi.py','--']
+    args=[args[2]]+args[4:]
 marked = args[0] == '/scripts/fampnn_native_binding.py'
 if marked:
     assert args[1:5] == ['--root','/app/fampnn','--','/app/fampnn/fampnn/inference/seq_design.py']
@@ -223,11 +226,15 @@ def run_wrapper(tmp_path, engine, mode, override=None, text=None, marked=False):
         text = (atom(1,'A',10)+atom(2,'A',15)) if engine == 'proteinmpnn' else (atom(1,'A',10)+atom(2,'B',21)+atom(3,'Z',77))
     source.write_text(text)
     params=dict(sequence_design_engine=engine,sequence_design_mode=mode,input_pdb=str(source),out_dir=str(tmp_path/'out'),
-                design_chain='A',target_chain='B',fixed_positions='',fampnn_fix_target_sidechains=(mode=='binder_design'),
+                design_chain='A',target_chain=None if engine == 'proteinmpnn' else 'B',fixed_positions='',fampnn_fix_target_sidechains=(mode=='binder_design'),
                 seqs_per_design=1,fampnn_psce_threshold=0,fampnn_repack_last=False,fampnn_exclude_cys=False,
                 fampnn_seq_only=True,fampnn_num_steps=20,fampnn_batch_size=1,fampnn_temperature=0.5,
                 fampnn_mutation_top_n=0,fampnn_max_psce=1.0,fampnn_max_residue_psce=1.0,
-                fampnn_extra_config='seed=42',mpnn_omitAAs='',mpnn_temperature=0.5,
+                fampnn_extra_config='',fampnn_seed=42,fampnn_checkpoint='fampnn_0_3_cath.pt',
+                fampnn_presort_by_length=False,fampnn_timestep_mode='cosine',fampnn_timestep_start=0,fampnn_timestep_end=1,
+                fampnn_scn_num_steps=20,fampnn_scn_timestep_mode='square',fampnn_scn_timestep_start=0,fampnn_scn_timestep_end=1,
+                fampnn_scn_step_scale=1.2,fampnn_scn_s_churn=0,fampnn_scn_s_noise=0,fampnn_scn_s_t_min=0,fampnn_scn_s_t_max=30,
+                mpnn_omitAAs='',mpnn_temperature=0.5,
                 mpnn_backbone_noise=0,mpnn_relax_max_cycles=0,mpnn_relax_output=False,
                 mpnn_relax_seqs_per_cycle=2,mpnn_relax_convergence_rmsd=0,mpnn_relax_convergence_score=0,
                 mpnn_relax_convergence_max_cycles=0,mpnn_checkpoint_type='vanilla',mpnn_checkpoint_model='v_48_010',
@@ -271,7 +278,9 @@ def test_real_wrapper_native_transport(tmp_path, engine, mode, count):
     stages={r['name'].split(':')[-1].split(' (')[0] for r in csv.DictReader((tmp_path/'trace.tsv').open(),delimiter='\t')}
     assert stages == ({'PrepFAMPNN','RunFAMPNN','FilterFAMPNN','PublishSequenceDesign'} if engine=='fampnn' else {'PrepMPNN','RunMPNN','FilterMPNN','PublishSequenceDesign'})
     out=tmp_path/'out'
-    assert (out/'pdb_files/subject_seq_0.pdb').read_bytes()==source.read_bytes()
+    candidate_bytes=(out/'pdb_files/subject_seq_0.pdb').read_bytes()
+    if engine=='proteinmpnn': candidate_bytes=candidate_bytes.split(b'\n',1)[1]
+    assert candidate_bytes==source.read_bytes()
     assert len(list((out/'pdb_files').glob('*.pdb')))==count
     index=json.loads((out/'results/sequence_design_results.json').read_text())
     from scripts.sequence_design_results import load_result_index
@@ -294,6 +303,13 @@ def test_real_wrapper_native_transport(tmp_path, engine, mode, count):
     if engine=='fampnn':
         native=next(r['argv'] for r in calls if '--native-script' in r['argv'])
         args=dict(a.split('=',1) for a in native[4:])
+        assert args['checkpoint_path']=='/app/fampnn/weights/fampnn_0_3_cath.pt'
+        assert {k:args[k] for k in ['presort_by_length','timestep_schedule.mode','timestep_schedule.t_start','timestep_schedule.t_end',
+            'scn_diffusion.num_steps','scn_diffusion.timestep_schedule.mode','scn_diffusion.timestep_schedule.t_start','scn_diffusion.timestep_schedule.t_end',
+            'scn_diffusion.step_scale','scn_diffusion.churn_cfg.s_churn','scn_diffusion.churn_cfg.s_noise','scn_diffusion.churn_cfg.s_t_min','scn_diffusion.churn_cfg.s_t_max']} == {
+            'presort_by_length':'false','timestep_schedule.mode':'cosine','timestep_schedule.t_start':'0','timestep_schedule.t_end':'1',
+            'scn_diffusion.num_steps':'20','scn_diffusion.timestep_schedule.mode':'square','scn_diffusion.timestep_schedule.t_start':'0','scn_diffusion.timestep_schedule.t_end':'1',
+            'scn_diffusion.step_scale':'1.2','scn_diffusion.churn_cfg.s_churn':'0','scn_diffusion.churn_cfg.s_noise':'0','scn_diffusion.churn_cfg.s_t_min':'0','scn_diffusion.churn_cfg.s_t_max':'30'}
         assert {k:args[k] for k in ['psce_threshold','repack_last','exclude_cys','seq_only','num_seqs_per_pdb','batch_size','temperature','timestep_schedule.num_steps','seed']} == dict(psce_threshold='0',repack_last='false',exclude_cys='false',seq_only='true',num_seqs_per_pdb=str(count),batch_size='1',temperature='0.5',seed='42',**{'timestep_schedule.num_steps':'20'})
         masks=json.loads((tmp_path/'masks.json').read_text())
         assert masks['ids']==[['A',10],['B',21],['Z',77]]
@@ -303,8 +319,9 @@ def test_real_wrapper_native_transport(tmp_path, engine, mode, count):
         assert (out/'run/fampnn/raw/inference_config.yaml').read_text()=='test_double: true\n'
         assert (out/'run/fampnn/raw/sample_pkls/subject_sample0.pkl').is_file()
     else:
-        assert (tmp_path/'mpnn_native_input.pdb').read_bytes()==source.read_bytes()
-        native=next(r['argv'] for r in calls if r['argv'][0].endswith('/dl_interface_design_multi.py'))
+        assert (tmp_path/'mpnn_native_input.pdb').read_bytes().split(b'\n',1)[1]==source.read_bytes()
+        binding_args=next(r['argv'] for r in calls if r['argv'][0]=='/scripts/proteinmpnn_native_binding.py')
+        native=[binding_args[2]]+binding_args[4:]
         assert native[native.index('-omit_AAs')+1]==''
         assert native[native.index('-augment_eps')+1]=='0'
         assert native[native.index('-relax_convergence_rmsd')+1]=='0'
@@ -321,7 +338,7 @@ def test_real_wrapper_native_transport(tmp_path, engine, mode, count):
     ('fampnn',{'fixed_positions':'A:99'},None,'absent'),
     ('fampnn',{'fampnn_extra_config':'fixed_pos_csv=other.csv'},None,'cannot override'),
     ('proteinmpnn',{'mpnn_extra_config':'-outpdbdir=/tmp/other'},None,'cannot override'),
-    ('proteinmpnn',{},atom(1,'A',10)+atom(2,'B',21),'multi-chain'),
+    ('proteinmpnn',{'design_chain':None},atom(1,'A',10)+atom(2,'B',21),'multi-chain'),
     ('proteinmpnn',{},'REMARK PDBinfo-LABEL: 99 FIXED\n'+atom(1,'A',10),'FIXED'),
 ])
 def test_real_wrapper_rejects_before_inference(tmp_path,engine,override,text,error):
@@ -536,3 +553,29 @@ def test_mpnn_explicit_role_admission(tmp_path,role_request,error):
     with pytest.raises(ValueError,match=error):
         validate_generic_input(source,role_request)
     assert validate_generic_input(source,dict(binder_chains='Z',target_chains='A'))=={('Z',10):'ALA',('A',20):'ALA'}
+
+
+def test_native_role_transport_preserves_upstream_source_correspondence(tmp_path):
+    from test_proteinmpnn_role_transport import binding, run_native_boundary
+    source, _ = run_native_boundary(tmp_path)
+    identities = list(binding.pdb_domain(source))
+    records = [json.loads(p.read_text()) for p in (tmp_path/'out/pdb_files').glob('*.json')]
+    assert records
+    for record in records:
+        assert record['source_input_tag'] == source.stem
+        assert record['source_structure_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+        assert record['native_output_tag'] == record['design']
+        assert record['binder_chains'] == ['z', '1']
+        assert record['designed_chain_sequences'] == {c: record['chain_sequences'][c] for c in ['z', '1']}
+        assert record['source_residue_mapping'] == [
+            dict(source=dict(chain_id=c, auth_seq_id=n, insertion_code=ins),
+                 output=dict(chain_id=c, auth_seq_id=n, insertion_code=ins))
+            for c, n, ins in identities]
+        assert [r['feature_index'] for r in record['residue_mapping'] if r['chain'] == 'z'] == [1, 2, 4]
+
+
+def test_fampnn_null_threshold_reaches_native_shell(tmp_path):
+    result,calls,_=run_wrapper(tmp_path,'fampnn','design',{'fampnn_psce_threshold':None})
+    assert result.returncode==0,result.stdout+result.stderr
+    native=next(r['argv'] for r in calls if '--native-script' in r['argv'])
+    assert 'psce_threshold=null' in native

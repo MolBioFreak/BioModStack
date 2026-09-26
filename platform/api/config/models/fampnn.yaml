@@ -3,7 +3,7 @@
 
 id: fampnn
 name: Full-Atom MPNN
-version: "1.0.0"
+version: "1.1.0"
 category: sequence_design
 description: >
   Full-atom message passing neural network for sequence design.
@@ -31,8 +31,25 @@ modes:
       - seqs_per_design
       - fampnn_checkpoint
       - fampnn_checkpoint_path
+      - fampnn_seed
+      - fampnn_presort_by_length
+      - fampnn_timestep_mode
+      - fampnn_timestep_start
+      - fampnn_timestep_end
+      - fampnn_scn_num_steps
+      - fampnn_scn_timestep_mode
+      - fampnn_scn_timestep_start
+      - fampnn_scn_timestep_end
+      - fampnn_scn_step_scale
+      - fampnn_scn_s_churn
+      - fampnn_scn_s_noise
+      - fampnn_scn_s_t_min
+      - fampnn_scn_s_t_max
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
       - design_chain
       - target_chain
+      - fixed_positions
       - fampnn_temperature
       - fampnn_exclude_cys
       - fampnn_fix_target_sidechains
@@ -53,7 +70,28 @@ modes:
       - seqs_per_design
       - fampnn_checkpoint
       - fampnn_checkpoint_path
+      - fampnn_seed
+      - fampnn_presort_by_length
+      - fampnn_timestep_mode
+      - fampnn_timestep_start
+      - fampnn_timestep_end
+      - fampnn_scn_num_steps
+      - fampnn_scn_timestep_mode
+      - fampnn_scn_timestep_start
+      - fampnn_scn_timestep_end
+      - fampnn_scn_step_scale
+      - fampnn_scn_s_churn
+      - fampnn_scn_s_noise
+      - fampnn_scn_s_t_min
+      - fampnn_scn_s_t_max
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
       - fixed_positions
+      - design_chain
+      - target_chain
+      - fampnn_fix_target_sidechains
+      - fampnn_batch_size
+      - fampnn_repack_last
       - fampnn_temperature
       - fampnn_exclude_cys
       - fampnn_psce_threshold
@@ -75,8 +113,25 @@ modes:
       - seqs_per_design
       - fampnn_checkpoint
       - fampnn_checkpoint_path
+      - fampnn_seed
+      - fampnn_presort_by_length
+      - fampnn_timestep_mode
+      - fampnn_timestep_start
+      - fampnn_timestep_end
+      - fampnn_scn_num_steps
+      - fampnn_scn_timestep_mode
+      - fampnn_scn_timestep_start
+      - fampnn_scn_timestep_end
+      - fampnn_scn_step_scale
+      - fampnn_scn_s_churn
+      - fampnn_scn_s_noise
+      - fampnn_scn_s_t_min
+      - fampnn_scn_s_t_max
+      - fampnn_mutation_top_n
+      - fampnn_mutation_min_log_odds_delta
       - design_chain
       - target_chain
+      - fixed_positions
       - fampnn_temperature
       - fampnn_exclude_cys
       - fampnn_fix_target_sidechains
@@ -93,19 +148,114 @@ modes:
 params:
   - name: seqs_per_design
     type: integer
-    description: Native number of designed sequences per input backbone.
+    description: "Sequences sampled per input backbone."
     required: false
     default: 8
     minimum: 1
 
   - name: fampnn_checkpoint
     type: string
-    description: Native FA-MPNN checkpoint preset.
-    default: fampnn_0_0.pt
-    enum:
-      - fampnn_0_0.pt
-      - fampnn_0_3.pt
-      - fampnn_0_3_cath.pt
+    description: "Scientific FA-MPNN checkpoint selection."
+    required: false
+    default: "fampnn_0_0.pt"
+    enum: [fampnn_0_0.pt, fampnn_0_3.pt, fampnn_0_3_cath.pt]
+
+  - name: fampnn_seed
+    type: integer
+    description: "Native random seed."
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: fampnn_presort_by_length
+    type: boolean
+    description: "Process longest structures first; affects seeded batch sampling order."
+    required: false
+    default: true
+
+  - name: fampnn_timestep_mode
+    type: string
+    description: "Native sequence timestep schedule."
+    enum: [linear, square, cubic, sqrt, cbrt, cosine]
+    required: false
+    default: "linear"
+
+  - name: fampnn_timestep_start
+    type: number
+    description: "Sequence schedule start time."
+    required: false
+    default: 0.0
+    minimum: 0
+
+  - name: fampnn_timestep_end
+    type: number
+    description: "Sequence schedule end time."
+    required: false
+    default: 1.0
+    minimum: 0
+
+  - name: fampnn_scn_num_steps
+    type: integer
+    description: "Sidechain diffusion steps."
+    required: false
+    default: 50
+    minimum: 1
+
+  - name: fampnn_scn_timestep_mode
+    type: string
+    description: "Native sidechain timestep schedule."
+    enum: [linear, square, cubic, sqrt, cbrt, cosine]
+    required: false
+    default: "linear"
+
+  - name: fampnn_scn_timestep_start
+    type: number
+    description: "Sidechain schedule start time."
+    required: false
+    default: 0.0
+    minimum: 0
+
+  - name: fampnn_scn_timestep_end
+    type: number
+    description: "Sidechain schedule end time."
+    required: false
+    default: 1.0
+    minimum: 0
+
+  - name: fampnn_scn_step_scale
+    type: number
+    description: "Native sidechain diffusion step scale."
+    required: false
+    default: 1.5
+    minimum: 0
+
+  - name: fampnn_scn_s_churn
+    type: number
+    description: "Sidechain diffusion stochastic churn."
+    required: false
+    default: 0
+    minimum: 0
+
+  - name: fampnn_scn_s_noise
+    type: number
+    description: "Sidechain diffusion noise multiplier."
+    required: false
+    default: 1.0
+    minimum: 0
+
+  - name: fampnn_scn_s_t_min
+    type: number
+    description: "Lower noise level for sidechain churn."
+    required: false
+    default: 0.01
+    minimum: 0
+
+  - name: fampnn_scn_s_t_max
+    type: number
+    description: "Upper noise level for sidechain churn."
+    required: false
+    default: 50.0
+    minimum: 0
 
   - name: fampnn_checkpoint_path
     type: file
@@ -169,7 +319,7 @@ params:
 
   - name: fampnn_psce_threshold
     type: number
-    description: "PSCE confidence threshold for sidechain filtering (0.0-1.0)"
+    description: "PSCE confidence threshold for sidechain filtering (0.0-1.0); null keeps all sidechains."
     required: false
     default: 0.3
     minimum: 0.0

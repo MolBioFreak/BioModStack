@@ -5083,6 +5083,11 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
+    if current_job is not None:
+        from services.result_state_integrity import _sequence_native_publication_owner
+        native_owner = _sequence_native_publication_owner(current_job)
+        if native_owner is not None:
+            return await native_owner.publish_native_results(current_job, output_path, session)
     if current_job is not None and current_job.model_id in {"binder_refinement", "caliby_binder"}:
         # These leaves publish generator sidecars in their collected terminal root,
         # not an all_designs.csv. Never import their inputs or intermediate stages.

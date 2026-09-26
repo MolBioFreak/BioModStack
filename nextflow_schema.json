@@ -870,6 +870,9 @@
             "type": "object",
             "properties": {
                 "ppiflow_generation_request": {"type": "string", "format": "directory-path", "hidden": true, "description": "Owned PPIFlow request directory; preserves the model-native settings and source snapshots."},
+                "caliby_request_dir": {"type": "string", "format": "directory-path", "hidden": true, "description": "Owned Caliby request directory with typed settings and retained structure snapshots."},
+                "ligandmpnn_design_request": {"type": "string", "format": "file-path", "hidden": true, "description": "Owned ordinary LigandMPNN native request document."},
+                "ligandmpnn_design_input": {"type": "string", "format": "file-path", "hidden": true, "description": "Owned LigandMPNN input complex snapshot."},
                 "boltzgen_generation_mode": {"type": "string", "enum": ["protein_binder", "peptide_binder", "nanobody_binder"]},
                 "boltzgen_target_chains": {"type": ["string", "null"]},
                 "boltzgen_target_binding_positions": {"type": ["string", "null"]},

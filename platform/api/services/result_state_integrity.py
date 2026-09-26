@@ -93,8 +93,24 @@ def _native_binder_generation_key(job: Job) -> str | None:
     return None
 
 
+def _sequence_native_publication_owner(job: Job):
+    if job.model_id == "caliby_experimental":
+        from services.caliby_native import SUPPORTED_MODES
+        if job.mode in SUPPORTED_MODES:
+            from services import caliby_native_publication
+            return caliby_native_publication
+    if job.model_id == "ligandmpnn":
+        from services.ligandmpnn_design import MODES
+        if job.mode in MODES:
+            from services import ligandmpnn_design_publication
+            return ligandmpnn_design_publication
+    return None
+
+
 def job_expects_design_results(job: Job) -> bool:
     """Return whether a successful workflow requires positive Design yield."""
+    if _sequence_native_publication_owner(job) is not None:
+        return False
     if _native_binder_generation_key(job):
         # The native publication owner validates projected rows. A zero-yield
         # receipt is still a completed campaign, including on administrative repair.
@@ -503,6 +519,13 @@ async def finalize_successful_job(
     from services.core_protein_scientific_contract import revision_for_job
 
     strict_revision = None
+    sequence_owner = _sequence_native_publication_owner(job) if default_ingester else None
+    sequence_prior_publication = False
+    if sequence_owner is not None:
+        from database import JobArtifact
+        sequence_prior_publication = bool(await session.scalar(select(JobArtifact.id).where(
+            JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
+            JobArtifact.logical_path.startswith(sequence_owner.DIRECTORY + "/")).limit(1)))
     bc2_native = default_ingester and str(job.model_id or '').strip().lower() == 'bindcraft2'
     bc2_prior_publication = bool((job.provenance or {}).get('bindcraft2_native_publication')) if bc2_native else False
     generation_key = _native_binder_generation_key(job) if default_ingester else None
@@ -571,7 +594,11 @@ async def finalize_successful_job(
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
         result_kind = "design"
-        if bc2_native:
+        if sequence_owner is not None:
+            await sequence_owner.read_published_native_results(job, session)
+            result_kind = sequence_owner.DIRECTORY + "_native"
+            idempotent_prior_results = sequence_prior_publication
+        elif bc2_native:
             # Zero yield and unjoined native rows remain valid. Verify every
             # projected Design against its registered CIF before completion.
             from services.bindcraft2_publication import read_published_native_results

@@ -184,6 +184,14 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if job.model_id == 'caliby_experimental':
+        from services.caliby_native import SUPPORTED_MODES, result_contract
+        if job.mode in SUPPORTED_MODES:
+            return result_contract(job.mode)
+    if job.model_id == 'ligandmpnn':
+        from services.ligandmpnn_design import MODES, result_contract
+        if job.mode in MODES:
+            return result_contract(job.mode)
     if job.model_id == 'ppiflow':
         from services.ppiflow_generation import generation_result_contract
         native = generation_result_contract(job.mode)

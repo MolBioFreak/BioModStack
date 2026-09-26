@@ -8,7 +8,7 @@ process THERMOMPNN {
     tuple val(meta), path(pdb)
 
     output:
-    tuple val(meta), path("*_stability.csv"), emit: stability
+    tuple val(meta), path("*_stability.csv"), optional: true, emit: stability
     path "thermompnn.log"
 
     script:
@@ -17,12 +17,14 @@ process THERMOMPNN {
 import subprocess
 import sys
 import os
-import glob
+import tempfile
 import shutil
 from pathlib import Path
 
 pdb_path = sys.argv[1]
 out_file = sys.argv[2]
+# A retried task must not publish an earlier score as this attempt's result.
+Path(out_file).unlink(missing_ok=True)
 
 # ThermoMPNN inference script location
 script_path = "/opt/ThermoMPNN/analysis/custom_inference.py"
@@ -58,35 +60,29 @@ cmd = [
 
 print(f"Running ThermoMPNN: {' '.join(cmd)}")
 
-try:
+# Keep native import/config resolution, but never read shared output files.
+# A fresh directory also isolates retries from files left by earlier attempts.
+with tempfile.TemporaryDirectory(prefix="thermompnn-", dir=".") as attempt:
+    cmd.extend(["--out_dir", str(Path(attempt).resolve())])
     result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/ThermoMPNN/analysis")
     print(result.stdout)
     if result.stderr:
         print(result.stderr, file=sys.stderr)
-    
-    # Find output CSV and rename to our convention
-    csvs = glob.glob("*.csv") + glob.glob("/opt/ThermoMPNN/analysis/*.csv")
-    for csv in csvs:
-        if "inference" in csv.lower() or "thermo" in csv.lower():
-            shutil.copy(csv, out_file)
-            print(f"Output saved to {out_file}")
-            break
-    else:
-        # Create empty file if no output found
-        with open(out_file, 'w') as f:
-            f.write("sequence_id,ddG_pred\\n")
-            f.write(f"{os.path.basename(pdb_path)},N/A\\n")
-        print("Warning: No inference output found, created placeholder")
-        
-except subprocess.CalledProcessError as e:
-    print(f"ThermoMPNN failed: {e}")
-    # Create placeholder on failure so pipeline can continue
-    with open(out_file, 'w') as f:
-        f.write("sequence_id,ddG_pred\\n")
-        f.write(f"{os.path.basename(pdb_path)},ERROR\\n")
+    if result.returncode != 0:
+        print(f"ThermoMPNN failed with exit status {result.returncode}; scores unavailable")
+        sys.exit(1)
+
+    # Match the installed native writer exactly (including its rstrip semantics).
+    pdb_id = os.path.basename(pdb_path).rstrip('.pdb')
+    native_csv = Path(attempt) / f"ThermoMPNN_inference_{pdb_id}.csv"
+    if not native_csv.is_file():
+        print("ThermoMPNN produced no inference output; scores unavailable")
+        sys.exit(1)
+    shutil.copyfile(native_csv, out_file)
+    print(f"Output saved to {out_file}")
 
 PYEOF
 
-    python3 run_thermompnn.py "${pdb}" "${meta.id}_stability.csv" > thermompnn.log 2>&1
+    python3 run_thermompnn.py "${pdb}" "${meta.id}_stability.csv" > thermompnn.log 2>&1 || echo "Optional ThermoMPNN scores unavailable; see native outcome above" >> thermompnn.log
     """
 }

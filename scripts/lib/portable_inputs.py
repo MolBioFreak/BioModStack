@@ -221,6 +221,12 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
+    if (model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}
+            and params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
+        return {'target_pdb', 'ligand_pdb'}
+    if (model_id == 'caliby_experimental' and mode in {'ensemble_design', 'sidechain_pack'}
+            and params.get('caliby_request_dir')):
+        return {'ensembles', 'structures'}
     if (model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}
             and params.get('ppiflow_generation_request')):
         return {'target_pdb', 'framework_pdb', 'input_csv'}
@@ -347,6 +353,22 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         for index, path in enumerate(str(params.get('pdb_paths') or '').split(',')):
             if path.strip():
                 visit(path.strip(), None, ('pdb_paths', index))
+    if params.get('mpnn_bias_AA_jsonl'):
+        keys.add('mpnn_bias_AA_jsonl')
+    if model_id == 'ligandmpnn' and mode in {'ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'}:
+        keys.update({'ligandmpnn_design_request', 'ligandmpnn_design_input'})
+        if not (params.get('ligandmpnn_design_request') and params.get('ligandmpnn_design_input')):
+            keys.update({'target_pdb', 'ligand_pdb'})
+    if model_id == 'caliby_experimental' and mode in {'ensemble_design', 'sidechain_pack'}:
+        keys.add('caliby_request_dir')
+        if not params.get('caliby_request_dir'):
+            if mode == 'ensemble_design':
+                for i, ensemble in enumerate(params.get('ensembles', [])):
+                    for j, state in enumerate(ensemble.get('states', [])):
+                        visit(state['path'], None, ('ensembles', i, 'states', j, 'path'))
+            else:
+                for i, state in enumerate(params.get('structures', [])):
+                    visit(state['path'], None, ('structures', i, 'path'))
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')
     if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:

@@ -3,6 +3,8 @@ import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLaunch
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ParamField, compactUiCopy } from './ModelParameterField';
+import { CalibyNativeForm } from './CalibyNativeForm';
+import { LigandMPNNDesignForm } from './LigandMPNNDesignForm';
 import { NativeBinderGeneration } from './NativeBinderGeneration';
 import { BinderRoundSettings } from './BinderRoundSettings';
 import { hydrateBinderRound } from '../lib/binderRound';
@@ -378,7 +380,9 @@ export function JobSubmission() {
         setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
         const draft = projectSetup.settings as Record<string, UntypedApiValue>;
         if (draft.binder_workflow_draft) binderDraftRef.current = draft.binder_workflow_draft;
-        if (['ppiflow', 'boltzgen'].includes(String(draft.model_id)) && typeof draft.mode === 'string') {
+        if ((['ppiflow', 'boltzgen'].includes(String(draft.model_id))
+            || (draft.model_id === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(draft.mode))
+            || (draft.model_id === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(draft.mode))) && typeof draft.mode === 'string') {
             setWizardMode('manual'); setSelectedTemplateId(null);
             setSelectedModelId(draft.model_id); setSelectedModeId(draft.mode);
             setParams(draft); setJobName(typeof draft.job_name === 'string' ? draft.job_name : '');
@@ -854,7 +858,7 @@ export function JobSubmission() {
         }
     });
 
-    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'caliby_experimental', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
+    const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const listedSelectedModel = models.find((m: UntypedApiValue) => m.id === selectedModelId);
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '')
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
@@ -863,9 +867,9 @@ export function JobSubmission() {
     const selectedNativeModelQuery = useQuery({
         queryKey: ['native-binder-model', selectedModelId],
         queryFn: () => fetchModelById(selectedModelId!),
-        enabled: isNativeBinderGeneration && !listedSelectedModel,
+        enabled: (isNativeBinderGeneration || selectedModelId === 'caliby_experimental') && !listedSelectedModel,
     });
-    const selectedModel = listedSelectedModel ?? (isNativeBinderGeneration ? selectedNativeModelQuery.data?.data : undefined);
+    const selectedModel = listedSelectedModel ?? ((isNativeBinderGeneration || selectedModelId === 'caliby_experimental') ? selectedNativeModelQuery.data?.data : undefined);
     const selectedMode = selectedModel?.modes.find((m: UntypedApiValue) => m.id === selectedModeId);
     const nativeGenerationQuery = useQuery({
         queryKey: ['native-generation-settings', selectedModelId, selectedModeId],
@@ -961,6 +965,12 @@ export function JobSubmission() {
     }, [selectedTemplateId, visibleApiTemplates]);
 
     useEffect(() => {
+        if (projectSetup.active && wizardMode === 'manual'
+            && ((selectedModelId === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(selectedModeId || ''))
+                || (selectedModelId === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(selectedModeId || '')))
+            && clonedValues && initializedModelParams.current?.clone === clonedValues) {
+            setProjectDraftValues({ ...params, job_name: jobName, model_id: selectedModelId, mode: selectedModeId });
+        }
         if (projectSetup.active && wizardMode === 'manual' && selectedModelId && ['boltzgen', 'ppiflow'].includes(selectedModelId)) {
             setProjectDraftValues({ ...nativeBinderDraft(params, jobName), model_id: selectedModelId, mode: selectedModeId, native_generation_authoring: true, binder_workflow_draft: binderDraftRef.current, binder_native_drafts: { ...binderNativeDrafts.current, [`${selectedModelId}:${selectedModeId}`]: nativeBinderDraft(params, jobName) } });
         }
@@ -1080,6 +1090,10 @@ export function JobSubmission() {
             </div>
         );
     };
+
+    const isCalibyNative = selectedModelId === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(selectedModeId || '');
+    const isLigandNative = selectedModelId === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(selectedModeId || '');
+    const renderSequenceScalar = (param: UntypedApiValue) => <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setShowFileBrowser} setActiveSequenceField={setActiveSequenceField} setShowSequenceManager={setShowSequenceManager} setSequenceToSave={setSequenceToSave} ligandPresets={ligandPresets} />;
 
     // Filter params for current mode
     const visibleParams = useMemo(() => nativeGenerationInventory?.parameters ?? (selectedModel?.params || []).filter((p: UntypedApiValue) => {
@@ -1299,7 +1313,7 @@ export function JobSubmission() {
                 (nativeGenerationInventory?.parameters.flatMap(parameter => [parameter.name, ...(parameter.aliases || [])]) || selectedMode.params).forEach((paramName: string) => {
                     // Empty native sequence settings (e.g. omit_AAs or a
                     // cleared optional target chain) are values, not defaults.
-                    const preserveNativeEmpty = ['fampnn', 'proteinmpnn', 'boltzgen', 'ppiflow'].includes(selectedModelId);
+                    const preserveNativeEmpty = isCalibyNative || isLigandNative || ['fampnn', 'proteinmpnn', 'boltzgen', 'ppiflow'].includes(selectedModelId);
                     if (params[paramName] !== undefined && (params[paramName] !== '' || preserveNativeEmpty)) {
                         filteredParams[paramName] = params[paramName];
                     }
@@ -1314,7 +1328,7 @@ export function JobSubmission() {
             }
 
             // specific check for ntp_type to ensure it's not sent if empty even if in params list
-            if (filteredParams['ntp_type'] === '') {
+            if (!isLigandNative && filteredParams['ntp_type'] === '') {
                 delete filteredParams['ntp_type'];
             }
 
@@ -1870,6 +1884,10 @@ export function JobSubmission() {
                             />
 
                             <div className="space-y-6">
+                                {(isCalibyNative || isLigandNative) && <label className="block text-sm text-slate-300">
+                                    Job name
+                                    <input aria-label="Sequence job name" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 p-3" value={jobName} onChange={event => setJobName(event.target.value)} />
+                                </label>}
                                 {['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && <label className="block text-sm text-[var(--text-secondary)]">
                                     Job name
                                     <input aria-label="Native binder job name" className="mt-2 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-[var(--text-primary)]"
@@ -1938,8 +1956,10 @@ export function JobSubmission() {
                                             return next;
                                         })} />
                                 </>}
-                                {/* Other models retain their existing editor. */}
-                                {!isNativeBinderGeneration && selectedMode && Object.keys(groupedParams).length > 0 && (
+                                {isCalibyNative && <CalibyNativeForm mode={selectedModeId!} parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
+                                {isLigandNative && <LigandMPNNDesignForm parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
+                                {/* Other models, including interface_context, retain their existing editor. */}
+                                {!isNativeBinderGeneration && !isCalibyNative && !isLigandNative && selectedMode && Object.keys(groupedParams).length > 0 && (
                                     <div className="space-y-6 pt-6 border-t border-slate-700/50">
                                         {/* Render groups in preferred order */}
                                         {['Inputs', 'Docking Settings', 'General'].filter(g => groupedParams[g]).map(groupName => (

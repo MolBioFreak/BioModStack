@@ -1,6 +1,7 @@
 import React, { act } from 'react';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -118,8 +119,14 @@ it('BC2 parent Project save/reopen retains typed native values and launch uses t
     expect(state.trace).toEqual(['save', 'prepare', 'reserve', 'context', 'submit', 'bind']);
     expect(state.submit.mock.calls[0][0]).toMatchObject({ model_id: 'bindcraft2', mode: 'campaign', launch_context_id: 'destination-child', params: { bindcraft2_settings: { ...settings, max_trajectories: 0 }, bc2_preview_digest: 'fixture-preview' } });
 });
-it('RFantibody real parent preserves uploaded target and framework draft through reopen and Project submit', async () => {
-    state.project.draft = { denovo_generator: 'rfantibody', job_name: 'RF Project', framework_type: 'custom', custom_framework_path: 'inputs/framework.pdb', custom_framework_source: { type: 'preset', name: 'Saved framework', path: 'inputs/framework.pdb', document: { artifact_id: 'framework-doc' } }, run_structure_validation: false, run_frustrampnn: false };
+it.each(['none', 'fampnn', 'caliby'])('RFantibody real parent with %s preserves target, framework and settings through reopen and Project submit', async seqDesigner => {
+    const calibySettings = { caliby_num_seqs_per_pdb: 7, caliby_gaussian_n_conformers: 0, caliby_gaussian_noise_std: 0, caliby_potts_rejection_step: false, caliby_scn_num_steps: 17, caliby_omit_aas: '', caliby_max_potts_energy: null };
+    const roundDesigner = seqDesigner === 'caliby' ? 'caliby_binder' : 'fampnn';
+    state.project.draft = { ...calibySettings, seq_designer: seqDesigner,
+        binder_round: { schema_version: 1, enabled: seqDesigner !== 'none',
+            sequence_design: { model_id: roundDesigner, params: seqDesigner === 'caliby' ? calibySettings : {} },
+            prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [] },
+        denovo_generator: 'rfantibody', job_name: 'RF Project', framework_type: 'custom', custom_framework_path: 'inputs/framework.pdb', custom_framework_source: { type: 'preset', name: 'Saved framework', path: 'inputs/framework.pdb', document: { artifact_id: 'framework-doc' } }, run_structure_validation: false, run_frustrampnn: false };
     await mount();
     const input = document.querySelector<HTMLInputElement>('input[type="file"][accept*=".pdb"]')!;
     expect(input).toBeTruthy();
@@ -136,6 +143,18 @@ it('RFantibody real parent preserves uploaded target and framework draft through
     expect(launch).toBeTruthy(); expect(launch.disabled).toBe(false); await act(async () => launch.click()); await settle();
     expect(state.trace).toEqual(['save', 'prepare', 'reserve', 'context', 'submit', 'bind']);
     expect(state.submit.mock.calls[0][0]).toMatchObject({ launch_context_id: 'destination-child', params: { target_pdb: 'inputs/retained-target.pdb', framework_pdb: 'inputs/framework.pdb' } });
+    expect(state.submit.mock.calls[0][0].binder_round).toMatchObject({ enabled: seqDesigner !== 'none', sequence_design: { model_id: roundDesigner } });
+    if (seqDesigner === 'caliby') {
+        const request = state.submit.mock.calls[0][0];
+        expect(request.binder_round.sequence_design.params).toMatchObject(calibySettings);
+        expect(request.params.seq_design_caliby).toBe(false);
+        expect(request.params).not.toHaveProperty('caliby_sampling_overrides_json');
+        if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(join(process.env.BMS_UI_EVIDENCE_DIR, 'embedded-caliby-request-settings.json'), JSON.stringify({
+            model_id: request.model_id, mode: request.mode,
+            params: Object.fromEntries(Object.entries(request.params).filter(([key]) => key.startsWith('caliby_') || ['seq_designer', 'seqs_per_design'].includes(key))),
+        }, null, 2));
+    }
+
 });
 
 it('real parent four-generator round trip preserves native drafts and independent source context', async () => {
@@ -196,4 +215,33 @@ it('BC2 lifecycle receives explicit destination and retains server-prepared chil
     await submitBindCraft2Lifecycle('foreign-source', 'rank', { reverse: false, limit: 0 }, 'remote', 'destination');
     expect(api.post).toHaveBeenCalledWith('/api/jobs', expect.objectContaining({ launch_context_id: 'destination', params: prepared.params }), undefined);
     expect(state.submit).toHaveBeenCalledWith(prepared, { launchContext: true });
+});
+
+
+it.each(['ensemble_design', 'sidechain_pack'])('standalone Caliby %s exposes applicable catalog scalar controls without a parallel form', async mode => {
+    state.models = [{ id: 'caliby_experimental', name: 'Caliby Standalone', category: 'generative_design',
+        modes: [{ id: 'ensemble_design', name: 'Ensemble Sequence Design', params: ['model_name', 'gaussian_noise_std', 'potts_rejection_step'] },
+            { id: 'sidechain_pack', name: 'Fixed-sequence Side-chain Packing', params: ['packer_model_name', 'scn_num_steps'] }],
+        params: [
+            { name: 'model_name', label: 'Sequence checkpoint', type: 'string', enum: ['caliby', 'soluble_caliby_v1'], default: 'soluble_caliby_v1' },
+            { name: 'gaussian_noise_std', label: 'Gaussian noise', type: 'number', default: 0 },
+            { name: 'potts_rejection_step', label: 'Potts rejection', type: 'boolean', default: false },
+            { name: 'packer_model_name', label: 'Packing checkpoint', type: 'string', enum: ['caliby_packer_010'], default: 'caliby_packer_010' },
+            { name: 'scn_num_steps', label: 'Packing steps', type: 'integer', default: 50 },
+        ],
+    }];
+    await mount(`/submit?model=caliby_experimental&mode=${mode}`);
+    const control = (label: string) => [...document.querySelectorAll('label')].find(row => row.textContent?.trim() === label)?.parentElement;
+    if (mode === 'ensemble_design') {
+        expect(control('Sequence checkpoint')?.querySelector('select')?.value).toBe('soluble_caliby_v1');
+        expect(control('Gaussian noise')?.querySelector('input')?.type).toBe('number');
+        expect(control('Gaussian noise')?.querySelector('input')?.value).toBe('0');
+        expect(control('Potts rejection')?.querySelector('input')?.checked).toBe(false);
+        expect(control('Packing steps')).toBeUndefined();
+    } else {
+        expect(control('Packing checkpoint')?.querySelector('select')?.value).toBe('caliby_packer_010');
+        expect(control('Packing steps')?.querySelector('input')?.value).toBe('50');
+        expect(control('Gaussian noise')).toBeUndefined();
+    }
+    expect(state.submit).not.toHaveBeenCalled();
 });
