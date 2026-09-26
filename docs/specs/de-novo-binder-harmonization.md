@@ -7,6 +7,7 @@ Companions form one packet:
 - [Product outcome](de-novo-binder-upgrade-outline.md).
 - [Complete scope and acceptance](de-novo-binder-design-upgrade.md): native denominator and A01–A14/C01–C14 definitions.
 - [Implementation packet](de-novo-binder-concurrent-implementation-plan.md): interfaces, sole-writer boundaries, work order and focused verification.
+- [Sequence-design and packing corrections](sequence-design-packing-harmonization.md): SQ01–SQ08, the focused current repair scope for existing sequence/packing gaps. Its reconciled baseline and specific corrections supersede older general availability claims in this packet; unrelated ledger entries are not newly reaudited.
 - [Model configuration/operator/agent parity policy](../Model_Configuration_Operator_Control_and_Agent_Parity.md).
 
 “V2”/“generation 2” is a development label, not a new product namespace, job family or schema suffix. The product remains **De Novo Binder Design**.
@@ -24,7 +25,7 @@ Neither PPIFlow role closes the other. Independent first-generation product plac
 
 Every starting generator receives full applicable target/template acquisition and inspection, with BC2's delivered workspace as the interaction reference. Structural frameworks/scaffolds/templates, seed complexes, sequence templates and saved workflow configurations remain distinct. Reuse Project management, model schemas, Jobs, selection, artifacts/results and the bridge. No second workflow engine, candidate database, settings database, Project store, numerical authority or scheduler.
 
-Generator-only completion is valid. After a round the operator may select exact compatible candidates/documents, independently choose operations, inspect/compare descendants and repeat. Optional to execute does not mean optional to deliver. Retain full global FrustraMPNN, Caliby, FA-MPNN/ProteinMPNN, supported prediction and the existing GROMACS handoff.
+Generator-only completion is valid. Initial launches also need the shared ProteinMPNN/FA-MPNN/Caliby sequence-design and independently selected prediction stage specified in SQ05, with visible sampling choices and preserved saved settings. After a round the operator may select exact compatible candidates/documents, independently choose operations, inspect/compare descendants and repeat. Selected-leaf availability does not complete initial-round wiring. Optional to execute does not mean optional to deliver. Retain full global FrustraMPNN and the existing GROMACS handoff.
 
 Cutoff-policy CRUD, saved classification/reclassification, automatic dual-pass/fail and diagnostic rejection machinery were superseded and are excluded. Independent raw LigandMPNN interface-context and blind-pose evidence remain in scope. Pairwise Frustratometer remains deferred. No new scientific thresholds, compulsory diagnostic/project, audit receipt, restart proof or extra preview is introduced.
 
@@ -242,7 +243,7 @@ A review report without required fixes does not close the work. Finding no defec
 - **H05:** designed BC2 typed controls exist; retain full native/source/Project parity. E/A.
 - **H06:** neutral continuation exists; add exact document/destination handoff and real repeated-round evidence. C/A/parent.
 - **H07:** independent refinement/repairs exist; finish hydration, roles/accounting and W01–W08. B/C/A.
-- **H08:** Caliby/full FrustraMPNN adapters exist; finish usable controls, owner-correct placement and native evidence. D/G.
+- **H08:** selected Caliby/full FrustraMPNN adapters exist. Caliby's parent descriptor contradicts its executable branch; typed parent controls, runtime discovery and native evidence remain incomplete. Apply SQ01/SQ03/SQ04; standalone ensemble/packing remains the separate SQ08 decision. Preserve full FrustraMPNN. D/G/parent.
 - **H09:** separate raw diagnostics exist; finish input/execution evidence and Project/round UX. No classifier. H/C/parent.
 - **H10:** native/shared results improved; finish exact navigation, workbench and Project reopen. C/F.
 - **H11:** shared transport exists; complete new generation/selected closure and real remote runs. G/B/E/H.
@@ -281,7 +282,7 @@ No native acceptance is certified by this document. “Implemented” credits co
 - **A06 — Partial.** Same-root immutable selection exists; alternate-document refinement and destination contexts remain. E05/E07/E09. Owner C/parent. Close exact state/parent identity and cross-project source import.
 - **A07 — Core implemented; whole-path evidence open.** Neutral repeated requests exist; designed UI and real generator/descendant handoffs remain. E05/E06. Owner B/C. Include real BC2 candidate and another selected round, with generator-only exit.
 - **A08 — Partial.** Independent operations/freshness repairs exist; native roles/sample/composition and accounting/UX remain. E03/E06/E07. Owner B. Verify PPIFlow generation and refinement separately.
-- **A09 — Adapters implemented; qualification open.** Full analyses and raw diagnostics exist. E06/E08. Owner D/H. Close native correctness and honest conditioning evidence, not classification machinery.
+- **A09 — Selected adapters implemented; software corrections and qualification open.** Full analyses and raw diagnostics exist. Caliby's parent descriptor/settings/runtime gaps are SQ01/SQ03/SQ04, not merely missing run evidence. E06/E08. Owner D/H/parent. Close those connections and native correctness without classification machinery; SQ08 standalone modes are not already delivered.
 - **A10 — Repair implemented; live coverage open.** Primary isolation includes manual return. E07. Owner C/G. Close optional failure/interruption/retry/replay without erased or duplicate results.
 - **A11 — Partial.** Credit C01–C14; residuals and W01–W08 remain mandatory. E01–E10. Owner parent. Close corrections on the combined path, not leaf totals.
 - **A12 — Partly wired; native parity open.** Existing bridge supports current contracts; new generation/Project/selected closure remains. E05/E06/E09/E10. Owner G. Verify actual local/remote paths at each operation owner.
@@ -310,7 +311,7 @@ No native acceptance is certified by this document. “Implemented” credits co
 - **P1.1 — Partial:** agnostic four-generator UI, full sources/viewer/Project and real wider BoltzGen/PPIFlow. E01–E03/E09. A/B/parent; close A01/A03.
 - **P1.2 — Core delivered; UX/native work open:** independent repeated refinement, including preserved PPIFlow use case. E03/E05/E06. B; close A07/A08.
 - **P1.3 — Partial:** immutable selection/publication exist; exact document/Project association/reopen remain. E05/E07/E09. C; close A05/A06/A10.
-- **P1.4 — Adapters delivered; native qualification open:** full FrustraMPNN/Caliby, no pairwise requirement. E06. D; close A09.
+- **P1.4 — Selected adapters delivered; Caliby integration corrections and native evidence open:** apply SQ01/SQ03/SQ04 while retaining full FrustraMPNN and no pairwise requirement. E06. D/G/parent; close A09. Do not equate selected sequence design with the retired standalone ensemble/packing scope in SQ08.
 - **P1.5 — Bridge foundation delivered; extensions/evidence open:** selected/new-generation closure and measured warm behavior. E10. G; close A12/A13.
 - **P1.6 — Partial:** C01–C14 plus W01–W08, real generic requests and saved/Project fidelity. E01–E10. Parent; close A11/A14.
 - **P2.1 — Foundation delivered; coverage open:** full BC2 field/action/modality/source parity. E04. E; close A02/A03.
