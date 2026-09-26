@@ -348,9 +348,9 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         refetchOnWindowFocus: false,
     });
 
-    const { data: cancelledData } = useQuery({
+    const { data: cancelledData, isLoading: cancelledLoading, isError: cancelledError, dataUpdatedAt: cancelledUpdatedAt, refetch: retryCancelled } = useQuery({
         queryKey: ['cancelledJobs'],
-        queryFn: () => fetchCancelledJobs(20),
+        queryFn: ({ signal }) => fetchCancelledJobs(20, signal),
         refetchInterval: (query) => jobPollingInterval(10000, query),
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
@@ -516,7 +516,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                     aria-controls="bms-gpu-queue-content"
                 >
                     <span className="text-sm font-semibold text-slate-200">GPU Queue</span>
-                    {stats && (
+                    {queueData && (
                         <div className="flex gap-2">
                             <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">
                                 {stats.running} run
@@ -582,7 +582,11 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">
                                 Cancelled Jobs (click to requeue)
                             </h4>
-                            {cancelledJobs.length === 0 ? (
+                            {cancelledError && <p role="alert" className="text-amber-300">
+                                {cancelledData ? `Cancelled jobs refresh failed. Showing last successful read from ${new Date(cancelledUpdatedAt).toLocaleTimeString()}.` : 'Cancelled jobs unavailable.'}
+                                {' '}<button type="button" onClick={() => void retryCancelled()}>Retry cancelled jobs</button>
+                            </p>}
+                            {cancelledLoading ? <p role="status">Loading cancelled jobs…</p> : cancelledError && !cancelledData ? null : cancelledJobs.length === 0 ? (
                                 <div className="text-center py-4 text-slate-500 text-sm">
                                     No cancelled jobs
                                 </div>

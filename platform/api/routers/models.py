@@ -304,6 +304,7 @@ async def list_models(
     
     - **category**: Filter by category (backbone_generation, sequence_design, etc.)
     - **include_experimental**: Include enabled models marked as experimental
+    - **compact**: Choice metadata only; full settings stay on the model-detail route
     """
     registry = get_registry()
     models = registry.list_models(

@@ -70,7 +70,14 @@ it('cloned false/zero/empty settings survive delayed selected detail and a faile
     expect([...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].some(input => !input.checked)).toBe(true);
     expect([...host.querySelectorAll<HTMLInputElement>('input')].some(input => input.value === 'default label')).toBe(false);
     failDetail = true; await act(async () => { await client.invalidateQueries({ queryKey: ['model', 'fixture'] }); }); await settle();
+    expect(host.textContent).toContain('Selected model settings refresh failed. Retaining last successful settings.');
     expect([...host.querySelectorAll<HTMLInputElement>('input[type="number"]')].some(input => input.value === '0')).toBe(true);
+});
+it('a failed definition read does not add a launch gate to a retained manual draft', async () => {
+    localStorage.setItem('clonedJobData', JSON.stringify({ name: 'Retained clone', model_id: 'fixture', mode: 'edit', params: { label: '', count: 0, enabled: false } }));
+    failDetail = true; await mount('/submit');
+    await until(() => expect(host.textContent).toContain('Selected model settings unavailable'));
+    expect(button('Launch Experiment').disabled).toBe(false);
 });
 it('leaving a pending selected-model read cancels its transport', async () => {
     hangDetail = true; await mount('/submit?model=fixture&mode=edit');

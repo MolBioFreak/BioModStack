@@ -9,7 +9,7 @@ const resultsViewerSource = readFileSync('src/components/ResultsViewer.tsx', 'ut
 
 test('mobile/recent job list calls use lightweight summaries instead of full job payloads', () => {
   assert.match(apiSource, /summary\?: boolean;/u);
-  assert.match(dashboardSource, /fetchJobs\(\{ limit: 100, summary: true \}, queryClient\.getQueryData/u);
+  assert.match(dashboardSource, /fetchJobs\(\{ limit: 100, offset,[\s\S]*?summary: true \},\s*queryClient\.getQueryData/u);
   assert.match(quickViewerSource, /fetchJobs\(\{ status: 'completed', limit: 100, summary: true \}, queryClient\.getQueryData/u);
   assert.match(resultsViewerSource, /fetchJobs\(\{\s*include_children: true,\s*limit: 100,\s*summary: true,\s*q: debouncedJobSelectorSearch \|\| undefined,/u);
 });

@@ -43,4 +43,3 @@ export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants:
         params: batchParams
     };
 }
-

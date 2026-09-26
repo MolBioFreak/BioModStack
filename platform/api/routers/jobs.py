@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, or_, and_
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, Literal, cast
 from dataclasses import dataclass
@@ -5371,6 +5371,7 @@ async def list_jobs(
     mode: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session),
@@ -5449,22 +5450,45 @@ async def list_jobs(
         .order_by(Job.created_at.desc())
     )
     
-    # Filter out child jobs by default (show only parent/top-level jobs)
+    # Use identical predicates for the bounded page and its total. These are
+    # presentation filters, not changes to execution/status authority.
+    filters = []
     if not include_children:
-        query = query.where(Job.parent_job_id == None)
-    
+        filters.append(Job.parent_job_id.is_(None))
     if status:
-        query = query.where(Job.status == status.value)
-
+        status_filter = Job.status == status.value
+        if status.value == "awaiting_input":
+            status_filter = or_(status_filter, Job.awaiting_input.is_(True))
+        filters.append(status_filter)
     if model_id:
-        query = query.where(Job.model_id == model_id)
-
+        filters.append(Job.model_id == model_id)
     if mode:
-        query = query.where(Job.mode == mode)
-    
+        filters.append(Job.mode == mode)
     if q:
-        query = query.where(Job.name.ilike(f"%{q}%"))
-    
+        # Dashboard search was a literal substring, not a SQL wildcard pattern.
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        filters.append(or_(Job.name.ilike(f"%{escaped}%", escape="\\"), func.instr(Job.id, q) > 0))
+    if exclude_ngs:
+        # Match ngsResultRouting.isNgsJob, including legacy missing-model rows.
+        ngs_models = ("nanopore", "ont_basecall_dna", "ont_basecall_rna", "ont_plasmid_qc",
+                      "ont_construct_screening", "ont_methylation_analysis", "ont_fastq_qc",
+                      "ont_pooled_reference_assignment", "wf_clone_validation")
+        ngs_workflows = (*ngs_models[1:], "basecall_dna", "basecall_rna", "plasmid_qc",
+                         "construct_screening", "methylation_analysis", "fastq_qc",
+                         "pooled_reference_assignment", "pooled-reference-assignment", "wf_clone", "clone_validation")
+        # JS routeIdentity trims ECMAScript whitespace. Preserve its truthy
+        # ont_workflow_id || workflow_id fallback for legacy JSON false/zero.
+        whitespace = " \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        model_identity = func.lower(func.trim(func.coalesce(Job.model_id, ""), whitespace))
+        workflow_identity = func.lower(func.trim(func.coalesce(
+            func.nullif(func.nullif(Job.params["ont_workflow_id"].as_string(), ""), 0),
+            Job.params["workflow_id"].as_string(), ""), whitespace))
+        mode_identity = func.lower(func.trim(func.coalesce(Job.mode, ""), whitespace))
+        filters.append(~or_(model_identity.in_(ngs_models), and_(
+            model_identity == "", or_(workflow_identity.in_(ngs_workflows),
+                                      mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    query = query.where(*filters)
+
     query = query.limit(limit).offset(offset)
     result = await session.execute(query)
     if summary:
@@ -5514,18 +5538,8 @@ async def list_jobs(
             if parent_job_id is not None
         }
     
-    # Get total count (for pagination) - also exclude children
-    count_query = select(func.count(Job.id))
-    if not include_children:
-        count_query = count_query.where(Job.parent_job_id == None)
-    if status:
-        count_query = count_query.where(Job.status == status.value)
-    if model_id:
-        count_query = count_query.where(Job.model_id == model_id)
-    if mode:
-        count_query = count_query.where(Job.mode == mode)
-    if q:
-        count_query = count_query.where(Job.name.ilike(f"%{q}%"))
+    # Count the same filtered scope, not just the current page.
+    count_query = select(func.count(Job.id)).where(*filters)
     total = (await session.execute(count_query)).scalar()
 
     

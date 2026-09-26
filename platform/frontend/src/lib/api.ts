@@ -3039,8 +3039,8 @@ export const retryQueueJob = (jobId: string) =>
 export const cancelAllQueuedJobs = () =>
     api.delete('/api/queue/clear-all');
 
-export const fetchCancelledJobs = (limit: number = 20) =>
-    api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit } });
+export const fetchCancelledJobs = (limit: number = 20, signal?: AbortSignal) =>
+    api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit }, signal, timeout: 10_000 });
 
 export const killActiveNextflowJobs = () =>
     api.post('/api/queue/kill-active');

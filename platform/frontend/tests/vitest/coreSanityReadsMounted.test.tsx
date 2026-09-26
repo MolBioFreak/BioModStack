@@ -69,7 +69,7 @@ it('cold Dashboard and Queue failures are unavailable, not empty, and retry reco
     failJobs = true; failQueue = true; await mount(<Dashboard />);
     expect(host.textContent).toContain('Jobs unavailable'); expect(host.textContent).toContain('Queue unavailable');
     expect(host.textContent).not.toContain('No jobs found'); expect(host.textContent).not.toContain('No jobs in queue');
-    expect(host.textContent).not.toContain('0 total jobs');
+    expect(host.textContent).not.toContain('0 total jobs'); expect(host.textContent).not.toContain('0 run');
     failJobs = false; failQueue = false; await click('Retry jobs'); await click('Retry queue');
     expect(host.textContent).toContain('Older retained job'); expect(host.textContent).toContain('Queued retained job');
     expect(host.textContent).not.toContain('Jobs unavailable');
@@ -100,6 +100,8 @@ it('real Query unmount aborts jobs/queue and their read transports have finite t
     hang = true; await mount(<Dashboard />);
     const pending = requests.filter(r => ['/api/jobs', '/api/queue'].includes(r.url!));
     expect(pending).toHaveLength(2); expect(pending.every(r => r.timeout === 10000 && r.signal && !r.signal.aborted)).toBe(true);
+    await input(host.querySelector<HTMLInputElement>('input[placeholder="Search jobs by name or ID..."]')!, 'replacement');
+    expect(pending.find(r => r.url === '/api/jobs')!.signal!.aborted).toBe(true);
     await mount(null); expect(pending.every(r => r.signal!.aborted)).toBe(true);
 });
 it('changing the real search aborts the replaced jobs read while keeping the queue request', async () => {
@@ -110,6 +112,21 @@ it('changing the real search aborts the replaced jobs read while keeping the que
     expect(first.signal!.aborted).toBe(true); expect(queue.signal!.aborted).toBe(false);
     const current = requests.filter(r => r.url === '/api/jobs').at(-1)!;
     expect(current.params.q).toBe('next-search'); expect(current.signal!.aborted).toBe(false);
+});
+it('cancelled queue reads report unavailable/stale states and retain rows on failed refresh', async () => {
+    await mount(<Dashboard />);
+    let failed = true;
+    const adapter = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (config.url !== '/api/queue/cancelled') return adapter(config);
+        requests.push(config); expect(config.timeout).toBe(10000); expect(config.signal).toBeTruthy();
+        if (failed) throw new Error('cancelled list offline');
+        return { data: [{ ...row, name: 'Retained cancelled row' }], status: 200, statusText: 'OK', headers: {}, config };
+    };
+    await click('Cancelled'); expect(host.textContent).toContain('Cancelled jobs unavailable'); expect(host.textContent).not.toContain('No cancelled jobs');
+    failed = false; await click('Retry cancelled jobs'); expect(host.textContent).toContain('Retained cancelled row');
+    failed = true; await act(async () => { await client.invalidateQueries({ queryKey: ['cancelledJobs'] }); }); await flush();
+    expect(host.textContent).toContain('Cancelled jobs refresh failed'); expect(host.textContent).toContain('Retained cancelled row');
 });
 it('model reads carry signal/timeouts without changing mutation timeout defaults', async () => {
     const controller = new AbortController();

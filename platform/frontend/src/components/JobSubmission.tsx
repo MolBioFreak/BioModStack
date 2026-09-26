@@ -1082,7 +1082,7 @@ export function JobSubmission() {
     const nativeBinderModeMissing = wizardMode === 'manual' && ['boltzgen', 'ppiflow'].includes(selectedModelId ?? '') && !selectedMode;
     const isReady = !nativeBinderModeMissing && !fampnnError && frustrampnnConfigurationReady && Boolean(
         (isTemplateMode && selectedTemplateId && templateLaunchName && templateDetail && allMissingRequiredTemplateParams.length === 0) ||
-        (wizardMode === 'manual' && selectedModel && jobName && selectedModelId && selectedModeId)
+        (wizardMode === 'manual' && jobName && selectedModelId && selectedModeId)
     );
     const launchBlockedReason = nativeBinderModeMissing
         ? 'The selected native mode is not advertised by the current model registry.'
