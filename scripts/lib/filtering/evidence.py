@@ -133,6 +133,8 @@ def correspondence_metadata(output_dir, identity):
     try:
         root = Path(output_dir)
         row = json.loads((root / f'{identity}.correspondence.json').read_text())
+        if not isinstance(row, dict):
+            return {}
         raw = (root / f'{identity}.pdb').read_bytes()
         if row.get('candidate_key') == identity and row.get('structure_sha256') == hashlib.sha256(raw).hexdigest():
             mapping = row.get('target_residue_mapping')
