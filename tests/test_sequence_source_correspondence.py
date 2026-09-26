@@ -10,9 +10,10 @@ import pytest
 from test_generic_sequence_native_transport import ROOT, atom, run_wrapper
 
 
-def emit_native_fa(source, output, count):
+def emit_native_fa(source, output, count, mutable_ids=None):
     """Execute installed parser and writer definitions, replacing only tensors/science."""
     import dataclasses
+    import pickle
     import numpy as np
     from types import SimpleNamespace
     from Bio.PDB import PDBParser, MMCIFParser, Structure
@@ -35,14 +36,28 @@ def emit_native_fa(source, output, count):
     definitions('fampnn/data/pdb_utils.py', ['write_to_pdb', 'write_batched_to_pdb'], writer)
     definitions('fampnn/model/sd_model.py', ['save_samples_to_pdb'], writer)
     n = len(prot.residue_index)
+    aatype = np.array(prot.aatype, copy=True)
+    for position, identity in enumerate(prot.bms_identity):
+        if mutable_ids is None or (chr(int(identity[0])), int(identity[1])) in mutable_ids:
+            aatype[position] = rc.restype_order['G']
     samples = dict(x_denoised=tensor([prot.atom_positions]), residue_index=tensor([prot.residue_index]),
                    chain_index=tensor([prot.chain_index]), seq_mask=tensor(np.ones((1,n))),
-                   pred_aatype=tensor(np.full((1,n),rc.restype_order['G'])),
+                   pred_aatype=tensor([aatype]),
                    missing_atom_mask=tensor([1-prot.atom_mask]), psce=tensor(np.zeros((1,n,33))))
     for index in range(count):
         path = output/'samples'/f'{source.stem}_sample{index}.pdb'
         path.with_name(path.name+'.fa_binding.json').unlink(missing_ok=True)
         native.save_samples(writer['save_samples_to_pdb'], samples, [str(path)], [context])
+        sample = dict(seq_probs=np.eye(21)[aatype], pred_aatype=aatype,
+                      seq_mask=np.ones(n), chain_index=prot.chain_index,
+                      residue_index=prot.residue_index,
+                      aatype_override_mask=np.array([
+                          mutable_ids is not None and (chr(int(r[0])), int(r[1])) not in mutable_ids
+                          for r in prot.bms_identity], dtype=int))
+        pkl_path = output/'sample_pkls'/f'{source.stem}_sample{index}.pkl'
+        pkl_path.parent.mkdir(exist_ok=True)
+        pkl_path.write_bytes(pickle.dumps(sample))
+        native.capture_sample(pkl_path, path, context)
 
 
 def test_fa_actual_parser_writer_compiled_shell(tmp_path, monkeypatch):
@@ -57,7 +72,7 @@ def test_fa_actual_parser_writer_compiled_shell(tmp_path, monkeypatch):
     pairs = [(r['source']['chain_id'],r['source']['auth_seq_id'],r['output']['chain_id'],r['output']['auth_seq_id'])
              for r in row['source_residue_mapping']]
     assert pairs == [('Z',10,'A',10),('Z',30,'A',30),('B',91,'B',91),('B',98,'B',98)]
-    assert row['chain_sequences'] == {'A':'GG','B':'GG'}
+    assert row['chain_sequences'] == {'A':'GG','B':'AA'}
     assert row['binder_chains'] == ['A']
     assert row['target_chains'] == ['B']
     assert row['input_binder_chains'] == ['Z']

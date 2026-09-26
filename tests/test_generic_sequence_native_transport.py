@@ -188,7 +188,8 @@ if args[0] == '/app/fampnn/fampnn/inference/seq_design.py':
     if os.environ.get('BMS_TEST_FA_REAL_WRITER'):
         sys.path.insert(0, {str(ROOT/'tests')!r})
         from test_sequence_source_correspondence import emit_native_fa
-        emit_native_fa(source, out, int(values['num_seqs_per_pdb']))
+        mutable_ids = [identity for identity, fixed in zip(ids, mask('fixed_seq_positions')) if not fixed]
+        emit_native_fa(source, out, int(values['num_seqs_per_pdb']), mutable_ids)
 elif args[0] == '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py':
     source=next(Path('.').glob('*.pdb'))
     Path({str(tmp_path/'mpnn_native_input.pdb')!r}).write_bytes(source.read_bytes())

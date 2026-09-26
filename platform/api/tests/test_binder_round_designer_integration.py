@@ -83,6 +83,8 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
     fixture = helper()
     if model == 'proteinmpnn':
         monkeypatch.setenv('BMS_TEST_MPNN_ROLE_FIXTURE', str(fixture.native_role_fixture(tmp_path)))
+    else:
+        monkeypatch.setenv('BMS_TEST_FA_REAL_WRITER', '1')
     typed = role_request(tmp_path, model, order)
     response = await jobs._create_job(typed, BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)
@@ -92,6 +94,7 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
         generated.materialize(output)
     command = list(invocation.command)
     command[2] = str(ROOT / invocation.entrypoint)
+    command[command.index('-w') + 1] = str(tmp_path / 'work')
     config = tmp_path / 'offline.config'
     config.write_text('process.executor="local"\nprocess.cpus=1\nprocess.memory="128 MB"\napptainer.enabled=false\nsingularity.enabled=false\ndocker.enabled=false\n')
     command = ['java', '-jar', os.environ['BMS_TEST_NEXTFLOW_JAR'], '-C', str(ROOT / 'nextflow.config') + ',' + str(config), *command[1:]]
@@ -110,10 +113,10 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
         assert row.confidence_metrics[model] == native
         # Protein's native featurizer sorts masked/visible chains; request order
         # remains unchanged in the persisted compiler settings tested above.
-        assert native['binder_chains'] == (sorted(order.split(',')) if model == 'proteinmpnn' else order.split(','))
-        assert native['target_chains'] == (['A', 'B'] if model == 'proteinmpnn' else ['B', 'A'])
-        assert native['chain_sequences']['A'] == native['chain_sequences']['B'] == 'A'
-        assert set(native['designed_chain_sequences']) == {'T', 'Z'}
+        assert native['binder_chains'] == (sorted(order.split(',')) if model == 'proteinmpnn' else ['B', 'D'])
+        assert native['target_chains'] == (['A', 'B'] if model == 'proteinmpnn' else ['A', 'C'])
+        assert all(native['chain_sequences'][chain] == 'A' for chain in native['target_chains'])
+        assert set(native['designed_chain_sequences']) == ({'T', 'Z'} if model == 'proteinmpnn' else {'B', 'D'})
         assert native['source_structure_sha256'] == hashlib.sha256(Path(typed.params['input_pdb']).read_bytes()).hexdigest()
         from services.binder_round_inputs import _residue_correspondence
         correspondence = _residue_correspondence(native['source_residue_mapping'], reverse=True)
@@ -126,6 +129,9 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
             assert native['designed_chain_sequences'] in ({'T': 'GG', 'Z': 'GA'}, {'T': 'VV', 'Z': 'VA'})
         else:
             assert native['output_structure_name'] == Path(row.pdb_path).name
+            assert native['input_binder_chains'] == order.split(',')
+            assert native['chain_roles_namespace'] == 'output'
+            assert native['designed_chain_sequences'] == {'B': 'GA', 'D': 'GG'}
     assert await ingest_job_results(job.id, output, admission) == 0
 
 
@@ -201,6 +207,7 @@ runner.main()
     wrapper.chmod(0o755)
     command = list(invocation.command)
     command[2] = str(ROOT / invocation.entrypoint)
+    command[command.index('-w') + 1] = str(tmp_path / 'work')
     command = ['java', '-jar', os.environ['BMS_TEST_NEXTFLOW_JAR'], '-C', str(ROOT / 'nextflow.config') + ',' + str(config), *command[1:]]
     result = subprocess.run(command, cwd=tmp_path, env=dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH']), text=True, capture_output=True, timeout=150)
     (tmp_path / 'caliby-transport.log').write_text(result.stdout + result.stderr)
