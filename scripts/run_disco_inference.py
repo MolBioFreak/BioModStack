@@ -65,16 +65,20 @@ def main() -> None:
     derived_json.write_text(json.dumps(bound_jobs, indent=2), encoding="utf-8")
     input_json_path = str(derived_json)
 
+    repo = Path(os.environ.get("DISCO_REPO", "/opt/disco")).resolve()
+    # Hydra and native auxiliary output must not write into the immutable SIF.
+    work_dir = output_dir / "disco_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = Path(disco.get("checkpoint_path") or "/weights/disco/DISCO.pt").absolute()
     cmd = [
         sys.executable,
-        "runner/inference.py",
+        str(repo / "runner" / "inference.py"),
         f"experiment={disco.get('experiment') or 'designable'}",
         f"effort={disco.get('effort') or 'fast'}",
         f"input_json_path={input_json_path}",
         f"dump_dir={run_dir}",
     ]
-    if disco.get("checkpoint_path"):
-        cmd.append(f"load_checkpoint_path={disco['checkpoint_path']}")
+    cmd.append(f"load_checkpoint_path={checkpoint}")
     if disco.get("use_deepspeed_evo_attention"):
         cmd.append("use_deepspeed_evo_attention=true")
     else:
@@ -86,12 +90,24 @@ def main() -> None:
         cmd.append(f"num_inference_seeds={int(disco.get('num_inference_seeds') or 8)}")
 
     env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(repo), env.get("PYTHONPATH"))))
+    # Keep the selected native snapshot/refs cache separate from writable JIT data.
+    env["HF_HOME"] = str(checkpoint.parent / "huggingface")
+    env["HF_HUB_CACHE"] = str(checkpoint.parent / "huggingface" / "hub")
+    # Preserve native network fallback and any explicit caller offline policy.
+    env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    cache_root = Path(env.get("XDG_CACHE_HOME") or work_dir / "cache")
+    for key, name in (("XDG_CACHE_HOME", "general"), ("TRITON_CACHE_DIR", "triton"),
+                      ("TORCH_EXTENSIONS_DIR", "torch_extensions")):
+        cache = Path(env.get(key) or (cache_root if key == "XDG_CACHE_HOME" else cache_root / name))
+        cache.mkdir(parents=True, exist_ok=True)
+        env[key] = str(cache)
     if disco.get("cutlass_path"):
         env["CUTLASS_PATH"] = disco["cutlass_path"]
 
     log_path = output_dir / "disco.log"
     with log_path.open("w", encoding="utf-8") as log_handle:
-        subprocess.run(cmd, cwd="/opt/disco", env=env, check=True, stdout=log_handle, stderr=subprocess.STDOUT)
+        subprocess.run(cmd, cwd=work_dir, env=env, check=True, stdout=log_handle, stderr=subprocess.STDOUT)
 
     prefix = _sanitize_name(request["job_name"])
     manifest: list[dict[str, object]] = []
