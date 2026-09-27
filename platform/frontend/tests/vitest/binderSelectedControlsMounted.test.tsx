@@ -26,6 +26,7 @@ async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId
     api.defaults.adapter = async config => {
         let data: unknown = [];
         if (config.url?.startsWith('/api/models/')) data = discovered;
+        if (config.url === '/api/execution-targets') data = [{ id: 'vast:selected', name: 'Selected worker', active: true, state: 'ready', capabilities: {} }];
         if (config.url?.startsWith('/api/designs/')) data = { job_id: 'producer-sibling', pdb_path: 'primary.pdb' };
         if (config.url?.endsWith('/selection-context')) data = { candidate_documents: Object.fromEntries(ids.map(id => [id,
             [{ artifact_id: `alternate-${id}`, target_state: 'alternate-state', logical_path: 'native/alternate.cif', download_url: '/api/files/download/inputs/alternate.cif' }]])) };
@@ -72,14 +73,25 @@ it('keeps modified model settings across operation switches and hands MD the exa
     expect(posted).toHaveLength(0);
 });
 
-it('submits the complete global FrustraMPNN settings rather than a simplified score action', async () => {
-    await mount();
+it('keeps complete FrustraMPNN settings, selected placement and Project destination together', async () => {
+    await mount(undefined, 'destination-attempt');
+    const worker = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Vast · Selected worker')!;
+    await act(async () => worker.props.onClick());
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Binder continuation operation' }).props.onChange({ target: { value: 'frustrampnn' } }));
+    expect(renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Vast · Selected worker')!.props['aria-pressed']).toBe(true);
     await act(async () => button('Run selected operation').props.onClick());
     expect(posted[0].operation).toBe('frustrampnn');
     expect(posted[0].frustrampnn_settings).toHaveProperty('protein_selection');
     expect(posted[0].frustrampnn_settings).toHaveProperty('source_structure');
     expect(posted[0].design_ids).toEqual(['page-1-state-a', 'page-2-state-b']);
+    expect(posted[0].execution_target_id).toBe('vast:selected');
+    expect(posted[0].launch_context_id).toBe('destination-attempt');
+    expect(posted[0]).not.toHaveProperty('params');
+    expect(posted[0].frustrampnn_settings).not.toHaveProperty('execution_target_id');
+    await act(async () => button('Local').props.onClick());
+    await act(async () => button('Run selected operation').props.onClick());
+    expect(posted[1].execution_target_id).toBeNull();
+    expect(posted[1].frustrampnn_settings).toEqual(posted[0].frustrampnn_settings);
 });
 
 it('shows queue errors without a fabricated child success', async () => {

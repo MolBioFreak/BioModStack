@@ -2670,6 +2670,7 @@ async def create_run_group(
     launch_context_ids: dict[str, str] | None = None,
     core_session: AsyncSession | None = None,
     source_domain_id: str | None = None,
+    preallocated_attempt_ids: dict[str, str] | None = None,
 ) -> ExperimentRunGroup:
     await _workspace(session, workspace_id)
     normalized_preparation_ids = [str(value) for value in preparation_ids]
@@ -2687,6 +2688,13 @@ async def create_run_group(
     ):
         raise ValidationFailure("launch context mapping is malformed")
     launch_context_ids = dict(launch_context_ids)
+    # Server-side native materializers may need their attempt identity before
+    # writing immutable inputs. Scheduler Job identity remains derived here.
+    preallocated_attempt_ids = dict(preallocated_attempt_ids or {})
+    if (set(preallocated_attempt_ids) - set(normalized_preparation_ids)
+            or any(not isinstance(value, str) or not value for value in preallocated_attempt_ids.values())
+            or len(set(preallocated_attempt_ids.values())) != len(preallocated_attempt_ids)):
+        raise ValidationFailure("preallocated attempt mapping is malformed")
     if not normalized_preparation_ids:
         raise ValidationFailure("run group requires at least one preparation")
     if len(set(normalized_preparation_ids)) != len(normalized_preparation_ids):
@@ -2721,6 +2729,8 @@ async def create_run_group(
         "preparation_ids": normalized_preparation_ids,
         "source_domain_id": derived_domain_id,
     }
+    if preallocated_attempt_ids:
+        request["preallocated_attempt_ids"] = preallocated_attempt_ids
     if launch_context_ids:
         request["launch_context_ids"] = launch_context_ids
     if idempotency_authority is not None:
@@ -2905,6 +2915,7 @@ async def create_run_group(
             kind="run_attempt",
             workspace_id=workspace_id,
             lifecycle_owner_id=workflow_run.resource_id,
+            resource_id=preallocated_attempt_ids.get(preparation_id),
         )
         scheduler_payload = json.loads(preparation.scheduler_payload_json)
         attempt = ExperimentRunAttempt(

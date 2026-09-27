@@ -233,6 +233,35 @@ def _verify_request_snapshots(job: Job, binding: dict) -> None:
         raise BlindPoseError('independent target snapshot changed')
 
 
+async def is_retained_selected_submission(request, session) -> bool:
+    """Recover selected-route custody without reopening original structures."""
+    from services.binder_diagnostic_selection import root_id
+    try:
+        params = request.params
+        manifest = Path(params['blind_pose_selection_manifest'])
+        directory = manifest.parent
+        if (directory.parent != get_inputs_dir() / 'blind_pose_selected'
+                or not re.fullmatch(r'[0-9a-f]{32}', directory.name)
+                or any(p.is_symlink() for p in (directory, *directory.parents))):
+            return False
+        binding = json.loads(_regular(directory / 'binding.json'))
+        if binding != params[KEY] or binding['schema'] != SCHEMA:
+            return False
+        source = await session.get(Job, binding['source_job_id'])
+        if (source is None or params['selection_source_job_id'] != source.id
+                or params['lineage_root_job_id'] != root_id(source)
+                or binding['lineage_root_job_id'] != root_id(source)):
+            return False
+        ids = [row['design_id'] for row in binding['candidates']]
+        designs = (await session.scalars(select(Design).where(Design.id.in_(ids)))).all()
+        if not ids or len(designs) != len(ids) or any(d.job_id != source.id for d in designs):
+            return False
+        _verify_request_snapshots(request, binding)
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 async def publish_selected(job: Job, root: Path, session) -> dict:
     """Attach immutable native evidence to a child Job, never overwrite parents."""
     binding = (job.params or {}).get(KEY)

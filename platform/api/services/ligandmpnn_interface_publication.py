@@ -82,6 +82,57 @@ def verify_binding(binding: dict):
             raise ValueError('selected native request changed')
 
 
+async def is_retained_selected_submission(request, session) -> bool:
+    """Recover custody from selected snapshots and persisted Design ownership."""
+    import re
+    from database import Design, Job
+    from services.binder_diagnostic_selection import CandidateDocument, root_id, selected_document
+    from services.ligandmpnn_interface_selection import InterfaceContextSettings
+    try:
+        params = request.params
+        binding = params[KEY]
+        manifest = Path(binding['manifest'])
+        directory = manifest.parents[2]
+        if (directory.parent != get_inputs_dir() / 'ligandmpnn_interface_context'
+                or not re.fullmatch(r'[0-9a-f]{32}', directory.name)
+                or manifest != directory / 'inputs/ligandmpnn_interface_context/selected.json'
+                or params['interface_context_manifest'] != str(manifest)):
+            return False
+        source = await session.get(Job, binding['source_job_id'])
+        if (source is None or binding['round_id'] != source.id
+                or params['selection_source_job_id'] != source.id
+                or binding['lineage_root_job_id'] != root_id(source)
+                or params['lineage_root_job_id'] != root_id(source)):
+            return False
+        settings = InterfaceContextSettings.model_validate(binding['settings']).model_dump()
+        if settings != binding['settings'] or any(params[k] != v for k, v in settings.items()):
+            return False
+        ids = binding['candidate_ids']
+        if not ids or len(set(ids)) != len(ids):
+            return False
+        for index, candidate in enumerate(ids):
+            design = await session.get(Design, candidate)
+            if design is None or design.job_id != source.id:
+                return False
+            saved = binding['sources'][candidate]
+            original = saved['original']
+            selector = (CandidateDocument(artifact_id=original.get('artifact_id'),
+                                          target_state=original.get('target_state'))
+                        if 'producer_document' in original else None)
+            path, identity = await selected_document(source, design, selector, session)
+            root = manifest.parent / f'{index:03d}'
+            if (saved['path'] != str(root / 'source.pdb')
+                    or saved['request'] != str(root / 'request.json')
+                    or original['snapshot_path'] != str(root / ('original' + original['format']))
+                    or original['path'] != str(path)
+                    or any(original.get(k) != v for k, v in identity.items())):
+                return False
+        verify_binding(binding)
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
+        return False
+
+
 async def read_selected(job, session):
     binding = (job.params or {}).get(KEY)
     if not isinstance(binding, dict):

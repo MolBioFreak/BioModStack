@@ -760,6 +760,7 @@ async def prepare_child_launch_contexts(
     preparation_ids: Sequence[str] | None = None,
     job_requests: Sequence[Any] | None = None,
     native_entrypoints: Sequence[str | None] | None = None,
+    preallocated_attempt_ids: Sequence[str] | None = None,
     idempotency_key: str,
     core_session: AsyncSession | None = None,
 ) -> dict[str, Any] | None:
@@ -783,6 +784,7 @@ async def prepare_child_launch_contexts(
             session, destination_launch_context_id=destination_launch_context_id,
             job_requests=job_requests, native_entrypoints=native_entrypoints,
             idempotency_key=idempotency_key, core_session=core_session,
+            preallocated_attempt_ids=preallocated_attempt_ids,
         )
     if native_entrypoints is not None:
         raise LaunchContextError("child_preparations_invalid", "Entrypoints require Job requests.", status_code=422)
@@ -791,8 +793,14 @@ async def prepare_child_launch_contexts(
         raise LaunchContextError("child_preparations_invalid", "Each child requires its own preparation.", status_code=422)
     if type(idempotency_key) is not str or not idempotency_key:
         raise LaunchContextError("child_idempotency_invalid", "A child handoff idempotency key is required.", status_code=422)
+    attempts = list(preallocated_attempt_ids or [])
+    if preallocated_attempt_ids is not None and (len(attempts) != len(ids) or len(set(attempts)) != len(attempts)):
+        raise LaunchContextError("child_preparations_invalid", "Each child requires its own attempt identity.", status_code=422)
     scope = f"launch-context:children:{destination_launch_context_id}"
-    digest = _request_digest({"destination_launch_context_id": destination_launch_context_id, "preparation_ids": ids})
+    identity = {"destination_launch_context_id": destination_launch_context_id, "preparation_ids": ids}
+    if attempts:
+        identity["preallocated_attempt_ids"] = attempts
+    digest = _request_digest(identity)
     replay = await _replay(session, scope=scope, key=idempotency_key, request_sha256=digest)
     if replay is not None:
         return replay
@@ -815,6 +823,7 @@ async def prepare_child_launch_contexts(
             launch_context_ids={row.preparation_id: row.launch_context_id for row in contexts},
             core_session=core_session,
             source_domain_id=destination.domain_experiment_id,
+            preallocated_attempt_ids=dict(zip(ids, attempts)),
         )
         response = {
             "run_group_id": group.resource_id,
@@ -832,6 +841,7 @@ async def _prepare_child_job_requests(
     session: AsyncSession, *, destination_launch_context_id: str,
     job_requests: Sequence[Any], native_entrypoints: Sequence[str | None] | None,
     idempotency_key: str, core_session: AsyncSession | None,
+    preallocated_attempt_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     from schemas import JobCreate
     from experiment_models import ExperimentWorkflowDraft
@@ -847,8 +857,11 @@ async def _prepare_child_job_requests(
     if not requests or len(entrypoints) != len(requests) or not idempotency_key:
         raise LaunchContextError("child_preparations_invalid", "Each child requires an ordered request and native route.", status_code=422)
     scope = f"launch-context:child-requests:{destination_launch_context_id}"
-    digest = _request_digest({"requests": [value.model_dump(mode="json") for value in requests],
-                              "native_entrypoints": entrypoints})
+    identity = {"requests": [value.model_dump(mode="json") for value in requests],
+                "native_entrypoints": entrypoints}
+    if preallocated_attempt_ids is not None:
+        identity["preallocated_attempt_ids"] = list(preallocated_attempt_ids)
+    digest = _request_digest(identity)
     replay = await _replay(session, scope=scope, key=idempotency_key, request_sha256=digest)
     if replay is not None:
         # Return retained normalized requests without native re-normalization or
@@ -903,7 +916,7 @@ async def _prepare_child_job_requests(
         response = await prepare_child_launch_contexts(session,
             destination_launch_context_id=destination_launch_context_id,
             preparation_ids=prepared_ids, idempotency_key=f"requests:{idempotency_key}",
-            core_session=core_session)
+            preallocated_attempt_ids=preallocated_attempt_ids, core_session=core_session)
         for child, request in zip(response["children"], prepared_requests):
             request["launch_context_id"] = child["launch_context_id"]
             child["job_request"] = request

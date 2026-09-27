@@ -30,15 +30,25 @@ def requests():
 
 
 @pytest.mark.asyncio
-async def test_normalized_requests_fanout_and_durable_replay(setup_store):
+@pytest.mark.parametrize("preallocate", [False, True])
+async def test_normalized_requests_fanout_and_durable_replay(setup_store, preallocate):
     async with setup_store() as session:
         dest = await destination(session)
         context_id = dest["launch_context_id"]
+        attempts = ["b58c11e2-1511-4b42-8cda-5e1bd9867e21", "19decb38-788a-46e2-aaf4-623553b8e43f"] if preallocate else None
         prepared = await prepare_child_launch_contexts(session,
-            destination_launch_context_id=context_id, job_requests=requests(), idempotency_key="children")
+            destination_launch_context_id=context_id, job_requests=requests(), idempotency_key="children",
+            preallocated_attempt_ids=attempts)
         children = prepared["children"]
         assert len({child["launch_context_id"] for child in children}) == 2
         assert len({child["run_attempt_id"] for child in children}) == 2
+        if attempts:
+            from experiment_models import ExperimentRunAttempt
+            from experiment_services import scheduler_job_id_for_attempt
+            assert [child["run_attempt_id"] for child in children] == attempts
+            for attempt_id in attempts:
+                attempt = await session.get(ExperimentRunAttempt, attempt_id)
+                assert attempt.scheduler_job_id == scheduler_job_id_for_attempt(attempt_id)
         for child in children:
             request = JobCreate.model_validate(child["job_request"])
             assert request.parent_job_id == "external-source"
@@ -60,12 +70,12 @@ async def test_normalized_requests_fanout_and_durable_replay(setup_store):
         await session.commit()
     async with setup_store() as session:
         assert await prepare_child_launch_contexts(session, destination_launch_context_id=context_id,
-            job_requests=requests(), idempotency_key="children") == prepared
+            job_requests=requests(), idempotency_key="children", preallocated_attempt_ids=attempts) == prepared
         changed = requests()
         changed[0].params["sequence"] = "AAAA"
         with pytest.raises(IdempotencyConflict):
             await prepare_child_launch_contexts(session, destination_launch_context_id=context_id,
-                job_requests=changed, idempotency_key="children")
+                job_requests=changed, idempotency_key="children", preallocated_attempt_ids=attempts)
         row = await session.get(ExperimentWorkflowPreparation, children[0]["preparation_id"])
         tampered = json.loads(row.scheduler_payload_json)
         tampered["params"]["sequence"] = "AAAA"
@@ -91,6 +101,63 @@ async def test_bad_later_child_rolls_back_entire_fanout(setup_store):
                 job_requests=children, idempotency_key="bad")
         assert await session.scalar(select(func.count()).select_from(ExperimentAggregateHead)) == count
         assert await session.scalar(select(func.count()).select_from(ExperimentWorkflowPreparation)) == 1
+
+
+@pytest.mark.asyncio
+async def test_frustrampnn_project_identity_is_chosen_before_snapshots(setup_store, tmp_path, monkeypatch):
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from database import Base, Job
+    from experiment_models import ExperimentRunAttempt
+    from experiment_services import new_id, scheduler_job_id_for_attempt
+    from services.frustrampnn import jobs as frustra
+    from services.frustrampnn.settings import default_settings
+    from test_frustrampnn_child_jobs import _pdb
+    import hashlib
+    monkeypatch.setattr(frustra, 'get_results_dir', lambda: tmp_path / 'results')
+    engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "frustra.db"}')
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    core_sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with setup_store() as session, core_sessions() as core:
+            dest = await destination(session)
+            attempts = [new_id('run_attempt'), new_id('run_attempt')]
+            children = []
+            for attempt in attempts:
+                children.append(await frustra.create_child_job(core,
+                    selections=[frustra.upload_selection(filename='source.pdb', payload=_pdb(),
+                        expected_sha256=hashlib.sha256(_pdb()).hexdigest())],
+                    source_parent=None, trigger='binder_selected', requested_settings=default_settings(),
+                    preallocated_job_id=scheduler_job_id_for_attempt(attempt), prepare_only=True))
+            requests_ = [frustra.prepared_child_request(child) for child in children]
+            result = await prepare_child_launch_contexts(session,
+                destination_launch_context_id=dest['launch_context_id'], job_requests=requests_,
+                native_entrypoints=['workflows/frustrampnn_analysis.nf'] * 2,
+                preallocated_attempt_ids=attempts, idempotency_key='frustra', core_session=core)
+            for prepared, child, attempt_id in zip(result['children'], children, attempts):
+                attempt = await session.get(ExperimentRunAttempt, attempt_id)
+                assert attempt.scheduler_job_id == child.id
+                assert prepared['run_attempt_id'] == attempt_id
+                assert frustra.load_prepared_child(JobCreate.model_validate(prepared['job_request'])).id == child.id
+                assert await core.get(Job, child.id) is None
+            assert len({row['launch_context_id'] for row in result['children']}) == 2
+            from fastapi import BackgroundTasks
+            from routers.jobs import submit_selected_child_jobs
+            inserted = await submit_selected_child_jobs(requests_, BackgroundTasks(), core, session,
+                destination_launch_context_id=dest['launch_context_id'], idempotency_key='frustra',
+                preallocated_attempt_ids=attempts, response_context={})
+            assert [row.id for row in inserted] == [child.id for child in children]
+            for child in children:
+                stored = await core.get(Job, child.id)
+                assert stored.params[frustra.ENVELOPE_KEY]['execution_owner_job_id'] == stored.id
+            await session.commit()
+        async with setup_store() as session:
+            assert await prepare_child_launch_contexts(session,
+                destination_launch_context_id=dest['launch_context_id'], job_requests=requests_,
+                native_entrypoints=['workflows/frustrampnn_analysis.nf'] * 2,
+                preallocated_attempt_ids=attempts, idempotency_key='frustra') == result
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

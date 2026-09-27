@@ -153,8 +153,9 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 design_ids: [...selectedDesignIds], operation,
                 candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])),
                 ...(launchContextId ? { launch_context_id: launchContextId } : {}),
+                execution_target_id: target,
                 ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra }
-                    : { params: { ...params }, execution_target_id: target }),
+                    : { params: { ...params } }),
             });
             setChildren(result.launched_jobs);
         } catch (reason) {
@@ -233,8 +234,8 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 key={param.name} param={param} params={params}
                 updateParam={updateParam}
                 setShowFileBrowser={name => { setFileField(name); if (name) void browseFiles('/'); }} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} />
-            <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
         </>}
+        <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
         {fileField && <section aria-label="Native input file browser"><h4>Choose {fileField}</h4>
             <StructuralSourceFiles allowSequence onSelect={source => { updateParam(fileField, source.path); setFileField(null); }} />
             <p>{fileFolder}</p>{fields.find((field: UntypedApiValue) => field.name === fileField)?.type === 'directory' && <button type="button" onClick={() => { updateParam(fileField, fileFolder); setFileField(null); }}>Use this native input directory</button>}<button type="button" onClick={() => void browseFiles('/' + fileFolder.split('/').filter(Boolean).slice(0, -1).join('/'))}>Parent folder</button>
@@ -244,7 +245,7 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
         </div>
         <div hidden={section !== 'review'}><h4>Review selected request</h4>
             <p>Source Job {sourceJobId}; {selectedDesignIds.length} exact selected candidates. Operation: {operation}.</p>
-            <BindCraft2SettingsReadback value={{ design_ids: selectedDesignIds, candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])), ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra } : { params, execution_target_id: target }) }} />
+            <BindCraft2SettingsReadback value={{ design_ids: selectedDesignIds, candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])), execution_target_id: target, ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra } : { params }) }} />
         </div>
         <button type="button" disabled={busy || !selectedDesignIds.length || (operation !== 'frustrampnn' && !model)} onClick={() => void run()}>Run selected operation</button>
         {busy && <p role="status">Submitting selected operation…</p>}

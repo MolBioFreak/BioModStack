@@ -11,6 +11,8 @@ export interface BindInterfaceContextSettings {
 
 export interface BindInterfaceContextSelection {
   action: 'ligandmpnn_interface_context';
+  execution_target_id?: string | null;
+  launch_context_id?: string | null;
   source_job_id: string;
   round_id: string;
   candidate_ids: string[];

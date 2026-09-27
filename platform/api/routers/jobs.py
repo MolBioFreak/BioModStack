@@ -5885,6 +5885,13 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     normalized_mode = str(job_data.mode or "").strip().lower()
     from services.sequence_designer_settings import normalize_historical_sequence_settings
     job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
+    if normalized_model_id == 'frustrampnn':
+        from services.frustrampnn.jobs import load_prepared_child
+        try:
+            load_prepared_child(job_data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return job_data
     if normalized_model_id == 'ligandmpnn' and normalized_mode in LIGANDMPNN_DESIGN_MODES:
         from services.ligandmpnn_design import normalize_design_params
         transport_keys = {'ligandmpnn_design_request', 'ligandmpnn_design_input',
@@ -6361,11 +6368,13 @@ async def _create_job(
     inherited_source_revision: str | None = None
     if (normalized_model_id, normalized_mode) == ('esmfold2', 'blind_pose'):
         from services.binder_blind_pose_trust import is_selected_submission
-        if not is_selected_submission():
+        from services.binder_blind_pose_selected import is_retained_selected_submission
+        if not is_selected_submission() and not await is_retained_selected_submission(job_data, session):
             raise HTTPException(status_code=422, detail='Blind pose requires the selected Design route')
     if (normalized_model_id, normalized_mode) == ('ligandmpnn', 'interface_context'):
         from services.ligandmpnn_interface_selection import selected_submission
-        if not selected_submission.get():
+        from services.ligandmpnn_interface_publication import is_retained_selected_submission
+        if not selected_submission.get() and not await is_retained_selected_submission(job_data, session):
             raise HTTPException(status_code=403, detail='Use the selected interface-context route')
     inherited_source_tree: str | None = None
     selected_execution_target: ExecutionTarget | None = None
@@ -6635,10 +6644,43 @@ async def _create_job(
                 },
             )
     if normalized_model_id == "frustrampnn":
-        raise HTTPException(
-            status_code=422,
-            detail="FrustraMPNN jobs must use the typed server-owned analysis endpoints.",
-        )
+        from services.frustrampnn.jobs import load_prepared_child, child_receipt
+        try:
+            child = load_prepared_child(job_data)
+            if isinstance(_preallocated_job_id, str) and child.id != _preallocated_job_id:
+                raise ValueError("FrustraMPNN snapshot differs from its reserved Project Job identity")
+            await child_receipt(session, child=child)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        existing = await session.get(Job, child.id)
+        if existing is not None:
+            return JobResponse.model_validate(existing)
+        child.params = dict(job_data.params)
+        child.execution_source_revision = inherited_source_revision
+        child.execution_source_tree = inherited_source_tree
+        provenance = dict(child.provenance or {})
+        if _bound_launch_context_id:
+            provenance['launch_context_id'] = _bound_launch_context_id
+        if execution_preview is not None:
+            provenance['execution_plan_approval'] = {
+                'approval_digest': execution_preview['approval_digest'],
+                'plan_sha256': execution_preview['plan']['plan_sha256'],
+                'plan': execution_preview['plan'],
+                'source_identity': execution_preview['plan']['source_identity'],
+                'input_identities': execution_preview['input_identities'],
+                'input_request': {'model_id': job_data.model_id, 'mode': job_data.mode,
+                                  'params': execution_preview['request']['params'],
+                                  'output_dir': child.output_dir},
+                'deferred_preparation': execution_preview['deferred_preparation'],
+                'declared_expansions': execution_preview.get('declared_expansions', []),
+            }
+        child.provenance = provenance
+        session.add(child)
+        await session.flush()
+        if _commit is not False:
+            await session.commit()
+        await session.refresh(child)
+        return JobResponse.model_validate(child)
     if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze" and _md_analysis_gpu_requested(job_data):
         raise _md_analysis_error(
             "MD_ANALYSIS_GPU_FORBIDDEN",
@@ -7967,6 +8009,7 @@ async def submit_selected_child_jobs(
     session: AsyncSession, experiment_session: AsyncSession, *,
     destination_launch_context_id: str | None, idempotency_key: str,
     response_context: dict[str, Any],
+    preallocated_attempt_ids: list[str] | None = None,
 ) -> list[JobResponse]:
     """Submit native selected requests with one destination attempt per child.
 
@@ -7985,7 +8028,8 @@ async def submit_selected_child_jobs(
                 experiment_session, destination_launch_context_id=destination_launch_context_id,
                 job_requests=requests,
                 native_entrypoints=[MODEL_MODE_WORKFLOW_ENTRYPOINTS.get((r.model_id, r.mode)) for r in requests],
-                idempotency_key=idempotency_key, core_session=session)
+                idempotency_key=idempotency_key, core_session=session,
+                preallocated_attempt_ids=preallocated_attempt_ids)
             requests = [JobCreate.model_validate(child['job_request']) for child in prepared['children']]
         remote = any(item.execution_target_id for item in requests)
         if remote:

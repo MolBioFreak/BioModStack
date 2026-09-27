@@ -53,8 +53,8 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
         from services.frustrampnn.jobs import FrustraMPNNChildError, design_selections
         from services.structure_dataset_fanout import StructureDatasetFanoutError
         from routers.frustrampnn import _fanout_design_selections
-        if request.params or request.execution_target_id is not None:
-            raise HTTPException(422, 'FrustraMPNN uses its model-owned settings and scheduler placement')
+        if request.params:
+            raise HTTPException(422, 'FrustraMPNN uses its model-owned settings')
         try:
             # Resolve each exact persisted owner through the full model adapter;
             # the shared same-root check above permits repeated-round siblings.
@@ -73,10 +73,21 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
                     'source_review_artifact_manifest': designs[ordinal].review_artifact_manifest,
                     'source_review_role_map': designs[ordinal].review_role_map,
                 })
-            fanout = await _fanout_design_selections(session, parent=source, selections=selections,
-                requested_settings=request.frustrampnn_settings or default_settings(),
-                trigger='binder_selected')
-            launched = [await get_job(child.id, session) for child in fanout.child_jobs]
+            if request.execution_target_id is not None or request.launch_context_id:
+                from services.frustrampnn.jobs import submit_selected_analysis
+                launched = await submit_selected_analysis(session, experiment_session, background_tasks,
+                    selections=selections, source_parent=source,
+                    requested_settings=request.frustrampnn_settings or default_settings(),
+                    execution_target_id=request.execution_target_id,
+                    destination_launch_context_id=request.launch_context_id,
+                    idempotency_key=request.idempotency_key,
+                    response_context={'source_job_id': source.id, 'root_job_id': root.id,
+                                      'operation': request.operation, 'selected_design_count': len(designs)})
+            else:
+                fanout = await _fanout_design_selections(session, parent=source, selections=selections,
+                    requested_settings=request.frustrampnn_settings or default_settings(),
+                    trigger='binder_selected')
+                launched = [await get_job(child.id, session) for child in fanout.child_jobs]
         except (FrustraMPNNChildError, StructureDatasetFanoutError, ValueError, OSError) as exc:
             await session.rollback()
             raise HTTPException(422, str(exc)) from exc

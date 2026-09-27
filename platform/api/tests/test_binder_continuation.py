@@ -165,6 +165,35 @@ async def test_individual_native_owners_keep_every_selected_state(selected, oper
 
 
 @pytest.mark.asyncio
+async def test_frustrampnn_remote_review_retains_selected_worker_and_source_offline_request(selected, monkeypatch):
+    from services.frustrampnn import jobs as frustra
+    from schemas import JobCreate
+    from sqlalchemy import select
+    client, session, root, source, tmp_path = selected
+    monkeypatch.setattr(frustra, 'get_results_dir', lambda: tmp_path / 'frustra-results')
+    source.execution_target_id = 'source-worker'
+    await session.commit()
+    response = await client.post('/api/binder-continuation/selected', json={
+        'source_job_id': source.id, 'design_ids': ['d1', 'd0'], 'operation': 'frustrampnn',
+        'execution_target_id': 'selected-worker'})
+    assert response.status_code == 409, response.text
+    detail = response.json()['detail']
+    assert detail['code'] == 'remote_prepared_job_review_required'
+    assert len(detail['job_requests']) == 2
+    assert not list((await session.scalars(select(Job).where(Job.model_id == 'frustrampnn'))).all())
+    (tmp_path / 'state-0.pdb').unlink()
+    (tmp_path / 'state-1.pdb').unlink()
+    for payload, design_id in zip(detail['job_requests'], ['d1', 'd0']):
+        request = JobCreate.model_validate(payload)
+        child = frustra.load_prepared_child(request)
+        assert request.execution_target_id == child.execution_target_id == 'selected-worker'
+        assert request.parent_job_id is None
+        assert child.parent_job_id == source.id and child.lineage_root_job_id == root.id
+        assert child.params[frustra.ENVELOPE_KEY]['selection'][0]['design_id'] == design_id
+        await frustra.child_receipt(session, child=child)
+
+
+@pytest.mark.asyncio
 async def test_full_frustrampnn_owner_persists_native_requests_for_same_root_states(selected, monkeypatch):
     from services.frustrampnn import jobs as frustra_jobs
     client, session, root, source, tmp_path = selected

@@ -11,6 +11,112 @@ from fastapi.testclient import TestClient
 from database import Design, Job, JobArtifact, get_session
 from routers import binder_blind_pose as route
 from services import binder_blind_pose_selected as selected
+from test_core_protein_scientific_admission import admission
+from test_project_workflow_setups import setup_store
+import pytest_asyncio
+
+
+@pytest_asyncio.fixture
+async def diagnostic_destination(setup_store, request):
+    if not request.param:
+        yield None, None
+        return
+    from test_project_normalized_child_requests import destination
+    async with setup_store() as session:
+        yield session, await destination(session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operation', ['blind_pose', 'interface_context'])
+@pytest.mark.parametrize('diagnostic_destination', [False, True], indirect=True, ids=['standalone', 'project'])
+async def test_selected_remote_route_review_and_approved_insertion(admission, tmp_path, monkeypatch, operation, diagnostic_destination):
+    """Real selected route and approval owners; background science is never run."""
+    from datetime import datetime
+    from database import ExecutionTarget
+    from routers import jobs, ligandmpnn_interface_context as interface
+    from schemas import JobCreate
+    from services import ligandmpnn_interface_publication as publication
+    from test_ligandmpnn_interface_context import example
+    import paths
+
+    experiment_session, destination = diagnostic_destination
+    destination_id = destination['launch_context_id'] if destination else None
+    candidate, _ = example(tmp_path)
+    target = tmp_path / 'target.pdb'
+    target.write_text(pdb('A', ['ALA', 'GLY']))
+    for owner in (paths, jobs, selected, interface):
+        monkeypatch.setattr(owner, 'get_allowed_roots', lambda: {'inputs': tmp_path})
+    for owner in (paths, jobs, selected, route, publication):
+        monkeypatch.setattr(owner, 'get_inputs_dir', lambda: tmp_path)
+    monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
+    parent = Job(id='source', name='source', model_id='proteinmpnn', mode='default',
+                 params={'target_pdb': str(target)}, status='completed')
+    design = Design(id='candidate', job_id=parent.id, name='candidate', pdb_path=str(candidate))
+    worker = ExecutionTarget(id='vast:diagnostic', provider='vast', provider_instance_id='diagnostic',
+        active=True, state='ready', capabilities={'gpu_count': 1,
+            'critical_runtime_binding': {'paths': {'python': '/fixture/python', 'nextflow': '/fixture/nextflow'}, 'environment': {}}},
+        provider_metadata={'inventory': {'checked_at': datetime.utcnow().isoformat(),
+            'status': 'complete', 'present': True, 'running': True}})
+    admission.add_all([parent, design, worker])
+    await admission.commit()
+    with pytest.raises(HTTPException) as review:
+        if operation == 'blind_pose':
+            await route.launch_selected(route.SelectedBlindPoseRequest(source_job_id=parent.id,
+                execution_target_id=worker.id, launch_context_id=destination_id, design_ids=[design.id], binder_chains={design.id: ['B']},
+                target_chains=['A'], settings=route.BlindPoseSettings(model_variant='fast', model_id_or_path='',
+                    num_loops=1, num_sampling_steps=25, num_diffusion_samples=1)), BackgroundTasks(), admission, experiment_session)
+        else:
+            await interface.submit_selected(interface.ProjectInterfaceContextSelection(
+                action='ligandmpnn_interface_context', source_job_id=parent.id, round_id=parent.id,
+                execution_target_id=worker.id, launch_context_id=destination_id, candidate_ids=[design.id], settings={
+                    'binder_chain': 'B', 'target_chain': 'A', 'target_patch': ['A1'],
+                    'seed': 0, 'samples': 1, 'temperature': 0.1}), BackgroundTasks(), admission, experiment_session)
+    assert review.value.status_code == 409
+    assert review.value.detail['code'] == 'remote_prepared_job_review_required'
+    retained = JobCreate.model_validate(review.value.detail['job_request'])
+    assert retained.execution_target_id == worker.id
+    assert 'execution_target_id' not in retained.params
+    assert retained.params['selection_source_job_id'] == parent.id
+    if destination:
+        from experiment_models import ExperimentLaunchContext
+        context = await experiment_session.get(ExperimentLaunchContext, retained.launch_context_id)
+        assert context.launch_context_id != destination_id
+        assert context.project_id == destination['project_id']
+    snapshot = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.rglob('*')
+                if p.is_file() and ('blind_pose_selected' in p.parts or 'ligandmpnn_interface_context' in p.parts)}
+    assert snapshot
+    candidate.unlink()
+    target.unlink()
+    preview = jobs._execution_plan_preview(retained)
+    assert preview['admissible'], preview['blockers']
+    retained.execution_plan_approval = preview['approval_digest']
+    owner = selected if operation == 'blind_pose' else publication
+    assert await owner.is_retained_selected_submission(retained, admission)
+    malformed = retained.model_copy(deep=True)
+    malformed.params[owner.KEY] = {'schema': 'fabricated'}
+    with pytest.raises(HTTPException) as rejected:
+        await jobs.create_job(malformed, BackgroundTasks(), admission, experiment_session=experiment_session)
+    assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
+    foreign = Job(id='foreign', name='foreign', model_id='proteinmpnn', mode='default', params={}, status='completed')
+    admission.add(foreign)
+    design.job_id = foreign.id
+    await admission.flush()
+    assert not await owner.is_retained_selected_submission(retained, admission)
+    with pytest.raises(HTTPException) as rejected:
+        await jobs.create_job(retained, BackgroundTasks(), admission, experiment_session=experiment_session)
+    assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
+    design.job_id = parent.id
+    await admission.flush()
+    token = jobs.current_launch_context_id.set(retained.launch_context_id)
+    try:
+        response = await jobs.create_job(retained, BackgroundTasks(), admission, experiment_session=experiment_session)
+    finally:
+        jobs.current_launch_context_id.reset(token)
+    admission.expire_all()
+    child = await admission.get(Job, response.id)
+    assert child.execution_target_id == worker.id
+    assert child.params['selection_source_job_id'] == parent.id
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in snapshot} == snapshot
 
 
 def pdb(chain, residues, offset=0):
@@ -50,7 +156,7 @@ def source(tmp_path, monkeypatch):
         candidates.append(SimpleNamespace(id=f'design-{idx}', job_id='source', pdb_path=str(path)))
     target = inputs / 'target.pdb'
     target.write_text(pdb('T', ['TYR'], 10))
-    job = SimpleNamespace(id='source', params={'target_pdb': str(target)}, lineage_root_job_id=None)
+    job = SimpleNamespace(id='source', model_id='proteinmpnn', params={'target_pdb': str(target)}, lineage_root_job_id=None)
     return job, candidates, inputs, target
 
 

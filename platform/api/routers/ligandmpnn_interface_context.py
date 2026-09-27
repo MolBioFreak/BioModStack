@@ -20,6 +20,7 @@ router = APIRouter(prefix='/api/ligandmpnn/interface-context', tags=['ligandmpnn
 
 class ProjectInterfaceContextSelection(InterfaceContextSelection):
     launch_context_id: str | None = None
+    execution_target_id: str | None = None
 
 
 @router.post('/selected', status_code=201)
@@ -27,7 +28,9 @@ async def submit_selected(selection: ProjectInterfaceContextSelection, backgroun
                           session: AsyncSession = Depends(get_session),
                           experiment_session: AsyncSession = Depends(get_experiment_session)):
     destination = getattr(selection, 'launch_context_id', None)
-    selection = InterfaceContextSelection.model_validate(selection.model_dump(exclude={'launch_context_id'}))
+    execution_target_id = getattr(selection, 'execution_target_id', None)
+    selection = InterfaceContextSelection.model_validate(
+        selection.model_dump(exclude={'launch_context_id', 'execution_target_id'}))
     if MODEL_MODE_WORKFLOW_ENTRYPOINTS.get(('ligandmpnn', 'interface_context')) != 'workflows/ligandmpnn_interface_context.nf':
         raise HTTPException(503, 'Selected interface-context workflow is not registered')
     from routers.jobs import create_job
@@ -84,14 +87,14 @@ async def submit_selected(selection: ProjectInterfaceContextSelection, backgroun
               'result_integrity_requires_designs': False}
     params.update(selection.settings.model_dump())
     request = JobCreate(name=f'interface-context-{source.id[:8]}', model_id='ligandmpnn',
-                        mode='interface_context', params=params)
+                        mode='interface_context', params=params, execution_target_id=execution_target_id)
     token = selected_submission.set(True)
     try:
-        if destination:
+        if destination or execution_target_id:
             from routers.jobs import submit_selected_child_jobs
             children = await submit_selected_child_jobs([request], background_tasks, session, experiment_session,
                 destination_launch_context_id=destination, idempotency_key=str(binding["manifest"]),
-                response_context={"source_job_id": source.id, "operation": "interface_context"})
+                response_context={"source_job_id": source.id, "operation": "interface_context", "selection": selection.model_dump()})
             response = children[0]
         else:
             response = await create_job(request, background_tasks, session)

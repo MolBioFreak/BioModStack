@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { readBinderCandidateDocuments, writeBinderCandidateDocuments } from '../lib/binderContinuation';
 import BinderDiagnosticRawResults from './BinderDiagnosticRawResults';
 import { fetchDiagnosticSelectionContext, type CandidateDocuments, type DiagnosticSelectionContext } from '../lib/binderDiagnosticSelection';
@@ -38,6 +39,7 @@ interface Props {
 /** Independent exploratory actions; source ownership and chain validity are resolved by the API. */
 export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, sourceParams, selectedDesignIds, candidateDocuments, launchContextId, resultJob, onOpenJob }: Props) {
     const [blindSettings, setBlindSettings] = useState(initialBlindSettings);
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
     const [targetName, setTargetName] = useState('');
     const [context, setContext] = useState<DiagnosticSelectionContext | null>(null);
     const [documents, setDocuments] = useState<CandidateDocuments>({});
@@ -87,6 +89,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
             if (kind === 'blind') {
                 const response = await submitBlindPoseSelected({
                     source_job_id: sourceJobId,
+                    execution_target_id: executionTargetId,
                     ...(launchContextId ? { launch_context_id: launchContextId } : {}),
                     ...(targetName ? { target_name: targetName } : {}),
                     ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}),
@@ -97,7 +100,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
                 });
                 jobId = response.id;
             } else {
-                const response = await submitLigandInterfaceContext({ ...selection!, ...(launchContextId ? { launch_context_id: launchContextId } : {}), ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}) });
+                const response = await submitLigandInterfaceContext({ ...selection!, execution_target_id: executionTargetId, ...(launchContextId ? { launch_context_id: launchContextId } : {}), ...(Object.keys(selectedDocuments).length ? { candidate_documents: selectedDocuments } : {}) });
                 jobId = response.job.id;
             }
             setSubmittedJobId(jobId);
@@ -130,6 +133,7 @@ export default function BlindPoseSelectedControls({ sourceJobId, sourceModelId, 
                 }}>
                 <option value="">Design primary document</option>{context!.candidate_documents[id].map(row => <option key={row.artifact_id} value={row.artifact_id}>{row.target_state ?? 'Unspecified state'} · {row.logical_path ?? row.artifact_id}</option>)}
             </select></label>)}
+        <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} disabled={Boolean(submitting)} />
         <details><summary className="cursor-pointer font-semibold">Blind pose (experimental)</summary>
             <div className="mt-3 flex flex-wrap gap-3">
                 {(sourceModelId === 'bindcraft2' || targets.some(target => target.name)) && <label>Declared target <select aria-label="Declared target" value={targetName} onChange={e => setTargetName(e.target.value)}>

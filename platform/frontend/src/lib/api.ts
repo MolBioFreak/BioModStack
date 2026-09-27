@@ -18,6 +18,9 @@ export const api = axios.create({
 
 export interface BlindPoseSelectedRequest {
     source_job_id: string;
+    execution_target_id?: string | null;
+    launch_context_id?: string | null;
+    candidate_documents?: import('./binderDiagnosticSelection').CandidateDocuments;
     target_name?: string;
     design_ids: string[];
     binder_chains: Record<string, string[]>;
@@ -36,15 +39,21 @@ export interface SelectedNativeResult {
     records: Array<Record<string, unknown>>;
     [key: string]: unknown;
 }
-export const submitBlindPoseSelected = async (request: BlindPoseSelectedRequest): Promise<Job> =>
-    (await api.post<Job>('/api/blind-pose/selected', request)).data;
+export const submitBlindPoseSelected = async (request: BlindPoseSelectedRequest): Promise<Job> => {
+    const { data } = await submitPreparedJobAction(() =>
+        api.post<Job & { launched_job?: Job }>('/api/blind-pose/selected', request));
+    return data.launched_job ?? data;
+};
 export const fetchBlindPoseSelectedResult = async (jobId: string): Promise<SelectedNativeResult> =>
     (await api.get<SelectedNativeResult>(`/api/blind-pose/${encodeURIComponent(jobId)}/result`)).data;
 export const submitLigandInterfaceContext = async (
     request: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection,
-): Promise<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }> =>
-    (await api.post<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }>(
-        '/api/ligandmpnn/interface-context/selected', request)).data;
+): Promise<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }> => {
+    const { data } = await submitPreparedJobAction(() =>
+        api.post<{ job: Job; launched_job?: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }>(
+            '/api/ligandmpnn/interface-context/selected', request));
+    return { job: data.launched_job ?? data.job, selection: data.selection };
+};
 export const fetchLigandInterfaceContextResult = async (jobId: string): Promise<SelectedNativeResult> =>
     (await api.get<SelectedNativeResult>(`/api/ligandmpnn/interface-context/${encodeURIComponent(jobId)}/result`)).data;
 
