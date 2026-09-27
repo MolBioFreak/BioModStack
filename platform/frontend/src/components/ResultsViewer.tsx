@@ -2,7 +2,7 @@ import { MSA_POLICY } from '../lib/msaPolicy';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
@@ -61,7 +61,10 @@ import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
 import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
-import StructureViewerPane from './StructureViewerPane';
+import StructureViewerPane, { ShapeDocumentInspector } from './StructureViewerPane';
+import { isShapeResultJob, shapeCohort, shapeDocuments, filterShapeCohort, shapeCsv, type ShapeMetricFilter } from '../lib/shapeResultsView';
+import { metricKeys, formatMetric as formatShapeMetric, summarizeMetric } from '../lib/cohortAnalytics';
+import { continuationHref } from '../lib/deNovoContinuation';
 import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
@@ -1683,6 +1686,145 @@ const buildBoltzgenClusters = (designs: Design[], mode: BoltzgenClusterMode): Bo
     };
 };
 
+const shapeControl = 'min-w-0 max-w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]';
+const shapePanel = 'min-w-0 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4';
+const emptyShapeFilter: ShapeMetricFilter = { key: '', kind: 'range', min: '', max: '' };
+
+/** Cohort composition over the existing paginated Design/native publication reader. */
+export function ShapeResultsWorkspace({ job }: { job: Job }) {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const params = new URLSearchParams(location.search);
+    const candidateId = params.get('design_id');
+    const documentKey = params.get('shape_document');
+    const artifactId = params.get('artifact_id');
+    const targetState = params.get('target_state');
+    const storageKey = `bms:shape-results:${job.id}`;
+    const [state, setState] = useState(() => {
+        const defaults = { search: '', filter: emptyShapeFilter, selected: [] as string[], selectedOnly: false,
+            columns: null as string[] | null, sort: '', descending: false, page: 0,
+            view: 'dashboard', exportScope: 'filtered', destination: 'standalone' };
+        try { return { ...defaults, ...JSON.parse(sessionStorage.getItem(storageKey) ?? '{}') } as typeof defaults; }
+        catch { return defaults; }
+    });
+    useEffect(() => { sessionStorage.setItem(storageKey, JSON.stringify(state)); }, [state, storageKey]);
+    const update = (next: Partial<typeof state>) => setState(current => ({ ...current, ...next }));
+    const query = useInfiniteQuery({
+        queryKey: ['shape-results-cohort', job.id], initialPageParam: 0,
+        queryFn: async ({ pageParam }) => ({ ...(await fetchDesigns({ job_id: job.id, include_children: false, limit: 500, offset: pageParam, sort_by: 'name', sort_desc: false, include_summary: false })).data, offset: pageParam }),
+        getNextPageParam: page => page.designs.length && page.offset + page.designs.length < page.total ? page.offset + page.designs.length : undefined,
+        retry: false, refetchOnWindowFocus: false,
+    });
+    useEffect(() => {
+        if (query.hasNextPage && !query.isFetching && !query.isFetchNextPageError) void query.fetchNextPage();
+    }, [query.data?.pages.length, query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage]);
+    const designs = useMemo(() => [...new Map((query.data?.pages.flatMap(page => page.designs) ?? []).map(row => [row.id, row])).values()], [query.data]);
+    const cohort = useMemo(() => shapeCohort(designs), [designs]);
+    const keys = useMemo(() => metricKeys(cohort), [cohort]);
+    const selected = useMemo(() => new Set(state.selected), [state.selected]);
+    const matching = useMemo(() => {
+        const rows = filterShapeCohort(cohort, state.search, state.filter, state.selectedOnly ? selected : undefined);
+        if (state.sort) rows.sort((a, b) => {
+            const av = state.sort === '$candidate' ? a.label : a.values[state.sort];
+            const bv = state.sort === '$candidate' ? b.label : b.values[state.sort];
+            const absent = (value: unknown) => value == null || (typeof value === 'number' && !Number.isFinite(value));
+            if (absent(av) || absent(bv)) return absent(av) === absent(bv) ? 0 : absent(av) ? 1 : -1;
+            const order = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv), undefined, { numeric: true });
+            return state.descending ? -order : order;
+        });
+        return rows;
+    }, [cohort, state.search, state.filter, state.selectedOnly, state.sort, state.descending, selected]);
+    const total = query.data?.pages[0]?.total;
+    const complete = total !== undefined && designs.length === total;
+    const scope = complete ? `Entire cohort · ${total} candidates` : `Partial read · ${designs.length} of ${total ?? 'unknown'} candidates`;
+    const page = Math.min(state.page, Math.max(0, Math.ceil(matching.length / 25) - 1));
+    const pageRows = matching.slice(page * 25, (page + 1) * 25);
+    const preferred = keys.filter(key => /shape_total$|shape_outside$|sdf_positive_inside_fraction$|plddt_overall$|ca_rmsd_angstrom$/.test(key));
+    const columns = state.columns ?? [...(keys.includes('sequence.designer') ? ['sequence.designer'] : []), ...(preferred.length ? preferred : keys.filter(key => key !== 'sequence.designer').slice(0, 5))];
+    const active = designs.find(design => design.id === candidateId);
+    const documents = active ? shapeDocuments(active) : [];
+    const document = documentKey !== null ? documents.find(doc => doc.key === documentKey)
+        : artifactId !== null ? documents.find(doc => doc.artifactId === artifactId && (targetState === null || doc.targetState === targetState))
+        : documents.find(doc => doc.key === 'structure');
+    const inspecting = candidateId !== null && params.get('shape_view') !== 'cohort';
+    const inspect = (id: string, key?: string) => {
+        const next = new URLSearchParams(location.search);
+        next.set('design_id', id); next.delete('artifact_id'); next.delete('target_state'); next.delete('shape_view');
+        if (key) next.set('shape_document', key); else next.delete('shape_document');
+        navigate(`${location.pathname}?${next}`, { replace: true });
+    };
+    const select = (ids: string[], checked: boolean) => update({ selected: checked ? [...new Set([...state.selected, ...ids])] : state.selected.filter(id => !ids.includes(id)) });
+    const exportRows = state.exportScope === 'all' ? cohort : state.exportScope === 'selected' ? cohort.filter(row => selected.has(row.id)) : matching;
+    const exportData = (kind: 'csv' | 'json') => {
+        const ids = new Set(exportRows.map(row => row.id));
+        const content = kind === 'csv' ? shapeCsv(exportRows, keys) : JSON.stringify({ scope: state.exportScope, complete, loaded: designs.length, total, records: designs.filter(design => ids.has(design.id)) }, null, 2);
+        const url = URL.createObjectURL(new Blob([content], { type: kind === 'csv' ? 'text/csv;charset=utf-8' : 'application/json' }));
+        const link = window.document.createElement('a'); link.href = url;
+        link.download = `${job.id}-shape-${state.exportScope}${complete ? '' : '-partial'}.${kind}`; link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+    let continuation: string | undefined;
+    if (document) {
+        const url = new URL(continuationHref(document.source, 'redesign'), window.location.origin);
+        // Destination is deliberate intent, never inferred from the source Job.
+        for (const key of ['launch_context_id', 'project_id', 'setup_context_id']) url.searchParams.delete(key);
+        if (state.destination === 'context' && params.get('launch_context_id')) url.searchParams.set('launch_context_id', params.get('launch_context_id')!);
+        url.searchParams.set('return_to', `${location.pathname}${location.search}`);
+        continuation = `${url.pathname}${url.search}`;
+    }
+    return <section aria-label="Shape cohort results" className="min-w-0 space-y-4 text-[var(--text-primary)]">
+        <header className="flex flex-wrap justify-between gap-3"><h2 className="text-xl font-semibold">Shape cohort overview</h2><span>{scope}</span></header>
+        <p className="text-sm">Scope: persisted Shape candidates in this Job, excluding child Jobs. Native stage measurements are not experimental validation. Acceptance retains the producer’s meaning; missing observations are not zero.</p>
+        {query.isLoading && <p role="status">Reading Shape candidates…</p>}
+        {query.isError && <p role="status">{designs.length ? 'Later-page read failed. Available candidates, partial charts and exports are retained.' : 'Shape candidates could not be read.'} <button className={shapeControl} onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>Retry Shape readback</button></p>}
+        {query.isFetchingNextPage && <p role="status">Loading the full cohort. Current statistics and exports cover loaded records only.</p>}
+        {total === 0 && <p>No persisted Shape candidates were published. See the retained native outcome below; zero candidates does not imply missing geometry.</p>}
+        <div hidden={inspecting} className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3" aria-label="Shape cohort summary">
+                <div className={shapePanel}>{matching.length} matching / {designs.length} loaded · {state.selected.length} selected</div>
+                {preferred.slice(0, 2).map(key => { const summary = summarizeMetric(matching, key); return <div key={key} className={shapePanel}><h3 className="break-words text-sm">Median {key}</h3><strong>{summary.median === null ? 'Not measured' : formatShapeMetric(summary.median)}</strong><p className="text-xs">{summary.observed} finite observations · {summary.missing} absent · {summary.nulls} null · {summary.nonNumeric} nonnumeric</p></div>; })}
+            </div>
+            <div className={`${shapePanel} flex flex-wrap gap-3`} aria-label="Shape cohort controls">
+                <input className={shapeControl} aria-label="Search Shape candidates" value={state.search} onChange={event => update({ search: event.target.value, page: 0 })} />
+                <label><input type="checkbox" checked={state.selectedOnly} onChange={event => update({ selectedOnly: event.target.checked, page: 0 })} />Selected only</label>
+                <label className="min-w-0 max-w-full">Metric<select className={shapeControl} aria-label="Shape filter metric" value={state.filter.key} onChange={event => update({ filter: { ...state.filter, key: event.target.value }, page: 0 })}><option value="">All measurements</option>{keys.map(key => <option key={key}>{key}</option>)}</select></label>
+                <select className={shapeControl} aria-label="Shape filter condition" value={state.filter.kind} onChange={event => update({ filter: { ...state.filter, kind: event.target.value as ShapeMetricFilter['kind'] }, page: 0 })}><option value="range">Numeric range</option><option value="missing">Not reported</option><option value="null">Explicit null</option><option value="nonNumeric">Nonnumeric</option></select>
+                {state.filter.kind === 'range' && (['min', 'max'] as const).map(bound => <input key={bound} className={`${shapeControl} w-28`} aria-label={`Shape filter ${bound}`} type="number" step="any" value={state.filter[bound]} onChange={event => update({ filter: { ...state.filter, [bound]: event.target.value }, page: 0 })} />)}
+                <button className={shapeControl} onClick={() => update({ search: '', filter: emptyShapeFilter, selectedOnly: false, page: 0 })}>Clear Shape filters</button>
+                <button className={shapeControl} onClick={() => update({ view: state.view === 'analytics' ? 'dashboard' : 'analytics' })}>{state.view === 'analytics' ? 'Overview plots' : 'Detailed analytics'}</button>
+            </div>
+            <AnalyticsDashboard designs={[]} nativeCohort={{ rows: matching, selectedIds: state.selected, activeId: candidateId ?? undefined, mode: state.view === 'analytics' ? 'analytics' : 'dashboard', onInspect: inspect, onSelect: ids => select(ids, true) }} />
+            <section className={shapePanel} aria-label="Shape candidate table">
+                <div className="mb-3 flex flex-wrap items-center gap-3"><h3 className="font-semibold">Candidates</h3>
+                    <button className={shapeControl} onClick={() => select(matching.map(row => row.id), true)}>Select all matching ({matching.length})</button>
+                    <button className={shapeControl} onClick={() => select(matching.map(row => row.id), false)}>Deselect matching</button>
+                    <details><summary>Columns</summary>{keys.map(key => <label key={key} className="block text-sm"><input type="checkbox" checked={columns.includes(key)} onChange={event => update({ columns: event.target.checked ? [...columns, key] : columns.filter(item => item !== key) })} />{key}</label>)}</details>
+                    <select className={shapeControl} aria-label="Shape export scope" value={state.exportScope} onChange={event => update({ exportScope: event.target.value })}><option value="filtered">Matching records</option><option value="selected">Selected records</option><option value="all">All loaded records</option></select>
+                    <button className={shapeControl} onClick={() => exportData('csv')}>Export CSV ({exportRows.length})</button><button className={shapeControl} onClick={() => exportData('json')}>Export native JSON ({exportRows.length})</button>
+                    {!complete && <span>Partial statistics and exports</span>}
+                </div>
+                <div className="max-h-[520px] overflow-auto"><table className="w-full text-sm"><thead><tr><th><input aria-label="Select Shape page" type="checkbox" checked={pageRows.length > 0 && pageRows.every(row => selected.has(row.id))} onChange={event => select(pageRows.map(row => row.id), event.target.checked)} /></th>
+                    {['$candidate', ...columns].map(key => <th key={key} className="p-3"><button onClick={() => update({ sort: key, descending: state.sort === key && !state.descending, page: 0 })}>{key === '$candidate' ? 'Candidate' : key}</button></th>)}</tr></thead>
+                    <tbody>{pageRows.map(row => <tr key={row.id}><td><input aria-label={`Select ${row.label}`} type="checkbox" checked={selected.has(row.id)} onChange={event => select([row.id], event.target.checked)} /></td><td className="p-3"><button onClick={() => inspect(row.id)}>{row.label}</button></td>{columns.map(key => <td className="p-3" key={key}>{formatShapeMetric(row.values[key])}</td>)}</tr>)}</tbody></table></div>
+                <nav className="mt-3 flex gap-4" aria-label="Shape candidate pages"><button disabled={!page} onClick={() => update({ page: page - 1 })}>Previous Shape page</button><span>{matching.length ? page * 25 + 1 : 0}–{Math.min((page + 1) * 25, matching.length)} of {matching.length}</span><button disabled={(page + 1) * 25 >= matching.length} onClick={() => update({ page: page + 1 })}>Next Shape page</button></nav>
+            </section>
+        </div>
+        {inspecting && <div className={`${shapePanel} space-y-4`}>
+            <button className={shapeControl} onClick={() => { const next = new URLSearchParams(location.search); next.set('shape_view', 'cohort'); navigate(`${location.pathname}?${next}`, { replace: true }); }}>Back to Shape cohort</button>
+            {!active ? <p>Requested candidate is {complete ? 'unavailable' : 'not loaded yet'}. No other candidate is substituted.</p> : <>
+                <label className="block min-w-0 max-w-full">Native document<select className={shapeControl} aria-label="Shape native document" value={document?.key ?? ''} onChange={event => inspect(active.id, event.target.value)}>{!document && <option value="">Requested document unavailable</option>}{documents.map(doc => <option key={doc.key} value={doc.key}>{doc.label} · {doc.format}</option>)}</select></label>
+                {document ? <ShapeDocumentInspector design={active} document={document} /> : <p>Requested native document is unavailable. The primary structure is not substituted.</p>}
+                {document && !document.source.design_id && !document.source.candidate_id && <p className="text-sm">This historical document has no published candidate source selector. Its exact governed path and available hash are retained; candidate ancestry is unavailable.</p>}
+                <div className="flex flex-wrap items-center gap-3"><label>Destination<select className={shapeControl} aria-label="Shape continuation destination" value={state.destination} onChange={event => update({ destination: event.target.value })}><option value="standalone">Standalone</option>{params.has('launch_context_id') && <option value="context">Selected Project launch context</option>}</select></label>
+                    {continuation && <button className={shapeControl} onClick={() => navigate(continuation!)}>Redesign selected structure</button>}
+                </div>
+                <details><summary>Candidate measurements · native stage paths</summary><dl>{Object.entries(cohort.find(row => row.id === active.id)?.values ?? {}).map(([key, value]) => <div key={key} className="flex flex-wrap justify-between gap-3 border-b py-2 text-sm"><dt>{key}</dt><dd>{formatShapeMetric(value)}</dd></div>)}</dl></details>
+            </>}
+        </div>}
+        <details className={shapePanel}><summary>Settings, native outcome and provenance</summary><pre className="max-h-96 overflow-auto text-xs">{JSON.stringify({ params: job.params, provenance: job.provenance }, null, 2)}</pre></details>
+    </section>;
+}
+
 export function ResultsViewer() {
     const { jobId } = useParams();
     const navigate = useNavigate();
@@ -2488,6 +2630,7 @@ export function ResultsViewer() {
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
         enabled: !!activeJob
+            && !isShapeResultJob(activeJob)
             && activeJob.model_id !== 'molecular_dynamics'
             && !isRFD3GenerationResultJob(activeJob)
             && !isRFD3LocalRedesignResultJob(activeJob)
@@ -3225,6 +3368,7 @@ export function ResultsViewer() {
         ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
         : null;
     const activeBadgeLabel = useMemo(() => {
+        if (isShapeResultJob(activeJob)) return 'Native Shape results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
@@ -5460,7 +5604,9 @@ export function ResultsViewer() {
                             sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
-                    nativeSequenceResultKind(activeJob) ? (
+                    isShapeResultJob(activeJob) ? (
+                        <ShapeResultsWorkspace key={activeJob.id} job={activeJob} />
+                    ) : nativeSequenceResultKind(activeJob) ? (
                         <NativeSequenceResults key={activeJob.id} job={activeJob} />
                     ) : isNativeBinderGeneration(activeJob) ? (
                         <>
