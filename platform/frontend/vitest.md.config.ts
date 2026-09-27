@@ -67,6 +67,8 @@ export default defineConfig({
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
             './tests/vitest/rfd3GenerationMounted.test.tsx',
             './tests/vitest/deNovoV15*.test.tsx',
+            './tests/vitest/generalSequenceDesignMounted.test.tsx',
+            './tests/vitest/candidateRoundProgressMounted.test.tsx',
             './tests/vitest/deNovoRemotePreparationMounted.test.tsx',
             './tests/vitest/deNovoContextInputMounted.test.tsx',
             './tests/vitest/laProteinaMotifInputMounted.test.tsx',

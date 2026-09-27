@@ -10,6 +10,8 @@ import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
 import { LaProteinaMotifInput, type LaProteinaMotifInspection } from './LaProteinaMotifInput';
 import { DeNovoContextInput } from './DeNovoContextInput';
+import { GeneralSequenceDesignSettings } from './GeneralSequenceDesignSettings';
+import { generalSequenceRequest, hydrateGeneralSequenceDesign, generalSequenceNames } from '../lib/generalSequenceDesign';
 import { DE_NOVO_MODIFICATION_MODE_CARDS, type ModificationMode } from './proteinModificationModes';
 
 export interface DeNovoNavigationState {
@@ -228,8 +230,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [ligandName, setLigandName] = useState(initialString(initialValues, 'disco_ligand_name', ''));
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [error, setError] = useState<string | null>(null);
+    const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
 
     const draftJson = JSON.stringify({
+        ...sequenceDesign,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
         job_name: jobName,
         num_designs: numDesigns,
@@ -271,6 +275,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     });
 
     const buildAlternativeWorkflowRequest = () => ({
+            ...generalSequenceRequest(sequenceDesign),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -343,6 +348,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
 
     const buildDeNovoWorkflowRequest = () => ({
+            ...generalSequenceRequest(sequenceDesign),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -427,7 +433,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     </div>;
     return (
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
-            <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling']} active={section} onChange={setSection} />
+            <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
                 {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates without a source structure.">
@@ -530,10 +536,14 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 </ProteinDesignPanel>
                 <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
+            <div hidden={section !== 'Sequence Design'}>
+                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={setSequenceDesign} />
+            </div>
             <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
                 <summary className="cursor-pointer text-sm font-medium">Run details</summary>
                 <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
                     <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
                     {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}

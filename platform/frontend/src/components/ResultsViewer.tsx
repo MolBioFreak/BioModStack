@@ -65,6 +65,8 @@ import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import { BindCraft2JobResults } from './BindCraft2JobResults';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
+import { CandidateRoundProgress } from './CandidateRoundProgress';
+import { ProteinDesignPanel } from './ProteinDesignWorkflow';
 import { NativeBinderGenerationResults } from './NativeBinderGenerationResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
@@ -5440,6 +5442,11 @@ export function ResultsViewer() {
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
 
+                {activeJob?.sequence_design && (
+                    <ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
+                        <CandidateRoundProgress key={`sequence-${activeJob.id}`} jobId={activeJob.id} kind="sequence" />
+                    </ProteinDesignPanel>
+                )}
                 {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
                     <BinderPredictionEvidence jobId={selectedJobId} sourceDesignId={selectedDesignId ?? undefined} launchContextId={destinationLaunchContextId} />
                 )}

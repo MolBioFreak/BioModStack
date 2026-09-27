@@ -11,17 +11,19 @@ const groupFor = (name: string): string => {
     return 'Sequence sampling';
 };
 
-export function SequenceDesignerSettings({ fields, renderField }: {
+export function SequenceDesignerSettings({ fields, renderField, groupForField, initiallyOpenGroups = ['Sequence sampling'] }: {
     fields: UntypedApiValue[];
     renderField: (field: UntypedApiValue) => ReactNode;
+    groupForField?: (field: UntypedApiValue) => string;
+    initiallyOpenGroups?: readonly string[];
 }) {
     const groups = new Map<string, UntypedApiValue[]>();
     for (const field of fields) {
-        const group = groupFor(field.name);
+        const group = groupForField?.(field) ?? groupFor(field.name);
         groups.set(group, [...(groups.get(group) ?? []), field]);
     }
     return <div className="space-y-3">{[...groups].map(([name, rows]) =>
-        <details key={name} open={name === 'Sequence sampling'} className="rounded border border-slate-700/50 p-3">
+        <details key={name} open={initiallyOpenGroups.includes(name)} className="rounded border border-slate-700/50 p-3">
             <summary className="cursor-pointer text-sm font-medium">{name}</summary>
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">{rows.map(field =>
                 <div key={field.name} data-sequence-designer-field={field.name}>{renderField(field)}</div>)}</div>

@@ -478,6 +478,7 @@ export function Dashboard() {
             execution_policy: detailedJob.execution_policy ?? { remote_result_policy: 'manual' },
             params: detailedJob.params || {},
             binder_round: detailedJob.binder_round,
+            sequence_design: detailedJob.sequence_design,
             pinned_gpu: detailedJob.pinned_gpu ?? null,
         };
         localStorage.setItem('clonedJobData', JSON.stringify(cloneData));

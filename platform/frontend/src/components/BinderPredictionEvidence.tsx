@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
-import { api, submitJob, type Job, type Design, type PersistedAnalysisRun } from '../lib/api';
+import { api, type Design, type PersistedAnalysisRun } from '../lib/api';
+import { CandidateRoundProgress } from './CandidateRoundProgress';
 import { fetchBinderEvidence, evidenceText, predictionKey, type BinderPrediction } from '../lib/binderEvidence';
 import { nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { parseScientificNativeMetric, parseScientificPae } from '../lib/scientificViewerIdentity';
@@ -36,7 +37,7 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
     const prediction = sequence?.predictions.find(row => predictionKey(row) === predictionId);
     return <section aria-label="Candidate-linked prediction evidence" className="space-y-3 rounded-xl border border-[var(--border-color)] p-4 text-[var(--text-primary)]">
         <h4 className="font-semibold">Sequence and prediction evidence</h4>
-        <RoundProgress jobId={jobId} />
+        <CandidateRoundProgress jobId={jobId} />
         <p className="text-xs text-[var(--text-secondary)]">Each sequence, prediction sample and target state retains its own evidence. Missing measurements are not zero. Source viewing and selection remain independent.</p>
         {query.isLoading && <p role="status">Reading candidate-linked evidence…</p>}
         {query.isError && <p role="status">Evidence readback unavailable. <button type="button" onClick={() => void query.refetch()}>Retry evidence readback</button></p>}
@@ -62,46 +63,6 @@ function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: st
     </section>;
 }
 
-interface RoundStep { state: string; job_id?: string; error?: string; superseded_by?: string; metadata?: Record<string, unknown>; request?: Partial<Job>; review?: unknown }
-interface RoundReadback { job_id: string; state: string; steps: Record<string, RoundStep>; errors: Record<string, unknown> }
-function RoundProgress({ jobId }: { jobId: string }) {
-    const cache = useQueryClient();
-    const [busy, setBusy] = useState(false), [error, setError] = useState('');
-    const url = `/api/binder-continuation/${encodeURIComponent(jobId)}/round`;
-    const query = useQuery({ queryKey: ['binder-round-progress', jobId], retry: false, refetchInterval: 5000,
-        queryFn: async ({ signal }) => {
-            const { data } = await api.get<RoundReadback>(url, { signal });
-            if (data.job_id !== jobId || typeof data.state !== 'string' || !data.steps) throw Error('Round progress readback unavailable');
-            return data;
-        } });
-    const act = async (request?: Partial<Job>) => {
-        setBusy(true); setError('');
-        try {
-            if (request) await submitJob(request, { launchContext: Boolean(request.launch_context_id) });
-            else await api.post(`${url}/retry`, {});
-            const readback = await query.refetch();
-            if (readback.isError) throw Error('Action returned, but round readback failed. Refresh to inspect its persisted state.');
-            await cache.invalidateQueries({ queryKey: ['binder-evidence', jobId] });
-        } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-        finally { setBusy(false); }
-    };
-    if (query.isError) return <p role="status">Round progress unavailable. <button type="button" onClick={() => void query.refetch()}>Refresh round progress</button></p>;
-    const progress = query.data;
-    if (!progress) return <p role="status">Reading round progress…</p>;
-    return <section aria-label="Binder round progress" className="space-y-2">
-        <p>Round: {progress.state}</p>
-        {Object.entries(progress.errors ?? {}).map(([source, reason]) => <p key={source} role="status">Source {source}: {evidenceText(reason)}</p>)}
-        {Object.entries(progress.steps).map(([id, step]) => <div key={id} className="text-sm">
-            <span>{evidenceText(step.metadata?.stage)} · source {evidenceText(step.metadata?.source_design_id)} · target {evidenceText(step.metadata?.target_state)} · {step.state}</span>
-            {step.job_id && <a className="ml-2 underline" href={`/jobs/${encodeURIComponent(step.job_id)}`}>Open child Job</a>}
-            {step.error && <p role="status">{step.error}</p>}
-            {step.superseded_by && <p>Retained history; retry step {step.superseded_by}</p>}
-            {step.state === 'review_required' && step.request && <><button className={control} type="button" disabled={busy} onClick={() => void act(step.request)}>Review prepared remote step {id}</button><details><summary>Retained preparation</summary><BindCraft2SettingsReadback value={{ request: step.request, review: step.review }} /></details></>}
-        </div>)}
-        {['needs_retry', 'completed_with_errors'].includes(progress.state) && <button className={control} type="button" disabled={busy} onClick={() => void act()}>Retry binder round</button>}
-        {error && <p role="alert">{error}</p>}
-    </section>;
-}
 
 function AnalysisEvidence({ run }: { run: PersistedAnalysisRun<unknown> }) {
     const [sort, setSort] = useState('');

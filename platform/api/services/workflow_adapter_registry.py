@@ -27,6 +27,9 @@ TYPED_CORE_JOB_MODELS = {
     "bindcraft2",
     "binder_refinement",
     "caliby_binder",
+    "caliby_experimental",
+    "proteinmpnn",
+    "fampnn",
     "frustrampnn",
     "ligandmpnn",
 }

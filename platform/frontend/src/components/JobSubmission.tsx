@@ -396,6 +396,7 @@ export function JobSubmission() {
                 window.dispatchEvent(new Event('bms:execution-target-change'));
                 data.params = fampnnUserParams(data.params || {});
                 if (data.binder_round) data.params.binder_round = data.binder_round;
+                if (data.sequence_design) data.params.sequence_design = data.sequence_design;
                 delete data.params.remote_result_policy;
                 console.log('Loading cloned job data:', data);
 

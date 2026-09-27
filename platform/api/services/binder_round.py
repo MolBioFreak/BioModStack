@@ -16,7 +16,8 @@ from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import select, update
 
 from database import Design, Job
-from schemas import BinderRoundRequest, BinderRoundStepReference, JobCreate
+from schemas import BinderRoundRequest, BinderRoundStepReference, JobCreate, SequenceDesignRequest
+from services.sequence_round_inputs import REQUEST as SEQUENCE_REQUEST
 
 REQUEST = 'binder_round_request'
 PROGRESS = 'binder_round_progress'
@@ -53,11 +54,15 @@ async def read_round(session, root_id):
     if root is None:
         raise HTTPException(404, 'Binder round Job not found')
     result = progress_of(root)
-    if REQUEST not in (root.provenance or {}):
+    provenance = root.provenance or {}
+    envelope = provenance.get(SEQUENCE_REQUEST) or provenance.get(REQUEST)
+    if envelope is None:
         result['state'] = 'not_requested'
-    elif not root.provenance[REQUEST]['enabled']:
+    elif not envelope['enabled']:
         result['state'] = 'generation_only'
-    result.update(job_id=root.id, binder_round=(root.provenance or {}).get(REQUEST))
+    result.update(job_id=root.id, binder_round=provenance.get(REQUEST),
+                  sequence_design=provenance.get(SEQUENCE_REQUEST),
+                  kind='general_sequence_design' if SEQUENCE_REQUEST in provenance else 'binder')
     # Observational readback only, including cancellation/failure before a
     # scheduler tick. Never materialize, submit or compute in GET.
     children = await session.scalars(select(Job).where(Job.provenance[STEP]['root_job_id'].as_string() == root_id))
@@ -116,15 +121,19 @@ async def _plan(session, root, progress, request, *, retry=False):
         metadata = child.provenance[STEP]
         for design in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id)):
             sources.append((child, design, metadata['backbone_design_id'], metadata))
+    general = isinstance(request, SequenceDesignRequest)
+    if general:
+        sources = [item for item in sources if item[0].id == root.id]
     targets = None
     for owner, design, backbone_id, prior in sources:
         if design.id in progress['errors'] and not retry:
             continue
         try:
-            is_backbone = requires_design(owner, design)
+            is_backbone = True if general else requires_design(owner, design)
             stage = 'sequence_design' if is_backbone else 'prediction'
-            binder, target = candidate_roles(owner, design, request) if prior is None else (
-                list(prior['binder_chains']), list(prior['target_chains']))
+            binder, target = ([], []) if general else (
+                candidate_roles(owner, design, request) if prior is None else (
+                    list(prior['binder_chains']), list(prior['target_chains'])))
             if stage == 'prediction' and targets is None:
                 targets = await declared_targets(root, session)
                 if not targets:
@@ -137,7 +146,7 @@ async def _plan(session, root, progress, request, *, retry=False):
                                  or backbone_id in t['source_design_ids']]
                 if not stage_targets:
                     raise ValueError('No independently declared target input is available for this candidate')
-            settings = request.sequence_design if is_backbone else request.prediction
+            settings = request if general else (request.sequence_design if is_backbone else request.prediction)
             samples = settings.params.get('num_parallel_jobs', 1) or 1
             for target_source in stage_targets:
                 for sample in range(samples):
@@ -152,7 +161,11 @@ async def _plan(session, root, progress, request, *, retry=False):
                             (design.provenance or {}).get('producer_candidate_key'),
                         'target_state': target_source.get('name') if target_source else None,
                         'binder_chains': binder, 'target_chains': target, 'sample_index': sample}
-                    if is_backbone:
+                    if general:
+                        from services.sequence_round_inputs import design_request as general_design_request
+                        child_request, binding = general_design_request(root, owner, design, request)
+                        metadata.update(binding)
+                    elif is_backbone:
                         child_request = design_request(root, owner, design, request, binder, target)
                     else:
                         child_request, binding = prediction_request(root, owner, design, request, binder, target, target_source)
@@ -172,7 +185,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     """Recovery tick; generation completion and native result rows are immutable."""
     from routers.jobs import submit_selected_child_jobs
     root = await lock_root(session, root_id)
-    envelope = (root.provenance or {}).get(REQUEST)
+    envelope = (root.provenance or {}).get(SEQUENCE_REQUEST) or (root.provenance or {}).get(REQUEST)
     if envelope is None:
         await session.rollback()
         return await read_round(session, root_id)
@@ -207,7 +220,8 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         save(root, progress)
         await session.commit()
         return await read_round(session, root_id)
-    await _plan(session, root, progress, BinderRoundRequest.model_validate(envelope), retry=retry)
+    request_type = SequenceDesignRequest if SEQUENCE_REQUEST in (root.provenance or {}) else BinderRoundRequest
+    await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
     save(root, progress)
     # Retained input snapshots and requested settings survive a failed submit or
     # cancellation. The existing submission owner is responsible for commits.
@@ -280,11 +294,13 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
 
 async def recover_rounds(session_factory, experiment_session_factory):
     """Existing scheduler recovery, including remote-return completion."""
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
     async with session_factory() as session:
         roots = list(await session.scalars(select(Job.id).where(
-            Job.status == 'completed', Job.provenance[REQUEST]['enabled'].as_boolean().is_(True),
+            Job.status == 'completed', or_(
+                Job.provenance[REQUEST]['enabled'].as_boolean().is_(True),
+                Job.provenance[SEQUENCE_REQUEST]['enabled'].as_boolean().is_(True)),
             func.coalesce(Job.provenance[PROGRESS]['state'].as_string(), 'pending').not_in(
                 ['completed', 'completed_with_errors', 'cancelled', 'generation_only']))))
         predictions = list(await session.scalars(select(Job.id).where(

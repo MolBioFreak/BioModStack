@@ -14,6 +14,7 @@ import { ParamField } from '../../src/components/ModelParameterField';
 import { EpitopeSelector } from '../../src/components/EpitopeSelector';
 import { readBinderCandidateDocuments } from '../../src/lib/binderContinuation';
 import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
+import { CandidateRoundProgress } from '../../src/components/CandidateRoundProgress';
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-native-canvas /> }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-native-canvas data-structure-url={props.structureUrl} /> }));
 vi.mock('../../src/components/EpitopeMolstarViewerImpl', () => ({ default: () => <div data-source-canvas /> }));
@@ -73,9 +74,14 @@ async function mount(element: React.ReactNode, route?: string) {
 }
 afterEach(async () => { await act(async () => mounted?.unmount()); mounted = undefined; client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); sessionStorage.clear(); });
 
-it.each([['boltzgen', 'protein_binder'], ['boltzgen', 'nanobody_binder'], ['boltzgen', 'peptide_binder'], ['ppiflow', 'protein_binder'], ['ppiflow', 'antibody_binder'], ['ppiflow', 'nanobody_binder']])('Jobs mounts %s %s zero yield despite generic Design errors', async (model_id, mode) => {
+it.each([['boltzgen', 'protein_binder'], ['boltzgen', 'nanobody_binder'], ['boltzgen', 'peptide_binder'], ['ppiflow', 'protein_binder'], ['ppiflow', 'antibody_binder'], ['ppiflow', 'nanobody_binder']])('Jobs opens %s %s native zero-yield results despite generic Design errors', async (model_id, mode) => {
     const job = { ...baseJob, model_id, mode }; transport(job, true, true);
-    await mount(<table><tbody><JobDetailsPanel job={job as Job} onClose={() => {}} /></tbody></table>);
+    await mount(<Routes><Route path="/" element={<table><tbody><JobDetailsPanel job={job as Job} onClose={() => {}} /></tbody></table>} /><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>);
+    expect(text(mounted!.root)).toContain('Stored designs0');
+    expect(calls.filter(call => call.url.endsWith('/generation-results'))).toEqual([]);
+    const resultsLink = mounted!.root.findAllByType('a').find(node => node.props.href === '/designs/parent')!;
+    await act(async () => resultsLink.props.onClick({ button: 0, preventDefault() {}, metaKey: false, altKey: false, ctrlKey: false, shiftKey: false }));
+    await flush();
     expect(text(mounted!.root)).toContain('published zero-yield result');
     expect(calls.filter(call => call.url.endsWith('/generation-results'))).toEqual([expect.objectContaining({ url: '/api/jobs/parent/generation-results', params: { offset: 0, limit: 1000 } })]);
     expect(mounted!.root.findByType(NativeBinderGenerationResults)).toBeDefined();
@@ -87,6 +93,20 @@ it('Results mounts zero-yield publication even when its generic query fails', as
     expect(text(mounted!.root)).toContain('published zero-yield result');
     expect(text(mounted!.root)).not.toContain('Results could not be loaded');
     expect(button('Overview')).toBeUndefined();
+});
+
+it('general generation mounts shared sequence progress independently of the generic Design query', async () => {
+    const job = { ...baseJob, model_id: 'protein_modification_experimental', mode: 'de_novo_design',
+        params: { generator: 'disco' }, sequence_design: {
+            schema_version: 1, enabled: true, model_id: 'caliby_experimental',
+            params: { verbose: false, gaussian_n_conformers: 0 }, input_settings: {},
+        } };
+    transport(job, true, true);
+    await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent');
+    expect(mounted!.root.findByType(CandidateRoundProgress).props).toMatchObject({ jobId: 'parent', kind: 'sequence' });
+    expect(text(mounted!.root)).toContain('Generation results remain unchanged');
+    expect(calls.some(call => call.url === '/api/binder-continuation/parent/round')).toBe(true);
+    expect(calls.every(call => !call.body)).toBe(true);
 });
 
 it('pages and reopens published native metrics with exact native document navigation, without a worker request', async () => {

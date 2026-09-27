@@ -79,6 +79,7 @@ export interface CandidateResultSummary {
 }
 
 export interface Job {
+    sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
     binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;
     execution_policy?: ExecutionPolicy;

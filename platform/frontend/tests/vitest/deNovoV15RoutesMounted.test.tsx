@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: [] })),
+    fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })),
     fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchInputPresets: vi.fn(async () => ({ data: [] })),

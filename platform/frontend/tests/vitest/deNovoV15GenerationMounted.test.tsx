@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_payload: any) => ({ data: {} })) }));
-vi.mock('../../src/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('../../src/lib/api')>(), submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
+vi.mock('../../src/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('../../src/lib/api')>(), fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })), submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/ModelDocumentationLinks', () => ({ ModelDocumentationLinks: () => null }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ workflowRequest }: any) => <output data-execution>{JSON.stringify(workflowRequest)}</output> }));
 // These doubles exercise parent snapshot ownership, not source/geometry behavior (covered by child suites).
@@ -54,7 +54,7 @@ it('defaults to one RFD3 editor and one run area after scientific inputs', async
     await render({ runDetails: <div data-policy>Execution details</div> });
     expect(control('Engine').value).toBe('rfd3');
     expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Shape']);
-    expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling']);
+    expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
     expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'De Novo Protein Design')).toHaveLength(1);

@@ -1573,7 +1573,7 @@ def _normalize_structure_runtime_paths(model_id: str, params: dict) -> dict:
 
     normalized = dict(params)
     keys = (("input_pdb", "mpnn_bias_AA_jsonl") if model_id == "proteinmpnn" else
-            ("input_pdb",) if model_id == "fampnn" else ("target_pdb", "fixed_target_source_path"))
+            ("input_pdb", "fampnn_checkpoint_path") if model_id == "fampnn" else ("target_pdb", "fixed_target_source_path"))
     for key in keys:
         value = normalized.get(key)
         if isinstance(value, str):
@@ -5868,6 +5868,12 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     """
     job_data = job_data.model_copy(deep=True)
     registry = registry or get_registry()
+    if job_data.sequence_design is not None:
+        from services.sequence_round_inputs import normalize_request as normalize_sequence_request
+        try:
+            job_data.sequence_design = normalize_sequence_request(job_data.sequence_design, registry)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if job_data.binder_round is not None:
         from services.binder_round_inputs import normalize_request
         try:
@@ -6309,6 +6315,12 @@ async def _create_job(
         from services.binder_round_inputs import normalize_request
         try:
             job_data.binder_round = normalize_request(job_data.binder_round)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if job_data.sequence_design is not None:
+        from services.sequence_round_inputs import normalize_request as normalize_sequence_request
+        try:
+            job_data.sequence_design = normalize_sequence_request(job_data.sequence_design)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
     # Reject stale/foreign resume paths before preview, job rows or output writes.
@@ -7377,8 +7389,19 @@ async def _create_job(
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
         if job_data.binder_round is not None:
             provenance_payload['binder_round_request'] = job_data.binder_round.model_dump(mode='json')
+        if job_data.sequence_design is not None:
+            provenance_payload['sequence_design_request'] = job_data.sequence_design.model_dump(mode='json')
         if round_step_metadata is not None:
             provenance_payload['binder_round_step'] = deepcopy(round_step_metadata)
+            if round_step_metadata.get('kind') == 'general_sequence_design':
+                # Server-bound retained step owns ancestry even for native models
+                # whose closed scientific request has no lineage parameters.
+                provenance_lineage_root = round_step_metadata['root_job_id']
+                provenance_source_stage_job_id = round_step_metadata['source_job_id']
+                provenance_selection_source_job_id = round_step_metadata['source_job_id']
+                provenance_selection_source_type = 'selected_designs'
+                provenance_source_selection_count = 1
+                provenance_source_selection_manifest_path = round_step_metadata['source_binding']['selection_manifest']
 
         if execution_preview is not None:
             if 'input_identities' not in execution_preview:
@@ -9360,6 +9383,9 @@ async def resubmit_job(
         original_round = (original_job.provenance or {}).get('binder_round_request')
         if original_round is not None:
             resubmit_provenance['binder_round_request'] = deepcopy(original_round)
+        original_sequence = (original_job.provenance or {}).get('sequence_design_request')
+        if original_sequence is not None:
+            resubmit_provenance['sequence_design_request'] = deepcopy(original_sequence)
         original_request = (original_job.provenance or {}).get('core_protein_requested_params')
         if original_request is not None:
             resubmit_provenance['core_protein_requested_params'] = deepcopy(original_request)
