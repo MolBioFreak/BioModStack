@@ -31,6 +31,19 @@ def _canonical(payload: object) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
+def native_settings_overrides(settings: Mapping[str, Any]) -> list[str]:
+    top_level = {"read_sequence_from_sequence_head", "dump_trajectories", "align_trajectory_structures", "low_memory_mode"}
+    overrides = []
+    for key, value in settings.items():
+        if key in {"num_timesteps", "ckpt_path"}:
+            continue
+        native_key = key if key.startswith("inference_sampler.") or key in top_level else f"inference_sampler.{key}"
+        # Native SampleDiffusionConfig has supported fields absent from the
+        # YAML projection. Hydra's force-add applies those and existing keys.
+        overrides.append(f"++{native_key}={json.dumps(value, separators=(',', ':'), allow_nan=False)}")
+    return overrides
+
+
 def _rfd3_runtime_identity() -> dict[str, object]:
     spec = importlib_util.find_spec("rfd3")
     if spec is None or spec.origin is None:
@@ -116,7 +129,7 @@ def _profile_for_request(request: dict) -> dict[str, object]:
 
 
 def validate_request_v2(request: dict, manifest: dict) -> tuple[dict, dict]:
-    if request.get("schema") != "bms_shape_design_request_v2":
+    if request.get("schema") not in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
         raise ValueError("unsupported Shape request schema")
     _profile_for_request(request)
     if request.get("geometry_sha256") != manifest.get("geometry_sha256"):
@@ -148,7 +161,7 @@ def validate_request_v2(request: dict, manifest: dict) -> tuple[dict, dict]:
     sequence_policy = request.get("sequence_policy", "auto")
     if sequence_policy not in {"auto", "skip", "external"}:
         raise ValueError("Shape sequence policy is invalid")
-    if sequence_policy == "external" and request.get("sequence_engine") not in {"proteinmpnn", "fampnn"}:
+    if sequence_policy == "external" and request.get("sequence_engine") not in {"proteinmpnn", "fampnn", "caliby_experimental"}:
         raise ValueError("Shape external sequence policy requires ProteinMPNN or FAMPNN")
     if sequence_policy != "external" and request.get("sequence_engine") is not None:
         raise ValueError("Shape sequence engine is only valid with sequence_policy=external")
@@ -273,6 +286,11 @@ def run_shape_rfd3(
 ) -> dict:
     request, manifest = validate_request(request_path, manifest_path)
     profile = _effective_profile(request)
+    settings = request.get("rfd3_settings", {})
+    # v2 keeps the historical process arguments. v3's immutable values own
+    # execution, including explicit false/zero/null native options.
+    num_timesteps = settings.get("num_timesteps", num_timesteps)
+    checkpoint_path = Path(settings.get("ckpt_path", checkpoint_path))
     runtime_identity = _rfd3_runtime_identity()
     if guidance_step_size is not None and guidance_step_size != profile["effective_step_size"]:
         raise ValueError("CLI guidance step size disagrees with immutable Shape guidance profile")
@@ -313,6 +331,7 @@ def run_shape_rfd3(
         f"ckpt_path={checkpoint_path.resolve()}",
         f"inference_sampler.num_timesteps={num_timesteps}",
     ]
+    command.extend(native_settings_overrides(settings))
     if guidance_enabled:
         command.extend(
             [

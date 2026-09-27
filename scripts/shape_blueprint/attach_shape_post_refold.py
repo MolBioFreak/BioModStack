@@ -59,6 +59,7 @@ def attach_post_refold(
     geometry_manifest_path: Path,
     points_path: Path,
     sdf_path: Path,
+    sequence_bundle: Path | None = None,
 ) -> dict[str, Any]:
     bundle_path = bundle_dir / "candidate_bundle.json"
     bundle = _json(bundle_path, "candidate bundle")
@@ -77,7 +78,7 @@ def attach_post_refold(
     metrics_path = bundle_dir / str(metrics_descriptor["filename"])
     metrics = _json(metrics_path, "candidate metrics")
     validator_envelope = _json(validator_records_path, "validator suite")
-    if validator_envelope.get("schema") != "bms_shape_validator_suite_v1":
+    if validator_envelope.get("schema") not in {"bms_shape_validator_suite_v1", "bms_shape_validator_suite_v2"}:
         raise ValueError("validator suite schema is invalid")
     records = validator_envelope.get("records")
     if not isinstance(records, dict):
@@ -110,6 +111,37 @@ def attach_post_refold(
     shutil.copyfile(validator_records_path, suite_destination)
     bundle["validator_evidence"] = _descriptor(suite_destination)
     bundle["validator_artifacts"] = bindings
+    if sequence_bundle is not None:
+        sequence_payload = _json(sequence_bundle / "sequence_records.json", "sequence records")
+        source_key = validator_envelope["sequence_name"]
+        rows = [row for row in sequence_payload["records"] if row["sequence_name"] == source_key]
+        if len(rows) != 1:
+            raise ValueError("sequence producer binding is absent or duplicated")
+        row = dict(rows[0])
+        descriptor = row.get("native_structure")
+        if descriptor:
+            relative = Path(descriptor["filename"])
+            native = sequence_bundle / relative
+            if relative.is_absolute() or ".." in relative.parts or not native.resolve().is_relative_to(sequence_bundle.resolve()):
+                raise ValueError("native sequence structure escaped its bundle")
+            if _sha(native) != descriptor["sha256"] or native.stat().st_size != descriptor["bytes"]:
+                raise ValueError("native sequence structure changed")
+            destination = bundle_dir / ("sequence_native" + native.suffix)
+            shutil.copyfile(native, destination)
+            row["native_structure"] = {**_descriptor(destination), "format": descriptor["format"]}
+        row_path = bundle_dir / "sequence_record.json"
+        _write(row_path, row)
+        bundle["sequence_record"] = _descriptor(row_path)
+        if descriptor:
+            bundle["sequence_native_structure"] = row["native_structure"]
+        bundle.setdefault("provenance", {}).update({
+            "sequence_engine": row["engine"], "sequence_name": source_key,
+            "backbone_candidate_id": row["backbone_candidate_id"],
+            "sequence_sample_index": row["sample_index"],
+        })
+    esm_sample = records.get("esmfold2", {}).get("native_metrics", {}).get("sample_id")
+    if esm_sample is not None:
+        bundle.setdefault("provenance", {}).update(predictor="esmfold2", native_sample_key=esm_sample)
 
     post_path = bundle_dir / "post_refold_evaluation.json"
     if bundle.get("status") == "accepted":
@@ -138,7 +170,7 @@ def attach_post_refold(
         "schema": validator_envelope["schema"],
         "status": validator_envelope.get("status"),
         "sequence_name": validator_envelope.get("sequence_name"),
-        "records": post.get("validators") or records,
+        "records": records,
         "suite_sha256": _sha(validator_records_path),
     }
     metrics["post_refold"] = post
@@ -164,6 +196,7 @@ def attach_post_refold(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sequence-bundle", type=Path)
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--validator-records", required=True, type=Path)
     parser.add_argument("--request", required=True, type=Path)
@@ -172,6 +205,7 @@ def main() -> int:
     parser.add_argument("--sdf", required=True, type=Path)
     args = parser.parse_args()
     attach_post_refold(
+        sequence_bundle=args.sequence_bundle,
         bundle_dir=args.bundle,
         validator_records_path=args.validator_records,
         request_path=args.request,

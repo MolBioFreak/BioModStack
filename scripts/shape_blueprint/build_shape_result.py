@@ -135,7 +135,7 @@ def build_result(
             if suite_payload.get("sequence_name") != (metadata.get("provenance") or {}).get("sequence_name"):
                 raise ValueError("validator suite candidate binding mismatch")
             records = suite_payload.get("records")
-            if (suite_payload.get("schema") != "bms_shape_validator_suite_v1"
+            if (suite_payload.get("schema") not in {"bms_shape_validator_suite_v1", "bms_shape_validator_suite_v2"}
                     or suite_payload.get("validators") != request.get("validator_suite")
                     or not isinstance(records, dict) or set(records) != set(request.get("validator_suite", []))):
                 raise ValueError("validator suite selection binding mismatch")
@@ -159,6 +159,13 @@ def build_result(
                     **_artifact(destination, output_dir, source.suffix.lstrip(".")),
                     "validator": descriptor["validator"], "native_path": descriptor["native_path"],
                 })
+        for key in ("sequence_record", "sequence_native_structure"):
+            descriptor = metadata.get(key)
+            if descriptor is not None:
+                source = _closed_file(bundle, descriptor, key)
+                destination = candidate_root / f"{candidate_id}.{key}{source.suffix}"
+                shutil.copyfile(source, destination)
+                native_evidence[key] = _artifact(destination, output_dir, source.suffix.lstrip("."))
         status = metadata.get("status")
         if status == "rejected":
             reason = metadata.get("reason")
