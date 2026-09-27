@@ -18,6 +18,19 @@ const RESULTS_VIEWER_PATH = resolve(process.cwd(), 'src/components/ResultsViewer
 const STRUCTURE_VIEWER_HOST_PATH = resolve(process.cwd(), 'src/structureViewer/StructureViewerHost.tsx');
 const METRIC_LEGEND_PATH = resolve(process.cwd(), 'src/structureViewer/extensions/metrics/MetricLegendPanel.tsx');
 
+test('shared workbench docks beside or below the scene instead of covering it', () => {
+    const host = readFileSync(STRUCTURE_VIEWER_HOST_PATH, 'utf8');
+    const css = readFileSync(resolve(process.cwd(), 'src/structureViewer/structureViewer.css'), 'utf8');
+    assert.match(host, /className="bms-structure-canvas"/);
+    assert.match(host, /<MolstarViewerImpl[^>]*height="100%"/);
+    assert.match(host, /<aside hidden=\{workbenchCollapsed\} className="bms-structure-workbench/);
+    assert.doesNotMatch(host, /<aside[^>]*className="absolute/);
+    assert.match(css, /grid-template-columns: minmax\(0, 1fr\) minmax\(18rem, 22rem\)/);
+    assert.match(css, /@container \(min-width: 56rem\)/);
+    assert.match(css, /background-color: var\(--surface-control\)/);
+    assert.match(css, /color: var\(--text-primary\)/);
+});
+
 test('structure viewer top toolbar contains navigation only, not legacy metric controls', () => {
     const source = readFileSync(STRUCTURE_VIEWER_PANE_PATH, 'utf8');
     const start = source.indexOf('const renderViewerToolbar');

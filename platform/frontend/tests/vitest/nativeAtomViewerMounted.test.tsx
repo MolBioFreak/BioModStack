@@ -52,7 +52,9 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     expect(show.props.className).toContain('right-14');
     expect(show.props.className).not.toContain('top-2');
     await openMetrics();
-    expect(mounted!.root.findByProps({'aria-label':'Structure metric workbench'}).props.className).toContain('right-14');
+    const workbenchClass = mounted!.root.findByProps({'aria-label':'Structure metric workbench'}).props.className;
+    expect(workbenchClass).toContain('bms-structure-workbench');
+    expect(workbenchClass).not.toContain('absolute');
     expect(text(mounted!.root.findByProps({'aria-label':'Metric categories'}))).toContain('≥90%');
     const options=()=>mounted!.root.findByProps({'aria-label':'Linked atom track'}).findAllByProps({role:'option'});
     expect(text(options()[3])).toBe('E:1:C125.0%');

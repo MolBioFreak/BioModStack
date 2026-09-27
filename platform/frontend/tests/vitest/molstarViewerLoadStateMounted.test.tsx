@@ -1,17 +1,22 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ThemeProvider } from '../../src/components/ThemeProvider';
+import { useTheme } from '../../src/components/themeContext';
 
 const controllerState = vi.hoisted(() => ({
     loadResult: { status: 'ok', value: undefined } as { status: string; value?: undefined; error?: Error },
     reconcileResult: { status: 'ok', value: undefined } as { status: string; value?: undefined; error?: Error },
     loadedScenes: [] as Array<Record<string, unknown>>,
+    mounted: 0,
+    backgrounds: [] as string[],
 }));
 
 vi.mock('../../src/structureViewer/adapters/MolstarDirectAdapter', () => ({
     MolstarDirectAdapterCancelledError: class MolstarDirectAdapterCancelledError extends Error {},
     MolstarDirectAdapter: class MolstarDirectAdapter {
-        async mount() { return undefined; }
+        async mount() { controllerState.mounted++; }
+        async setBackground(color: string) { controllerState.backgrounds.push(color); }
         dispose() { return undefined; }
         resetCamera() { return { status: 'ok', value: undefined }; }
     },
@@ -39,6 +44,8 @@ beforeEach(() => {
     controllerState.loadResult = { status: 'ok', value: undefined };
     controllerState.reconcileResult = { status: 'ok', value: undefined };
     controllerState.loadedScenes = [];
+    controllerState.mounted = 0;
+    controllerState.backgrounds = [];
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -50,6 +57,36 @@ afterEach(async () => {
 });
 
 describe('Mol* public load-state contract', () => {
+    it('updates global theme and explicit background without reloading the scene', async () => {
+        const style = document.createElement('style');
+        style.textContent = '[data-theme="midnight"] { --bg-primary: #0b1020; } [data-theme="light"] { --bg-primary: #ffffff; }';
+        document.head.append(style);
+        localStorage.setItem('bms-theme', 'midnight');
+        function SwitchTheme() {
+            const { setTheme } = useTheme();
+            return <button onClick={() => setTheme('light')}>Light theme</button>;
+        }
+        const render = async (backgroundColor?: string) => act(async () => {
+            root.render(<ThemeProvider><SwitchTheme /><StructureViewerHost structureUrl="/target.cif" backgroundColor={backgroundColor} /></ThemeProvider>);
+        });
+        try {
+            await render();
+            await vi.waitFor(() => expect(controllerState.backgrounds.at(-1)).toBe('#0b1020'));
+            await act(async () => container.querySelector('button')!.click());
+            await vi.waitFor(() => expect(controllerState.backgrounds.at(-1)).toBe('#ffffff'));
+            await render('#123456');
+            await vi.waitFor(() => expect(controllerState.backgrounds.at(-1)).toBe('#123456'));
+            await render();
+            await vi.waitFor(() => expect(controllerState.backgrounds.at(-1)).toBe('#ffffff'));
+            expect(controllerState.mounted).toBe(1);
+            expect(controllerState.loadedScenes).toHaveLength(1);
+        } finally {
+            style.remove();
+            localStorage.removeItem('bms-theme');
+            document.documentElement.removeAttribute('data-theme');
+        }
+    });
+
     it('forwards real scene loading and loaded states through the host and maps public cif to mmcif', async () => {
         const onLoadStateChange = vi.fn();
         await act(async () => {

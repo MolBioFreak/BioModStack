@@ -1,0 +1,77 @@
+/* Shared viewer layout: the workbench never sits on top of the molecular scene. */
+.bms-structure-workspace { container-type: inline-size; }
+.bms-structure-workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.bms-structure-canvas { min-width: 0; min-height: 0; }
+.bms-structure-workspace-layout[data-workbench-visible="true"] {
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 0.5rem;
+}
+.bms-structure-workbench[hidden] { display: none; }
+@container (min-width: 56rem) {
+  .bms-structure-workspace-layout[data-workbench-visible="true"] {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+/* Mol* ships a fixed beige UI palette. Map its chrome, not scientific colors,
+   to BMS's existing tokens. The renderer background is updated separately. */
+[data-bms-molstar-adapter] .msp-plugin,
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-plugin-content, .msp-viewport) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+[data-bms-molstar-adapter] .msp-plugin :is(
+  .msp-layout-region, .msp-scrollable-container, .msp-sequence-wrapper,
+  .msp-sequence-wrapper-non-empty, .msp-sequence-select, .msp-viewport-controls-panel,
+  .msp-selection-viewport-controls-actions, .msp-control-group-header,
+  .msp-control-offset, .msp-control-offset-1, .msp-control-offset-2,
+  .msp-log, .msp-toast-entry, .msp-highlight-info, .msp-simple-help-section
+) {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}
+[data-bms-molstar-adapter] .msp-plugin :is(
+  .msp-btn, .msp-help, .msp-form-control, select, input[type="text"], input[type="number"], textarea,
+  .msp-control-row > div, .msp-help-row > div, .msp-copy-image-wrapper > div
+) {
+  background-color: var(--surface-control);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-btn, .msp-form-control, select, input, textarea):is(:hover, :focus, :active) {
+  background-color: var(--surface-control-strong);
+  color: var(--text-primary) !important;
+  outline-color: var(--accent-primary) !important;
+}
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-btn-link-toggle-off, .msp-control-row-label, .msp-description) {
+  /* Mol* marks its toggle text colors important. */
+  color: var(--text-secondary) !important;
+}
+[data-bms-molstar-adapter] .msp-plugin .msp-sequence-present { color: var(--text-primary); }
+[data-bms-molstar-adapter] .msp-plugin .msp-btn-link-toggle-on {
+  color: var(--text-primary) !important;
+}
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-sequence-number, .msp-sequence-label, .msp-sequence-chain-label) {
+  color: var(--text-secondary);
+}
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-layout-standard, .msp-layout-expanded, .msp-sequence-select) {
+  border-color: var(--border-primary);
+}
+[data-bms-molstar-adapter] .msp-plugin .msp-slider-base-rail { background-color: var(--border-primary); }
+[data-bms-molstar-adapter] .msp-plugin .msp-slider-base-handle {
+  background-color: var(--accent-primary);
+  border-color: var(--bg-secondary);
+}
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-shape-filled, .msp-transform-header-brand svg) {
+  fill: currentColor;
+  stroke: currentColor;
+}

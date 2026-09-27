@@ -1068,7 +1068,7 @@ export class MolstarDirectAdapter {
         };
     }
 
-    private async setBackground(backgroundColor: string): Promise<void> {
+    async setBackground(backgroundColor: string): Promise<void> {
         const plugin = this.requirePlugin();
         await PluginCommands.Canvas3D.SetSettings(plugin, {
             settings: (props) => {
