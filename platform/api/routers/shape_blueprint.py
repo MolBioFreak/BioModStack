@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
+from experiment_database import get_experiment_session
 from paths import get_data_root
 from routers import jobs as jobs_router
 from schemas import ExecutionPolicy
@@ -41,6 +42,15 @@ _UNIT_TO_ANGSTROM = {
 
 def _feature_enabled() -> bool:
     return os.getenv("BMS_SHAPE_BLUEPRINT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@router.get("/settings")
+async def get_shape_settings() -> dict[str, object]:
+    if not _feature_enabled():
+        raise HTTPException(status_code=404, detail="Shape Blueprint is disabled")
+    from services.shape_requests import shape_settings_definition
+
+    return shape_settings_definition()
 
 
 @router.get("/sequence-settings/{engine}")
@@ -229,10 +239,11 @@ def _assert_execution_replay(job: Job, submitted: SubmittedShapeRequest) -> None
     # Reusing science must not silently reuse another placement or opt into return.
     # Current target readiness is irrelevant to replaying an existing request.
     if (job.execution_target_id != submitted.execution_target_id
-            or ExecutionPolicy.from_params(job.params) != submitted.execution_policy):
+            or ExecutionPolicy.from_params(job.params) != submitted.execution_policy
+            or (job.provenance or {}).get("launch_context_id") != submitted.launch_context_id):
         raise HTTPException(status_code=409, detail={
             "code": "request_execution_conflict",
-            "message": "This request ID has a different target or return policy; use a new client_request_id.",
+            "message": "This request ID has a different target, return policy or Project destination; use a new client_request_id.",
         })
 
 
@@ -241,6 +252,7 @@ async def submit_shape_request(
     submitted: SubmittedShapeRequest,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     if not _feature_enabled():
         raise HTTPException(status_code=404, detail="Shape Blueprint is disabled")
@@ -262,11 +274,57 @@ async def submit_shape_request(
     request_row = await session.get(ShapeDesignRequest, staged.request_id)
     if request_row is None:
         raise HTTPException(status_code=500, detail="Shape request staging was not persisted")
+    existing_job = None
     if request_row.job_id:
         existing_job = await session.get(Job, request_row.job_id)
         if existing_job is None:
             raise HTTPException(status_code=409, detail="Shape request references a missing job")
         _assert_execution_replay(existing_job, submitted)
+
+    job_request = shape_job_request(staged, submitted)
+    if submitted.launch_context_id:
+        # Project owns its reserved scheduler identity and committed transaction.
+        # Canonical replay repairs a crash after Job commit but before this Shape
+        # row is linked; never allocate a competing deterministic Job here.
+        if existing_job is None:
+            existing_job = await session.scalar(select(Job).where(
+                Job.params["shape_request_id"].as_string() == staged.request_id,
+                Job.provenance["launch_context_id"].as_string() == submitted.launch_context_id,
+            ).limit(1))
+            if existing_job is not None:
+                _assert_execution_replay(existing_job, submitted)
+        reused = existing_job is not None
+        if not reused and submitted.execution_target_id and not submitted.execution_plan_approval:
+            jobs_router._require_prepared_remote_review(job_request, {
+                "request_id": staged.request_id,
+                "request_sha256": staged.request_sha256,
+                "client_request_id": submitted.client_request_id,
+                "launch_context_id": submitted.launch_context_id,
+            })
+        job_response = await jobs_router.create_job(
+            job_request, background_tasks, session,
+            _preallocated_job_id=None, _commit=True,
+            experiment_session=experiment_session,
+        )
+        request_row = await session.get(ShapeDesignRequest, staged.request_id)
+        if request_row is None:
+            raise HTTPException(status_code=500, detail="Shape request disappeared during job creation")
+        request_row.job_id = job_response.id
+        await session.commit()
+        return {
+            "request_id": staged.request_id,
+            "request_sha256": staged.request_sha256,
+            "job_id": job_response.id,
+            "job_status": str(job_response.status),
+            "execution_target_id": job_response.execution_target_id,
+            "execution_policy": job_response.execution_policy.model_dump(mode="json"),
+            "launch_context_id": job_response.launch_context_id,
+            "launch_context_binding": job_response.launch_context_binding,
+            "return_uri": job_response.return_uri,
+            "reused": reused,
+        }
+
+    if existing_job is not None:
         return {
             "request_id": staged.request_id,
             "request_sha256": staged.request_sha256,
@@ -278,7 +336,6 @@ async def submit_shape_request(
         }
 
     deterministic_job_id = str(uuid.uuid5(_SHAPE_JOB_NAMESPACE, staged.request_id))
-    job_request = shape_job_request(staged, submitted)
     if submitted.execution_target_id and not submitted.execution_plan_approval:
         jobs_router._require_prepared_remote_review(job_request, {
             "request_id": staged.request_id,
