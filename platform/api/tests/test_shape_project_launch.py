@@ -258,3 +258,69 @@ async def test_shape_project_prepared_remote_review_and_actual_approval(admissio
             assert len(list(await admission.scalars(select(Job)))) == 1
         finally:
             jobs.current_launch_context_id.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_shape_project_http_preparation_uses_both_scratch_stores(admission, setup_store, tmp_path):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from routers import project_manager, projects
+    from test_project_workflow_setups import _project_payload
+
+    request = await submitted(admission, tmp_path)
+    app = FastAPI()
+    app.include_router(projects.router)
+    app.include_router(project_manager.router)
+
+    @app.middleware('http')
+    async def authenticated_operator(http_request, call_next):
+        http_request.state.authenticated_principal = {'id': 'operator', 'roles': ['operator']}
+        return await call_next(http_request)
+
+    async def core_dependency():
+        yield admission
+
+    async def experiment_dependency():
+        async with setup_store() as db:
+            yield db
+
+    app.dependency_overrides[project_manager.get_core_session] = core_dependency
+    app.dependency_overrides[project_manager.get_experiment_session] = experiment_dependency
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        # Use the real Project creator, which persists its authenticated owner.
+        created = await client.post('/api/projects', json=_project_payload('Shape HTTP'))
+        assert created.status_code == 201, created.text
+        project_id = created.json()['id']
+        setup_response = await client.post(f'/api/projects/{project_id}/workflow-setups', json={
+            'schema': 'bms.project-workflow-setup.create.v1',
+            'relationship_kind': 'primary', 'global_experiment_id': None,
+            'experiment': {'name': 'Shape HTTP', 'objective': 'Verify preparation transport'},
+            'domain_kind': 'protein_in_silico', 'capability_id': SHAPE_SETUP_CAPABILITY_ID,
+        }, headers={'Idempotency-Key': 'http-create'})
+        assert setup_response.status_code == 201, setup_response.text
+        setup = setup_response.json()
+        setup_path = f"/api/projects/{project_id}/workflow-setups/{setup['setup_context_id']}"
+        saved = await client.put(f'{setup_path}/draft', json={
+            'expected_generation': 0,
+            'draft': {'modification_mode': 'shape_blueprint',
+                      'shape_submitted_request': request.model_dump(mode='json')},
+        }, headers={'Idempotency-Key': 'http-save'})
+        assert saved.status_code == 200, saved.text
+        response = await client.post(f'{setup_path}/prepare-launch', json={'expected_generation': 1},
+                                     headers={'Idempotency-Key': 'http-prepare'})
+        assert response.status_code == 200, response.text
+        prepared = response.json()
+        replay = await client.post(f'{setup_path}/prepare-launch', json={'expected_generation': 1},
+                                   headers={'Idempotency-Key': 'http-prepare'})
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == prepared
+
+    async with setup_store() as db:
+        preparation = await db.get(ExperimentWorkflowPreparation, prepared['preparation_id'])
+        await validate_preparation_authority(db, preparation)
+        scheduler = json.loads(preparation.scheduler_payload_json)
+    admission.expire_all()
+    row = await admission.get(ShapeDesignRequest, scheduler['params']['shape_request_id'])
+    assert row is not None and row.job_id is None
+    assert Path(scheduler['params']['shape_request_path']).is_file()
+    assert not list(await admission.scalars(select(Job)))

@@ -541,19 +541,25 @@ async def prepare_project_workflow_setup_launch(
     payload: WorkflowSetupPrepareRequest,
     request: Request,
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         response = await prepare_workflow_setup_launch(
             session,
+            core_session=core_session,
             project_id=project_id,
             setup_context_id=setup_context_id,
             expected_generation=payload.expected_generation,
             idempotency_key=_idempotency_key(request),
         )
+        # Keep the immutable native input before publishing its Project Plan.
+        # A later Project failure can reuse the same model-owned preparation.
+        await core_session.commit()
         await session.commit()
         return response
     except ExperimentServiceError as exc:
+        await core_session.rollback()
         await session.rollback()
         raise _service_error(exc) from exc
 
