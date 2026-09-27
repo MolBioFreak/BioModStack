@@ -87,7 +87,11 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     assert snapshot
     candidate.unlink()
     target.unlink()
-    preview = jobs._execution_plan_preview(retained)
+    token = jobs.current_launch_context_id.set(retained.launch_context_id)
+    try:
+        preview = await jobs.preview_job_execution_plan(retained, admission, experiment_session)
+    finally:
+        jobs.current_launch_context_id.reset(token)
     assert preview['admissible'], preview['blockers']
     retained.execution_plan_approval = preview['approval_digest']
     owner = selected if operation == 'blind_pose' else publication
@@ -95,7 +99,7 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     async def submit(request):
         token = jobs.current_launch_context_id.set(request.launch_context_id)
         try:
-            return await jobs.create_job(request, BackgroundTasks(), admission, experiment_session=experiment_session)
+            return await jobs.create_job(request.model_copy(deep=True), BackgroundTasks(), admission, experiment_session=experiment_session)
         finally:
             jobs.current_launch_context_id.reset(token)
     if not destination:
@@ -114,11 +118,15 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
         assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
         design.job_id = parent.id
         await admission.flush()
+    if destination:
+        stale = retained.model_copy(update={'execution_plan_approval': '0' * 64}, deep=True)
+        with pytest.raises(HTTPException, match='approval is stale'):
+            await submit(stale)
     response = await submit(retained)
     admission.expire_all()
     child = await admission.get(Job, response.id)
-    assert child.execution_target_id == worker.id
-    assert child.params['selection_source_job_id'] == parent.id
+    assert child.execution_target_id == retained.execution_target_id
+    assert child.params['selection_source_job_id'] == 'source'
     assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in snapshot} == snapshot
 
 

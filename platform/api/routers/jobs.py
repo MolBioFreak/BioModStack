@@ -8186,7 +8186,28 @@ async def create_job(
             _preallocated_job_id = prepared_attempt.scheduler_job_id
         if typed_md_project_launch is None:
             from services.global_experiments.launch_contexts import validate_prepared_child_job_request
+            retained_preview = None
             if await validate_prepared_child_job_request(experiment_session, preview_context, job_data):
+                if job_data.execution_target_id:
+                    # Review covers the immutable child request before the Project
+                    # owner adds reservation metadata. Reuse the same approved-plan
+                    # handoff as other native owners, without changing science.
+                    from component_runtime import canonical_bytes
+                    if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
+                        if canonical_bytes(job_data.model_dump(mode='json')) != _approved_execution_plan.request_json:
+                            raise HTTPException(409, 'Trusted native preview request changed')
+                        retained_preview = json.loads(_approved_execution_plan.preview_json)
+                    else:
+                        from services.declared_job_expansion import declarations
+                        if not job_data.execution_plan_approval:
+                            raise HTTPException(409, 'Remote submission requires explicit execution-plan preview approval')
+                        try:
+                            expansions = await declarations(job_data, session, lock=True)
+                            retained_preview = await asyncio.to_thread(_execution_plan_preview, job_data, expansions)
+                        except (ValueError, OSError) as exc:
+                            raise HTTPException(422, str(exc)) from exc
+                        if retained_preview['approval_digest'] != job_data.execution_plan_approval:
+                            raise HTTPException(409, 'Execution plan approval is stale; preview and approve the current request')
                 from experiment_models import ExperimentWorkflowRun
                 run = await experiment_session.get(ExperimentWorkflowRun, prepared_attempt.workflow_run_id)
                 await _reserve_selected_run_group(experiment_session, group_id=run.run_group_id,
@@ -8200,6 +8221,10 @@ async def create_job(
                 params=dict(job_data.params or {}),
                 pinned_gpu=job_data.pinned_gpu,
             )
+            if retained_preview is not None:
+                from component_runtime import canonical_bytes
+                _approved_execution_plan = ApprovedExecutionPlan(
+                    canonical_bytes(job_data.model_dump(mode='json')), canonical_bytes(retained_preview))
         else:
             from component_runtime import canonical_bytes
             if isinstance(_approved_execution_plan, ApprovedExecutionPlan):
