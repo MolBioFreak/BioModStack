@@ -1258,19 +1258,37 @@ export interface ShapeLengthPolicy {
     allocation_policy_sha256?: string | null;
 }
 
-export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn';
-export type ShapeSequenceSettings = Record<string, number | string | boolean>;
+export type ShapeSequenceEngine = 'proteinmpnn' | 'fampnn' | 'caliby_experimental';
+export type ShapeSequenceSettings = Record<string, unknown>;
+export type ShapePredictor = 'boltz2' | 'esmfold2' | 'protenix_v2';
 
-// Wire projection of global registry metadata, not a separate settings schema.
+// Wire projection of model-owned metadata, never a second settings authority.
 export interface ShapeSequenceSettingsDefinition {
     engine: ShapeSequenceEngine;
     model_version: string;
     schema_sha256: string;
-    params: Array<{ name: string; type: string; default: number | string | boolean; [metadata: string]: unknown }>;
+    params: Array<{ name: string; type: string; default?: unknown; [metadata: string]: unknown }>;
     initial_values: ShapeSequenceSettings;
     contextual_defaults: ShapeSequenceSettings;
     contextual_default_reason: string;
+    json_schema?: Record<string, unknown>;
+    input_settings_schema?: Record<string, unknown>;
 }
+
+export interface ShapeNativeSettingsDefinition extends Omit<ShapeSequenceSettingsDefinition, 'engine'> {
+    model_id: string;
+    mode: string;
+}
+
+export interface ShapeSettingsDefinition {
+    schema: 'bms_shape_settings_v1';
+    rfd3: ShapeNativeSettingsDefinition;
+    sequence_engines: ShapeSequenceEngine[];
+    validators: Record<ShapePredictor, ShapeNativeSettingsDefinition>;
+}
+
+export const fetchShapeSettings = () =>
+    api.get<ShapeSettingsDefinition>('/api/shape-blueprint/settings');
 
 export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequenceCount: number) =>
     api.get<ShapeSequenceSettingsDefinition>(`/api/shape-blueprint/sequence-settings/${engine}`, {
@@ -1279,6 +1297,7 @@ export const fetchShapeSequenceSettings = (engine: ShapeSequenceEngine, sequence
 
 export interface ShapeLaunchRequest extends ExecutionPlacement {
     execution_plan_approval?: string | null;
+    launch_context_id?: string | null;
     client_request_id: string;
     name: string;
     geometry_id: string;
@@ -1293,7 +1312,10 @@ export interface ShapeLaunchRequest extends ExecutionPlacement {
     sequence_policy?: 'auto' | 'skip' | 'external';
     sequence_engine?: ShapeSequenceEngine;
     sequence_settings?: ShapeSequenceSettings;
-    validator_suite?: Array<'boltz2' | 'esmfold2' | 'protenix_v2'>;
+    sequence_input_settings?: Record<string, unknown>;
+    rfd3_settings?: Record<string, unknown>;
+    validator_settings?: Partial<Record<ShapePredictor, Record<string, unknown>>>;
+    validator_suite?: ShapePredictor[];
     guidance_profile: 'rfd3_unguided_control_v1' | 'rfd3_ca_shape_transfer_control_v1';
 }
 
