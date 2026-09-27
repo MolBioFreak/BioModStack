@@ -1231,6 +1231,7 @@ export const completeCurrentLaunchContext = async (responseData: unknown): Promi
 export interface ShapeGeometrySummary {
     geometry_id: string;
     source_id: string;
+    original_filename?: string | null;
     geometry_sha256: string;
     manifest_sha256: string;
     source_sha256: string;

@@ -179,12 +179,14 @@ def _denovo_runtime_dependencies() -> tuple[RuntimeDependencyRef, ...]:
             refs.append(RuntimeDependencyRef(kind='weights', relative_path=weights))
     # Family preload retains the complete managed DISCO tree.
     refs.append(RuntimeDependencyRef(kind='weights', relative_path='disco'))
-    # Both designers ship their default checkpoints inside their images.
+    # ProteinMPNN and FA-MPNN ship defaults inside their images; Shape's
+    # ordinary Caliby design uses its model-owned managed checkpoint.
     for peer in ('fampnn', 'proteinmpnn', 'esmfold2'):
         refs.extend(model_runtime_dependencies(peer))
+    refs.extend(model_image_dependencies('caliby_experimental'))
     refs.extend(model_image_dependencies('protenix'))
     refs.extend(model_image_dependencies('boltz2'))
-    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina',
+    for process in ('RunRFD3', 'RunShapeRFD3', 'RunLaProteina', 'RunShapeCaliby',
                     'RunShapeBoltzValidator', 'RunShapeProtenixValidator'):
         dependencies, _ = native_checkpoint_dependencies(process, {})
         refs.extend(RuntimeDependencyRef(kind=dep.kind, relative_path=dep.relative_path)
@@ -300,9 +302,14 @@ def native_checkpoint_dependencies(process: str, params: dict):
             relative = 'caliby/model_params/' + member
             dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
                 'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
-    elif process == 'RunCalibyNative':
+    elif process in {'RunCalibyNative', 'RunShapeCaliby'}:
         from services.caliby_native import selected_assets
-        assets = selected_assets(params['task'], params)
+        if process == 'RunShapeCaliby':
+            request = params.get('shape_request') or {}
+            settings = request.get('sequence_settings', params.get('shape_sequence_settings', {}))
+            assets = selected_assets('ensemble_design', settings)
+        else:
+            assets = selected_assets(params['task'], params)
         relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
         dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
             'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
@@ -318,9 +325,15 @@ def native_checkpoint_dependencies(process: str, params: dict):
         members = ['checkpoint/protenix-v2.pt', 'common/components.cif',
                    'common/components.cif.rdkit_mol.pkl',
                    'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv']
-        enabled = lambda key: params.get(key) in (True, 'true')
+        selected_params = params
+        if process == 'RunShapeProtenixValidator':
+            request = params.get('shape_request') or {}
+            # Historical Shape always disables templates. Only this workflow's
+            # retained native settings opt in, never unrelated global defaults.
+            selected_params = request.get('validator_settings', {}).get('protenix_v2', {})
+        enabled = lambda key: selected_params.get(key) in (True, 'true')
         anchored = process in {'ProtenixFromComplex', 'BatchProtenixValidation'} and enabled('protenix_anchor_target')
-        templates = process != 'RunShapeProtenixValidator' and (enabled('protenix_use_template') or anchored)
+        templates = enabled('protenix_use_template') or anchored
         if templates:
             members.extend(('common/obsolete_to_successor.json', 'common/release_date_cache.json'))
             # Anchored consumers generate mmcif from their declared target input.

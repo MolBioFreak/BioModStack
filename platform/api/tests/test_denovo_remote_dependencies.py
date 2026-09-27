@@ -64,12 +64,13 @@ def test_family_union_exact_deduplicated_native_members_and_no_unrelated_assets(
     images = {r.relative_path for r in refs if r.kind == 'image'}
     assert images == {'foundry.sif', 'shape_rfd3.sif', 'disco.sif', 'laproteina.sif',
                       'pyrosetta_tools.sif', 'fampnn.sif', 'dl_binder_design.sif',
-                      'boltz2.sif', 'esmfold2.sif', 'protenix.sif'}
+                      'boltz2.sif', 'esmfold2.sif', 'protenix.sif', 'caliby.sif'}
     protenix, blockers = native_checkpoint_dependencies('RunShapeProtenixValidator', {})
     assert not blockers
     assert {r.relative_path for r in refs if r.kind == 'weights'} == {
         'foundry/checkpoints/rfd3_latest.ckpt', 'disco', 'laproteina', 'esmfold2',
         'boltz/boltz2_conf.ckpt', 'boltz/boltz2_aff.ckpt', 'boltz/mols',
+        'caliby/model_params/caliby/soluble_caliby_v1.ckpt',
         *(d.relative_path for d in protenix),
     }
     assert len(refs) == len(set(refs))

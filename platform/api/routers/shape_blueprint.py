@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, ShapeDesignGeometry, ShapeDesignRequest, get_session
+from database import Job, ShapeCadSource, ShapeDesignGeometry, ShapeDesignRequest, get_session
 from experiment_database import get_experiment_session
 from paths import get_data_root
 from routers import jobs as jobs_router
@@ -63,7 +63,7 @@ async def get_sequence_settings(engine: str, sequence_count: int = Query(default
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
-def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
+def _summary(row: ShapeDesignGeometry | AdmittedGeometry, original_filename: str | None = None) -> dict[str, object]:
     manifest = dict(row.manifest)
     bounds = [float(value) for value in cast(list[float], manifest["bounds_angstrom"])]
     scale = float(str(manifest["angstrom_per_unit"]))
@@ -71,6 +71,7 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     return {
         "geometry_id": row.geometry_id,
         "source_id": row.source_id,
+        "original_filename": original_filename,
         "geometry_sha256": row.geometry_sha256,
         "manifest_sha256": str(manifest["manifest_sha256"]),
         "source_sha256": manifest["source_sha256"],
@@ -91,9 +92,9 @@ def _summary(row: ShapeDesignGeometry | AdmittedGeometry) -> dict[str, object]:
     }
 
 
-def _current_summary_or_conflict(row: ShapeDesignGeometry) -> dict[str, object]:
+def _current_summary_or_conflict(row: ShapeDesignGeometry, original_filename: str | None = None) -> dict[str, object]:
     try:
-        return _summary(row)
+        return _summary(row, original_filename)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=409,
@@ -138,22 +139,25 @@ async def upload_geometry(
         )
     except ShapeGeometryError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    return _summary(result)
+    source = await session.get(ShapeCadSource, result.source_id)
+    return _summary(result, source.original_filename if source else None)
 
 
 @router.get("/geometries")
 async def list_geometries(session: AsyncSession = Depends(get_session)):
     rows = (
         await session.execute(
-            select(ShapeDesignGeometry).order_by(
+            select(ShapeDesignGeometry, ShapeCadSource.original_filename).outerjoin(
+                ShapeCadSource, ShapeCadSource.source_id == ShapeDesignGeometry.source_id
+            ).order_by(
                 ShapeDesignGeometry.created_at.desc(), ShapeDesignGeometry.geometry_id
             ).limit(100)
         )
-    ).scalars().all()
+    ).all()
     geometries: list[dict[str, object]] = []
-    for row in rows:
+    for row, original_filename in rows:
         try:
-            geometries.append(_summary(row))
+            geometries.append(_summary(row, original_filename))
         except (KeyError, TypeError, ValueError):
             # Legacy rows without the complete immutable provenance contract
             # must not be selectable as if their units or hashes were known.
@@ -170,7 +174,9 @@ async def _geometry_or_404(session: AsyncSession, geometry_id: str) -> ShapeDesi
 
 @router.get("/geometries/{geometry_id}")
 async def get_geometry(geometry_id: str, session: AsyncSession = Depends(get_session)):
-    return _current_summary_or_conflict(await _geometry_or_404(session, geometry_id))
+    row = await _geometry_or_404(session, geometry_id)
+    source = await session.get(ShapeCadSource, row.source_id)
+    return _current_summary_or_conflict(row, source.original_filename if source else None)
 
 
 @router.get("/geometries/{geometry_id}/preview.obj")
