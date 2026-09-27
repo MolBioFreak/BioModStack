@@ -1330,13 +1330,26 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
 };
 
 export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
-    const payload = structuredClone(prepareExecutionPlacement(request));
-    type Response = { request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean } & Required<ExecutionPlacement>;
+    // Explicit destination (including null/standalone) wins over ambient Project
+    // navigation. Snapshot the same body/header context through remote review.
+    const launchContextId = request.launch_context_id === undefined && typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('launch_context_id')
+        : request.launch_context_id;
+    const payload = structuredClone(prepareExecutionPlacement({
+        ...request, launch_context_id: launchContextId ?? null,
+    }));
+    const contextConfig = jobLaunchContextConfig(payload, { launchContext: false });
+    type Response = {
+        request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean;
+        launch_context_id?: string | null; return_uri?: string | null;
+        launch_context_binding?: Record<string, unknown> | null;
+    } & Required<ExecutionPlacement>;
     return submitPreparedJobAction(
-        () => api.post<Response>('/api/shape-blueprint/requests', payload),
+        () => api.post<Response>('/api/shape-blueprint/requests', payload, contextConfig),
         approved => api.post<Response>('/api/shape-blueprint/requests', {
             ...payload, execution_plan_approval: approved.execution_plan_approval,
-        }),
+        }, contextConfig),
+        { launchContext: false },
     );
 };
 
@@ -1690,6 +1703,7 @@ export interface LaunchAntibodyIterationResponse {
 async function submitPreparedJobAction<T>(
     action: () => Promise<import('axios').AxiosResponse<T>>,
     submitApproved?: (request: Partial<Job>) => Promise<import('axios').AxiosResponse<T>>,
+    options: { launchContext?: boolean } = {},
 ) {
     try {
         return await action();
@@ -1699,7 +1713,7 @@ async function submitPreparedJobAction<T>(
         if (detail?.code !== 'remote_prepared_job_review_required'
                 || !detail.job_request?.execution_target_id || detail.job_request.execution_plan_approval) throw error;
         // Native request owners such as Shape must bind their own row during insertion.
-        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request)));
+        if (submitApproved) return submitApproved(await approveJobExecutionPlan(structuredClone(detail.job_request), options));
         // Never repeat the mutation endpoint: review and submit the exact
         // once-prepared request through the ordinary shared canonical path.
         const submitted = await submitJob(detail.job_request, { launchContext: false });
