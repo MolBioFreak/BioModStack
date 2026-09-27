@@ -24,7 +24,7 @@ const PDB = 'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00 
 beforeEach(() => {
     submitted = []; previews = []; savedTemplates = [];
     vi.spyOn(api, 'get').mockImplementation(async (url: string) => {
-        const model = catalogs.find((item: any) => url === `/api/models/${item.id}`);
+        const model = [...catalogs, ...nativeModels].find((item: any) => url === `/api/models/${item.id}`);
         if (model) return { data: structuredClone(model) };
         if (url === '/api/models') return { data: nativeModels };
         if (url.endsWith('/integration')) return { data: { workflows: {} } };

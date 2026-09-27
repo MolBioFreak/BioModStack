@@ -43,7 +43,7 @@ DOMAIN_JOB_MODELS = {
         "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "molecular_dynamics",
         "ppiflow", "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3",
         "template_antibody_denovo", "antibody_denovo", "bindcraft2", "binder_refinement",
-        "caliby_binder", "frustrampnn", "ligandmpnn",
+        "caliby_binder", "caliby_experimental", "proteinmpnn", "fampnn", "frustrampnn", "ligandmpnn",
     },
     "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design"},
 }
