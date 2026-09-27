@@ -57,6 +57,26 @@ afterEach(async () => {
 });
 
 describe('Mol* public load-state contract', () => {
+    it('keeps the structure caption in a bounded header before the native controls', async () => {
+        const label = 'candidate_with_a_long_native_structure_identifier_0_0_model_0';
+        await act(async () => {
+            root.render(<StructureViewerHost structureUrl="/target.cif" label={label} />);
+        });
+        const viewer = container.querySelector('[data-bms-molstar-adapter]')!;
+        const caption = viewer.querySelector('[title]') as HTMLElement;
+        const mount = viewer.querySelector('[data-bms-molstar-mount]') as HTMLElement;
+        expect(viewer.classList.contains('flex-col')).toBe(true);
+        expect(caption.textContent).toBe(label);
+        expect(caption.title).toBe(label);
+        expect(caption.classList.contains('truncate')).toBe(true);
+        expect(caption.classList.contains('shrink-0')).toBe(true);
+        expect(caption.classList.contains('absolute')).toBe(false);
+        expect(caption.nextElementSibling).toBe(mount);
+        expect(mount.classList.contains('flex-1')).toBe(true);
+        expect(mount.classList.contains('absolute')).toBe(false);
+        expect(controllerState.mounted).toBe(1);
+    });
+
     it('updates global theme and explicit background without reloading the scene', async () => {
         const style = document.createElement('style');
         style.textContent = '[data-theme="midnight"] { --bg-primary: #0b1020; } [data-theme="light"] { --bg-primary: #ffffff; }';

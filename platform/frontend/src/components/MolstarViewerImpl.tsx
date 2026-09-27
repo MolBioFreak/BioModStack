@@ -430,22 +430,22 @@ export default function MolstarViewer({
 
     return (
         <div
-            className="w-full rounded-lg overflow-hidden relative bg-slate-900"
+            className="flex w-full flex-col rounded-lg overflow-hidden relative bg-slate-900"
             style={{ height: heightStyle }}
             data-bms-molstar-adapter="direct-4.5.0"
             data-bms-molstar-status={status}
         >
-            <div
-                ref={mountRef}
-                className="absolute inset-0"
-                style={{ touchAction: interactionTouchAction }}
-                data-bms-molstar-mount="true"
-            />
             {label && (
-                <div className="absolute top-2 left-2 z-20 px-2 py-1 bg-slate-800/80 text-slate-200 text-xs rounded font-medium pointer-events-none">
+                <div className="min-w-0 shrink-0 truncate border-b border-border-primary bg-bg-secondary px-2 py-1 text-xs font-medium text-text-secondary" title={label}>
                     {label}
                 </div>
             )}
+            <div
+                ref={mountRef}
+                className="relative min-h-0 flex-1"
+                style={{ touchAction: interactionTouchAction }}
+                data-bms-molstar-mount="true"
+            />
 
             {status === 'loading' && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/70 pointer-events-none">
