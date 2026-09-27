@@ -12,6 +12,8 @@
 
 **Implementation authority:** This document specifies work. Source edits, test execution, computational runs, deployment, and Production promotion require separate authorization.
 
+**Shape/CAD completion update (2026-09-27):** The [final Shape completion specification](2026-09-27-rfd3-shape-cad-completion.md) and its [implementation packet](../plans/2026-09-27-rfd3-shape-cad-implementation.md) control the remaining Shape work. Christian approved the accompanying UI direction. Credit the existing geometry, validator selector, remote preparation and native result mechanisms; finish the disconnected settings, Caliby stage, Project insertion and result composition. This addendum does not reopen other workflows, change scientific defaults or turn incomplete development evidence into a new runtime refusal.
+
 ## 1. Outcome
 
 Deliver the complete Protein In Silico half of the global research layer:
@@ -174,7 +176,7 @@ These are reusable prerequisites. They do not count as completion of the protein
 16. No current Development browser path proves folding, de novo design, CM/MD, FrustraMPNN, Dataset, comparison, ELN, restart, and exact reopening as one vertical.
 17. AlphaFold2 remains enabled in the current model registry even though AF2/AF3 are outside the approved prediction/validation policy for this vertical.
 18. LigandMPNN is enabled in the model registry, but no executable entrypoint, module invocation, typed Project adapter, dedicated result authority, or viewer closure is present.
-19. Shape Blueprint applies a server-default validator suite that includes Boltz-2, ESMFold2, and Protenix V2. The current operator surface does not expose this result-affecting selection.
+19. Shape Blueprint already exposes its Boltz-2, ESMFold2 and Protenix V2 validator selection on the reviewed 2026-09-27 source. Remaining work is the complete model-owned settings and explicit per-sample publication, not another selector; see CAD-04 and A04 in the final Shape completion specification.
 20. DISCO and La-Proteina are executable experimental generators, while their terminal authority remains weaker and more generic than RFD3, Shape Blueprint, CM, MD, and FrustraMPNN.
 21. The typed core result adapter binds Job parameters, stage outputs, and provenance, but it does not independently verify every producer-native artifact byte required by each scientific result contract.
 22. Project Manager can display plans and Datasets but does not currently author protein Workflow Plan revisions, Dataset revisions, preparations, or run groups.
@@ -356,7 +358,7 @@ Saving and preparing create no Job.
 
 Every result-affecting scientific setting supported by an accepted model is available through suitable typed UI controls and the same typed API used by agents.
 
-Each accepted model must pass all ten gates in `docs/Model_Configuration_Operator_Control_and_Agent_Parity.md`. Registry YAML, selected launcher controls, or a model-detail endpoint cannot establish parameter parity alone. Hidden active defaults are forbidden. Shape Blueprint must expose its validator suite as one typed UI/API setting and persist both requested and effective validator identities.
+Each accepted model must pass all ten gates in `docs/Model_Configuration_Operator_Control_and_Agent_Parity.md`. Registry YAML, selected launcher controls, or a model-detail endpoint cannot establish parameter parity alone. Hidden active defaults are forbidden. Shape Blueprint already exposes its typed validator suite; retain that control and complete applicable native settings, requested/effective persistence, consumed invocation and per-sample readback under CAD-02–04 and A02–04 of the final Shape specification. These are engineering completion criteria, not additional runtime admission checks.
 
 The immutable preparation stores:
 
@@ -482,7 +484,9 @@ The accepted sequence-design matrix is fixed as follows:
 
 `workflows/protein_sequence_design.nf` is an orchestration wrapper over the existing FAMPNN and ProteinMPNN modules. It cannot fork their scientific implementation. It accepts only immutable server-staged inputs and a closed compiled settings document. Current `fampnn_extra_config` and `mpnn_extra_config` free-form passthroughs are excluded from accepted Project plans until each supported field becomes a typed schema property; arbitrary CLI fragments fail validation.
 
-The accepted antibody matrix enables only the FAMPNN child above by default. Antibody ProteinMPNN, AntiFold, Caliby, maturation-specific FAMPNN uses, Shape Blueprint consumers, and any other FAMPNN/ProteinMPNN child remain `internal`, `experimental`, `historical`, or `disabled` until their own row names an exact parent workflow, request/result versions, materializer, verifier, viewer, settings parity, and owner-path receipt. The accepted UI hides or disables those rows and cannot enable them from a registry/module presence. `seq_method`, `plr_seq_method`, and antibody sequence toggles compile to one explicit matrix row; null or unknown values fail instead of selecting a producer.
+The accepted antibody matrix enables only the FAMPNN child above by default. Antibody ProteinMPNN, AntiFold, Caliby, maturation-specific FAMPNN uses, and any other antibody FAMPNN/ProteinMPNN child remain `internal`, `experimental`, `historical`, or `disabled` until their own row names an exact parent workflow, request/result versions, materializer, verifier, viewer, settings parity, and owner-path receipt. The accepted antibody UI hides or disables those rows and cannot enable them from a registry/module presence. `seq_method`, `plr_seq_method`, and antibody sequence toggles compile to one explicit matrix row; null or unknown values fail instead of selecting a producer.
+
+Shape is not governed by that antibody restriction. Its completion lineup is ProteinMPNN, FA-MPNN and ordinary Caliby `ensemble_design`, with its existing Auto/Skip/explicit-engine semantics preserved. The final Shape specification owns their precise integration, native settings, execution and result acceptance. Missing new qualification evidence does not hide an existing Shape operation or add an execution gate.
 
 Foundry owns all LigandMPNN execution. The global layer must not add a second implementation or infer chemical pose from SMILES/CCD alone. LigandMPNN consumes an immutable coordinate-bearing parent pose and context map.
 
@@ -1053,7 +1057,7 @@ Retry uses the exact invariant in section 8.1: an unchanged valid preparation ca
 
 ### Phase P7: Experimental/historical inventory reconciliation
 
-**Work:** Complete or hide every Fold-CP, shape/CAD, Protein Hunter, DISCO, La-Proteina, BoltzGen, RFdiffusion, RF3, AF2, and specialized legacy lane according to Phase P0 classification. AF2 cannot become a new Project predictor or validator. Shape Blueprint exposes its validator suite through typed UI/API authority. DISCO and La-Proteina gain typed terminal manifests and specialized result verification before any complete status.
+**Work:** Complete or hide every Fold-CP, Protein Hunter, DISCO, La-Proteina, BoltzGen, RFdiffusion, RF3, AF2, and specialized legacy lane according to Phase P0 classification. AF2 cannot become a new Project predictor or validator. For Shape/CAD, implement CAD-01–06 and A01–A12 from the final Shape specification through its existing owners; preserve current execution behavior and the already exposed validator selector. Do not interpret this historical phase as permission to hide working Shape operations because completion evidence is still being collected. DISCO and La-Proteina gain typed terminal manifests and specialized result verification before any complete status.
 
 **Gate:** No visible capability is registry-only, generic-fallback-only, or viewerless. Historical attachment remains exact.
 
@@ -1187,7 +1191,7 @@ The SOW is complete only when all statements are true:
 - The five-candidate CM→FrustraMPNN compatibility result reopens through canonical persisted authority without uploads, generalized import claims, changed native IDs/provenance, or fresh-runtime claims. A DRT4 label is allowed only when the closed import-authority receipt in section 8.3.1 binds the exact result to `WP_031606642.1`; otherwise the result remains `historical_cm_compatibility`.
 - MD acceptance stays inside the exact profile and numerical bounds in section 7.8. DRT4 MD remains unavailable until its separate chemistry/topology and analysis receipt passes.
 - Every exposed protein capability has a materializer, terminal verifier, result contract, result adapter, and canonical viewer.
-- Every accepted model passes all ten settings-parity gates. Shape Blueprint does not apply a hidden validator suite.
+- Every accepted model passes all ten settings-parity gates. Shape Blueprint retains its visible validator suite and completes native settings, all three sequence designers, actual Project-bound insertion, sample-preserving publication and the approved result workspace under the final Shape specification. A selector or prepared request alone is not completion.
 - Typed core and experimental generator result adapters verify the producer-native bytes required by their result contracts.
 - Unqualified experimental or historical capabilities are explicitly classified and cannot enter an unrelated fallback.
 - Preparation creates no work. Launch is explicit and idempotent.
