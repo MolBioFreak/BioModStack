@@ -739,6 +739,9 @@ class ModelRegistry:
                 # it is not the generic launcher's unmaterialized parameter DTO.
                 model = raw
                 native_required = ('cm_request_path',)
+            elif (model_id, mode_id) == ('frustrampnn', 'analyze'):
+                model = raw
+                native_required = ('frustrampnn_batch_manifest_path', '_frustrampnn_child_v1')
             elif raw is not None:
                 model = raw
         if not model:
@@ -1300,11 +1303,18 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     elif result.analysis_contract_id is None:
         unresolved(model_id, 'result_contract', retrieval_authority,
                    'Native result resolver does not establish a contract for selected identity')
-    if availability != 'public':
+    # Selected Frustra analysis is admitted by its retained model-owned request,
+    # not the generic public launcher. Its compiler verifies that immutable batch.
+    selected_analysis = (reviewed and availability == 'internal'
+        and (model_id, mode, entrypoint) == ('frustrampnn', 'analyze', 'workflows/frustrampnn_analysis.nf')
+        and bool(p.get('_frustrampnn_child_v1')) and bool(p.get('frustrampnn_batch_manifest_path')))
+    if selected_analysis:
+        admission_authority = 'platform/api/services/frustrampnn/jobs.py:load_prepared_child'
+    if availability != 'public' and not selected_analysis:
         unresolved(model_id, 'availability', authority, f'Declaration availability is {availability}; not public admission',
             blocks=('preview_acceptance', 'launch') if availability == 'internal' else
                    ('preview_acceptance', 'provision', 'launch'))
-    if model is not None and mode not in {item.id for item in model.modes}:
+    if model is not None and mode not in {item.id for item in model.modes} and not selected_analysis:
         unresolved(f'{model_id}/{mode}', 'mode_descriptor', entrypoint,
                    'Compiler/internal mode is not a declared public mode; native descriptor needs review')
     # Every selected process carries lifecycle and configured resource semantics;

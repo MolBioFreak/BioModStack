@@ -4201,6 +4201,21 @@ def compile_workflow_provision_request(request):
     typed = JobCreate.model_validate(payload)
     original = deepcopy(typed.params)
     registry = get_registry()
+    if (typed.model_id, typed.mode) == ('frustrampnn', 'analyze'):
+        from services.frustrampnn.jobs import load_prepared_child
+        errors = registry.validate_job_params(typed.model_id, typed.mode, typed.params,
+            native_entrypoint=MODEL_MODE_WORKFLOW_ENTRYPOINTS[(typed.model_id, typed.mode)])
+        if errors:
+            raise ValueError('; '.join(errors))
+        # The immutable batch embeds its retained Job ID and output root.
+        # Review reopens that construction; it must not invent a preview owner.
+        child = load_prepared_child(typed)
+        child.provenance = {**(child.provenance or {}), 'core_protein_requested_params': original}
+        invocation = compile_job_nextflow_invocation(
+            child, typed.params, child.output_dir, _preview_only=True)
+        if invocation.requested_json != canonical_bytes(original):
+            raise ValueError('Workflow provision changed requested scientific identity')
+        return invocation
     model = registry.get_model(typed.model_id)
     native_entrypoint = None
     if (typed.model_id == 'template_antibody_denovo'
@@ -5019,7 +5034,10 @@ def compile_nextflow_invocation(
     if str(model_id or "").strip() == "frustrampnn":
         if str(mode or "").strip() != "analyze":
             raise ValueError("frustrampnn supports only mode=analyze")
-        unknown = sorted(set(params) - {"frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id"})
+        unknown = sorted(set(params) - {
+            "frustrampnn_batch_manifest_path", "_frustrampnn_child_v1", "gpu_id",
+            "workflow_adapter", "_global_resource_admission", "_global_dispatch_authority",
+        })
         if unknown:
             raise ValueError(
                 "scheduler-owned FrustraMPNN launch parameters fail closed: "
@@ -5104,7 +5122,7 @@ def compile_nextflow_invocation(
                 if hashlib.sha256(payload).hexdigest() != record.get(f"{kind}_sha256"):
                     raise ValueError(f"FrustraMPNN {kind} digest binding is invalid")
         gpu_id = params.get("gpu_id")
-        if isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0:
+        if not _preview_only and (isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0):
             raise ValueError("FrustraMPNN requires a non-negative scheduler-assigned gpu_id")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="frustrampnn",
@@ -5124,14 +5142,14 @@ def compile_nextflow_invocation(
             str(output_dir),
             "--frustrampnn_batch_manifest_path",
             batch_manifest_path,
-            "--frustrampnn_physical_gpu_id",
-            str(gpu_id),
         ]
+        if not _preview_only:
+            command.extend(["--frustrampnn_physical_gpu_id", str(gpu_id)])
+            native_parameters['frustrampnn_physical_gpu_id'] = gpu_id
         if job_id:
             command.extend(["--job_id", str(job_id)])
         native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
-            frustrampnn_batch_manifest_path=batch_manifest_path,
-            frustrampnn_physical_gpu_id=gpu_id)
+            frustrampnn_batch_manifest_path=batch_manifest_path)
         return finish_command(command)
 
     if str(model_id or "").strip() == "conformational_mapping":

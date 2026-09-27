@@ -92,26 +92,29 @@ async def test_selected_remote_route_review_and_approved_insertion(admission, tm
     retained.execution_plan_approval = preview['approval_digest']
     owner = selected if operation == 'blind_pose' else publication
     assert await owner.is_retained_selected_submission(retained, admission)
-    malformed = retained.model_copy(deep=True)
-    malformed.params[owner.KEY] = {'schema': 'fabricated'}
-    with pytest.raises(HTTPException) as rejected:
-        await jobs.create_job(malformed, BackgroundTasks(), admission, experiment_session=experiment_session)
-    assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
-    foreign = Job(id='foreign', name='foreign', model_id='proteinmpnn', mode='default', params={}, status='completed')
-    admission.add(foreign)
-    design.job_id = foreign.id
-    await admission.flush()
-    assert not await owner.is_retained_selected_submission(retained, admission)
-    with pytest.raises(HTTPException) as rejected:
-        await jobs.create_job(retained, BackgroundTasks(), admission, experiment_session=experiment_session)
-    assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
-    design.job_id = parent.id
-    await admission.flush()
-    token = jobs.current_launch_context_id.set(retained.launch_context_id)
-    try:
-        response = await jobs.create_job(retained, BackgroundTasks(), admission, experiment_session=experiment_session)
-    finally:
-        jobs.current_launch_context_id.reset(token)
+    async def submit(request):
+        token = jobs.current_launch_context_id.set(request.launch_context_id)
+        try:
+            return await jobs.create_job(request, BackgroundTasks(), admission, experiment_session=experiment_session)
+        finally:
+            jobs.current_launch_context_id.reset(token)
+    if not destination:
+        malformed = retained.model_copy(deep=True)
+        malformed.params[owner.KEY] = {'schema': 'fabricated'}
+        with pytest.raises(HTTPException) as rejected:
+            await submit(malformed)
+        assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
+        foreign = Job(id='foreign', name='foreign', model_id='proteinmpnn', mode='default', params={}, status='completed')
+        admission.add(foreign)
+        design.job_id = foreign.id
+        await admission.flush()
+        assert not await owner.is_retained_selected_submission(retained, admission)
+        with pytest.raises(HTTPException) as rejected:
+            await submit(retained)
+        assert rejected.value.status_code == (422 if operation == 'blind_pose' else 403)
+        design.job_id = parent.id
+        await admission.flush()
+    response = await submit(retained)
     admission.expire_all()
     child = await admission.get(Job, response.id)
     assert child.execution_target_id == worker.id
