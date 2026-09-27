@@ -377,7 +377,13 @@ async function mountRoute(route: string) {
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 35)); }); }
 const sourceFixture = { job_id: 'source', design_id: 'design', output_format: 'native' };
 const nativeFixture = { path: 'inputs/native.cif', format: 'cif', sha256: 'c'.repeat(64), model_number: 2, author_residues: [], source_structure: { ...sourceFixture, path: 'inputs/native.cif' } };
-const sequenceRoute = '/submit?' + new URLSearchParams({ model: 'proteinmpnn', mode: 'design', continuation: 'sequence', source_structure: JSON.stringify(sourceFixture) });
+const sequenceRoute = '/submit?' + new URLSearchParams({ model: 'proteinmpnn', mode: 'design', continuation: 'sequence', source_structure: JSON.stringify(sourceFixture), return_to: '/designs/source' });
+
+it('still reports invalid explicit Molecular Dynamics handoff metadata', async () => {
+    await mountRoute('/submit?model=proteinmpnn&mode=design&md_draft_id=invalid');
+    expect(document.body.textContent).toContain('Invalid Molecular Dynamics handoff route: md_draft_id must be one UUID.');
+    expect(captured).toHaveLength(0);
+});
 
 it('a rejected PDB conversion leaves the chooser usable and Caliby submits the retained native CIF', async () => {
     const previous = api.defaults.adapter as any;
@@ -395,6 +401,7 @@ it('a rejected PDB conversion leaves the chooser usable and Caliby submits the r
     await change(document.querySelector('[aria-label="Sequence design model"]')!, 'caliby_experimental:ensemble_design');
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('input[aria-label="ensembles.0.states.0.path"]')).toBeTruthy(); });
     expect((document.querySelector('input[aria-label="ensembles.0.states.0.path"]') as HTMLInputElement).value).toBe(nativeFixture.path);
+    expect(document.body.textContent).not.toContain('Invalid Molecular Dynamics handoff route');
     await change(document.querySelector('[aria-label="Sequence job name"]')!, 'native-cif-follow-on');
     await click('Local'); await click('Launch Experiment');
     expect(captured).toHaveLength(1);

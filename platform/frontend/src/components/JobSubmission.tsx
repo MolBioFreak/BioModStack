@@ -146,6 +146,9 @@ export function JobSubmission() {
     const [searchParams, setSearchParams] = useSearchParams();
     const projectSetup = useProjectWorkflowSetup();
     const mdHandoff = useMemo(() => {
+        const hasMdHandoff = searchParams.get('template') === 'molecular_dynamics'
+            || ['source_sequence_id', 'return_template', 'md_draft_id', 'source_prediction_job_id', 'source_design_id'].some(key => searchParams.has(key));
+        if (!hasMdHandoff) return { route: null, error: '' };
         try {
             return { route: parseMolecularDynamicsHandoffRoute(`?${searchParams.toString()}`), error: '' };
         } catch (error) {
