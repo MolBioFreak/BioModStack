@@ -47,6 +47,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
     const loadGenerationRef = useRef(0);
     const [mesh, setMesh] = useState<Mesh | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [retry, setRetry] = useState(0);
     const [yaw, setYaw] = useState(-35);
     const [pitch, setPitch] = useState(22);
 
@@ -70,7 +71,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
                 setError(cause instanceof Error ? cause.message : 'Canonical mesh preview failed.');
             });
         return () => controller.abort();
-    }, [url]);
+    }, [url, retry]);
 
     const facts = useMemo(() => mesh ? `${mesh.vertices.length.toLocaleString()} vertices · ${mesh.faces.length.toLocaleString()} faces` : null, [mesh]);
 
@@ -138,7 +139,7 @@ export default function CanonicalMeshPreview({ url, label, height = 430 }: Canon
                     <a href={url} download className="rounded border border-cyan-500/40 px-2 py-1 text-cyan-200 hover:bg-cyan-500/10">Download canonical OBJ</a>
                 </div>
             </div>
-            {error ? <div className="flex items-center justify-center text-sm text-red-300" style={{ height }}>{error}</div> : <canvas ref={canvasRef} className="block w-full" style={{ height }} />}
+            {error ? <div className="flex items-center justify-center text-sm text-red-300" style={{ height }}><div>{error}<button type="button" className="ml-3 rounded border px-3 py-2" onClick={() => setRetry(value => value + 1)}>Retry surface preview</button></div></div> : <canvas ref={canvasRef} className="block w-full" style={{ height }} />}
         </div>
     );
 }

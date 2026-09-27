@@ -1703,6 +1703,7 @@ export function JobSubmission() {
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
                                 <ProteinModificationTemplate
+                                    launchContextId={launchContextId}
                                     key={`de-novo:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={deNovoInitialValues}

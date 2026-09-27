@@ -28,6 +28,7 @@ interface ProteinModificationTemplateProps {
     onNavigationChange?: (state: DeNovoNavigationState) => void;
     navigationState?: DeNovoNavigationState;
     runDetails?: ReactNode;
+    launchContextId?: string | null;
     onOpenTemplateManager?: (context: {
         currentParams?: Record<string, unknown>;
         currentModelId?: string;
@@ -82,7 +83,7 @@ const draftKey = (state: DeNovoNavigationState) => state.modification_mode === '
     ? `${state.modification_mode}:${state.generator}:${state.design_task}` : state.modification_mode;
 
 export function ProteinModificationTemplate({
-    onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager,
+    onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
 }: ProteinModificationTemplateProps) {
     const [navigation, setNavigation] = useState(() => resolveNavigation({ ...navigationState, ...initialValues }));
     const drafts = useRef<Record<string, Record<string, unknown>>>(
@@ -178,7 +179,7 @@ export function ProteinModificationTemplate({
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />
-                : <ShapeBlueprintTemplate key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
+                : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
                     currentParams: { ...drafts.current[activeKey], ...navigation, modification_mode: savedMode, de_novo_drafts: { ...drafts.current } },
