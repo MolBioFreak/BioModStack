@@ -54,6 +54,38 @@ def test_bridge_is_exact_local_origin_main_frame_bounded_and_not_cordova_exec() 
     assert 'execute(' not in bridge
 
 
+def test_shell_info_reads_installed_package_version_metadata() -> None:
+    """Source contract only; this does not execute Android PackageManager."""
+    bridge = BRIDGE.read_text()
+    shell_info = bridge.split('private fun emitShellInfo() {', 1)[1].split(
+        'override fun onResume', 1
+    )[0]
+    assert 'import android.os.Build' in bridge
+    assert (
+        'val packageInfo = cordova.activity.packageManager.getPackageInfo('
+        'cordova.activity.packageName, 0)'
+    ) in shell_info
+    assert '''val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }''' in shell_info
+    assert '.put("shellVersion", packageInfo.versionName ?: "unknown")' in shell_info
+    assert '.put("shellVersionCode", versionCode)' in shell_info
+    assert '"0.2.0"' not in shell_info
+    assert '.put("shellVersionCode", 200)' not in shell_info
+    for field in (
+        '.put("available", true)',
+        '.put("nativeApkUpdateSupported", true)',
+        '.put("nativeApkUpdateChannel", "stable")',
+        '.put("nativeApkUpdateStrategy", "same-origin-verified-user-approved")',
+    ):
+        assert field in shell_info
+    assert "CustomEvent('biomodstack-android-shell-info', { detail: $detail })" in shell_info
+    assert 'nativeWebView.post { nativeWebView.evaluateJavascript(script, null) }' in shell_info
+
+
 def test_policy_is_same_origin_https_immutable_stable_and_strictly_newer() -> None:
     policy = POLICY.read_text()
     for token in ('org.biomodstack.mobile', 'MAX_APK_BYTES', 'userInfo', 'fragment', 'query',

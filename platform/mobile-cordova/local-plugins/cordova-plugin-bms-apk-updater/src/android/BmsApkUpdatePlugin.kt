@@ -1,6 +1,7 @@
 package org.biomodstack.mobile.apkupdate
 
 import android.net.Uri
+import android.os.Build
 import android.webkit.WebView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -46,10 +47,17 @@ class BmsApkUpdatePlugin : CordovaPlugin() {
     }
 
     private fun emitShellInfo() {
+        val packageInfo = cordova.activity.packageManager.getPackageInfo(cordova.activity.packageName, 0)
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
         val detail = JSONObject()
             .put("available", true)
-            .put("shellVersion", "0.2.0")
-            .put("shellVersionCode", 200)
+            .put("shellVersion", packageInfo.versionName ?: "unknown")
+            .put("shellVersionCode", versionCode)
             .put("nativeApkUpdateSupported", true)
             .put("nativeApkUpdateChannel", "stable")
             .put("nativeApkUpdateStrategy", "same-origin-verified-user-approved")
