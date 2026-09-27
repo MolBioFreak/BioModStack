@@ -123,7 +123,7 @@ async def test_shape_local_real_insertion_without_remote_review(admission, isola
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('designer', [None, 'proteinmpnn', 'fampnn'])
+@pytest.mark.parametrize('designer', [None, 'proteinmpnn', 'fampnn', 'caliby_experimental'])
 async def test_shape_current_preparation_uses_same_projection_family_is_source_free(admission, isolated_roots, tmp_path, designer):
     submitted = await submitted_request(admission, tmp_path)
     if designer:
@@ -143,7 +143,8 @@ async def test_shape_current_preparation_uses_same_projection_family_is_source_f
     images = {d.relative_path for d in plan.dependencies if d.kind == "image"}
     if designer:
         assert images == {'shape_rfd3.sif', 'esmfold2.sif', 'boltz2.sif', 'protenix.sif',
-                          'dl_binder_design.sif' if designer == 'proteinmpnn' else 'fampnn.sif'}
+                          {'proteinmpnn': 'dl_binder_design.sif', 'fampnn': 'fampnn.sif',
+                           'caliby_experimental': 'caliby.sif'}[designer]}
     else:
         assert images == {'shape_rfd3.sif'}
     assert not plan.metadata.external_services
@@ -161,3 +162,60 @@ async def test_shape_current_preparation_uses_same_projection_family_is_source_f
     assert (await admission.get(ShapeDesignRequest, staged.request_id)).job_id is None
     family = ProvisionSelection(kind='model', model_id='protein_modification_experimental')
     assert await controller._compile_native(family, None, None) is None
+
+
+@pytest.mark.asyncio
+async def test_shape_bundle_retains_native_snapshots_not_original_paths(admission, isolated_roots, tmp_path, monkeypatch):
+    """Real compiler and input inventory, with a relocated scratch-only bundle."""
+    import json
+    import shutil
+    from scripts.lib.portable_inputs import ENV, SCHEMA, resolve_input_path
+    from services.nextflow import compile_nextflow_invocation
+
+    source = tmp_path / 'bias.json'
+    source.write_text('{"A": 0.25}')
+    submitted = await submitted_request(admission, tmp_path)
+    submitted = shape_requests.SubmittedShapeRequest.model_validate({
+        **submitted.model_dump(), 'sequence_policy': 'external',
+        'sequence_engine': 'proteinmpnn', 'sequences_per_backbone': 1,
+        'sequence_settings': {'mpnn_bias_AA_jsonl': str(source)},
+    })
+    staged = await shape_requests.materialize_shape_request(admission, data_root=tmp_path, submitted=submitted)
+    stage = Path(staged.stage_dir)
+    before = {p.name: p.read_bytes() for p in stage.iterdir()}
+    source.unlink()
+    output = tmp_path / 'results' / 'shape-bundle'
+    invocation = compile_nextflow_invocation(staged.model_id, staged.mode,
+        staged.launch_params, str(output), job_id='shape-bundle')
+    for name, path in [('get_data_root', tmp_path), ('get_inputs_dir', tmp_path / 'inputs'),
+                       ('get_results_dir', tmp_path / 'results')]:
+        monkeypatch.setattr(bundle, name, lambda path=path: path)
+    references = []
+    inputs = bundle._input_assets(staged.launch_params, native_invocation=invocation,
+        repo_root=Path(__file__).resolve().parents[3], runtime_paths=set(), output_dir=output,
+        references=references)
+    assert len(inputs) == 1 and inputs[0][0] == stage
+    native = json.loads(before['request.json'])['sequence_settings']['mpnn_bias_AA_jsonl']
+    assert any(Path(ref['source_path']) == stage / native for ref in references)
+    assert all(Path(ref['source_path']) != source for ref in references)
+
+    worker = tmp_path / 'returned'
+    destination = worker / inputs[0][1]
+    shutil.copytree(stage, destination)
+    bindings = []
+    for ref in references:
+        transferred = destination / Path(ref['source_path']).relative_to(stage)
+        assert transferred.is_file()
+        bindings.append({'reference': ref, 'path': str(transferred)})
+    shutil.rmtree(stage)
+    binding_file = worker / 'bindings.json'
+    binding_file.write_text(json.dumps({'schema': SCHEMA, 'roots': [str(worker)], 'bindings': bindings,
+                                      'directories': [{'source_path': str(stage), 'path': str(destination)}]}))
+    monkeypatch.setenv(ENV, str(binding_file))
+    assert resolve_input_path(native, owner=destination / 'request.json').read_text() == '{"A": 0.25}'
+    assert {p.name: p.read_bytes() for p in destination.iterdir()} == before
+    mutated = destination / native
+    mutated.chmod(0o600)
+    mutated.write_text('{"A": 0.5}')
+    with pytest.raises(ValueError, match='digest/size mismatch'):
+        resolve_input_path(native, owner=destination / 'request.json')

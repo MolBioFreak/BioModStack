@@ -2265,7 +2265,12 @@ export interface Design {
     review_contract_source?: string | null;
     review_artifact_manifest?: {
         schema?: string;
-        artifacts?: Record<string, { kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null }>;
+        artifacts?: Record<string, {
+            kind?: string; state?: 'ready' | 'missing' | 'invalid'; path?: string | null; reason?: string | null;
+            artifact_id?: string; target_state?: string; format?: string; sha256?: string;
+            download_url?: string; model_number?: number; source_structure?: StructureSourceSelection;
+            predictor?: string; validator?: string; native_sample_key?: string; source_sequence_key?: string;
+        }>;
         roles?: Record<string, unknown> & { has_binder?: boolean };
     } | null;
     review_role_map?: Record<string, unknown> | null;

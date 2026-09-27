@@ -1066,6 +1066,7 @@ def test_native_process_annotations_retain_current_output_requiredness():
     'modules/ppiflow.nf', 'workflows/binder_refinement.nf',
     'workflows/maturation_child_core.nf', 'modules/protenix.nf',
     'modules/boltz_cp_experimental.nf',
+    'modules/shape_blueprint.nf', 'modules/esmfold2_experimental.nf',
 ])
 def test_refinement_publication_descriptors_match_actual_process_sections(source):
     """Reverse I/O comparison catches newly emitted outputs, not only stale ones."""

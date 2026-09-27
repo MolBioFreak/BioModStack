@@ -722,6 +722,14 @@ def _input_assets(
         # arbitrary historical campaigns nor rewrite sealed compilation bytes.
         root = Path(params['bc2_compilation']).parent
         selected[root] = 'bindcraft2'
+    if (native_invocation.model_id, native_invocation.mode) == ('protein_modification_experimental', 'shape_blueprint'):
+        # Geometry and typed native inputs share the existing immutable request
+        # directory. Keep that layout intact without rewriting the sealed JSON.
+        request_path = Path(params['shape_request_path']).resolve()
+        root = request_path.parent
+        if not any(root != allowed and _under(root, allowed) for allowed in input_roots):
+            raise RemoteBundleError('Shape request directory is outside managed inputs')
+        selected[root] = f"shape-request/{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
     # A selected input directory already owns its contained generated files.
     # Do not transfer/hash the same bytes again as standalone child inputs.
     selected = {path: relative for path, relative in selected.items()
